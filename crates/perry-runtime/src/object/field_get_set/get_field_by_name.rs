@@ -641,7 +641,22 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                     return JSValue::from_bits(value.to_bits());
                 }
-                if class_id != 0 && class_has_own_method(class_id, name) {
+                // Instance (prototype) methods must only resolve when reading
+                // off the prototype ref (`C.prototype.m`), NOT off the class ref
+                // itself (`C.m`). In JS a class object does not expose its
+                // prototype methods as static members: `class C { m(){} }` has
+                // `C.m === undefined` (the method lives on `C.prototype`). The
+                // earlier unconditional lookup leaked instance methods onto the
+                // class ref, so `C.m` returned a (mis-bound) function. This
+                // broke NestJS interceptor/guard/pipe resolution: its
+                // `getInterceptorInstance` duck-types `!!metatype.intercept` to
+                // decide "is this a class or an already-built instance"; a
+                // truthy `Class.intercept` made it treat the CLASS as the
+                // instance, so `intercept()` ran with a broken receiver and
+                // returned `{}`, which rxjs `innerFrom` then rejected. Real
+                // static methods are resolved below via
+                // `lookup_static_method_in_chain`.
+                if is_prototype_ref && class_id != 0 && class_has_own_method(class_id, name) {
                     let value = class_prototype_method_value_for_name(class_id, name);
                     return JSValue::from_bits(value.to_bits());
                 }

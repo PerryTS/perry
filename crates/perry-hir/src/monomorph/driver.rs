@@ -273,7 +273,26 @@ fn collect_instantiations_in_expr(
                     };
 
                     if let Some(ta) = resolved_type_args {
-                        ctx.request_class_specialization(class_name, ta);
+                        // Never monomorphize a class instantiation whose type
+                        // argument is still an unresolved type variable, e.g.
+                        // `new Observable<R>()` inside `lift<R>()`. TypeScript
+                        // class generics are erased at runtime, so `new C<R>()`
+                        // must construct the SAME class `C` as `new C()`.
+                        // Specializing on an unknown type var instead produced a
+                        // bogus `C$R` class whose instances are NOT `instanceof
+                        // C` and do not inherit `C`'s prototype (e.g. rxjs's
+                        // `Observable.prototype[Symbol.observable]`). That broke
+                        // rxjs `innerFrom`/`from` ObservableInput detection —
+                        // every NestJS interceptor (`next.handle().pipe(...)`)
+                        // 500'd because the piped Observable failed both the
+                        // `input instanceof Observable` and `isInteropObservable`
+                        // checks. Erase the type args and construct the base class.
+                        if !ta
+                            .iter()
+                            .any(crate::monomorph::infer::type_contains_type_var)
+                        {
+                            ctx.request_class_specialization(class_name, ta);
+                        }
                     }
                 }
             }
