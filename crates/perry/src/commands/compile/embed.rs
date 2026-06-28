@@ -289,7 +289,11 @@ pub(super) fn generate_embedded_asset_object(
     for (idx, (name, path)) in assets.iter().enumerate() {
         // Names are tiny — keep them as ASCII-clean C string literals.
         let name_lit = c_byte_literal(name.as_bytes());
-        writeln!(c, "static const char PERRY_ASSET_NAME_{idx}[] = {name_lit};").ok();
+        writeln!(
+            c,
+            "static const char PERRY_ASSET_NAME_{idx}[] = {name_lit};"
+        )
+        .ok();
         writeln!(
             c,
             "static const size_t PERRY_ASSET_NAME_LEN_{idx} = {};",
@@ -301,9 +305,9 @@ pub(super) fn generate_embedded_asset_object(
         // and end label so the C side recovers the length as a link-time
         // constant (end − start). `.incbin` needs an unambiguous path, so feed
         // it the canonical absolute path.
-        let abs = path.canonicalize().map_err(|e| {
-            anyhow!("failed to resolve embed asset {}: {}", path.display(), e)
-        })?;
+        let abs = path
+            .canonicalize()
+            .map_err(|e| anyhow!("failed to resolve embed asset {}: {}", path.display(), e))?;
         let start = format!("{sym_prefix}PERRY_ASSET_DATA_{idx}");
         let end = format!("{sym_prefix}PERRY_ASSET_END_{idx}");
         // Assembler-level escape for the path inside `.incbin "..."`; `asm_line`
