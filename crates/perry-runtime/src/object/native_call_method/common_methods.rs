@@ -59,12 +59,23 @@ pub(super) unsafe fn dispatch_common(
             if jsval.is_undefined() || jsval.is_null() {
                 return Some(f64::from_bits(JSValue::bool(false).bits()));
             }
+            // ToPropertyKey(V) (19.1.3.3 step 1) BEFORE the string coercion
+            // below: an object argument whose `toString`/`valueOf` yields a
+            // Symbol must be treated as that Symbol, not stringified to
+            // "[object Object]" (test262 hasOwnProperty/symbol_property_*). A
+            // resolved Symbol key routes through the symbol-aware own-property
+            // check in the canonical entry point. The conversion runs once here
+            // so a user `toString` is invoked exactly once.
+            let key_value = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let key_value = crate::object::js_to_property_key(key_value);
+            if crate::symbol::js_is_symbol(key_value) != 0 {
+                return Some(super::object_ops::js_object_has_own(object, key_value));
+            }
             if (object.to_bits() >> 48) == 0x7FFE {
-                let key_value = if args_len >= 1 && !args_ptr.is_null() {
-                    *args_ptr
-                } else {
-                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                };
                 let key_str = crate::builtins::js_string_coerce(key_value);
                 let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
                 let present = if key_str.is_null() {
@@ -80,11 +91,6 @@ pub(super) unsafe fn dispatch_common(
                 return Some(f64::from_bits(JSValue::bool(present).bits()));
             }
             if jsval.is_pointer() {
-                let key_value = if args_len >= 1 && !args_ptr.is_null() {
-                    *args_ptr
-                } else {
-                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                };
                 let key_str = crate::builtins::js_string_coerce(key_value);
                 if key_str.is_null() {
                     return Some(f64::from_bits(JSValue::bool(false).bits()));
@@ -204,6 +210,11 @@ pub(super) unsafe fn dispatch_common(
             } else {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             };
+            // ToPropertyKey(V) (19.1.3.4 step 1): an object argument whose
+            // `toString`/`valueOf` yields a Symbol must be treated as that
+            // Symbol (test262 propertyIsEnumerable/symbol_property_*), invoking
+            // the user conversion exactly once.
+            let key_value = crate::object::js_to_property_key(key_value);
             // Symbol keys must not be string-coerced — route through the
             // canonical entry, which consults the SYMBOL_PROPERTIES side
             // table (mirrors hasOwnProperty's symbol arm).

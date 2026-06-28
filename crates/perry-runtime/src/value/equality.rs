@@ -157,8 +157,56 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
         return if a == b { 1 } else { 0 };
     }
 
+    // Array-grow / GC-evacuation forwarding identity. After `js_array_grow`
+    // (or a copying-GC evacuation) relocates an object, an aliased reference —
+    // e.g. the result of `Object(arr)`, or a `var b = arr` captured before the
+    // grow — can still hold the stale pre-grow pointer while another reference
+    // holds the relocated head. They are the SAME object, so `===` must be
+    // true. Both operands are POINTER_TAG here (numbers/strings/bigint/int32
+    // returned above); resolve each through its `GC_FLAG_FORWARDED` chain (the
+    // same follow `clean_arr_ptr` performs) and compare the resolved addresses.
+    // Gated on the forwarding flag: distinct, non-forwarded objects keep their
+    // own address and fall straight through to `0`, so the common case is a
+    // couple of cheap GcHeader flag loads. (test262 Object S15.2.1.1_A2_T10 /
+    // S15.2.2.1_A2_T3: `Object(arr) === arr`.)
+    if a_val.is_pointer() && b_val.is_pointer() {
+        let ra = resolve_forwarding((abits & crate::value::POINTER_MASK) as usize);
+        let rb = resolve_forwarding((bbits & crate::value::POINTER_MASK) as usize);
+        if ra != 0 && ra == rb {
+            return 1;
+        }
+    }
+
     // Different types or different NaN-boxed values → not equal
     0
+}
+
+/// Follow an object's `GC_FLAG_FORWARDED` chain to its current heap address,
+/// mirroring `clean_arr_ptr`'s forwarding walk. Returns `addr` unchanged when
+/// it is not a forwarded heap pointer (handle/proxy-band registry ids, small
+/// slab allocations, out-of-heap addresses, or live non-forwarded objects), so
+/// callers can compare resolved addresses for object identity. `try_read_gc_-
+/// header` performs the band/heap classification (never dereferencing a
+/// non-heap id). Depth-capped to defend against corrupted GC cycles.
+fn resolve_forwarding(mut addr: usize) -> usize {
+    unsafe {
+        let mut steps = 0u32;
+        while let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
+            if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+                break;
+            }
+            let new_user = crate::gc::forwarding_address(header) as usize;
+            if new_user == 0 || new_user == addr {
+                break;
+            }
+            addr = new_user;
+            steps += 1;
+            if steps > 64 {
+                break;
+            }
+        }
+    }
+    addr
 }
 
 /// JS Abstract Equality Comparison (==).

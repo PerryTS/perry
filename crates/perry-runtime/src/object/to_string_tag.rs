@@ -147,6 +147,43 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     } else {
         0
     };
+    // Proxy receiver (§20.1.3.6). A revocable Proxy is a POINTER_TAG value
+    // whose payload is a small id in the proxy band, NOT a heap pointer, so it
+    // must be handled before the brand blocks below dereference `raw_addr`.
+    // Spec order: (1) IsArray(O) — recurses through the [[ProxyTarget]] chain
+    // and throws a TypeError if any link is revoked (test262 proxy-revoked);
+    // (2) builtinTag from arrayness/callability; (3) Get(O, @@toStringTag)
+    // through the get trap, falling back to builtinTag when it is not a String
+    // (a proxy revoked DURING that Get returns undefined, so it does not throw —
+    // test262 proxy-revoked-during-get-call).
+    if jsv.is_pointer()
+        && crate::value::addr_class::is_proxy_id_band(raw_addr)
+        && crate::proxy::js_proxy_is_proxy(value) != 0
+    {
+        const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+        let is_array = crate::array::js_array_is_array(value).to_bits() == TAG_TRUE;
+        let builtin_tag = if is_array {
+            "Array"
+        } else if crate::proxy::proxy_wraps_callable(value) {
+            "Function"
+        } else {
+            "Object"
+        };
+        let sym = crate::symbol::well_known_symbol("toStringTag");
+        let tag = if sym.is_null() {
+            None
+        } else {
+            let sym_f64 = f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK));
+            string_value_to_owned(crate::proxy::js_proxy_get(value, sym_f64))
+        };
+        let formatted = match tag {
+            Some(tag) => format!("[object {}]", tag),
+            None => format!("[object {}]", builtin_tag),
+        };
+        let str_ptr =
+            crate::string::js_string_from_bytes(formatted.as_ptr(), formatted.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
     if raw_addr >= 0x1000 && crate::date::is_date_cell_addr(raw_addr) {
         let str_ptr = crate::string::js_string_from_bytes(b"[object Date]".as_ptr(), 13);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));

@@ -19,11 +19,86 @@ pub unsafe extern "C" fn js_to_property_key(value: f64) -> f64 {
     if crate::symbol::js_is_symbol(primitive) != 0 {
         return primitive;
     }
+    // `js_to_primitive` only consults a user `@@toPrimitive` method; when none
+    // is present it returns the object unchanged. Complete `ToPrimitive` here
+    // via `OrdinaryToPrimitive(value, "string")` so that a `toString`/`valueOf`
+    // returning a Symbol yields that Symbol as the property key rather than
+    // being stringified by `js_jsvalue_to_string` below (test262
+    // hasOwnProperty/propertyIsEnumerable `symbol_property_{toString,valueOf}`).
+    if primitive.to_bits() == value.to_bits() {
+        if let Some(p) = ordinary_to_primitive_string_key(primitive) {
+            if crate::symbol::js_is_symbol(p) != 0 {
+                return p;
+            }
+            let key = crate::value::js_jsvalue_to_string(p);
+            if key.is_null() {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            return crate::value::js_nanbox_string(key as i64);
+        }
+    }
     let key = crate::value::js_jsvalue_to_string(primitive);
     if key.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::value::js_nanbox_string(key as i64)
+}
+
+/// True when `v` is not a JS Object — i.e. a usable primitive result from
+/// `OrdinaryToPrimitive` (undefined/null/boolean/number/string/bigint and,
+/// crucially, **Symbol**, the one `POINTER_TAG` primitive).
+fn js_value_is_not_object(v: f64) -> bool {
+    let bits = v.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
+        return true;
+    }
+    // A Symbol is the one POINTER_TAG primitive. Use `js_is_symbol` (not the
+    // narrower registered-handle table) so a fresh heap `Symbol()` returned
+    // from `toString`/`valueOf` is recognized and preserved as the key.
+    unsafe { crate::symbol::js_is_symbol(v) != 0 }
+}
+
+/// `OrdinaryToPrimitive(O, "string")` with Symbol preservation. The spec
+/// fallback (when no `@@toPrimitive` exists) invokes `toString` then `valueOf`
+/// and uses the first result whose type is not Object — and a Symbol is not an
+/// Object, so it is returned verbatim instead of being coerced to a string.
+/// Returns `None` for a non-object receiver, when neither method is a callable
+/// closure, or when both yield Objects, so the caller falls back to its
+/// ordinary string coercion (preserving prior behavior for those cases — most
+/// notably plain objects whose only `toString` is the native
+/// `Object.prototype.toString`, which is not stored as a closure field here).
+unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
+    if extract_obj_ptr(value).is_null() {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    for name in [b"toString".as_slice(), b"valueOf".as_slice()] {
+        let receiver = value_handle.get_nanbox_f64();
+        let recv_ptr = extract_obj_ptr(receiver);
+        if recv_ptr.is_null() {
+            return None;
+        }
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let method = js_object_get_field_by_name(recv_ptr as *const ObjectHeader, key);
+        let method_bits = method.bits();
+        if (method_bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
+            continue;
+        }
+        let method_ptr = (method_bits & crate::value::POINTER_MASK) as usize;
+        if !crate::closure::is_closure_ptr(method_ptr) {
+            continue;
+        }
+        let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
+        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let result =
+            crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+        crate::object::js_implicit_this_set(prev_this);
+        if js_value_is_not_object(result) {
+            return Some(result);
+        }
+    }
+    None
 }
 
 /// `obj[ToPropertyKey(key)] = value` for object-literal computed definitions.

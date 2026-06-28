@@ -73,6 +73,11 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             super::super::has_own_helpers::throw_to_object_nullish_type_error();
         }
 
+        // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
+        // returns a Symbol) into its canonical key before the symbol/string
+        // split. A no-op for keys that are already primitives.
+        let key_value = super::super::js_to_property_key(key_value);
+
         // A Proxy is a small registered id, not a heap object — route
         // `hasOwnProperty` through `[[GetOwnProperty]]` (a present own property
         // is one whose descriptor is not undefined) rather than dereferencing
@@ -318,6 +323,11 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         if obj_jv.is_null() || obj_jv.is_undefined() {
             super::super::has_own_helpers::throw_to_object_nullish_type_error();
         }
+
+        // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
+        // returns a Symbol) into its canonical key before the symbol/string
+        // split. A no-op for keys that are already primitives.
+        let key_value = super::super::js_to_property_key(key_value);
 
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather

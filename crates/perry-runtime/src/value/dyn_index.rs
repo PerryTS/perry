@@ -211,6 +211,18 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
                 return f64::from_bits(TAG_UNDEFINED);
             }
             let arr = raw_ptr as *const crate::array::ArrayHeader;
+            // When any property descriptor is live, an array element read may
+            // resolve to an index accessor descriptor — own (`Object.define-
+            // Property(arr, "0", {get})`) or inherited from a polluted
+            // `Array.prototype`/`Object.prototype` — rather than the raw slot.
+            // Route through `js_array_get_f64`, which fires the getter and
+            // applies the out-of-bounds prototype fallback. The raw-slot fast
+            // path below is preserved for the common no-descriptor case so the
+            // hot dynamic-index path is unchanged. (test262 Object/define-
+            // Propert{y,ies} Array-index accessor reads.)
+            if crate::object::descriptors_in_use() {
+                return crate::array::js_array_get_f64(arr, idx_i32 as u32);
+            }
             let length = unsafe { (*arr).length };
             if (idx_i32 as u32) >= length {
                 return f64::from_bits(TAG_UNDEFINED);
