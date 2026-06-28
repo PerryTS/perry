@@ -714,7 +714,7 @@ impl GlobalEvalHoist {
                 ast::Stmt::Decl(ast::Decl::Var(var_decl))
                     if top_level
                         && var_decl.kind == ast::VarDeclKind::Var
-                        && matches!(self.mode, HoistMode::Global) =>
+                        && matches!(&self.mode, HoistMode::Global) =>
                 {
                     let mut publishes: Vec<ast::Stmt> = Vec::new();
                     for d in &var_decl.decls {
@@ -747,7 +747,7 @@ impl GlobalEvalHoist {
                     // Global mode bails (a `class` lowered in the IIFE would leak
                     // to module scope). Function-scope mode never rewrites a
                     // `class`, so it just leaves it in place.
-                    if matches!(self.mode, HoistMode::Global) {
+                    if matches!(&self.mode, HoistMode::Global) {
                         self.ok = false;
                     }
                     out.push(stmt);
