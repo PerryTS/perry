@@ -667,6 +667,16 @@ fn try_arraylike_receiver_method(
             | "sort"
             | "splice"
             | "concat"
+            // Generic stack/queue mutators over a value receiver: route the
+            // `.call`/`.apply` form to the spec-generic engine so a primitive
+            // (`Array.prototype.pop.call(true)`) returns `undefined` instead of
+            // a synthesized `(true).pop()` member call throwing "not a function"
+            // (test262 pop|shift|unshift/call-with-boolean), and a plain
+            // array-like object mutates via live Get/Set/Delete.
+            | "pop"
+            | "shift"
+            | "push"
+            | "unshift"
     );
     if generic {
         // Receiver lowers before the positional args, matching source order.

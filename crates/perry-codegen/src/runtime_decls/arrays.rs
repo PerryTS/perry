@@ -203,6 +203,12 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_arraylike_sort", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_arraylike_splice", DOUBLE, &[DOUBLE, PTR, I32]);
     module.declare_function("js_arraylike_concat", DOUBLE, &[DOUBLE, PTR, I32]);
+    // Generic mutators over a value receiver (`Array.prototype.{pop,shift,
+    // push,unshift}.call/apply(recv, …)`) — primitive / array-like receivers.
+    module.declare_function("js_arraylike_pop", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_arraylike_shift", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_arraylike_push", DOUBLE, &[DOUBLE, PTR, I32]);
+    module.declare_function("js_arraylike_unshift", DOUBLE, &[DOUBLE, PTR, I32]);
     // Spread `[...x]` — strict GetIterator/materialization.
     module.declare_function("js_array_clone_for_spread", I64, &[DOUBLE]);
     module.declare_function("js_array_spread_append", I64, &[I64, DOUBLE]);

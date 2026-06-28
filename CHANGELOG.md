@@ -1,3 +1,14 @@
+## v0.5.1207 — fix(runtime): #5589 — generic `Array.prototype.{pop,shift,push,unshift}` over primitive/array-like receivers + `ToObject` of symbol/string
+
+Closes 7 `built-ins/Array` test262 cases (#5589, "exotic length/index, prototype-as-receiver"). These are the spec-generic stack/queue mutators reached only through the explicit `Array.prototype.<m>.call/apply(recv, …)` (and bound-local) form, where `recv` may be a primitive or a plain array-like object.
+
+- **HIR routing** (`lower/expr_call/intrinsics/apply_call.rs`): `pop`/`shift`/`push`/`unshift` now join `sort`/`splice`/`concat`/… in the `.call`/`.apply` generic-receiver list, lowering to `Expr::ArrayLikeMethod` instead of synthesizing a `(recv).<m>()` member call. The synthesized form threw `<m> is not a function` on a primitive receiver — so `Array.prototype.pop.call(true)` crashed instead of returning `undefined` (test262 `{pop,shift,unshift}/call-with-boolean`).
+- **Codegen** (`expr/logical_collections.rs`, `runtime_decls/arrays.rs`): new `Expr::ArrayLikeMethod` arms + extern decls for `js_arraylike_{pop,shift,push,unshift}` (pop/shift nullary; push/unshift variadic via an alloca buffer, mirroring splice/concat).
+- **Runtime** (`array/generic.rs`): `js_arraylike_{pop,shift,push,unshift}` forward to the existing `array_proto_mutator` engine — real array → dense helper, plain array-like object → live `Get`/`Set`/`Delete`. A boolean/number primitive boxes to a fresh wrapper (length 0), so `push`/`unshift` return `ToLength(len) + count` (e.g. `unshift.call(true)` → `0`) rather than `undefined`. A **primitive `string`** receiver boxes to a `String` exotic whose indices/`length` are non-writable, so every mutator's internal `Set(O,"length",…,true)`/`DeletePropertyOrThrow` fails with a **TypeError** — restored via an up-front guard (test262 `{pop,push,shift,unshift}/throws-with-string-receiver`; previously these "passed" only by accident, via the wrong-but-throwing `(string).pop is not a function`).
+- **`ToObject` of a symbol** (`array/generic.rs::to_object`): a symbol is `POINTER_TAG`-shaped, so it was caught by the generic pointer early-return and passed through unboxed; now boxed before that branch so `[].sort.call(Symbol())` returns an `instanceof Symbol` wrapper (test262 sort/call-with-primitive). BigInt already boxed correctly.
+
+Newly passing: `prototype/{pop,shift,unshift}/call-with-boolean`, `prototype/{pop,push,unshift}/throws-with-string-receiver`, `prototype/sort/call-with-primitive`. No regressions in the `built-ins/Array` test262 subset.
+
 ## v0.5.1206 — release: cargo-test + iOS simctl gate fixes + runtime/codegen batch
 
 Supersedes the unshipped v0.5.1205 (whose simctl gate failed on an iOS build break).

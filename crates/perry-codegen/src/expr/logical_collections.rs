@@ -383,6 +383,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
                     )
                 }
+                // pop() / shift(): no args, generic over a value receiver.
+                "pop" | "shift" => {
+                    let fname = if method == "pop" {
+                        "js_arraylike_pop"
+                    } else {
+                        "js_arraylike_shift"
+                    };
+                    blk.call(DOUBLE, fname, &[(DOUBLE, &recv_box)])
+                }
+                // push(...) / unshift(...): variadic — pass an alloca buffer of
+                // raw NaN-boxed doubles + count (mirrors splice/concat above).
+                "push" | "unshift" => {
+                    let n = arg_boxes.len();
+                    let (buf_reg, count_str) = if n == 0 {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf_reg = blk.next_reg();
+                        blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                        for (i, val) in arg_boxes.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                            blk.store(DOUBLE, val, &slot);
+                        }
+                        (buf_reg, format!("{}", n))
+                    };
+                    let fname = if method == "push" {
+                        "js_arraylike_push"
+                    } else {
+                        "js_arraylike_unshift"
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
+                    )
+                }
                 other => bail!("unsupported generic array-like method '{other}'"),
             };
             Ok(result)
