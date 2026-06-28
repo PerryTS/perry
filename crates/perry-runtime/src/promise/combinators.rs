@@ -760,18 +760,30 @@ fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
     Ok(callable_closure_value(then).map(|_| then))
 }
 
-/// #5590: a native Promise resolution that carries a user-installed *own*
-/// `then` override (`thenable.then = function(){…}` or
-/// `Object.defineProperty(p, "then", …)`). Per ECMA-262 27.2.1.3.2, the resolve
-/// function reads `then = Get(resolution, "then")` and, when callable, enqueues
-/// a `PromiseResolveThenableJob` with THAT `then` — even when `resolution` is a
-/// genuine promise. Perry's native promise→promise wiring is only valid when the
-/// promise's `then` is the intrinsic; an own override must be honored instead
-/// (test262 `resolve-*-prms-cstm-then*`). Returns the override `then` action.
-fn promise_custom_own_then(value: f64) -> Option<f64> {
+/// #5590: classification of a native Promise resolution's *own* `then` property
+/// (`thenable.then = …` or `Object.defineProperty(p, "then", …)`). Per ECMA-262
+/// 27.2.1.3.2 the resolve function reads `then = Get(resolution, "then")` and
+/// branches on `IsCallable(then)` — even when `resolution` is a genuine promise,
+/// where Perry would otherwise take its native promise→promise wiring.
+enum OwnThen {
+    /// No own `then` — the promise's `then` is the intrinsic; the native
+    /// promise→promise fast-path is valid.
+    None,
+    /// An own `then` exists but is NOT callable — `IsCallable(then)` is false, so
+    /// the promise is fulfilled with `resolution` directly (FulfillPromise); it
+    /// must NOT adopt the inner promise's eventual state
+    /// (test262 `resolve-prms-cstm-then*` with a non-function `then`).
+    NonCallable,
+    /// A callable own `then` override — assimilate via `PromiseResolveThenableJob`
+    /// with this `then` action (test262 `resolve-*-prms-cstm-then*`).
+    Callable(f64),
+}
+
+/// Classify a native Promise resolution's own `then` (see [`OwnThen`]).
+fn promise_own_then(value: f64) -> OwnThen {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
-        return None;
+        return OwnThen::None;
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let then = unsafe {
@@ -781,11 +793,11 @@ fn promise_custom_own_then(value: f64) -> Option<f64> {
             "then",
             value,
         )
-    }?;
-    if callable_closure_value(then).is_some() {
-        Some(then)
-    } else {
-        None
+    };
+    match then {
+        None => OwnThen::None,
+        Some(t) if callable_closure_value(t).is_some() => OwnThen::Callable(t),
+        Some(_) => OwnThen::NonCallable,
     }
 }
 
@@ -844,15 +856,28 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
 
     let value = adapt_foreign_promise_value(value);
     if js_value_is_promise(value) != 0 {
-        // #5590: honor a user-installed own `then` override before the native
-        // promise→promise fast-path (spec reads `Get(resolution, "then")`).
-        if let Some(then_action) = promise_custom_own_then(value) {
-            enqueue_thenable_job(promise, value, then_action);
-            return;
+        // #5590: branch on a user-installed own `then` before the native
+        // promise→promise fast-path (spec reads `Get(resolution, "then")` and
+        // switches on `IsCallable(then)`).
+        match promise_own_then(value) {
+            // Callable override: assimilate via PromiseResolveThenableJob.
+            OwnThen::Callable(then_action) => {
+                enqueue_thenable_job(promise, value, then_action);
+                return;
+            }
+            // Present but non-callable: `IsCallable(then)` is false → fulfill
+            // with the resolution VALUE directly, do NOT adopt the inner promise.
+            OwnThen::NonCallable => {
+                js_promise_resolve(promise, value);
+                return;
+            }
+            // No own `then` → intrinsic `then`; native promise→promise wiring.
+            OwnThen::None => {
+                let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+                js_promise_resolve_with_promise(promise, inner);
+                return;
+            }
         }
-        let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
-        js_promise_resolve_with_promise(promise, inner);
-        return;
     }
 
     match get_then_action(value) {
@@ -1820,6 +1845,46 @@ mod tests {
             crate::closure::js_native_call_value(on_rejected, [reason].as_ptr(), 1);
         }
         0.0
+    }
+
+    #[test]
+    fn resolve_with_promise_having_noncallable_own_then_fulfills_with_value() {
+        // #5590: resolving a promise with a native promise that carries an own
+        // NON-callable `then` (`p.then = 123`) must fulfill with that promise
+        // VALUE directly — `IsCallable(then)` is false, so FulfillPromise runs
+        // and the inner promise's eventual state is NOT adopted. A callable own
+        // `then` is classified for the thenable-job path; no own `then` keeps the
+        // native promise->promise wiring.
+        unsafe {
+            use crate::object::exotic_expando::{exotic_set_property, ExoticKind};
+            reset_promise_test_state();
+
+            // Inner promise left PENDING: if its state were adopted (the bug),
+            // `outer` would also stay pending; fulfilling with the value settles
+            // `outer` synchronously, which is the discriminating signal.
+            let inner = js_promise_new();
+            let inner_val = js_nanbox_pointer(inner as i64);
+            let inner_addr = (inner_val.to_bits() & crate::value::POINTER_MASK) as usize;
+
+            // No own `then` yet -> intrinsic, native wiring.
+            assert!(matches!(promise_own_then(inner_val), OwnThen::None));
+
+            // Install an own, NON-callable `then` (a plain number).
+            assert!(exotic_set_property(
+                inner_addr,
+                ExoticKind::Promise,
+                "then",
+                123.0,
+                inner_val,
+            ));
+            assert!(matches!(promise_own_then(inner_val), OwnThen::NonCallable));
+
+            let outer = js_promise_new();
+            promise_resolve_assimilating(outer, inner_val);
+
+            assert_eq!((*outer).state, PromiseState::Fulfilled);
+            assert_eq!((*outer).value.to_bits(), inner_val.to_bits());
+        }
     }
 
     #[test]
