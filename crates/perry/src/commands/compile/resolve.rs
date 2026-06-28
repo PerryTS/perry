@@ -859,10 +859,13 @@ fn prefer_ts_source_for_package_entry(
     normal_entry: PathBuf,
 ) -> Option<PathBuf> {
     if is_js_file(&normal_entry) {
-        // Try .ts equivalent of the .js entry
-        let ts_path = normal_entry.with_extension("ts");
-        if ts_path.exists() && !is_hybrid_cjs_emit_input(&ts_path) {
-            return Some(ts_path);
+        // Try native TypeScript equivalents of the JS entry first, in the
+        // same preference order used by resolve_with_extensions.
+        for ext in ["ts", "tsx", "mts"] {
+            let ts_path = normal_entry.with_extension(ext);
+            if ts_path.is_file() && !is_hybrid_cjs_emit_input(&ts_path) {
+                return Some(ts_path);
+            }
         }
         // Check src/ directory mirror of lib/ or dist/ path
         if let Ok(rel) = normal_entry.strip_prefix(package_dir) {
@@ -874,9 +877,11 @@ fn prefer_ts_source_for_package_entry(
                     rel.strip_prefix("dist")
                 };
                 if let Ok(rest) = stripped {
-                    let src_equiv = package_dir.join("src").join(rest).with_extension("ts");
-                    if src_equiv.exists() && !is_hybrid_cjs_emit_input(&src_equiv) {
-                        return Some(src_equiv);
+                    for ext in ["ts", "tsx", "mts"] {
+                        let src_equiv = package_dir.join("src").join(rest).with_extension(ext);
+                        if src_equiv.is_file() && !is_hybrid_cjs_emit_input(&src_equiv) {
+                            return Some(src_equiv);
+                        }
                     }
                 }
             }

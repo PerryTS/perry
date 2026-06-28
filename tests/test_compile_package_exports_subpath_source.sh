@@ -17,7 +17,7 @@ trap "rm -rf $TMPDIR" EXIT
 
 PKG="$TMPDIR/node_modules/pkg"
 CONSUMER="$TMPDIR/node_modules/consumer"
-mkdir -p "$PKG/src/feature" "$CONSUMER/src"
+mkdir -p "$PKG/dist/feature" "$PKG/src/feature" "$CONSUMER/src"
 
 cat > "$TMPDIR/package.json" << 'JSON'
 {
@@ -40,7 +40,7 @@ cat > "$PKG/package.json" << 'JSON'
   "type": "module",
   "exports": {
     ".": { "import": { "default": "./src/index.ts" } },
-    "./feature": { "import": { "default": "./src/feature/server.ts" } }
+    "./feature": { "import": { "default": "./dist/feature/server.js" } }
   }
 }
 JSON
@@ -49,7 +49,11 @@ cat > "$PKG/src/index.ts" << 'TS'
 export const rootOnly = 1
 TS
 
-cat > "$PKG/src/feature/server.ts" << 'TS'
+cat > "$PKG/dist/feature/server.js" << 'JS'
+export const subValue = 0
+JS
+
+cat > "$PKG/src/feature/server.tsx" << 'TS'
 export const subValue = 41
 TS
 

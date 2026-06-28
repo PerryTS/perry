@@ -28,7 +28,9 @@ use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, get_pat_type,
     is_destructuring_pattern, is_rest_param,
 };
-use crate::lower_types::{infer_hoisted_text_codec_var_type, require_literal_specifier};
+use crate::lower_types::hoisted_text_codec::{
+    infer_hoisted_text_codec_var_type, require_literal_specifier,
+};
 
 use super::{lower_expr, LoweringContext};
 
@@ -813,6 +815,14 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                 }
                                 infer_hoisted_text_codec_var_type(decl, ident, |name| {
                                     builtin_aliases_in_var_decl.contains(name)
+                                        || matches!(
+                                            ctx.lookup_builtin_module_alias(name),
+                                            Some("util" | "node:util")
+                                        )
+                                        || matches!(
+                                            ctx.lookup_native_module(name),
+                                            Some(("util" | "node:util", None))
+                                        )
                                 })
                             } else {
                                 Type::Any

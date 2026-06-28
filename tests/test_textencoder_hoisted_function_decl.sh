@@ -16,15 +16,26 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 cat > "$TMPDIR/main.js" <<'JS'
+var util = require('util')
+
 function encodeLength(content) {
   content = textEncoder.encode(content)
   return content.byteLength
 }
 
-var util = require('util'),
-  textEncoder = new util.TextEncoder()
+var textEncoder = new util.TextEncoder()
 
-console.log('len=' + encodeLength('hello'))
+var nestedLen = (function () {
+  function encodeLengthNested(content) {
+    content = nestedTextEncoder.encode(content)
+    return content.byteLength
+  }
+
+  var nestedTextEncoder = new util.TextEncoder()
+  return encodeLengthNested('world')
+})()
+
+console.log('len=' + encodeLength('hello') + ',nested=' + nestedLen)
 JS
 
 "$PERRY" compile --no-cache "$TMPDIR/main.js" -o "$TMPDIR/out" >"$TMPDIR/compile.log" 2>&1 || {
@@ -33,7 +44,7 @@ JS
 }
 
 output="$($TMPDIR/out)"
-if [[ "$output" != "len=5" ]]; then
+if [[ "$output" != "len=5,nested=5" ]]; then
   echo "Unexpected output: $output" >&2
   exit 1
 fi
