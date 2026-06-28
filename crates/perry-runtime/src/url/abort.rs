@@ -21,7 +21,9 @@ const ABORT_METHOD_FIELD: u32 = 2;
 //   field 0: aborted (bool)
 //   field 1: reason (any)
 //   field 2: listeners (array of closure f64 values; may be null/undefined if empty)
-const ABORT_SIGNAL_FIELD_COUNT: u32 = 3;
+//   field 3: addEventListener method
+//   field 4: removeEventListener method
+const ABORT_SIGNAL_FIELD_COUNT: u32 = 5;
 
 const TAG_UNDEFINED_AC: u64 = 0x7FFC_0000_0000_0001;
 const TAG_TRUE_AC: u64 = 0x7FFC_0000_0000_0004;
@@ -53,11 +55,47 @@ fn alloc_abort_signal() -> *mut ObjectHeader {
     signal_keys = js_array_push_f64(signal_keys, create_string_f64("aborted"));
     signal_keys = js_array_push_f64(signal_keys, create_string_f64("reason"));
     signal_keys = js_array_push_f64(signal_keys, create_string_f64("_listeners"));
+    signal_keys = js_array_push_f64(signal_keys, create_string_f64("addEventListener"));
+    signal_keys = js_array_push_f64(signal_keys, create_string_f64("removeEventListener"));
     js_object_set_keys(signal, signal_keys);
     js_object_set_field_f64(signal, 0, f64::from_bits(TAG_FALSE_AC));
     js_object_set_field_f64(signal, 1, f64::from_bits(TAG_UNDEFINED_AC));
     js_object_set_field_f64(signal, 2, f64::from_bits(TAG_UNDEFINED_AC));
+    js_object_set_field_f64(signal, 3, abort_signal_listener_method_value(signal, true));
+    js_object_set_field_f64(signal, 4, abort_signal_listener_method_value(signal, false));
     signal
+}
+
+extern "C" fn abort_signal_add_event_listener_method(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+) -> f64 {
+    let signal = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    js_abort_signal_add_listener(signal, event_type, listener);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn abort_signal_remove_event_listener_method(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+) -> f64 {
+    let signal = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    js_abort_signal_remove_listener(signal, event_type, listener);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn abort_signal_listener_method_value(signal: *mut ObjectHeader, add: bool) -> f64 {
+    let func = if add {
+        abort_signal_add_event_listener_method as *const u8
+    } else {
+        abort_signal_remove_event_listener_method as *const u8
+    };
+    crate::closure::js_register_closure_arity(func, 2);
+    let closure = crate::closure::js_closure_alloc(func, 1);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, signal as i64);
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 extern "C" fn abort_controller_abort_method(

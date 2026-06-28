@@ -7,6 +7,7 @@ use perry_runtime::{
     js_array_alloc, js_array_push, js_object_alloc, js_object_set_field, js_object_set_keys,
     js_string_from_bytes, JSValue, StringHeader,
 };
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -264,6 +265,27 @@ struct FetchResponse {
     /// each time would silently un-lock a reader). None for an empty body —
     /// `Response.body` is `ReadableStream | null` (#1650).
     cached_body_stream_id: Option<usize>,
+    /// Original ReadableStream body passed to `new Response(stream, init)`.
+    /// Unlike buffered bodies, this must stay lazy: constructing a Response
+    /// must not synchronously drain a producer whose chunks appear only after
+    /// downstream pulls (TanStack Start / React SSR relies on that).
+    body_stream_id: Option<usize>,
+}
+
+thread_local! {
+    static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
+}
+
+fn take_pending_fetch_body_stream_id() -> Option<usize> {
+    PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
+        let id = pending.get();
+        pending.set(0);
+        if id != 0 && crate::streams::js_stream_handle_kind(id) == 1 {
+            Some(id)
+        } else {
+            None
+        }
+    })
 }
 
 /// Extract the registry id from a Web Fetch handle f64 value.
@@ -428,6 +450,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -503,6 +526,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -580,6 +604,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -664,6 +689,7 @@ pub unsafe extern "C" fn js_fetch_post(
                         redirected: false,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
+                        body_stream_id: None,
                     },
                 );
 
@@ -793,18 +819,24 @@ pub extern "C" fn js_response_body_used(handle: f64) -> f64 {
 
 fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
     let response_id = handle_id(handle);
-    let mut guard = FETCH_RESPONSES.lock().unwrap();
-    let resp = guard
-        .get_mut(&response_id)
-        .ok_or("Invalid response handle")?;
-    if !resp.body_present {
-        return Ok(Vec::new());
+    let (body, stream_id) = {
+        let mut guard = FETCH_RESPONSES.lock().unwrap();
+        let resp = guard
+            .get_mut(&response_id)
+            .ok_or("Invalid response handle")?;
+        if !resp.body_present {
+            return Ok(Vec::new());
+        }
+        if resp.body_used {
+            return Err(BODY_ALREADY_USED_MESSAGE);
+        }
+        resp.body_used = true;
+        (resp.body.clone(), resp.body_stream_id)
+    };
+    if let Some(stream_id) = stream_id {
+        return Ok(crate::streams::drain_readable_into_bytes(stream_id));
     }
-    if resp.body_used {
-        return Err(BODY_ALREADY_USED_MESSAGE);
-    }
-    resp.body_used = true;
-    Ok(resp.body.clone())
+    Ok(body)
 }
 
 /// Get response body as text
@@ -1286,6 +1318,7 @@ fn alloc_response(
             redirected: false,
             cached_headers_id: None,
             cached_body_stream_id: None,
+            body_stream_id: None,
         },
     );
     id
@@ -1309,9 +1342,10 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
+    let body_stream_id = take_pending_fetch_body_stream_id();
     // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
     let body_opt = dispatch::body_bytes_from_header(body_ptr);
-    let body_present = body_opt.is_some();
+    let body_present = body_opt.is_some() || body_stream_id.is_some();
     let body = body_opt.unwrap_or_default();
     // NaN / 0.0 are the codegen "no status field" sentinels. Node defaults
     // missing status to 200; any explicit value is truncated toward zero
@@ -1355,13 +1389,14 @@ pub unsafe extern "C" fn js_response_new(
     } else {
         HeadersStore::default()
     };
-    handle_to_f64(alloc_response(
-        status_u16,
-        status_text,
-        headers,
-        body,
-        body_present,
-    ))
+    let id = alloc_response(status_u16, status_text, headers, body, body_present);
+    if let Some(stream_id) = body_stream_id {
+        if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&id) {
+            resp.body_stream_id = Some(stream_id);
+            resp.cached_body_stream_id = Some(stream_id);
+        }
+    }
+    handle_to_f64(id)
 }
 
 /// response.headers — returns a Headers handle (f64). Lazily allocates a Headers entry
@@ -1403,6 +1438,7 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
                 redirected: resp.redirected,
                 cached_headers_id: None,
                 cached_body_stream_id: None,
+                body_stream_id: None,
             }
         })
     };
@@ -1681,6 +1717,14 @@ pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
 /// single stream, and a fresh one each call would silently unlock a held
 /// reader (#1650).
 fn response_body_stream(resp_id: usize) -> f64 {
+    if let Some(id) = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&resp_id)
+        .and_then(|r| r.body_stream_id)
+    {
+        return id as f64;
+    }
     if let Some(id) = FETCH_RESPONSES
         .lock()
         .unwrap()

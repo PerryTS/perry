@@ -832,7 +832,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                 .lookup_index_in_scope(&name, outer_locals_len)
                                 .is_some();
                             if !already_in_scope {
-                                let id = ctx.define_local(name.clone(), ty);
+                                let id = ctx.define_local(name.clone(), ty.clone());
                                 // Mark as hoisted so closures created
                                 // before the var's init expression see
                                 // it through a box (mutable capture),
@@ -881,7 +881,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                 nested_var_prologue.push(Stmt::Let {
                                     id,
                                     name,
-                                    ty: Type::Any,
+                                    ty,
                                     mutable: true,
                                     init: Some(Expr::Undefined),
                                 });

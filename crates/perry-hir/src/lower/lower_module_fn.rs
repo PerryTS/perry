@@ -18,31 +18,89 @@ use crate::lower_types::hoisted_text_codec::{
     infer_hoisted_text_codec_var_type, require_literal_specifier,
 };
 
-fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
-    // A file is strict-mode code exactly when Node runs it as an ES module. Three
-    // independent signals make it one (#6542); any is sufficient:
-    //
-    // 1. The module FORMAT — an ESM extension (`.mjs`/`.mts`) or an ESM package
-    //    context (`"type":"module"`). This holds even with NO in-file import/
-    //    export syntax: e.g. Perry's own test-suite `.ts` files carry no module
-    //    syntax yet run strict because the repo's `package.json` sets
-    //    `"type":"module"`, so `Object.freeze(o); o.x = 1` must throw there.
-    if perry_parser::file_is_es_module_by_format(source_file_path) {
-        return true;
+fn should_enable_react_automatic_jsx(name: &str, ast_module: &ast::Module) -> bool {
+    let is_jsx_source = name.ends_with(".tsx")
+        || name.ends_with(".jsx")
+        || name.contains(".tsx?")
+        || name.contains(".jsx?");
+    if !is_jsx_source {
+        return false;
     }
-    // 2. An ES `import`/`export` ANYWHERE in the body makes the source a Module
-    //    (Source Text Module Record) even outside any package context — the
-    //    declaration need not precede other statements, so a trailing
-    //    `export {}` or a `const x = 1; export function f() {}` both count.
-    if ast_module
-        .body
-        .iter()
-        .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
+
+    let mut has_explicit_react_import = false;
+    let mut has_react_ecosystem_import = false;
+    for item in &ast_module.body {
+        let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import)) = item else {
+            continue;
+        };
+        let source = import.src.value.to_string_lossy().to_string();
+        let has_runtime_value = !import.type_only
+            && (import.specifiers.is_empty()
+                || import.specifiers.iter().any(|specifier| match specifier {
+                    ast::ImportSpecifier::Named(named) => !named.is_type_only,
+                    ast::ImportSpecifier::Default(_) | ast::ImportSpecifier::Namespace(_) => true,
+                }));
+        let provides_react_object = !import.type_only
+            && import.specifiers.iter().any(|specifier| {
+                matches!(
+                    specifier,
+                    ast::ImportSpecifier::Default(_) | ast::ImportSpecifier::Namespace(_)
+                )
+            });
+        if source == "react" && provides_react_object {
+            has_explicit_react_import = true;
+        }
+        if has_runtime_value
+            && (source.starts_with("@tanstack/react-")
+                || source == "@tanstack/react-router"
+                || source == "react/jsx-runtime")
+        {
+            has_react_ecosystem_import = true;
+        }
+    }
+
+    if has_explicit_react_import {
+        return false;
+    }
+
+    has_react_ecosystem_import
+        || name.contains("node_modules/@tanstack/react-")
+        || name.contains("node_modules/@tanstack/react-router/")
+}
+
+fn enable_react_automatic_jsx(module: &mut Module, ctx: &mut LoweringContext) {
+    const LOCAL: &str = "__perry_react_auto";
+    let local = LOCAL.to_string();
+    ctx.register_imported_func(local.clone(), local.clone());
+    ctx.namespace_import_locals.insert(local.clone());
+    ctx.namespace_import_sources
+        .insert(local.clone(), "react".to_string());
+    ctx.react_default_import_local = Some(local.clone());
+    module.imports.push(Import {
+        source: "react".to_string(),
+        specifiers: vec![ImportSpecifier::Namespace { local }],
+        is_native: false,
+        module_kind: ModuleKind::NativeCompiled,
+        resolved_path: None,
+        type_only: false,
+        is_dynamic: false,
+        is_dynamic_target: false,
+        is_deferred_require: false,
+        is_adopted_require: false,
+    });
+}
+
+fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
+    // Node treats ESM format/package context and any source-text module as
+    // strict even without a directive prologue (#6542).
+    if perry_parser::file_is_es_module_by_format(source_file_path)
+        || ast_module
+            .body
+            .iter()
+            .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
     {
         return true;
     }
-    // 3. Otherwise this is CommonJS script text; it is strict only if the
-    //    directive prologue opens with a `"use strict"` directive.
     for item in &ast_module.body {
         let ast::ModuleItem::Stmt(stmt) = item else {
             break;
@@ -438,6 +496,9 @@ pub fn lower_module_full(
         ctx.seed_imported_class_accessors(seed);
     }
     let mut module = Module::new(name);
+    if should_enable_react_automatic_jsx(name, ast_module) {
+        enable_react_automatic_jsx(&mut module, &mut ctx);
+    }
 
     // Pre-scan for `new Function` / `Function(...)` constant-argument
     // resolution: single-assignment module vars, `toString`-bearing object

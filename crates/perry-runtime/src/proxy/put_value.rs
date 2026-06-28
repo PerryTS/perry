@@ -167,6 +167,27 @@ pub extern "C" fn js_put_value_set(
                 return value;
             }
         }
+        // Web Streams handles are finite f64 ids in the stream-id band, not
+        // heap objects. They still need ordinary expando property writes for
+        // userland fields such as ReactDOM's `stream.allReady`. Route through
+        // the registered handle setter so stdlib-owned handle storage remains
+        // consistent with stdlib-owned handle reads.
+        if let Some(name) = key_to_rust_string(property_key) {
+            if target.is_finite() && target > 0.0 && target.fract() == 0.0 {
+                let id = target as usize;
+                if let Some(probe) = crate::object::stream_handle_probe() {
+                    unsafe {
+                        if probe(id) {
+                            if let Some(dispatch) = crate::object::handle_property_set_dispatch() {
+                                dispatch(id as i64, name.as_ptr(), name.len(), value);
+                            }
+                            return value;
+                        }
+                    }
+                }
+            }
+        }
+
         // Date / RegExp / Error exotic cells: route to the expando-aware
         // setter — the ordinary path below would bit-cast them. Throws on a
         // rejected strict write. (See `object::exotic_expando`.)

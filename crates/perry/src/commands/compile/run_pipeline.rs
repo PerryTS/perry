@@ -3343,7 +3343,10 @@ pub fn run_with_parse_cache(
                     let origin_key_under_origin_name = resolved_origin_name
                         .as_ref()
                         .map(|n| (origin_path.clone(), n.clone()));
-                    if exported_var_names.contains(&origin_key)
+                    let source_exports_object = source_module
+                        .is_some_and(|m| m.exported_objects.iter().any(|n| n == &exported_name));
+                    if source_exports_object
+                        || exported_var_names.contains(&origin_key)
                         || origin_key_under_origin_name
                             .as_ref()
                             .map(|k| exported_var_names.contains(k))

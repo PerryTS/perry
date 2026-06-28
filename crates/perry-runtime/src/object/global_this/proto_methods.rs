@@ -649,6 +649,62 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("text", 0),
                 ],
             );
+            // Web Fetch accessors must be visible as accessor descriptors on
+            // the intrinsic prototype, not just as compiler-known handle
+            // fields. Libraries such as srvx copy `Response.prototype`
+            // descriptors onto lightweight response wrappers and provide their
+            // own getter body. If these names are absent from reflection, the
+            // wrapper's inherited `.body`/`.headers` reads become undefined and
+            // streamed SSR responses are dropped before the underlying stream
+            // is ever pulled.
+            let accessors: &[&str] = if builtin_name == "Response" {
+                &[
+                    "body",
+                    "bodyUsed",
+                    "headers",
+                    "ok",
+                    "redirected",
+                    "status",
+                    "statusText",
+                    "type",
+                    "url",
+                ]
+            } else {
+                &[
+                    "body",
+                    "bodyUsed",
+                    "cache",
+                    "credentials",
+                    "destination",
+                    "duplex",
+                    "headers",
+                    "integrity",
+                    "keepalive",
+                    "method",
+                    "mode",
+                    "redirect",
+                    "referrer",
+                    "referrerPolicy",
+                    "signal",
+                    "url",
+                ]
+            };
+            unsafe {
+                crate::closure::js_register_closure_arity(
+                    global_this_builtin_noop_thunk as *const u8,
+                    0,
+                );
+                for name in accessors {
+                    let getter = crate::closure::js_closure_alloc(
+                        global_this_builtin_noop_thunk as *const u8,
+                        0,
+                    );
+                    if !getter.is_null() {
+                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                        install_builtin_getter(proto_obj, name, getter_bits);
+                    }
+                }
+            }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         #[cfg(feature = "global-webfetch")]

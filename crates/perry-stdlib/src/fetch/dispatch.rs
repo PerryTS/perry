@@ -64,10 +64,13 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             .contains(&value)
     {
         let id = value as usize;
-        // kind == 1 ⇒ live ReadableStream.
+        // kind == 1 ⇒ live ReadableStream. Stash it for the constructor that
+        // requested the body-init conversion: Request drains it to bytes, while
+        // Response preserves it lazily because transformed SSR streams often
+        // produce data only when the downstream consumer pulls.
         if crate::streams::js_stream_handle_kind(id) == 1 {
-            let bytes = crate::streams::drain_readable_into_bytes(id);
-            return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+            PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(id));
+            return 0;
         }
     }
     // #5437: a Node `IncomingMessage` body — the request-body bridge Next.js's

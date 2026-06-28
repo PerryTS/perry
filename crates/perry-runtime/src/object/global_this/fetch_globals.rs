@@ -547,6 +547,46 @@ fn is_uncallable_builtin_super_parent(name: &str) -> bool {
     )
 }
 
+fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    const NAMES: &[&str] = &[
+        "Map",
+        "Set",
+        "WeakMap",
+        "WeakSet",
+        "Array",
+        "ArrayBuffer",
+        "SharedArrayBuffer",
+        "DataView",
+        "Boolean",
+        "Number",
+        "String",
+        "Date",
+        "RegExp",
+        "Promise",
+        "Function",
+        "BigInt",
+        "Symbol",
+        "Object",
+        "Int8Array",
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "Float32Array",
+        "Float64Array",
+        "BigInt64Array",
+        "BigUint64Array",
+    ];
+    NAMES
+        .iter()
+        .any(|name| super::super::instanceof::global_builtin_constructor_class_id(name) == class_id)
+}
+
 /// `super(...)` for `class X extends <runtime-value constructor>` where the
 /// parent expression is an alias of the global `Request`/`Response` constructor
 /// — e.g. `@hono/node-server`'s `class Request extends GlobalRequest` with
@@ -835,6 +875,17 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             }
             let usable = if bits & TAG_MASK == POINTER_TAG {
                 let p = (bits & PTR_MASK) as usize;
+                if super::super::class_registry::is_class_object_ptr(p as *const u8) {
+                    let parent_cid = crate::object::js_object_get_class_id(p as *const _);
+                    if parent_cid != 0 {
+                        if let Some(obj) = subclass_this_object_ptr(this_box) {
+                            super::super::class_constructors::run_class_constructor_on_this_flat(
+                                parent_cid, obj as i64, args_ptr, args_len,
+                            );
+                        }
+                    }
+                    return undef;
+                }
                 // A real callability test: a closure, or a per-evaluation class
                 // OBJECT (constructor). The prior `class_id != 0` accepted any
                 // pointer-tagged object with a class id — including non-callable
@@ -842,7 +893,6 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 // skipped the `parent_closure_in_chain` recovery below and
                 // dispatched `js_native_call_value` on a non-function.
                 crate::closure::is_closure_ptr(p)
-                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
             } else {
                 // INT32-tagged ClassRefs route through the static super paths
                 // before reaching here; anything else (undefined / a stale
@@ -854,6 +904,15 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                     let cid = crate::object::js_object_get_class_id(obj);
                     if let Some(addr) = super::super::class_registry::parent_closure_in_chain(cid) {
                         callee = f64::from_bits(POINTER_TAG | addr as u64);
+                    } else if let Some(parent_cid) = crate::object::get_parent_class_id(cid) {
+                        if parent_cid != 0
+                            && !is_uncallable_builtin_super_parent_class_id(parent_cid)
+                        {
+                            super::super::class_constructors::run_class_constructor_on_this_flat(
+                                parent_cid, obj as i64, args_ptr, args_len,
+                            );
+                            return undef;
+                        }
                     }
                 }
             }

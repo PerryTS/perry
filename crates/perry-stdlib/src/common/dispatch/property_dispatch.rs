@@ -53,7 +53,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         .contains(&(handle as usize))
         && crate::streams::js_stream_handle_is_registered(handle as usize)
     {
-        return crate::streams::dispatch_stream_property(handle as f64, property_name);
+        let value = crate::streams::dispatch_stream_property(handle as f64, property_name);
+        if value.to_bits() != 0x7FFC_0000_0000_0001 {
+            return value;
+        }
     }
 
     if let Some(value) =
