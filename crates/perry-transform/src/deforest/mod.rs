@@ -174,4 +174,58 @@ pub fn run(module: &mut Module) {
         }
         rewrite_call_sites_in_stmts(&mut func.body, &producers, &out_param_ids, &mut next_local);
     }
+
+    // Class member bodies (constructors, methods, accessors, static methods)
+    // are equally valid producer call sites — `detect_producers` already
+    // scans them for unsafe usages, so a producer admitted here may have its
+    // only `let x = f(...)` call inside a method. Without rewriting those
+    // sites the call keeps its original arity while the producer's signature
+    // gained the `__deforest_out` param; codegen then passes `undefined` for
+    // the missing arg and the body operates on a non-array, SIGSEGVing (same
+    // class of arity-mismatch miscompile as the in-closure bail-out, #5136 —
+    // but here the call sites are ordinary statement bodies we can rewrite
+    // rather than bail on). Producers are only ever free functions
+    // (`analyze_producer` runs on `module.functions`), so no skip is needed.
+    for class in &mut module.classes {
+        if let Some(ctor) = &mut class.constructor {
+            rewrite_call_sites_in_stmts(
+                &mut ctor.body,
+                &producers,
+                &out_param_ids,
+                &mut next_local,
+            );
+        }
+        for method in &mut class.methods {
+            rewrite_call_sites_in_stmts(
+                &mut method.body,
+                &producers,
+                &out_param_ids,
+                &mut next_local,
+            );
+        }
+        for (_, getter) in &mut class.getters {
+            rewrite_call_sites_in_stmts(
+                &mut getter.body,
+                &producers,
+                &out_param_ids,
+                &mut next_local,
+            );
+        }
+        for (_, setter) in &mut class.setters {
+            rewrite_call_sites_in_stmts(
+                &mut setter.body,
+                &producers,
+                &out_param_ids,
+                &mut next_local,
+            );
+        }
+        for method in &mut class.static_methods {
+            rewrite_call_sites_in_stmts(
+                &mut method.body,
+                &producers,
+                &out_param_ids,
+                &mut next_local,
+            );
+        }
+    }
 }

@@ -279,6 +279,124 @@ fn still_deforests_when_caller_is_not_a_closure() {
     );
 }
 
+#[test]
+fn deforests_producer_called_from_class_method() {
+    // Regression: a producer called via `let v = helper()` inside a CLASS
+    // METHOD must have its call site rewritten in lock-step with the
+    // producer's signature. `detect_producers` already scans method bodies,
+    // so it admits the producer — but before phase-3 covered class member
+    // bodies the method's call site kept its original 0-arg form while
+    // `helper` gained the `__deforest_out` param. Codegen then passed
+    // `undefined` for the missing arg and the body operated on a non-array,
+    // SIGSEGVing (same arity-mismatch class as the in-closure bail, #5136).
+    //
+    //   function helper() { const out = []; out.push(1); return out; }
+    //   class C { m() { const v = helper(); return v.length; } }
+    let helper = make_simple_producer(); // id=1, the producer
+
+    let method = Function {
+        id: 2,
+        name: "m".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 30,
+                name: "v".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(30)),
+                property: "length".to_string(),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+
+    let class = perry_hir::Class {
+        id: 10,
+        name: "C".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: Vec::new(),
+        constructor: None,
+        methods: vec![method],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        is_nested: false,
+        aliases: Vec::new(),
+    };
+
+    let mut module = Module::new("m");
+    module.functions = vec![helper];
+    module.classes = vec![class];
+
+    assert!(
+        !detect_producers(&module).is_empty(),
+        "producer with a class-method caller should still deforest"
+    );
+
+    run(&mut module);
+
+    let helper_after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert_eq!(
+        helper_after.params.len(),
+        1,
+        "producer should gain the synthetic accumulator param"
+    );
+
+    // Every call to the producer (id=1) in the method body must now match
+    // the rewritten arity (1). The rewrite turns `let v = helper()` into
+    // `let v = []; helper(v);`, so the surviving call is a `Stmt::Expr`
+    // passing the accumulator. A stale `[0]` here is exactly the miscompile.
+    let method_after = &module.classes[0].methods[0];
+    let mut arities = Vec::new();
+    for stmt in &method_after.body {
+        let init = match stmt {
+            Stmt::Let { init: Some(e), .. } => Some(e),
+            Stmt::Expr(e) | Stmt::Throw(e) => Some(e),
+            Stmt::Return(Some(e)) => Some(e),
+            _ => None,
+        };
+        if let Some(Expr::Call { callee, args, .. }) = init {
+            if matches!(callee.as_ref(), Expr::FuncRef(1)) {
+                arities.push(args.len());
+            }
+        }
+    }
+    assert_eq!(
+        arities,
+        vec![1],
+        "the method's producer call site must be rewritten to pass the out-param"
+    );
+}
+
 fn make_simple_producer() -> Function {
     Function {
         id: 1,

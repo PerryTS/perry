@@ -39,6 +39,15 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
         if let Some(ctor) = &class.constructor {
             scan_funcref_misuses(&ctor.body, &candidates, &mut by_ref_used);
         }
+        for (_, getter) in &class.getters {
+            scan_funcref_misuses(&getter.body, &candidates, &mut by_ref_used);
+        }
+        for (_, setter) in &class.setters {
+            scan_funcref_misuses(&setter.body, &candidates, &mut by_ref_used);
+        }
+        for m in &class.static_methods {
+            scan_funcref_misuses(&m.body, &candidates, &mut by_ref_used);
+        }
     }
     candidates.retain(|id, _| !by_ref_used.contains(id));
     if candidates.is_empty() {
@@ -63,6 +72,15 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
         if let Some(ctor) = &class.constructor {
             scan_unsafe_call_sites(&ctor.body, &candidates, &mut unsupported_call);
         }
+        for (_, getter) in &class.getters {
+            scan_unsafe_call_sites(&getter.body, &candidates, &mut unsupported_call);
+        }
+        for (_, setter) in &class.setters {
+            scan_unsafe_call_sites(&setter.body, &candidates, &mut unsupported_call);
+        }
+        for m in &class.static_methods {
+            scan_unsafe_call_sites(&m.body, &candidates, &mut unsupported_call);
+        }
     }
     candidates.retain(|id, _| !unsupported_call.contains(id));
     if candidates.is_empty() {
@@ -85,6 +103,15 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
         }
         if let Some(ctor) = &class.constructor {
             scan_producers_used_in_closures(&ctor.body, &candidates, &mut in_closure);
+        }
+        for (_, getter) in &class.getters {
+            scan_producers_used_in_closures(&getter.body, &candidates, &mut in_closure);
+        }
+        for (_, setter) in &class.setters {
+            scan_producers_used_in_closures(&setter.body, &candidates, &mut in_closure);
+        }
+        for m in &class.static_methods {
+            scan_producers_used_in_closures(&m.body, &candidates, &mut in_closure);
         }
     }
     candidates.retain(|id, _| !in_closure.contains(id));
