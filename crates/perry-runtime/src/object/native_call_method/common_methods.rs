@@ -179,6 +179,16 @@ pub(super) unsafe fn dispatch_common(
                 }
                 let obj_ptr = jsval.as_pointer::<ObjectHeader>();
                 if !obj_ptr.is_null() && is_valid_obj_ptr(obj_ptr as *const u8) {
+                    // perry's hidden `__perry_collection_backing__` runtime-internal
+                    // field lives in a class instance's keys_array but is never a
+                    // reflectable own property — `hasOwnProperty` must report false.
+                    if (*obj_ptr).class_id != 0 {
+                        if let Some(key) = super::has_own_helpers::str_from_string_header(key_str) {
+                            if crate::object::field_get_set::is_internal_runtime_key(key) {
+                                return Some(f64::from_bits(JSValue::bool(false).bits()));
+                            }
+                        }
+                    }
                     return Some(f64::from_bits(
                         JSValue::bool(own_key_present(obj_ptr as *mut ObjectHeader, key_str))
                             .bits(),

@@ -772,23 +772,24 @@ pub(crate) unsafe fn instance_private_key_hidden(
         .unwrap_or(false)
 }
 
-/// True for perry's hidden runtime-internal own keys (`__perry_*`) — currently
-/// the `__perry_collection_backing__` field stashed on a `class … extends
-/// Map/Set` instance. These physically live in the instance keys_array but must
-/// NEVER surface to `Object.keys` / `for…in` / `Object.getOwnPropertyNames` /
-/// `JSON.stringify` / `propertyIsEnumerable`. They are only ever installed on
-/// class instances (`class_id != 0`), so a plain object literal with such a key
-/// (`{"__perry_x": 1}`) is unaffected — every caller already gates on the
-/// instance/private context before consulting this predicate.
+/// True for perry's hidden runtime-internal own keys — currently exactly the
+/// `__perry_collection_backing__` field stashed on a `class … extends Map/Set`
+/// instance. This physically lives in the instance keys_array but must NEVER
+/// surface to `Object.keys` / `for…in` / `Object.getOwnPropertyNames` /
+/// `JSON.stringify` / `Object.hasOwn` / `hasOwnProperty` / `propertyIsEnumerable`.
+///
+/// Matches the backing key EXACTLY (an allowlist), not a broad `__perry_*`
+/// prefix — a prefix test would wrongly hide legitimate user properties whose
+/// name happens to begin with `__perry_` (e.g. `this.__perry_user = 1`).
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
-    b.starts_with(b"__perry_")
+    b == crate::object::map_set_subclass::BACKING_KEY
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].
 #[inline]
 pub(crate) fn is_internal_runtime_key(s: &str) -> bool {
-    s.starts_with("__perry_")
+    is_internal_runtime_key_bytes(s.as_bytes())
 }
 
 /// True when a per-property descriptor marks `key_val`'s name non-enumerable

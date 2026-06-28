@@ -25,7 +25,7 @@ use crate::value::{JSValue, POINTER_MASK};
 
 /// Hidden field on a Map/Set subclass instance holding the NaN-boxed backing
 /// `MapHeader`/`SetHeader` pointer.
-const BACKING_KEY: &[u8] = b"__perry_collection_backing__";
+pub(crate) const BACKING_KEY: &[u8] = b"__perry_collection_backing__";
 
 #[derive(Clone, Copy)]
 pub(crate) enum CollectionBacking {

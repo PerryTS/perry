@@ -960,13 +960,14 @@ fn js_set_foreach_impl(
     let has_override = collection_override.to_bits() != crate::value::TAG_UNDEFINED;
     let collection_handle = scope.root_nanbox_f64(collection_override);
     unsafe {
-        let set = set_handle.get_raw_const_ptr::<SetHeader>();
-        let size = (*set).size as usize;
-        if size == 0 {
-            return;
-        }
-
-        for i in 0..size {
+        // ECMA-262 24.2.3.6: Set.prototype.forEach iterates [[SetData]] in
+        // insertion order, re-reading the live entry count each step. Entries
+        // appended during the callback (`set.add` inside the callback) MUST be
+        // visited, so the loop bound is re-evaluated against `(*set).size` every
+        // iteration rather than snapshotting the initial size — mirrors
+        // `js_map_foreach_impl`.
+        let mut i = 0usize;
+        loop {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
             if i >= (*set).size as usize {
                 break;
@@ -987,6 +988,7 @@ fn js_set_foreach_impl(
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
+            i += 1;
         }
     }
 }

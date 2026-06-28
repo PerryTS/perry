@@ -92,14 +92,18 @@ pub(super) unsafe fn dispatch_map_set(
             &[]
         };
         // forEach: run over the backing but observe the subclass instance.
-        if method_name == "forEach" && !args.is_empty() {
+        if method_name == "forEach" {
+            // Pass the callback through even when absent so the impl's
+            // `js_validate_array_callback` throws `TypeError: callback is not a
+            // function` (matching Node) instead of silently returning undefined.
+            let callback = args.first().copied().unwrap_or(undefined);
             let this_arg = args.get(1).copied().unwrap_or(undefined);
             match backing {
                 super::super::map_set_subclass::CollectionBacking::Map(m) => {
-                    crate::map::js_map_foreach_with_collection(m, args[0], this_arg, object);
+                    crate::map::js_map_foreach_with_collection(m, callback, this_arg, object);
                 }
                 super::super::map_set_subclass::CollectionBacking::Set(s) => {
-                    crate::set::js_set_foreach_with_collection(s, args[0], this_arg, object);
+                    crate::set::js_set_foreach_with_collection(s, callback, this_arg, object);
                 }
             }
             return Some(undefined);
