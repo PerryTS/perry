@@ -243,13 +243,20 @@ fn unicode_escape_len(chars: &[char], bs: usize, in_class: bool) -> Option<usize
     }
 }
 
-/// True if `\<letter>` immediately following a `[` opens a recognised
-/// CharacterClassEscape (`\d \D \s \S \w \W`) — i.e. a range endpoint that may
-/// not participate in a `-` range under `/u`.
+/// True if the `\` at `backslash` opens a CharacterClassEscape (`\d \D \s \S
+/// \w \W` or a `\p{…}` / `\P{…}` property escape) — i.e. a class member that
+/// may not be an endpoint of a `-` range under `/u` (`[\d-a]`, `[\p{L}-a]`).
 fn class_escape_is_set(chars: &[char], backslash: usize) -> bool {
     matches!(
         chars.get(backslash + 1),
-        Some('d') | Some('D') | Some('s') | Some('S') | Some('w') | Some('W')
+        Some('d')
+            | Some('D')
+            | Some('s')
+            | Some('S')
+            | Some('w')
+            | Some('W')
+            | Some('p')
+            | Some('P')
     )
 }
 
@@ -1513,6 +1520,11 @@ mod tests {
             "[a-\\w]",
             "[\\d-\\d]",
             "[\\s-\\S]",
+            // Property escapes are CharacterClassEscapes too (CodeRabbit #5749).
+            "[\\p{L}-a]",
+            "[a-\\p{L}]",
+            "[\\p{L}-\\p{N}]",
+            "[\\P{L}-a]",
             // Quantified assertions (unicode_restricted_quantifiable_assertion).
             "(?=.)*",
             "(?=.)+",
@@ -1564,6 +1576,8 @@ mod tests {
             "[\\d]",
             "[\\d-]",
             "[-\\d]",
+            "[\\p{L}-]",
+            "[-\\p{L}]",
             "[\\w_]",
             "[\\b]",
             "[\\p{L}]",
