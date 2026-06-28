@@ -222,6 +222,52 @@ fn round_decision(more_half: bool, exactly_half: bool, kept_is_odd: bool) -> boo
     }
 }
 
+/// Remainder of a big-endian ASCII decimal-digit string modulo a small divisor.
+/// Folds digit-by-digit so the operand width is unbounded (the scaled integer in
+/// increment rounding can exceed `u128` for wide `maximumFractionDigits`).
+fn decimal_mod_small(digits: &[u8], divisor: u64) -> u64 {
+    let mut r: u64 = 0;
+    for &d in digits {
+        r = (r * 10 + (d - b'0') as u64) % divisor;
+    }
+    r
+}
+
+/// Add a small value into a big-endian ASCII decimal-digit string in place,
+/// prepending digits on overflow (`"99"` + 5 → `"104"`).
+fn decimal_add_small(digits: &mut Vec<u8>, add: u64) {
+    let mut carry = add;
+    let mut i = digits.len();
+    while carry > 0 {
+        if i == 0 {
+            digits.insert(0, b'0');
+            i = 1;
+        }
+        i -= 1;
+        let sum = (digits[i] - b'0') as u64 + carry;
+        digits[i] = (sum % 10) as u8 + b'0';
+        carry = sum / 10;
+    }
+}
+
+/// Subtract a small value (assumed ≤ the represented number) from a big-endian
+/// ASCII decimal-digit string in place (`"104"` − 5 → `"099"`).
+fn decimal_sub_small(digits: &mut [u8], sub: u64) {
+    let mut borrow = sub;
+    let mut i = digits.len();
+    while borrow > 0 {
+        i -= 1;
+        let s = (borrow % 10) as i64;
+        borrow /= 10;
+        let mut v = (digits[i] - b'0') as i64 - s;
+        if v < 0 {
+            v += 10;
+            borrow += 1;
+        }
+        digits[i] = v as u8 + b'0';
+    }
+}
+
 /// Round the decimal `int_part.frac_part` to the nearest multiple of
 /// `increment` at exactly `frac_digits` fractional places, under the active
 /// rounding mode (ECMA-402 `roundingIncrement`). Returns `(int, frac)` with the
@@ -237,7 +283,10 @@ pub(crate) fn round_to_increment(
 ) -> (String, String) {
     // Scale by 10^frac_digits so the increment acts on integers: the first
     // `int_len + frac_digits` digits form the scaled integer `q`; any remaining
-    // digits are the dropped fractional tail used to break ties.
+    // digits are the dropped fractional tail used to break ties. `q` is kept as a
+    // digit string (it can exceed u128 for wide fraction scales / large values),
+    // and reduced via small-divisor modular arithmetic; the sanctioned increment
+    // (≤ 5000) and the dropped tail (bounded by the shortest decimal) stay small.
     let mut combined: Vec<u8> = Vec::with_capacity(int_part.len() + frac_part.len());
     combined.extend(int_part.bytes());
     combined.extend(frac_part.bytes());
@@ -245,36 +294,28 @@ pub(crate) fn round_to_increment(
     while combined.len() < cut {
         combined.push(b'0');
     }
-    let dropped = &combined[cut..];
-    // Astronomically large operands (q or the tail past u128) fall back to plain
-    // fraction rounding — unreachable for any realistic formatter input.
-    let fallback = || round_to_fraction(int_part, frac_part, frac_digits);
-    let Ok(q) = std::str::from_utf8(&combined[..cut])
-        .unwrap()
-        .parse::<u128>()
-    else {
-        return fallback();
-    };
+    let dropped = combined[cut..].to_vec();
+    let mut q_digits = combined[..cut].to_vec();
+    let inc = increment as u64;
     let dropped_zero = dropped.iter().all(|&d| d == b'0');
+    // The dropped tail comes from the shortest round-trip decimal, so it fits
+    // u128; an unexpectedly long tail falls back to plain fraction rounding.
     let dropped_int: u128 = if dropped.is_empty() {
         0
     } else {
-        match std::str::from_utf8(dropped).unwrap().parse() {
+        match std::str::from_utf8(&dropped).unwrap().parse() {
             Ok(v) => v,
-            Err(_) => return fallback(),
+            Err(_) => return round_to_fraction(int_part, frac_part, frac_digits),
         }
     };
-    let rem = q % increment;
-    let base = q - rem;
-    let m = if rem == 0 && dropped_zero {
-        q // exact multiple — no rounding.
-    } else {
+    let rem = decimal_mod_small(&q_digits, inc);
+    if !(rem == 0 && dropped_zero) {
         // Position of `rem.dropped` within [0, increment): compare against
         // increment/2 by cross-multiplying out the dropped fraction
         // (2·rem·10^k + 2·dropped) vs increment·10^k, with k = dropped digits.
         let classify = || -> Option<(bool, bool)> {
             let pow10 = 10u128.checked_pow(dropped.len() as u32)?;
-            let lhs = rem
+            let lhs = (rem as u128)
                 .checked_mul(2)?
                 .checked_mul(pow10)?
                 .checked_add(dropped_int.checked_mul(2)?)?;
@@ -282,22 +323,24 @@ pub(crate) fn round_to_increment(
             Some((lhs > rhs, lhs == rhs))
         };
         let Some((more_half, exactly_half)) = classify() else {
-            return fallback();
+            return round_to_fraction(int_part, frac_part, frac_digits);
         };
-        if round_decision(more_half, exactly_half, (base / increment) % 2 == 1) {
-            base + increment
-        } else {
-            base
+        // Parity of q/increment (consulted only by halfEven): q ≡ rem (mod inc),
+        // so `q mod 2·inc` is `rem` for an even quotient and `rem+inc` for odd.
+        let kept_is_odd = decimal_mod_small(&q_digits, inc.saturating_mul(2)) != rem;
+        // Round down to the lower multiple, then up one increment if required.
+        decimal_sub_small(&mut q_digits, rem);
+        if round_decision(more_half, exactly_half, kept_is_odd) {
+            decimal_add_small(&mut q_digits, inc);
         }
-    };
-    // Place the decimal point `frac_digits` from the right of the scaled integer.
-    let mut m_str = m.to_string().into_bytes();
-    while m_str.len() <= frac_digits {
-        m_str.insert(0, b'0');
     }
-    let split = m_str.len() - frac_digits;
-    let int_str = String::from_utf8(m_str[..split].to_vec()).unwrap();
-    let frac_str = String::from_utf8(m_str[split..].to_vec()).unwrap();
+    // Place the decimal point `frac_digits` from the right of the scaled integer.
+    while q_digits.len() <= frac_digits {
+        q_digits.insert(0, b'0');
+    }
+    let split = q_digits.len() - frac_digits;
+    let int_str = String::from_utf8(q_digits[..split].to_vec()).unwrap();
+    let frac_str = String::from_utf8(q_digits[split..].to_vec()).unwrap();
     (strip_leading_zeros(int_str), frac_str)
 }
 
@@ -1284,7 +1327,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
     match r.notation.as_str() {
         "scientific" | "engineering" => {
             let msd = decimal_msd_exponent(int_part, frac_part);
-            let exp = if r.notation == "engineering" {
+            let mut exp = if r.notation == "engineering" {
                 (msd as f64 / 3.0).floor() as i32 * 3
             } else {
                 msd
@@ -1306,11 +1349,36 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
             // The fraction path rounds the mantissa to `maxFrac` places (honoring
             // roundingIncrement); significant rounding already normalizes its own
             // trailing zeros.
-            let (mut i_out, f_out) = if r.use_sig {
+            let (mut i_out, mut f_out) = if r.use_sig {
                 round_to_significant(m_int, m_frac, r.min_sig, r.max_sig)
             } else {
                 round_fraction_or_increment(m_int, m_frac, r)
             };
+            // Rounding can carry the mantissa into an extra integer digit
+            // (9.9 → 10); the significand is then exactly 10^(msd+1). Recompute the
+            // exponent from the grown magnitude and reshape so scientific emits
+            // `1E1` rather than `10E0` (engineering keeps the digit when the new
+            // magnitude still falls in the same power-of-1000 band, e.g. `100E3`).
+            if i_out.len() > int_digits {
+                let new_msd = msd + 1;
+                exp = if r.notation == "engineering" {
+                    (new_msd as f64 / 3.0).floor() as i32 * 3
+                } else {
+                    new_msd
+                };
+                let new_int_digits = (new_msd - exp + 1).max(1) as usize;
+                let sig = format!("{i_out}{f_out}");
+                let sig = if sig.len() < new_int_digits {
+                    format!("{:0<width$}", sig, width = new_int_digits)
+                } else {
+                    sig
+                };
+                i_out = sig[..new_int_digits].to_string();
+                f_out = sig[new_int_digits..].to_string();
+                if !r.use_sig {
+                    f_out = trim_fraction(&f_out, r.min_frac as usize);
+                }
+            }
             while (i_out.len() as u32) < r.min_int {
                 i_out.insert(0, '0');
             }
@@ -1452,7 +1520,11 @@ pub(crate) fn push_style_suffix(
 /// `number_instance_parts`.
 pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> {
     let locale = &r.locale;
-    let frac_digits = r.currency.as_deref().map_or(2, currency_fraction_digits) as usize;
+    // Use the *resolved* fraction width (which already folds in the currency's
+    // default digits plus any minimum/maximumFractionDigits options) so the
+    // increment grid and the displayed precision agree — e.g. 3 fraction digits
+    // snap on 0.005 steps, not the currency-default 0.05.
+    let frac_digits = r.max_frac as usize;
     // The native float renderer below doesn't honor roundingIncrement; when set,
     // snap the magnitude onto the increment grid first (digit-string rounding,
     // respecting roundingMode) so the renderer formats an already-gridded value.
