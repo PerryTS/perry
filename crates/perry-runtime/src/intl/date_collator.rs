@@ -110,19 +110,27 @@ fn date_time_format_to_parts_value(obj: *const ObjectHeader, value: f64) -> f64 
 }
 
 /// Append a `timeZoneName` part when the `timeZoneName` option is set and the
-/// value being formatted denotes a real instant (a `Date` or numeric
-/// timestamp). A Temporal *plain* value (PlainDate/PlainTime/PlainDateTime/…)
-/// carries no time zone, so it must NOT print one — see
-/// `temporal-*-formatting-timezonename.js`. Perry ships no CLDR zone-name data,
-/// so the rendered label is best-effort (the in-scope tests observe only the
-/// part's presence and string-ness, all with the UTC default zone).
+/// value being formatted is anchored to the timeline (a `Date`/number, or a
+/// `Temporal.Instant`). A Temporal *plain* value (PlainDate/PlainTime/
+/// PlainDateTime/PlainYearMonth/PlainMonthDay) carries no time zone, so it must
+/// NOT print one — see `temporal-*-formatting-timezonename.js`.
+/// (`Temporal.ZonedDateTime`/`Duration` are rejected upstream by
+/// `date_arg_to_clipped_ms` and never reach here.) Perry ships no CLDR
+/// zone-name data, so the rendered label is best-effort (the in-scope tests
+/// observe only the part's presence and string-ness, all with the UTC default).
 fn append_time_zone_name_part(
     parts: &mut Vec<(&'static str, String)>,
     obj: *const ObjectHeader,
     value: f64,
 ) {
-    if crate::temporal::is_temporal_value(value) {
-        return;
+    use crate::temporal::TemporalKind::*;
+    if let Some(kind) = crate::temporal::temporal_kind(value) {
+        if matches!(
+            kind,
+            PlainDate | PlainTime | PlainDateTime | PlainYearMonth | PlainMonthDay
+        ) {
+            return;
+        }
     }
     if let Some(style) = get_string_field(obj, KEY_TIME_ZONE_NAME) {
         let tz = get_string_field(obj, KEY_TIME_ZONE).unwrap_or_else(|| "UTC".to_string());
