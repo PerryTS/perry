@@ -824,7 +824,11 @@ pub(super) fn resolve_package_source_entry(
         }
     }
 
-    // For subpaths, try src/<subpath>.ts
+    // For subpaths, try src/<subpath>.ts first. If that shorthand does not
+    // exist, respect package.json "exports" for the subpath before considering
+    // the package root. Falling back to src/index.ts for a subpath misroutes
+    // imports like `@tanstack/router-core/isServer` to the root barrel and
+    // leaves callers linked against symbols that the root never exports.
     if let Some(sub) = subpath {
         let src_path = package_dir.join("src").join(sub);
         if let Some(resolved) = resolve_with_extensions(&src_path) {
@@ -832,6 +836,9 @@ pub(super) fn resolve_package_source_entry(
                 return Some(resolved);
             }
         }
+
+        let normal_entry = normal_entry?;
+        return prefer_ts_source_for_package_entry(package_dir, normal_entry);
     }
 
     // Try src/index.ts (most common TS source entry)
@@ -844,6 +851,13 @@ pub(super) fn resolve_package_source_entry(
 
     // Try using normal entry resolution but prefer TS over JS
     let normal_entry = normal_entry?;
+    prefer_ts_source_for_package_entry(package_dir, normal_entry)
+}
+
+fn prefer_ts_source_for_package_entry(
+    package_dir: &Path,
+    normal_entry: PathBuf,
+) -> Option<PathBuf> {
     if is_js_file(&normal_entry) {
         // Try .ts equivalent of the .js entry
         let ts_path = normal_entry.with_extension("ts");
@@ -869,7 +883,7 @@ pub(super) fn resolve_package_source_entry(
         }
     }
 
-    None
+    Some(normal_entry)
 }
 
 /// Resolve exports field from package.json

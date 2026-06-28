@@ -14,6 +14,7 @@ use swc_ecma_ast as ast;
 
 use super::*;
 use crate::ir::*;
+use crate::lower_types::{infer_hoisted_text_codec_var_type, require_literal_specifier};
 
 fn module_has_strict_mode(ast_module: &ast::Module, source_file_path: &str) -> bool {
     // A file is strict-mode code exactly when Node runs it as an ES module. Three
@@ -622,6 +623,7 @@ pub fn lower_module_full(
             _ => None,
         };
         if let Some(var_decl) = var_decl {
+            let mut builtin_aliases_in_decl = HashSet::new();
             for decl in &var_decl.decls {
                 // #4461: `var X = class { ... }` is lowered as a class
                 // expression bound to the name `X` (see stmt.rs) — the class
@@ -637,12 +639,24 @@ pub fn lower_module_full(
                 }
                 if let ast::Pat::Ident(ident) = &decl.name {
                     let name = ident.id.sym.to_string();
+                    if decl.init.as_deref().and_then(require_literal_specifier) == Some("util")
+                        || decl.init.as_deref().and_then(require_literal_specifier)
+                            == Some("node:util")
+                    {
+                        builtin_aliases_in_decl.insert(name.clone());
+                    }
                     if ctx.lookup_local(&name).is_none() {
-                        let ty = ident
-                            .type_ann
-                            .as_ref()
-                            .map(|ann| extract_ts_type(&ann.type_ann))
-                            .unwrap_or(Type::Any);
+                        let ty = infer_hoisted_text_codec_var_type(decl, ident, |name| {
+                            builtin_aliases_in_decl.contains(name)
+                                || matches!(
+                                    ctx.lookup_builtin_module_alias(name),
+                                    Some("util" | "node:util")
+                                )
+                                || matches!(
+                                    ctx.lookup_native_module(name),
+                                    Some(("util" | "node:util", None))
+                                )
+                        });
                         ctx.define_local(name.clone(), ty);
                         ctx.pre_registered_module_vars.insert(name);
                         if var_decl.kind == ast::VarDeclKind::Var {
