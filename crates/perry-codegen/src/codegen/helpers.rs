@@ -516,6 +516,13 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
         "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
         "android" => Some("aarch64-unknown-linux-android".to_string()),
+        // #5742: Android x86_64 (emulator / x86_64 devices). Without this arm
+        // `resolve_target_triple` returned None for `--target android-x86_64`,
+        // so codegen fell back to the host triple (e.g. x86_64-pc-windows-msvc)
+        // and emitted COFF objects, which the Android linker rejects with
+        // `unknown file type`. Mirrors the `-unknown-` LLVM-triple form of the
+        // arm64 `android` arm above (cf. harmonyos / harmonyos-simulator).
+        "android-x86_64" => Some("x86_64-unknown-linux-android".to_string()),
         // Wear OS is Android-on-a-watch: same arm64 Android object format.
         "wearos" => Some("aarch64-unknown-linux-android".to_string()),
         "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
@@ -1135,4 +1142,27 @@ pub(super) fn emit_namespace_populator(
     crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
     blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+}
+
+#[cfg(test)]
+mod resolve_target_triple_tests {
+    use super::resolve_target_triple;
+
+    #[test]
+    fn android_targets_resolve_to_android_elf_triples() {
+        // #5742: `android-x86_64` must resolve (it previously returned None and
+        // codegen fell back to the host triple, emitting COFF the Android
+        // linker rejects). Both Android arms use the `-unknown-linux-android`
+        // LLVM form so the emitted objects are ELF for the right arch.
+        assert_eq!(
+            resolve_target_triple("android").as_deref(),
+            Some("aarch64-unknown-linux-android")
+        );
+        assert_eq!(
+            resolve_target_triple("android-x86_64").as_deref(),
+            Some("x86_64-unknown-linux-android")
+        );
+        // Unknown targets still fall through to None.
+        assert_eq!(resolve_target_triple("android-mips"), None);
+    }
 }
