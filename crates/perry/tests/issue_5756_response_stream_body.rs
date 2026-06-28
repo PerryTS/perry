@@ -132,3 +132,72 @@ console.log('answer=' + mod.answer)
     let stdout = compile_and_run_entry(dir.path(), "main.js");
     assert_eq!(stdout, "answer=42\n");
 }
+
+#[test]
+fn script_string_query_imports_compile_to_default_string_asset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("package.json"),
+        r#"{
+          "type": "module",
+          "perry": {
+            "compilePackages": ["pkg"],
+            "allow": { "compilePackages": ["pkg"] }
+          }
+        }"#,
+    )
+    .expect("write package");
+    let pkg = dir.path().join("node_modules/pkg");
+    std::fs::create_dir_all(pkg.join("src")).expect("mkdir pkg");
+    std::fs::write(
+        pkg.join("package.json"),
+        r#"{
+          "name": "pkg",
+          "type": "module",
+          "exports": { ".": { "import": { "default": "./src/index.ts" } } }
+        }"#,
+    )
+    .expect("write pkg package");
+    std::fs::write(
+        pkg.join("src/index.ts"),
+        "import boot from './boot?script-string'\nexport function readBoot() { return boot }\n",
+    )
+    .expect("write pkg index");
+    std::fs::write(pkg.join("src/boot.ts"), "self.$_TSR = { buffer: [] }\n")
+        .expect("write script source");
+    std::fs::write(
+        dir.path().join("main.js"),
+        "import { readBoot } from 'pkg'\nconst boot = readBoot()\nconsole.log(typeof boot)\nconsole.log(boot.includes('self.$_TSR ='))\nconsole.log(boot === true)\n",
+    )
+    .expect("write main");
+
+    let stdout = compile_and_run_entry(dir.path(), "main.js");
+    assert_eq!(stdout, "string\ntrue\nfalse\n");
+}
+
+#[test]
+fn map_foreach_property_receiver_preserves_map_callback_shape() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const renderState = { styles: new Map() }
+renderState.styles.set('default', {
+  precedence: 'default',
+  sheets: new Map([['/assets/styles.css', { href: '/assets/styles.css' }]])
+})
+const seen = []
+renderState.styles.forEach(function(styleQueue, key, map) {
+  seen.push(
+    key + ':' +
+    styleQueue.precedence + ':' +
+    styleQueue.sheets.size + ':' +
+    (map === renderState.styles) + ':' +
+    this.destination
+  )
+}, { destination: 'html' })
+console.log(seen.join('|'))
+"#,
+    );
+    assert_eq!(stdout, "default:default:1:true:html\n");
+}
