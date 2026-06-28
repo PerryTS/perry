@@ -49,6 +49,18 @@ pub struct DelegationRoute {
     pub suspend_state_lo: u32,
     pub suspend_state_hi: u32,
     pub iter_id: LocalId,
+    /// The drive loop's iter-result local (`__del_result`). `gen.throw(e)`
+    /// forwards into the delegated iterator's `throw`, stores the awaited
+    /// result here, then re-drives the state machine so the loop's condition
+    /// state observes `__del_result.done` (spec `yield *` step 6.b.ii.5-7).
+    pub result_id: LocalId,
+    /// The drive loop's condition-check state — where `gen.throw(e)` re-enters
+    /// the dispatch loop after writing `result_id`, so a `done` inner result
+    /// resumes the outer body after the `yield *` and a not-`done` result
+    /// re-yields. This is the `while` loop's `cond_state`, which the linearizer
+    /// emits as `suspend_state_lo + 1` (the non-empty pre-loop state always
+    /// takes `suspend_state_lo`).
+    pub resume_state: u32,
 }
 
 /// Resolve a `yield*` operand into its iterator. An async generator delegates
@@ -290,6 +302,11 @@ fn emit_yield_star_loop(
                 suspend_state_lo: deleg_lo,
                 suspend_state_hi: deleg_hi,
                 iter_id: del_iter_id,
+                result_id: del_result_id,
+                // `current` always holds the iterator-setup prelude pushed above,
+                // so the `while` linearizer emits a non-empty pre-loop state at
+                // `deleg_lo` and the condition state at `deleg_lo + 1`.
+                resume_state: deleg_lo + 1,
             })
         });
     }

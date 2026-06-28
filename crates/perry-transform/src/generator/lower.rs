@@ -17,8 +17,9 @@ mod yield_await;
 pub(crate) use abrupt::{
     build_abrupt_routing, build_async_catch_route_body, build_async_throw_body,
     build_completion_resume_stmts, build_dispatch_catch_handler, build_finally_run_stmts,
-    build_yield_star_return_routes, catch_route_condition, finally_abrupt_condition,
-    finally_route_condition, rewrite_dispatch_continue_to_suspend, wrap_dispatch_loop,
+    build_yield_star_return_routes, build_yield_star_throw_routes, catch_route_condition,
+    finally_abrupt_condition, finally_route_condition, rewrite_dispatch_continue_to_suspend,
+    wrap_dispatch_loop,
 };
 pub(crate) use async_step::{
     build_async_catch_route_body_direct, build_async_step_driver_direct,
@@ -838,6 +839,21 @@ pub fn transform_generator_function_with_extra_captures(
             *next_func_id += 1;
             id
         };
+        // #5745: spec `yield *` step 6.b — when an async generator is suspended
+        // inside a `yield *` and `gen.throw(e)` is called, forward the error into
+        // the delegated iterator's `throw` (re-yielding or, on a `done` result,
+        // resuming the outer body past the `yield *`) rather than routing it into
+        // the outer generator's own catch handlers. Each route re-drives the
+        // state machine via the `while_body_for_throw` continuation loop, so it
+        // is built BEFORE the loop is moved into `throw_continuation` below.
+        // Empty for sync generators (`delegations` is only recorded for async).
+        let yield_star_throw_routes = build_yield_star_throw_routes(
+            &delegations,
+            state_id,
+            throw_param_id,
+            &while_body_for_throw,
+            next_local_id,
+        );
         // #4374: sync generators continue the state machine after a catch
         // (running the inlined finally + reaching the next yield/completion);
         // async generators keep the existing deferred-resume behavior to stay
@@ -854,6 +870,10 @@ pub fn transform_generator_function_with_extra_captures(
             executing_id,
             Box::new(Expr::Bool(true)),
         ))];
+        // The `yield *` throw routes return/throw from inside their own
+        // continuation loop on a match, so they precede the catch-routing body
+        // and only fall through to it when not suspended in a delegation.
+        throw_resume_body.extend(yield_star_throw_routes);
         throw_resume_body.extend(build_async_throw_body(
             &catches,
             &finallys,
