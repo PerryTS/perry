@@ -43,7 +43,12 @@ const u = new Uint8Array([10, 20]);
 // with the pre-fix depth leak the throws stopped firing partway through.
 let caught = 0;
 for (let i = 0; i < 2000; i++) {
-  try { (u as any).every(NaN); } catch (e) { caught++; }
+  try {
+    (u as any).every(NaN);
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    caught++;
+  }
 }
 console.log("caught=" + caught);
 
@@ -51,7 +56,12 @@ console.log("caught=" + caught);
 // ordinary value-returning calls. Pre-fix, the guard was wedged and these
 // returned the empty null-object fallback (no throw / wrong value).
 let stillThrows = false;
-try { (u as any).every(NaN); } catch (e) { stillThrows = true; }
+try {
+  (u as any).every(NaN);
+} catch (e) {
+  if (!(e instanceof TypeError)) throw e;
+  stillThrows = true;
+}
 console.log("stillThrows=" + stillThrows);
 
 // A valid callback must still iterate and compute correctly.
