@@ -231,7 +231,7 @@ unsafe fn call_all_f64_fallback(func_ptr: usize, args: &[f64]) -> f64 {
     }
     macro_rules! arm {
         ($($i:expr),*) => {{
-            let f: extern "C" fn($(replace_expr!($i f64)),*) -> f64 =
+            let f: extern "C" fn($(replace_expr!($i, f64)),*) -> f64 =
                 std::mem::transmute(func_ptr);
             f($(a(args, $i)),*)
         }};
