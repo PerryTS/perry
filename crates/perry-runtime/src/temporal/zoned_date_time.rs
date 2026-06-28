@@ -52,10 +52,17 @@ fn require_ns(v: f64) -> i128 {
 fn timezone_arg(v: f64) -> TimeZone {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
-        return ok_or_throw(TimeZone::try_from_str(&dispatch::read_string(v)));
+        // `ToTemporalTimeZoneIdentifier` (strict): only IANA names and UTC-offset
+        // strings are accepted. An ISO-datetime string like
+        // "1997-12-04T12:34[+01:00]" must throw a RangeError.
+        // Use `try_from_identifier_str` (not `try_from_str`, which also accepts
+        // ISO datetime strings by extracting their bracket annotation).
+        return ok_or_throw(TimeZone::try_from_identifier_str(&dispatch::read_string(v)));
     }
-    crate::fs::validate::throw_range_error_with_code(
-        "Temporal.ZonedDateTime requires a time-zone identifier string",
+    // Every non-string primitive (null, boolean, number, bigint, symbol, undefined)
+    // is a TypeError per `ToTemporalTimeZoneIdentifier`.
+    crate::object::throw_object_type_error(
+        b"Temporal.ZonedDateTime timeZone must be a string identifier",
     )
 }
 
@@ -69,6 +76,7 @@ fn calendar_arg(v: f64) -> Calendar {
 
 /// `new Temporal.ZonedDateTime(epochNanoseconds: bigint, timeZone, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     let ns = require_ns(raw_arg(args, 0));
     let tz = timezone_arg(raw_arg(args, 1));
     // Constructor calendar arg is a strict identifier (an ISO date string is a

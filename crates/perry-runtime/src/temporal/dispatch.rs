@@ -105,7 +105,19 @@ pub(crate) fn to_integer_if_integral(raw: f64) -> i128 {
             "Temporal duration fields must be integers",
         );
     }
-    n as i128
+    let i = n as i128;
+    // Guard against values that are finite and integral in IEEE-754 terms but
+    // exceed the i128 range (e.g. Number.MAX_VALUE ≈ 1.8×10^308 > i128::MAX
+    // ≈ 1.7×10^38). Such a cast silently saturates, then the narrowing to i64
+    // wraps (e.g. i128::MAX as i64 = -1), producing a nonsensical field value
+    // that temporal_rs accepts without complaint. Round-tripping back to f64
+    // detects the saturation.
+    if i as f64 != n {
+        crate::fs::validate::throw_range_error_with_code(
+            "Temporal duration fields must be integers",
+        );
+    }
+    i
 }
 
 /// `ToIntegerIfIntegral(args[i])`, defaulting an absent / `undefined` argument

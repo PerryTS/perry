@@ -192,18 +192,15 @@ fn to_zoned_args(v: f64) -> (TimeZone, Option<PlainTime>) {
 pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
     match name {
         "add" => {
+            // Spec reads the duration argument's fields BEFORE the options bag.
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
             let overflow = super::options::overflow(raw_arg(args, 1));
-            wrap(ok_or_throw(d.add(
-                &super::duration::coerce_duration(raw_arg(args, 0)),
-                overflow,
-            )))
+            wrap(ok_or_throw(d.add(&dur, overflow)))
         }
         "subtract" => {
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
             let overflow = super::options::overflow(raw_arg(args, 1));
-            wrap(ok_or_throw(d.subtract(
-                &super::duration::coerce_duration(raw_arg(args, 0)),
-                overflow,
-            )))
+            wrap(ok_or_throw(d.subtract(&dur, overflow)))
         }
         "until" => super::duration::wrap(ok_or_throw(d.until(
             &coerce_date(raw_arg(args, 0)),

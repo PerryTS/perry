@@ -672,19 +672,33 @@ pub extern "C" fn js_bigint_mul(
         return bigint_alloc_with_limbs(result);
     }
 
-    // Slow path: 16-limb school multiplication (keeping lower 1024 bits).
-    // Skip trailing all-zero limbs on both operands so e.g. multiplying a
-    // value that uses 3 limbs by one that uses 2 only does 3*2 = 6 word
-    // multiplies instead of 16*16 = 256.
-    let a_len = effective_limb_len(&a_limbs);
-    let b_len = effective_limb_len(&b_limbs);
+    // Slow path: unsigned schoolbook multiplication on the magnitudes, then
+    // apply the sign. Using two's-complement limbs directly would require
+    // carrying the sign-extension words through every row of the accumulation,
+    // which is subtle to get right — sign-and-magnitude is cleaner.
+    let a_neg = is_negative(&a_limbs);
+    let b_neg = is_negative(&b_limbs);
+    let a_mag = if a_neg {
+        negate_limbs(&a_limbs)
+    } else {
+        a_limbs
+    };
+    let b_mag = if b_neg {
+        negate_limbs(&b_limbs)
+    } else {
+        b_limbs
+    };
+
+    // Skip trailing all-zero limbs so e.g. multiplying a value that uses 3
+    // limbs by one that uses 2 only does 3×2 = 6 word multiplies.
+    let a_len = effective_limb_len(&a_mag);
+    let b_len = effective_limb_len(&b_mag);
     let mut result = ZERO_LIMBS;
     for i in 0..a_len {
         let mut carry = 0u128;
         let inner_max = b_len.min(BIGINT_LIMBS - i);
         for j in 0..inner_max {
-            let product =
-                (a_limbs[i] as u128) * (b_limbs[j] as u128) + (result[i + j] as u128) + carry;
+            let product = (a_mag[i] as u128) * (b_mag[j] as u128) + (result[i + j] as u128) + carry;
             result[i + j] = product as u64;
             carry = product >> 64;
         }
@@ -697,6 +711,9 @@ pub extern "C" fn js_bigint_mul(
             carry = sum >> 64;
             k += 1;
         }
+    }
+    if a_neg != b_neg {
+        result = negate_limbs(&result);
     }
     bigint_alloc_with_limbs(result)
 }

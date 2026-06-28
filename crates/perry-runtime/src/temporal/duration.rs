@@ -25,6 +25,7 @@ pub(crate) fn wrap(d: Duration) -> f64 {
 /// `new Temporal.Duration(years?, months?, …, nanoseconds?)` — every argument
 /// is an optional integer defaulting to 0.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     let d = ok_or_throw(Duration::new(
         integral_arg(args, 0) as i64, // years
         integral_arg(args, 1) as i64, // months

@@ -29,6 +29,7 @@ fn calendar_id_arg(v: f64) -> Calendar {
 
 /// `new Temporal.PlainDateTime(year, month, day, hour?, …, nanosecond?, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     // Each field is `ToIntegerWithTruncation`: a non-finite (`Infinity`/`NaN` /
     // absent required field) is a RangeError, a Symbol/BigInt a TypeError — not
     // a silently-mangled `as i32`/`0`. `try_new` = overflow "reject" (out-of-range
