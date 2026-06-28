@@ -46,10 +46,13 @@ fn registry() -> &'static Mutex<Vec<EmbeddedAsset>> {
 }
 
 /// Strip the `$perryfs/` prefix (and a single leading `./`) so `$perryfs/x`,
-/// `./x`, and `x` all resolve to the same registry key.
-fn normalize_key(path: &str) -> &str {
-    let p = path.strip_prefix(VIRTUAL_PREFIX).unwrap_or(path);
-    p.strip_prefix("./").unwrap_or(p)
+/// `./x`, and `x` all resolve to the same registry key. Backslashes are folded
+/// to `/` first so Windows-style inputs (`$perryfs\dist\index.html`,
+/// `dist\index.html`) match the always-`/`-joined registry keys.
+fn normalize_key(path: &str) -> String {
+    let unified = path.replace('\\', "/");
+    let p = unified.strip_prefix(VIRTUAL_PREFIX).unwrap_or(&unified);
+    p.strip_prefix("./").unwrap_or(p).to_string()
 }
 
 /// Register an embedded asset. Called once per file from the generated
@@ -84,29 +87,28 @@ pub unsafe extern "C" fn js_register_embedded_asset(
 }
 
 /// Look up an embedded asset's bytes by virtual path (`$perryfs/...`) or by its
-/// embed-relative key. Returns the `'static` slice into the binary.
+/// embed-relative key. Returns the `'static` slice into the binary. This is the
+/// authoritative presence test — a path is "embedded" iff this returns `Some`.
 pub fn lookup(path: &str) -> Option<&'static [u8]> {
     let key = normalize_key(path);
     let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
     reg.iter().find(|a| a.name == key).map(|a| a.bytes)
 }
 
-/// True if `path` should be served from the embedded registry: either it
-/// carries the `$perryfs/` prefix, or it exactly matches a registered key.
-/// `fs` consults this before falling back to a real disk read.
-pub fn is_embedded_path(path: &str) -> bool {
-    if path.starts_with(VIRTUAL_PREFIX) {
-        return true;
-    }
-    let key = normalize_key(path);
-    let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-    reg.iter().any(|a| a.name == key)
+/// True if `path` is an embedded-asset *virtual* path (carries the `$perryfs/`
+/// prefix), independent of whether it actually resolves. `fs` uses this to treat
+/// an unresolved `$perryfs/...` path as missing rather than attempting a real
+/// disk read of the literal string. Actual presence is [`lookup`].
+pub fn is_virtual_path(path: &str) -> bool {
+    path.replace('\\', "/").starts_with(VIRTUAL_PREFIX)
 }
 
 /// Snapshot of `(name, size)` for every embedded asset, in registration order.
 fn snapshot() -> Vec<(String, usize)> {
     let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-    reg.iter().map(|a| (a.name.clone(), a.bytes.len())).collect()
+    reg.iter()
+        .map(|a| (a.name.clone(), a.bytes.len()))
+        .collect()
 }
 
 /// Best-effort MIME type from a file extension, covering the asset classes a
@@ -158,7 +160,9 @@ fn set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
 }
 
 /// `import { embeddedFiles } from "perry"`. Returns a fresh array with one
-/// `{ name, size, type }` object per embedded asset, in registration order.
+/// `{ name, size, type }` object per embedded asset. Assets are registered (and
+/// therefore listed) sorted by their embed-relative path — deterministic across
+/// builds, after de-duplication.
 ///
 /// Exposed as a (zero-arg) function rather than a bare value: member calls on a
 /// native-module *value* binding (`embeddedFiles.map(...)`) are lowered as a
@@ -213,18 +217,28 @@ pub fn is_standalone_executable_value() -> f64 {
     f64::from_bits(TAG_TRUE)
 }
 
+/// Throw a catchable `Error` for a `readEmbedded` miss. The native call's
+/// return ABI (NR_PTR) NaN-boxes the raw pointer, so a null return would surface
+/// as a bogus object rather than `null` — throwing keeps the `readEmbedded():
+/// Buffer` contract honest and matches Node's `fs` "not found" semantics.
+fn throw_embed_not_found(path: &str) -> ! {
+    let message = format!("No embedded asset found for path: {path}");
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
+
 /// `import { readEmbedded } from "perry"`. Reads an embedded asset by virtual
 /// path (`$perryfs/...`) or embed-relative key and returns its bytes as a
-/// `Buffer`. Returns a null pointer (→ NaN-boxed null by the dispatch layer)
-/// when the asset is not found.
+/// `Buffer`. Throws an `Error` when the asset is not found.
 #[no_mangle]
 pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer::BufferHeader {
     let path = match unsafe { crate::fs::decode_path_value(path_value) } {
         Some(p) => p,
-        None => return std::ptr::null_mut(),
+        None => throw_embed_not_found("<non-string path>"),
     };
     let Some(bytes) = lookup(&path) else {
-        return std::ptr::null_mut();
+        throw_embed_not_found(&path);
     };
     unsafe {
         let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
@@ -260,6 +274,12 @@ mod tests {
         assert_eq!(normalize_key("$perryfs/dist/index.html"), "dist/index.html");
         assert_eq!(normalize_key("./dist/index.html"), "dist/index.html");
         assert_eq!(normalize_key("dist/index.html"), "dist/index.html");
+        // Windows-style separators fold to `/` (before and after the prefix).
+        assert_eq!(normalize_key("dist\\index.html"), "dist/index.html");
+        assert_eq!(
+            normalize_key("$perryfs\\dist\\index.html"),
+            "dist/index.html"
+        );
     }
 
     #[test]
@@ -269,13 +289,15 @@ mod tests {
         unsafe {
             js_register_embedded_asset(NAME.as_ptr(), NAME.len(), DATA.as_ptr(), DATA.len());
         }
-        // Found by bare key and by `$perryfs/` virtual path.
+        // Found by bare key, by `$perryfs/` virtual path, and via backslashes.
         assert_eq!(lookup("embed-test/asset.txt"), Some(DATA));
         assert_eq!(lookup("$perryfs/embed-test/asset.txt"), Some(DATA));
-        assert!(is_embedded_path("embed-test/asset.txt"));
-        assert!(is_embedded_path("$perryfs/anything")); // prefix alone marks it embedded
-        assert!(!is_embedded_path("not/registered.txt"));
-        assert_eq!(lookup("missing.txt"), None);
+        assert_eq!(lookup("$perryfs\\embed-test\\asset.txt"), Some(DATA));
+        // `is_virtual_path` is a pure prefix test; presence is `lookup`.
+        assert!(is_virtual_path("$perryfs/anything"));
+        assert!(!is_virtual_path("not/registered.txt"));
+        assert!(lookup("not/registered.txt").is_none());
+        assert!(lookup("$perryfs/not-registered").is_none());
     }
 
     #[test]

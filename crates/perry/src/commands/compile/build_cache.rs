@@ -107,7 +107,7 @@ impl BuildCacheProbe {
             .join(manifest_name);
         let eligible = eligibility(args, project_root);
         Self {
-            args_key: args_key(args, &output_path),
+            args_key: args_key(args, &output_path, project_root),
             manifest_path,
             output_path,
             target_name: args.target.clone().unwrap_or_else(|| "native".to_string()),
@@ -437,7 +437,7 @@ fn entry_uses_precompile(input: &Path) -> bool {
         .unwrap_or(true)
 }
 
-fn args_key(args: &CompileArgs, output_path: &Path) -> String {
+fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> String {
     let mut hasher = Sha256::new();
     hash_field(&mut hasher, "args-debug", &format!("{args:?}"));
     hash_field(&mut hasher, "input", &absolute_identity(&args.input));
@@ -453,6 +453,21 @@ fn args_key(args: &CompileArgs, output_path: &Path) -> String {
         "features",
         args.features.as_deref().unwrap_or(""),
     );
+    // #5731 — fold the resolved embedded-asset set *and contents* into the key.
+    // `{args:?}` covers `--embed` patterns but not `perry.embed` /
+    // `[compile] embed` config nor the file bytes, so without this an edit to an
+    // embedded file (with no pattern change) would reuse a stale cached binary.
+    if let Ok(assets) = super::embed::resolve_embedded_assets(&args.embed, project_root) {
+        for (name, path) in &assets {
+            hash_field(&mut hasher, "embed-name", name);
+            if let Ok(bytes) = fs::read(path) {
+                hasher.update(b"embed-data");
+                hasher.update([0]);
+                hasher.update(&bytes);
+                hasher.update([0xff]);
+            }
+        }
+    }
     hex::encode(hasher.finalize())
 }
 

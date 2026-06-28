@@ -38,6 +38,9 @@ console.log("viaFs:", fs.readFileSync("$perryfs/dist/index.html", "utf8"));
 const html = files.find(f => f.name === "dist/index.html");
 console.log("type:", html.type, "size:", html.size);
 console.log("exists:", fs.existsSync("$perryfs/dist/assets/app.js"));
+console.log("existsMissing:", fs.existsSync("$perryfs/nope.txt"));
+try { readEmbedded("nope.txt"); console.log("throwMissing: no"); }
+catch (e) { console.log("throwMissing: yes"); }
 "#,
     )
     .expect("write entry");
@@ -80,7 +83,9 @@ console.log("exists:", fs.existsSync("$perryfs/dist/assets/app.js"));
          readEmbedded: HELLO_EMBED\n\
          viaFs: HELLO_EMBED\n\
          type: text/html; charset=utf-8 size: 11\n\
-         exists: true\n",
+         exists: true\n\
+         existsMissing: false\n\
+         throwMissing: yes\n",
         "unexpected runtime output"
     );
 }

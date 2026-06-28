@@ -207,8 +207,14 @@ fn segment_match(pat: &str, text: &str) -> bool {
 }
 
 /// Project-root-relative name with `/` separators, e.g. `dist/index.html`.
+///
+/// Canonicalizes both the candidate and the project root before stripping so a
+/// pattern that escapes the root (`--embed ../secret.txt`, or a symlink out of
+/// the tree) is rejected (`None`) rather than producing a `../`-laden key.
 fn relative_name(path: &Path, project_root: &Path) -> Option<String> {
-    let rel = path.strip_prefix(project_root).ok()?;
+    let root = project_root.canonicalize().ok()?;
+    let abs = path.canonicalize().ok()?;
+    let rel = abs.strip_prefix(&root).ok()?;
     let name = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
@@ -246,14 +252,22 @@ pub(super) fn generate_embedded_asset_object(
             .map_err(|e| anyhow!("failed to read embed asset {}: {}", path.display(), e))?;
         let name_lit = c_byte_literal(name.as_bytes());
         let data_lit = c_byte_literal(&bytes);
-        writeln!(c, "static const char PERRY_ASSET_NAME_{idx}[] = {name_lit};").ok();
+        writeln!(
+            c,
+            "static const char PERRY_ASSET_NAME_{idx}[] = {name_lit};"
+        )
+        .ok();
         writeln!(
             c,
             "static const size_t PERRY_ASSET_NAME_LEN_{idx} = {};",
             name.len()
         )
         .ok();
-        writeln!(c, "static const char PERRY_ASSET_DATA_{idx}[] = {data_lit};").ok();
+        writeln!(
+            c,
+            "static const char PERRY_ASSET_DATA_{idx}[] = {data_lit};"
+        )
+        .ok();
         writeln!(
             c,
             "static const size_t PERRY_ASSET_DATA_LEN_{idx} = {};",
@@ -390,7 +404,11 @@ mod tests {
         let names: Vec<&str> = all.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
             names,
-            vec!["dist/assets/app.js", "dist/assets/logo.png", "dist/index.html"]
+            vec![
+                "dist/assets/app.js",
+                "dist/assets/logo.png",
+                "dist/index.html"
+            ]
         );
 
         // Glob with extension filter.

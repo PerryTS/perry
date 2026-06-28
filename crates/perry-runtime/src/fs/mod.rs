@@ -436,10 +436,13 @@ fn read_file_bytes_with_options(path_value: f64, options_value: f64) -> Option<V
         // matches an embedded asset) is served from the in-binary registry
         // before any disk access, so `fs.readFileSync`/`readFile` (text and
         // binary) transparently read embedded files in a standalone executable.
-        if crate::embedded::is_embedded_path(&path_str) {
-            if let Some(bytes) = crate::embedded::lookup(&path_str) {
-                return Some(bytes.to_vec());
-            }
+        // A successful registry lookup is the only short-circuit; an unresolved
+        // `$perryfs/...` path is treated as missing, never a literal disk read.
+        if let Some(bytes) = crate::embedded::lookup(&path_str) {
+            return Some(bytes.to_vec());
+        }
+        if crate::embedded::is_virtual_path(&path_str) {
+            return None;
         }
         let flag = read_file_flag(options_value);
         let mut file = open_file_for_read_flag(&path_str, &flag).ok()?;
@@ -560,9 +563,14 @@ pub extern "C" fn js_fs_exists_sync(path_value: f64) -> i32 {
             None => return 0,
         };
 
-        // #5731 — embedded assets exist for the life of the process.
-        if crate::embedded::is_embedded_path(&path_str) {
+        // #5731 — a registered embedded asset exists for the life of the
+        // process; an unresolved `$perryfs/...` path does not (and must not
+        // fall through to a disk check of the literal virtual path).
+        if crate::embedded::lookup(&path_str).is_some() {
             return 1;
+        }
+        if crate::embedded::is_virtual_path(&path_str) {
+            return 0;
         }
 
         if Path::new(&path_str).exists() {

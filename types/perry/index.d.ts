@@ -18,8 +18,9 @@ export interface EmbeddedFile {
 }
 
 /**
- * All files embedded into this executable, in the order they were embedded.
- * Returns a fresh array on each call (empty for a non-embedded build).
+ * All files embedded into this executable, sorted by their embed-relative path
+ * (deterministic across builds, after de-duplication). Returns a fresh array on
+ * each call (empty for a non-embedded build).
  *
  * Note: exposed as a function (not a bare value like Bun's `embeddedFiles`) so
  * that array methods dispatch correctly on the result —
@@ -37,7 +38,6 @@ export const isStandaloneExecutable: boolean;
 /**
  * Read an embedded asset's bytes. Accepts either the `$perryfs/<path>` virtual
  * path or the embed-relative key (`dist/index.html`). Returns the bytes as a
- * `Buffer` (a `Uint8Array`), or throws/returns an empty buffer when the asset
- * is not found.
+ * `Buffer` (a `Uint8Array`); throws an `Error` when the asset is not found.
  */
 export function readEmbedded(path: string): Buffer;
