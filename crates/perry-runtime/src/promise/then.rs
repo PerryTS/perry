@@ -1268,7 +1268,11 @@ extern "C" fn then_cap_fulfill_fn(
     let cap_reject = js_closure_get_capture_f64(closure, 2);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
 
-    let on_ful_cl = arg_to_closure(on_fulfilled);
+    let on_ful_cl = if super::spec_combinators::is_callable_value(on_fulfilled) {
+        arg_to_closure(on_fulfilled)
+    } else {
+        ptr::null()
+    };
     let (result, threw) = if on_ful_cl.is_null() {
         (value, false)
     } else {
@@ -1304,7 +1308,11 @@ extern "C" fn then_cap_reject_fn(
     let cap_reject = js_closure_get_capture_f64(closure, 2);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
 
-    let on_rej_cl = arg_to_closure(on_rejected);
+    let on_rej_cl = if super::spec_combinators::is_callable_value(on_rejected) {
+        arg_to_closure(on_rejected)
+    } else {
+        ptr::null()
+    };
     let (result, threw) = if on_rej_cl.is_null() {
         (reason, true) // passthrough rejection
     } else {
@@ -1390,7 +1398,11 @@ extern "C" fn spec_then_finally_fn(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
 
     // Call on_finally() with zero args; if it throws, propagate.
-    let on_finally_cl = arg_to_closure(on_finally);
+    let on_finally_cl = if super::spec_combinators::is_callable_value(on_finally) {
+        arg_to_closure(on_finally)
+    } else {
+        ptr::null()
+    };
     let result = if on_finally_cl.is_null() {
         undef
     } else {
@@ -1422,7 +1434,11 @@ extern "C" fn spec_catch_finally_fn(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
 
     // Call on_finally() with zero args; if it throws, propagate.
-    let on_finally_cl = arg_to_closure(on_finally);
+    let on_finally_cl = if super::spec_combinators::is_callable_value(on_finally) {
+        arg_to_closure(on_finally)
+    } else {
+        ptr::null()
+    };
     let result = if on_finally_cl.is_null() {
         undef
     } else {
@@ -1521,9 +1537,8 @@ pub(crate) extern "C" fn promise_prototype_finally_thunk(
 
     let receiver = crate::object::js_implicit_this_get();
 
-    // receiver must be an Object (covers both Promise and non-Promise objects).
-    let jsval = crate::value::JSValue::from_bits(receiver.to_bits());
-    if !jsval.is_pointer() {
+    // receiver must be a JS Object — pointer-tagged, not a registered symbol, not a handle.
+    if !is_promise_species_object(receiver) {
         throw_promise_finally_non_object();
     }
 
