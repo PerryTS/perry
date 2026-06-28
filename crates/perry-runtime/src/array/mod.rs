@@ -4,6 +4,7 @@ mod concat_reverse;
 mod flat_clone;
 mod from_concat;
 mod generic;
+mod generic_mutators;
 mod header;
 mod immutable;
 mod indexing;
@@ -52,6 +53,9 @@ pub use self::generic::{
 pub(crate) use self::generic::{
     non_array_object_receiver, object_pop as generic_object_pop,
     object_shift as generic_object_shift, object_sort, object_splice, plain_object_value,
+};
+pub use self::generic_mutators::{
+    js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
 };
 pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
 pub use self::header::{

@@ -62,7 +62,7 @@ fn top16(bits: u64) -> u64 {
 /// from `Boolean.prototype` and pass a `Boolean` wrapper to `fn`. Strings keep
 /// their dedicated code-unit path; symbols / bigints (no indexed properties)
 /// are returned as-is and read as an empty array-like.
-fn to_object(recv: f64) -> f64 {
+pub(super) fn to_object(recv: f64) -> f64 {
     let b = recv.to_bits();
     if b == TAG_UNDEFINED || b == TAG_NULL {
         let msg = b"Cannot convert undefined or null to object";
@@ -145,7 +145,7 @@ fn to_length(v: f64) -> i64 {
 /// its `length <= capacity` bound, then `(*arr).length` / the element buffer
 /// read `field_count` / inline slots as garbage (see `normalize_array_receiver`).
 #[inline]
-fn as_real_array(recv: f64) -> *mut ArrayHeader {
+pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
     let b = recv.to_bits();
     if top16(b) != 0x7FFD {
         return ptr::null_mut();
@@ -175,7 +175,7 @@ fn as_real_array(recv: f64) -> *mut ArrayHeader {
 }
 
 #[inline]
-fn is_string_value(bits: u64) -> bool {
+pub(super) fn is_string_value(bits: u64) -> bool {
     let t = top16(bits);
     // Heap string (0x7FFF) or small-string-optimised inline string (0x7FF9).
     t == 0x7FFF || t == 0x7FF9
@@ -262,7 +262,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
 }
 
 /// `LengthOfArrayLike(ToObject(recv))`.
-fn al_length(recv: f64) -> i64 {
+pub(super) fn al_length(recv: f64) -> i64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { (*arr).length as i64 };
@@ -1714,92 +1714,6 @@ pub fn array_proto_mutator(recv: f64, method: &str, args_ptr: *const f64, args_l
     run_object_mutator(recv, method, args_ptr, args_len).unwrap_or_else(undef)
 }
 
-/// Generic `Array.prototype.{pop,shift,push,unshift}` over an arbitrary
-/// receiver value, used by the `Array.prototype.<m>.call/apply(recv, …)`
-/// (and bound-local) lowering when the receiver may be a primitive or a plain
-/// array-like object (test262 `pop|shift|unshift/call-with-boolean`,
-/// `*/S15.4.4.*` generic-`this` cases). A real array routes to the dense
-/// helpers, a plain array-like object to the spec-generic engine, and any
-/// other value (boolean / number / symbol …) yields `undefined` — mirroring
-/// the reified-thunk dispatch, but reachable from a static `.call`/`.apply`
-/// fold instead of a synthesized `(recv).<m>()` member call (which threw
-/// `<m> is not a function` on a primitive receiver).
-/// A primitive `string` receiver boxes to a `String` exotic wrapper whose
-/// indexed elements and `length` are non-writable / non-configurable, so every
-/// `Array.prototype` stack/queue mutator — each performs `Set(O, "length", …,
-/// true)` and (for `pop`/`shift`) `DeletePropertyOrThrow` — fails with a
-/// **TypeError** (ECMA-262 §23.1.3.*). Guard up front so the mutators throw
-/// rather than silently no-op (test262 `{pop,push,shift,unshift}/
-/// throws-with-string-receiver`, `shift/throws-when-this-value-length-is-
-/// writable-false`).
-#[cold]
-fn throw_string_receiver_mutation() -> ! {
-    crate::collection_iter::throw_type_error(
-        "Cannot assign to read only property of a String object",
-    );
-}
-
-#[inline]
-fn guard_string_receiver(recv: f64) {
-    if is_string_value(recv.to_bits()) {
-        throw_string_receiver_mutation();
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_arraylike_pop(recv: f64) -> f64 {
-    guard_string_receiver(recv);
-    array_proto_mutator(recv, "pop", ptr::null(), 0)
-}
-
-#[no_mangle]
-pub extern "C" fn js_arraylike_shift(recv: f64) -> f64 {
-    guard_string_receiver(recv);
-    array_proto_mutator(recv, "shift", ptr::null(), 0)
-}
-
-#[no_mangle]
-pub extern "C" fn js_arraylike_push(recv: f64, args_ptr: *const f64, count: i32) -> f64 {
-    guard_string_receiver(recv);
-    let n = count.max(0) as usize;
-    let arr = as_real_array(recv);
-    if !arr.is_null() {
-        return unsafe { real_array_mutator(arr, "push", args_ptr, n) };
-    }
-    if let Some(r) = run_object_mutator(recv, "push", args_ptr, n) {
-        return r;
-    }
-    pushlike_primitive_result(recv, n)
-}
-
-#[no_mangle]
-pub extern "C" fn js_arraylike_unshift(recv: f64, args_ptr: *const f64, count: i32) -> f64 {
-    guard_string_receiver(recv);
-    let n = count.max(0) as usize;
-    let arr = as_real_array(recv);
-    if !arr.is_null() {
-        return unsafe { real_array_mutator(arr, "unshift", args_ptr, n) };
-    }
-    if let Some(r) = run_object_mutator(recv, "unshift", args_ptr, n) {
-        return r;
-    }
-    pushlike_primitive_result(recv, n)
-}
-
-/// `push`/`unshift` over a receiver with no mutable array backing (boolean /
-/// number primitive boxed to a fresh wrapper, or a symbol/bigint empty
-/// array-like). `ToObject(recv)` throws a `TypeError` for `null`/`undefined`
-/// (spec step 1), then the index/length writes land on the discarded wrapper
-/// and the observable result is `ToLength(len) + count` — e.g.
-/// `Array.prototype.unshift.call(true)` is `0` (test262
-/// unshift/call-with-boolean), not `undefined`. A string receiver boxes to a
-/// `String` wrapper with non-writable indices/length whose `Set` should throw;
-/// that case keeps its existing behavior here and is covered separately.
-fn pushlike_primitive_result(recv: f64, count: usize) -> f64 {
-    let o = to_object(recv);
-    (al_length(o) + count as i64) as f64
-}
-
 #[inline]
 fn arg_or_undef(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
     if i < args_len && !args_ptr.is_null() {
@@ -1811,7 +1725,7 @@ fn arg_or_undef(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
 
 /// Dense-array branch of [`array_proto_mutator`]. Reuses the existing dense
 /// runtime helpers (matching the `js_native_call_method` array arms).
-unsafe fn real_array_mutator(
+pub(super) unsafe fn real_array_mutator(
     arr: *mut ArrayHeader,
     method: &str,
     args_ptr: *const f64,
