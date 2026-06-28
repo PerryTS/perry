@@ -201,3 +201,89 @@ console.log(seen.join('|'))
     );
     assert_eq!(stdout, "default:default:1:true:html\n");
 }
+
+#[test]
+fn imported_jsx_named_function_remains_an_import_binding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("main.js"),
+        "import { jsx } from './jsx-lib.js'\nconsole.log(jsx('value'))\n",
+    )
+    .expect("write main");
+    std::fs::write(
+        dir.path().join("jsx-lib.js"),
+        "export function jsx(value) { return 'imported:' + value }\n",
+    )
+    .expect("write lib");
+
+    let stdout = compile_and_run_entry(dir.path(), "main.js");
+    assert_eq!(stdout, "imported:value\n");
+}
+
+#[test]
+fn react_type_only_import_does_not_disable_automatic_jsx_runtime_binding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("package.json"),
+        r#"{
+          "type": "module",
+          "perry": {
+            "compilePackages": ["react", "@tanstack/react-router"],
+            "allow": { "compilePackages": ["react", "@tanstack/react-router"] }
+          }
+        }"#,
+    )
+    .expect("write package");
+    let react = dir.path().join("node_modules/react");
+    std::fs::create_dir_all(&react).expect("mkdir react");
+    std::fs::write(
+        react.join("package.json"),
+        r#"{"name":"react","type":"module","exports":{".":"./index.js"}}"#,
+    )
+    .expect("write react package");
+    std::fs::write(
+        react.join("index.js"),
+        "export function createElement(type, props, ...children) { return 'react:' + type + ':' + children.join('|') }\n",
+    )
+    .expect("write react index");
+    let router = dir.path().join("node_modules/@tanstack/react-router");
+    std::fs::create_dir_all(&router).expect("mkdir router");
+    std::fs::write(
+        router.join("package.json"),
+        r#"{"name":"@tanstack/react-router","type":"module","exports":{".":"./index.js"}}"#,
+    )
+    .expect("write router package");
+    std::fs::write(router.join("index.js"), "export const Link = 'link'\n")
+        .expect("write router index");
+    std::fs::write(
+        dir.path().join("main.tsx"),
+        r#"
+import type * as React from 'react'
+import { Link } from '@tanstack/react-router'
+function App() { return <div>Hello</div> }
+console.log(App())
+"#,
+    )
+    .expect("write main");
+
+    let stdout = compile_and_run_entry(dir.path(), "main.tsx");
+    assert_eq!(stdout, "react:div:\n");
+}
+
+#[test]
+fn named_imported_exported_function_as_value_stays_callable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("main.js"),
+        "import { callMe } from './lib.js'\nconst fn = callMe\nconsole.log(fn('x'))\n",
+    )
+    .expect("write main");
+    std::fs::write(
+        dir.path().join("lib.js"),
+        "export function callMe(value) { return 'fn:' + value }\n",
+    )
+    .expect("write lib");
+
+    let stdout = compile_and_run_entry(dir.path(), "main.js");
+    assert_eq!(stdout, "fn:x\n");
+}

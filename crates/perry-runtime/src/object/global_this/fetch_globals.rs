@@ -558,7 +558,6 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
         "WeakSet",
         "Array",
         "ArrayBuffer",
-        "SharedArrayBuffer",
         "DataView",
         "Boolean",
         "Number",
