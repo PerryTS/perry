@@ -281,9 +281,16 @@ pub(super) unsafe fn dispatch_primitive(
     // generic "<m> is not a function" fall-through. Only dispatch when the
     // stored value is actually callable — a non-callable expando
     // (`thenable.status()`) falls through to the normal not-a-function path.
-    if !matches!(method_name, "then" | "catch" | "finally")
-        && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
-    {
+    //
+    // #5590: this INCLUDES `then`/`catch`/`finally`. A user-assigned own
+    // `then` (`p.then = function(){…}`) must shadow the intrinsic — the spec's
+    // `Invoke(promise, "then", …)` does a `Get` of the property, which finds
+    // the own override. The Promise combinators rely on this: `Promise.all`'s
+    // per-element `Invoke(nextPromise, "then", «resolveElement, reject»)` must
+    // dispatch to a custom `then` when present (test262 all/race/allSettled/any
+    // `invoke-then.js`). A callable own override wins here; a promise without
+    // one falls through to the intrinsic then/catch/finally block below.
+    if crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0 {
         let recv = object_handle.get_nanbox_f64();
         let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
         if let Some(v) = super::exotic_expando::exotic_get_own_property(

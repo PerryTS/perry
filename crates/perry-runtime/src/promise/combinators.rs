@@ -760,6 +760,35 @@ fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
     Ok(callable_closure_value(then).map(|_| then))
 }
 
+/// #5590: a native Promise resolution that carries a user-installed *own*
+/// `then` override (`thenable.then = function(){…}` or
+/// `Object.defineProperty(p, "then", …)`). Per ECMA-262 27.2.1.3.2, the resolve
+/// function reads `then = Get(resolution, "then")` and, when callable, enqueues
+/// a `PromiseResolveThenableJob` with THAT `then` — even when `resolution` is a
+/// genuine promise. Perry's native promise→promise wiring is only valid when the
+/// promise's `then` is the intrinsic; an own override must be honored instead
+/// (test262 `resolve-*-prms-cstm-then*`). Returns the override `then` action.
+fn promise_custom_own_then(value: f64) -> Option<f64> {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    let then = unsafe {
+        crate::object::exotic_expando::exotic_get_own_property(
+            addr,
+            crate::object::exotic_expando::ExoticKind::Promise,
+            "then",
+            value,
+        )
+    }?;
+    if callable_closure_value(then).is_some() {
+        Some(then)
+    } else {
+        None
+    }
+}
+
 fn get_then_action(value: f64) -> Result<Option<f64>, f64> {
     if is_definitely_primitive(value) {
         return Ok(None);
@@ -815,6 +844,12 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
 
     let value = adapt_foreign_promise_value(value);
     if js_value_is_promise(value) != 0 {
+        // #5590: honor a user-installed own `then` override before the native
+        // promise→promise fast-path (spec reads `Get(resolution, "then")`).
+        if let Some(then_action) = promise_custom_own_then(value) {
+            enqueue_thenable_job(promise, value, then_action);
+            return;
+        }
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         js_promise_resolve_with_promise(promise, inner);
         return;
