@@ -1431,15 +1431,24 @@ pub fn timezone(v: f64) -> TimeZone {
 /// Parse a `getTimeZoneTransition` direction argument — a `"next"`/`"previous"`
 /// string or a `{ direction }` object.
 pub fn transition_direction(v: f64) -> TransitionDirection {
+    // `GetDirectionOption`: a String is used directly; otherwise the argument is
+    // run through `GetOptionsObject`, which throws a **TypeError** for `undefined`
+    // (the option is required) and for any non-object primitive (boolean, number,
+    // bigint, symbol, null). Only a malformed *string* / object `direction` value
+    // is a RangeError.
     let s = if JSValue::from_bits(v.to_bits()).is_string() {
         read_string(v)
+    } else if is_undefined(v) {
+        type_error("getTimeZoneTransition: direction option is required".to_string());
     } else if let Some(obj) = as_obj(v) {
         match str_field_coerce(obj, "direction") {
             Some(s) => s,
             None => range("getTimeZoneTransition requires a direction"),
         }
     } else {
-        range("getTimeZoneTransition requires a direction string or object");
+        type_error(
+            "getTimeZoneTransition: direction must be a string or an options object".to_string(),
+        );
     };
     TransitionDirection::from_str(&s).unwrap_or_else(|_| range("Invalid transition direction"))
 }

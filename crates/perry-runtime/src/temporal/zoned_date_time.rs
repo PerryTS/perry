@@ -87,6 +87,13 @@ fn coerce_zdt(v: f64) -> ZonedDateTime {
 /// consulted for the string + property-bag forms).
 fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
     if let Some(TemporalValue::ZonedDateTime(z)) = temporal_value_ref(v) {
+        // The result is a clone, but `ToTemporalZonedDateTime` still performs
+        // `GetOptionsObject` and reads disambiguation → offset → overflow in spec
+        // order, so a bad options type (TypeError) or invalid option value
+        // (RangeError) is observed *before* the instance is cloned.
+        let _ = super::options::disambiguation(opts);
+        let _ = super::options::offset_option(opts);
+        let _ = super::options::overflow(opts);
         return z.clone();
     }
     if let Some(partial) = super::options::zoned_partial(v) {
@@ -105,11 +112,25 @@ fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
         // Parse the string BEFORE reading options (spec order: an invalid string
-        // throws a RangeError before any option is touched).
+        // throws a RangeError before `GetOptionsObject` — which would otherwise
+        // throw a TypeError for a non-object options value). `from_utf8` couples
+        // parsing with offset interpretation, so validate the string structurally
+        // with a lenient offset disambiguation (`Ignore` never rejects on an
+        // offset mismatch) and discard the result; only a malformed IXDTF string
+        // throws here. The real parse below applies the requested options.
         let s = dispatch::read_string(v);
+        let _ = ok_or_throw(ZonedDateTime::from_utf8(
+            s.as_bytes(),
+            Disambiguation::Compatible,
+            OffsetDisambiguation::Ignore,
+        ));
+        // Now read + validate options in spec order: disambiguation, offset,
+        // overflow. `overflow` carries no effect for the string form but is still
+        // read (a bad value is a RangeError — `overflow-invalid-string`).
         let disambiguation =
             super::options::disambiguation(opts).unwrap_or(Disambiguation::Compatible);
         let offset = super::options::offset_option(opts).unwrap_or(OffsetDisambiguation::Reject);
+        let _ = super::options::overflow(opts);
         return ok_or_throw(ZonedDateTime::from_utf8(
             s.as_bytes(),
             disambiguation,
