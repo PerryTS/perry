@@ -39,7 +39,7 @@ pub(crate) use date_collator::{
     date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
     date_time_format_range_value, date_time_format_resolved_options_object,
     date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk, date_time_range_clip,
-    range_parts_to_js_array, swedish_collation_key,
+    range_parts_to_js_array, swedish_collation_key, temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, collect_string_list,

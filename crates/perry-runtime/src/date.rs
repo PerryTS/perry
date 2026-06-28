@@ -396,7 +396,7 @@ use parse::parse_date_string;
 /// fallback; superseded elsewhere by [`make_utc_ms`] (which normalizes
 /// out-of-range components).
 #[cfg_attr(not(windows), allow(dead_code))]
-fn components_to_timestamp(
+pub(crate) fn components_to_timestamp(
     year: i32,
     month: u32,
     day: u32,

@@ -282,6 +282,65 @@ pub unsafe fn finalize_temporal_cell_for_gc(cell: *mut TemporalCell) {
 #[cfg(not(feature = "temporal"))]
 pub unsafe fn finalize_temporal_cell_for_gc(_cell: *mut TemporalCell) {}
 
+/// Convert a Temporal value to epoch milliseconds for Intl.DateTimeFormat.
+///
+/// Each Temporal type maps its fields to a Unix timestamp (UTC):
+/// - `Instant`/`ZonedDateTime`: direct epoch_milliseconds()
+/// - `PlainDate`/`PlainDateTime`: treat as UTC midnight / UTC wall-clock time
+/// - `PlainTime`: use epoch base date 1970-01-01 with the time fields
+/// - `PlainYearMonth`: use day=1 for the epoch base
+/// - `PlainMonthDay`: use year=1970 for the epoch base
+/// - `Duration`: no epoch representation → `None`
+#[cfg(feature = "temporal")]
+pub fn temporal_to_epoch_ms(tv: &TemporalValue) -> Option<f64> {
+    let secs: i64 = match tv {
+        TemporalValue::Instant(i) => return Some(i.epoch_milliseconds() as f64),
+        TemporalValue::ZonedDateTime(z) => return Some(z.epoch_milliseconds() as f64),
+        TemporalValue::PlainDate(d) => crate::date::components_to_timestamp(
+            d.year(),
+            d.month() as u32,
+            d.day() as u32,
+            0,
+            0,
+            0,
+        ),
+        TemporalValue::PlainDateTime(dt) => crate::date::components_to_timestamp(
+            dt.year(),
+            dt.month() as u32,
+            dt.day() as u32,
+            dt.hour() as u32,
+            dt.minute() as u32,
+            dt.second() as u32,
+        ),
+        TemporalValue::PlainTime(t) => crate::date::components_to_timestamp(
+            1970,
+            1,
+            1,
+            t.hour() as u32,
+            t.minute() as u32,
+            t.second() as u32,
+        ),
+        TemporalValue::PlainYearMonth(ym) => {
+            crate::date::components_to_timestamp(ym.year(), ym.month() as u32, 1, 0, 0, 0)
+        }
+        TemporalValue::PlainMonthDay(md) => crate::date::components_to_timestamp(
+            1970,
+            md.month_code().to_month_integer() as u32,
+            md.day() as u32,
+            0,
+            0,
+            0,
+        ),
+        TemporalValue::Duration(_) => return None,
+    };
+    Some(secs as f64 * 1000.0)
+}
+
+#[cfg(not(feature = "temporal"))]
+pub fn temporal_to_epoch_ms(_tv: &TemporalValue) -> Option<f64> {
+    match *_tv {}
+}
+
 /// Render a Temporal value as its canonical ISO-8601 / IXDTF string — the form
 /// `toString` and `toJSON` use. Returns `None` only if `value` is not a
 /// Temporal cell.

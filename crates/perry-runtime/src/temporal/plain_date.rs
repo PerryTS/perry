@@ -226,7 +226,21 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         "toJSON" => string(&d.to_string()),
         "toLocaleString" => {
             super::options::assert_locale_string_calendar(d.calendar().identifier());
-            string(&super::options::plain_date_locale_string(d))
+            let epoch_ms = crate::date::components_to_timestamp(
+                d.year(),
+                d.month() as u32,
+                d.day() as u32,
+                0,
+                0,
+                0,
+            ) as f64
+                * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainDate,
+            )
         }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {

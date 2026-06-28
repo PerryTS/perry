@@ -246,7 +246,13 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
         "toJSON" => string(&z.to_string()),
         "toLocaleString" => {
             super::options::assert_locale_string_calendar(z.calendar().identifier());
-            string(&super::options::zoned_date_time_locale_string(z))
+            let epoch_ms = z.epoch_milliseconds() as f64;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::ZonedDateTime,
+            )
         }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {

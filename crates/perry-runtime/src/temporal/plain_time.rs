@@ -194,7 +194,23 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
             &t.to_ixdtf_string(ToStringRoundingOptions::default())
                 .unwrap_or_default(),
         ),
-        "toLocaleString" => string(&super::options::plain_time_locale_string(t)),
+        "toLocaleString" => {
+            let epoch_ms = crate::date::components_to_timestamp(
+                1970,
+                1,
+                1,
+                t.hour() as u32,
+                t.minute() as u32,
+                t.second() as u32,
+            ) as f64
+                * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainTime,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

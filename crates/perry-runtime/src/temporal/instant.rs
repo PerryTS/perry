@@ -180,10 +180,19 @@ pub fn call(recv: f64, i: &Instant, name: &str, args: &[f64]) -> f64 {
             let tz = super::options::optional_instant_timezone(raw_arg(args, 0));
             string(&ok_or_throw(i.to_ixdtf_string(tz, opts)))
         }
-        "toJSON" | "toLocaleString" => string(
+        "toJSON" => string(
             &i.to_ixdtf_string(None, ToStringRoundingOptions::default())
                 .unwrap_or_default(),
         ),
+        "toLocaleString" => {
+            let epoch_ms = i.epoch_milliseconds() as f64;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::Instant,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "round" => wrap(ok_or_throw(
             i.round(super::options::rounding_options(raw_arg(args, 0))),

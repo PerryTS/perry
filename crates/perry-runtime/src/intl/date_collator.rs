@@ -19,17 +19,19 @@ use unicode_segmentation::UnicodeSegmentation;
 /// `Date` constructor; a Symbol throws TypeError; an object's abrupt
 /// valueOf/toString propagates. A non-finite or out-of-range (|t| > 8.64e15)
 /// result is a RangeError, per TimeClip.
+///
+/// Temporal values are handled via their brand: epoch-milliseconds are extracted
+/// directly from the cell rather than going through ToNumber (which would throw).
 fn date_arg_to_clipped_ms(value: f64) -> f64 {
-    let js = JSValue::from_bits(value.to_bits());
-    // A Temporal argument dispatches on its brand in the spec — it is never fed
-    // to ToNumber — so it must not raise the "Cannot convert a Temporal value to
-    // a number" TypeError here. Perry has no Temporal/calendar formatting engine
-    // (out of scope, see CLAUDE.md), so this is a best-effort fallthrough: the
-    // raw cell value decodes to epoch in the deterministic formatter rather than
-    // throwing, keeping `format`/`formatToParts` non-throwing for these inputs.
-    if crate::temporal::is_temporal_value(value) {
-        return crate::date::date_cell_timestamp(value);
+    if let Some(tv) = crate::temporal::temporal_value_ref(value) {
+        return match crate::temporal::temporal_to_epoch_ms(tv) {
+            Some(ms) => ms,
+            None => {
+                throw_type_error("Temporal.Duration cannot be formatted with Intl.DateTimeFormat")
+            }
+        };
     }
+    let js = JSValue::from_bits(value.to_bits());
     let ms = if js.is_undefined() {
         crate::date::js_date_now()
     } else {
@@ -54,18 +56,22 @@ pub(crate) extern "C" fn date_time_format_format_thunk(
     _closure: *const ClosureHeader,
     value: f64,
 ) -> f64 {
-    let _obj = this_intl_object("format", KIND_DATE_TIME);
-    date_time_format_format_value(value)
+    let obj = this_intl_object("format", KIND_DATE_TIME);
+    let ms = date_arg_to_clipped_ms(value);
+    string_value(&format_ms_with_dtf_obj(obj, ms))
 }
 
 pub(crate) extern "C" fn date_time_format_bound_format_thunk(
     closure: *const ClosureHeader,
     value: f64,
 ) -> f64 {
-    let _obj = captured_intl_object(closure, "format", KIND_DATE_TIME);
-    date_time_format_format_value(value)
+    let obj = captured_intl_object(closure, "format", KIND_DATE_TIME);
+    let ms = date_arg_to_clipped_ms(value);
+    string_value(&format_ms_with_dtf_obj(obj, ms))
 }
 
+/// Fallback path: no DTF object context, produce short UTC date. Still used by
+/// some internal callers that pre-date the obj-aware thunks.
 pub(crate) fn date_time_format_format_value(value: f64) -> f64 {
     let ms = date_arg_to_clipped_ms(value);
     string_value(&date_short_utc_from_ms(ms))
@@ -108,6 +114,461 @@ pub(crate) fn date_range_parts_from_ms(ms: f64) -> Vec<(&'static str, String)> {
         ("literal", "/".to_string()),
         ("year", year.to_string()),
     ]
+}
+
+// ---- Locale-aware date/time formatting (DTF and Temporal.toLocaleString) ---
+
+const MONTH_FULL: &[&str] = &[
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+const MONTH_ABBR: &[&str] = &[
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const WEEKDAY_FULL: &[&str] = &[
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+
+/// Weekday index (0=Sunday…6=Saturday) from a UTC epoch-seconds value.
+/// 1970-01-01 was Thursday = index 4.
+fn weekday_index(secs: i64) -> usize {
+    ((secs.div_euclid(86400) + 4).rem_euclid(7)) as usize
+}
+
+fn format_date_style(year: i32, month: u32, day: u32, secs: i64, style: &str) -> String {
+    let mi = month.saturating_sub(1).min(11) as usize;
+    match style {
+        "short" => format!("{}/{}/{}", month, day, year),
+        "medium" => format!("{} {}, {}", MONTH_ABBR[mi], day, year),
+        "long" => format!("{} {}, {}", MONTH_FULL[mi], day, year),
+        "full" => format!(
+            "{}, {} {}, {}",
+            WEEKDAY_FULL[weekday_index(secs)],
+            MONTH_FULL[mi],
+            day,
+            year
+        ),
+        _ => format!("{}/{}/{}", month, day, year),
+    }
+}
+
+fn format_time_12h(hour: u32, minute: u32, second: u32, inc_secs: bool) -> String {
+    let (h, ampm) = if hour == 0 {
+        (12u32, "AM")
+    } else if hour < 12 {
+        (hour, "AM")
+    } else if hour == 12 {
+        (12, "PM")
+    } else {
+        (hour - 12, "PM")
+    };
+    if inc_secs {
+        format!("{}:{:02}:{:02} {}", h, minute, second, ampm)
+    } else {
+        format!("{}:{:02} {}", h, minute, ampm)
+    }
+}
+
+fn format_time_24h(hour: u32, minute: u32, second: u32, inc_secs: bool) -> String {
+    if inc_secs {
+        format!("{:02}:{:02}:{:02}", hour, minute, second)
+    } else {
+        format!("{:02}:{:02}", hour, minute)
+    }
+}
+
+fn format_time_style(hour: u32, minute: u32, second: u32, style: &str, use_24h: bool) -> String {
+    let inc_secs = style != "short";
+    if use_24h {
+        format_time_24h(hour, minute, second, inc_secs)
+    } else {
+        format_time_12h(hour, minute, second, inc_secs)
+    }
+}
+
+/// Resolve 24-hour-clock mode from hour12/hourCycle options.
+fn resolve_24h(hour12: Option<bool>, hour_cycle: Option<&str>) -> bool {
+    if let Some(h12) = hour12 {
+        return !h12;
+    }
+    matches!(hour_cycle, Some("h23") | Some("h24"))
+}
+
+/// Format date+time components from the individual component options (no style).
+fn format_components(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    year_opt: Option<&str>,
+    month_opt: Option<&str>,
+    day_opt: Option<&str>,
+    hour_opt: Option<&str>,
+    minute_opt: Option<&str>,
+    second_opt: Option<&str>,
+    use_24h: bool,
+) -> String {
+    let has_date = year_opt.is_some() || month_opt.is_some() || day_opt.is_some();
+    let has_time = hour_opt.is_some() || minute_opt.is_some() || second_opt.is_some();
+
+    let date_part = if has_date {
+        let fmt_month = match month_opt {
+            Some("long") => MONTH_FULL[month.saturating_sub(1).min(11) as usize].to_string(),
+            Some("short") | Some("narrow") => {
+                MONTH_ABBR[month.saturating_sub(1).min(11) as usize].to_string()
+            }
+            Some("2-digit") => format!("{:02}", month),
+            _ => month.to_string(),
+        };
+        let fmt_day = match day_opt {
+            Some("2-digit") => format!("{:02}", day),
+            _ if day_opt.is_some() => day.to_string(),
+            _ => String::new(),
+        };
+        let fmt_year = match year_opt {
+            Some("2-digit") => format!("{:02}", year.rem_euclid(100)),
+            _ if year_opt.is_some() => year.to_string(),
+            _ => String::new(),
+        };
+        // Use named-month format for long/short/narrow, numeric M/D/YYYY otherwise.
+        match month_opt {
+            Some("long") | Some("short") | Some("narrow") => {
+                let has_y = year_opt.is_some();
+                let has_d = day_opt.is_some();
+                Some(match (has_d, has_y) {
+                    (true, true) => format!("{} {}, {}", fmt_month, fmt_day, fmt_year),
+                    (true, false) => format!("{} {}", fmt_month, fmt_day),
+                    (false, true) => format!("{} {}", fmt_month, fmt_year),
+                    (false, false) => fmt_month,
+                })
+            }
+            _ => {
+                let has_y = year_opt.is_some();
+                let has_d = day_opt.is_some();
+                Some(match (has_d, has_y) {
+                    (true, true) => format!("{}/{}/{}", fmt_month, fmt_day, fmt_year),
+                    (true, false) => format!("{}/{}", fmt_month, fmt_day),
+                    (false, true) => format!("{}/{}", fmt_month, fmt_year),
+                    (false, false) => fmt_month,
+                })
+            }
+        }
+    } else {
+        None
+    };
+
+    let time_part = if has_time {
+        let inc_secs = second_opt.is_some();
+        let inc_mins = minute_opt.is_some() || inc_secs;
+        Some(if use_24h {
+            if inc_secs {
+                format!("{:02}:{:02}:{:02}", hour, minute, second)
+            } else if inc_mins {
+                format!("{:02}:{:02}", hour, minute)
+            } else {
+                format!("{:02}", hour)
+            }
+        } else {
+            let (h, ampm) = if hour == 0 {
+                (12u32, "AM")
+            } else if hour < 12 {
+                (hour, "AM")
+            } else if hour == 12 {
+                (12, "PM")
+            } else {
+                (hour - 12, "PM")
+            };
+            if inc_secs {
+                format!("{}:{:02}:{:02} {}", h, minute, second, ampm)
+            } else if inc_mins {
+                format!("{}:{:02} {}", h, minute, ampm)
+            } else {
+                format!("{} {}", h, ampm)
+            }
+        })
+    } else {
+        None
+    };
+
+    match (date_part, time_part) {
+        (Some(d), Some(t)) => format!("{}, {}", d, t),
+        (Some(d), None) => d,
+        (None, Some(t)) => t,
+        (None, None) => format!("{}/{}/{}", month, day, year),
+    }
+}
+
+/// Format a millisecond timestamp using the options stored on a DTF instance.
+fn format_ms_with_dtf_obj(obj: *const ObjectHeader, ms: f64) -> String {
+    let secs = (ms as i64).div_euclid(1000);
+    let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
+
+    let date_style = get_string_field(obj, KEY_DATE_STYLE);
+    let time_style = get_string_field(obj, KEY_TIME_STYLE);
+    let hour12_v = {
+        let v = JSValue::from_bits(get_field(obj, KEY_HOUR12).to_bits());
+        if v.is_bool() {
+            Some(v.as_bool())
+        } else {
+            None
+        }
+    };
+    let hour_cycle = get_string_field(obj, KEY_HOUR_CYCLE);
+    let use_24h = resolve_24h(hour12_v, hour_cycle.as_deref());
+
+    match (date_style.as_deref(), time_style.as_deref()) {
+        (Some(ds), Some(ts)) => format!(
+            "{}, {}",
+            format_date_style(year, month, day, secs, ds),
+            format_time_style(hour, minute, second, ts, use_24h),
+        ),
+        (Some(ds), None) => format_date_style(year, month, day, secs, ds),
+        (None, Some(ts)) => format_time_style(hour, minute, second, ts, use_24h),
+        (None, None) => {
+            let year_opt = get_string_field(obj, KEY_YEAR);
+            let month_opt = get_string_field(obj, KEY_MONTH);
+            let day_opt = get_string_field(obj, KEY_DAY);
+            let hour_opt = get_string_field(obj, KEY_HOUR);
+            let minute_opt = get_string_field(obj, KEY_MINUTE);
+            let second_opt = get_string_field(obj, KEY_SECOND);
+            format_components(
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                year_opt.as_deref(),
+                month_opt.as_deref(),
+                day_opt.as_deref(),
+                hour_opt.as_deref(),
+                minute_opt.as_deref(),
+                second_opt.as_deref(),
+                use_24h,
+            )
+        }
+    }
+}
+
+/// Parse a raw option value as a string; treat `undefined`/`null` as absent.
+fn opt_string(raw: f64) -> Option<String> {
+    string_from_string_value(raw)
+}
+
+/// Context tag for [`temporal_locale_string`] — which Temporal type is being formatted.
+/// Controls default options, type-specific TypeError guards, and timezone handling.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TemporalLocaleCtx {
+    PlainDate,
+    PlainDateTime,
+    PlainTime,
+    PlainYearMonth,
+    PlainMonthDay,
+    Instant,
+    ZonedDateTime,
+}
+
+/// Shared `toLocaleString` implementation for all Temporal types.
+///
+/// Parses `locale_arg` / `opts_arg`, validates option conflicts and
+/// type-specific restrictions (TypeError), applies type-appropriate defaults,
+/// then formats `epoch_ms` using the same logic as `Intl.DateTimeFormat.format`.
+pub(crate) fn temporal_locale_string(
+    epoch_ms: f64,
+    locale_arg: f64,
+    opts_arg: f64,
+    ctx: TemporalLocaleCtx,
+) -> f64 {
+    // ---- parse options object ----
+    let opts_obj = object_ptr_from_value(opts_arg);
+
+    let get_opt =
+        |key: &str| -> Option<String> { opts_obj.and_then(|o| opt_string(get_field(o, key))) };
+    let get_bool_opt = |key: &str| -> Option<bool> {
+        let raw = opts_obj
+            .map(|o| get_field(o, key))
+            .unwrap_or_else(undefined);
+        let v = JSValue::from_bits(raw.to_bits());
+        if v.is_bool() {
+            Some(v.as_bool())
+        } else {
+            None
+        }
+    };
+
+    let date_style = get_opt("dateStyle");
+    let time_style = get_opt("timeStyle");
+    let year_opt = get_opt("year");
+    let month_opt = get_opt("month");
+    let day_opt = get_opt("day");
+    let hour_opt = get_opt("hour");
+    let minute_opt = get_opt("minute");
+    let second_opt = get_opt("second");
+    let hour12 = get_bool_opt("hour12");
+    let hour_cycle = get_opt("hourCycle");
+    let weekday_opt = get_opt("weekday");
+    let era_opt = get_opt("era");
+    let tz_name_opt = get_opt("timeZoneName");
+    let tz_opt = get_opt("timeZone");
+
+    let has_style = date_style.is_some() || time_style.is_some();
+    let has_component = year_opt.is_some()
+        || month_opt.is_some()
+        || day_opt.is_some()
+        || hour_opt.is_some()
+        || minute_opt.is_some()
+        || second_opt.is_some()
+        || weekday_opt.is_some()
+        || era_opt.is_some()
+        || tz_name_opt.is_some();
+
+    // ---- validate option conflicts ----
+
+    // dateStyle/timeStyle cannot mix with explicit components (DTF constructor rule).
+    if has_style && has_component {
+        throw_type_error(
+            "dateStyle and timeStyle cannot be used with explicit date-time component options",
+        );
+    }
+
+    // Type-specific restrictions:
+    match ctx {
+        TemporalLocaleCtx::PlainDate
+        | TemporalLocaleCtx::PlainYearMonth
+        | TemporalLocaleCtx::PlainMonthDay => {
+            // No time support — timeStyle is invalid.
+            if time_style.is_some() {
+                throw_type_error(
+                    "timeStyle option is not valid for this Temporal type (no time component)",
+                );
+            }
+        }
+        TemporalLocaleCtx::PlainTime => {
+            // No date support — dateStyle is invalid.
+            if date_style.is_some() {
+                throw_type_error(
+                    "dateStyle option is not valid for Temporal.PlainTime (no date component)",
+                );
+            }
+        }
+        TemporalLocaleCtx::ZonedDateTime => {
+            // The timeZone option is disallowed (ZDT carries its own timezone).
+            if tz_opt.is_some() {
+                throw_type_error(
+                    "timeZone option is not allowed when formatting Temporal.ZonedDateTime",
+                );
+            }
+        }
+        _ => {}
+    }
+
+    // ---- apply type-appropriate defaults when no style/component is given ----
+    let (eff_date_style, eff_time_style, eff_year, eff_month, eff_day, eff_hour, eff_min, eff_sec) =
+        if has_style || has_component {
+            (
+                date_style.as_deref(),
+                time_style.as_deref(),
+                year_opt.as_deref(),
+                month_opt.as_deref(),
+                day_opt.as_deref(),
+                hour_opt.as_deref(),
+                minute_opt.as_deref(),
+                second_opt.as_deref(),
+            )
+        } else {
+            // No options given — apply spec defaults for this Temporal type.
+            match ctx {
+                TemporalLocaleCtx::PlainDate => (
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    Some("numeric"),
+                    None,
+                    None,
+                    None,
+                ),
+                TemporalLocaleCtx::PlainDateTime
+                | TemporalLocaleCtx::Instant
+                | TemporalLocaleCtx::ZonedDateTime => (
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    Some("numeric"),
+                    Some("numeric"),
+                    Some("2-digit"),
+                    Some("2-digit"),
+                ),
+                TemporalLocaleCtx::PlainTime => (
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("2-digit"),
+                    Some("2-digit"),
+                ),
+                TemporalLocaleCtx::PlainYearMonth => (
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                TemporalLocaleCtx::PlainMonthDay => (
+                    None,
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    None,
+                    None,
+                    None,
+                ),
+            }
+        };
+
+    let use_24h = resolve_24h(hour12, hour_cycle.as_deref());
+    let secs = (epoch_ms as i64).div_euclid(1000);
+    let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
+
+    let result = match (eff_date_style, eff_time_style) {
+        (Some(ds), Some(ts)) => format!(
+            "{}, {}",
+            format_date_style(year, month, day, secs, ds),
+            format_time_style(hour, minute, second, ts, use_24h),
+        ),
+        (Some(ds), None) => format_date_style(year, month, day, secs, ds),
+        (None, Some(ts)) => format_time_style(hour, minute, second, ts, use_24h),
+        (None, None) => format_components(
+            year, month, day, hour, minute, second, eff_year, eff_month, eff_day, eff_hour,
+            eff_min, eff_sec, use_24h,
+        ),
+    };
+    string_value(&result)
 }
 
 /// Shared steps 4–7 of `Intl.DateTimeFormat.prototype.formatRange` /
