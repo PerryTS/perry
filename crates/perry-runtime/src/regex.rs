@@ -50,7 +50,8 @@ use exec_array::{
 };
 #[cfg(feature = "regex-engine")]
 use grammar::{
-    has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape, js_regex_to_rust,
+    has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape,
+    has_unicode_forbidden_pattern, js_regex_to_rust,
 };
 #[cfg(feature = "regex-engine")]
 pub use match_all::{
@@ -448,6 +449,16 @@ pub extern "C" fn js_regexp_new(
         // would otherwise silently relax them. (test262 RegExp/
         // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
         if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
+            throw_regexp_syntax_error(&format!(
+                "Invalid regular expression: /{}/: invalid pattern",
+                pattern_str
+            ));
+        }
+        // The remaining Annex B.1.4 leniencies (lone `]`/`}`, incomplete `{`
+        // quantifiers, `\d`-style range endpoints, quantified lookarounds, and
+        // forbidden IdentityEscapes) are likewise hard errors under `/u`. Gated
+        // on `u` specifically — `/v`'s ClassSetExpression grammar differs.
+        if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
             throw_regexp_syntax_error(&format!(
                 "Invalid regular expression: /{}/: invalid pattern",
                 pattern_str

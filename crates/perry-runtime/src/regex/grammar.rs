@@ -153,6 +153,222 @@ pub(super) fn has_unicode_forbidden_legacy_escape(pattern: &str) -> bool {
     false
 }
 
+/// The `SyntaxCharacter` set — the only characters a bare `\X` IdentityEscape
+/// may carry under `/u` (plus `/`, handled by the caller). Mirrors the spec's
+/// `SyntaxCharacter :: one of ^ $ \ . * + ? ( ) [ ] { } |`.
+fn is_unicode_syntax_character(c: char) -> bool {
+    matches!(
+        c,
+        '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+    )
+}
+
+/// Length (including the leading backslash) of a well-formed escape under `/u`
+/// starting at index `bs` (which must point at `\`), or `None` if the escape is
+/// not permitted in Unicode mode. `in_class` selects between the AtomEscape and
+/// ClassEscape grammars (e.g. `\b` is a word boundary in an Atom but a backspace
+/// in a class, while `\B` and `\k<name>` are class-illegal).
+///
+/// Annex B.1.4's lenient IdentityEscape (`\X` for an arbitrary SourceCharacter)
+/// does NOT apply under `/u`: only SyntaxCharacters, `/`, the recognised
+/// character-class/control escapes, and the *complete* `\xHH` / `\uHHHH` /
+/// `\u{…}` / `\cX` / `\p{…}` / `\k<…>` forms are accepted. A bare `\x`, `\u`,
+/// `\c`, `\p`, `\k`, or `\A` is a `SyntaxError`.
+fn unicode_escape_len(chars: &[char], bs: usize, in_class: bool) -> Option<usize> {
+    let c = *chars.get(bs + 1)?; // a trailing lone backslash is never valid
+    let after = bs + 2; // index just past the escape letter
+    let is_hex = |idx: usize| chars.get(idx).is_some_and(|h| h.is_ascii_hexdigit());
+    match c {
+        // CharacterClassEscape / control escapes — fixed two-char forms.
+        'd' | 'D' | 's' | 'S' | 'w' | 'W' | 'f' | 'n' | 'r' | 't' | 'v' => Some(2),
+        // `\b` word boundary (Atom) / backspace (class); `\B` is class-illegal.
+        'b' => Some(2),
+        'B' => (!in_class).then_some(2),
+        // `\0` NUL — only when not the prefix of a legacy octal (`\0DD`), which
+        // `has_unicode_forbidden_legacy_escape` already rejects.
+        '0' => match chars.get(after) {
+            Some(d) if d.is_ascii_digit() => None,
+            _ => Some(2),
+        },
+        // Decimal backreference (Atom only). Validity of the target group is
+        // checked by `has_unicode_forbidden_legacy_escape`; here we only consume.
+        '1'..='9' if !in_class => {
+            let (_, digits) = parse_decimal_escape(chars, bs + 1);
+            Some(1 + digits)
+        }
+        // `\cX` control letter.
+        'c' => match chars.get(after) {
+            Some(x) if x.is_ascii_alphabetic() => Some(3),
+            _ => None,
+        },
+        // `\xHH` — exactly two hex digits.
+        'x' if is_hex(after) && is_hex(after + 1) => Some(4),
+        // `\uHHHH` or `\u{H+}`.
+        'u' => {
+            if matches!(chars.get(after), Some('{')) {
+                let mut j = after + 1;
+                let start = j;
+                while chars.get(j).is_some_and(|h| h.is_ascii_hexdigit()) {
+                    j += 1;
+                }
+                (j > start && matches!(chars.get(j), Some('}'))).then(|| j + 1 - bs)
+            } else if (0..4).all(|k| is_hex(after + k)) {
+                Some(6)
+            } else {
+                None
+            }
+        }
+        // `\p{…}` / `\P{…}` property escape (Unicode mode only — handled here).
+        'p' | 'P' if matches!(chars.get(after), Some('{')) => {
+            let mut j = after + 1;
+            while chars.get(j).is_some_and(|ch| *ch != '}') {
+                j += 1;
+            }
+            matches!(chars.get(j), Some('}')).then(|| j + 1 - bs)
+        }
+        // `\k<name>` named backreference (Atom only).
+        'k' if !in_class && matches!(chars.get(after), Some('<')) => {
+            let mut j = after + 1;
+            while chars.get(j).is_some_and(|ch| *ch != '>') {
+                j += 1;
+            }
+            matches!(chars.get(j), Some('>')).then(|| j + 1 - bs)
+        }
+        // IdentityEscape: a SyntaxCharacter or `/` anywhere; `-` additionally in a
+        // class (ClassEscape permits `\-`). Anything else is forbidden under `/u`.
+        '/' => Some(2),
+        '-' if in_class => Some(2),
+        _ if is_unicode_syntax_character(c) => Some(2),
+        _ => None,
+    }
+}
+
+/// True if `\<letter>` immediately following a `[` opens a recognised
+/// CharacterClassEscape (`\d \D \s \S \w \W`) — i.e. a range endpoint that may
+/// not participate in a `-` range under `/u`.
+fn class_escape_is_set(chars: &[char], backslash: usize) -> bool {
+    matches!(
+        chars.get(backslash + 1),
+        Some('d') | Some('D') | Some('s') | Some('S') | Some('w') | Some('W')
+    )
+}
+
+/// Annex B.1.4's leniencies that ECMAScript forbids under `/u` (beyond the
+/// legacy escapes handled by [`has_unicode_forbidden_legacy_escape`]). Returns
+/// `true` — so the caller throws a `SyntaxError` at construction — when the
+/// pattern relies on any sloppy-mode extension that `js_regex_to_rust` would
+/// otherwise quietly relax into a valid `regex`-crate pattern:
+///
+/// * a lone `]` or `}` PatternCharacter (must be `\]` / `\}` under `/u`);
+/// * an incomplete or standalone `{` that is not a complete `{n}` / `{n,}` /
+///   `{n,m}` quantifier;
+/// * a `-` range whose endpoint is a `\d`-style CharacterClassEscape
+///   (`[\d-a]`, `[a-\w]`, `[\s-\S]`);
+/// * a quantifier applied directly to a lookaround assertion (`(?=.)*`);
+/// * a forbidden IdentityEscape (`\A`, `\-` outside a class, a bare `\x` / `\u`
+///   / `\p` / `\k`), via [`unicode_escape_len`].
+///
+/// Only sound to call when the `u` flag is set. (The `v` flag's ClassSetExpression
+/// grammar differs and is validated separately.)
+pub(super) fn has_unicode_forbidden_pattern(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    let mut in_class = false;
+    let mut class_start = 0usize;
+    // Whether the previous class member was a CharacterClassEscape (`\d`, …), so
+    // a following `-` range can flag it. Reset on entering a class / past a `]`.
+    let mut prev_member_was_class_escape = false;
+    let mut prev_member_exists = false;
+    // For each open `(`, whether it begins a lookaround assertion — so its `)`
+    // can reject an immediately-following quantifier.
+    let mut paren_is_assertion: Vec<bool> = Vec::new();
+
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            match unicode_escape_len(&chars, i, in_class) {
+                Some(len) => {
+                    if in_class {
+                        prev_member_was_class_escape = class_escape_is_set(&chars, i);
+                        prev_member_exists = true;
+                    }
+                    i += len;
+                    continue;
+                }
+                None => return true,
+            }
+        }
+        if in_class {
+            match c {
+                ']' => {
+                    in_class = false;
+                    prev_member_exists = false;
+                    prev_member_was_class_escape = false;
+                }
+                '-' => {
+                    let is_first = i == class_start;
+                    let is_last = matches!(chars.get(i + 1), Some(']'));
+                    if !is_first && !is_last && prev_member_exists {
+                        let right_is_class_escape = matches!(chars.get(i + 1), Some('\\'))
+                            && class_escape_is_set(&chars, i + 1);
+                        if prev_member_was_class_escape || right_is_class_escape {
+                            return true;
+                        }
+                    }
+                    // The `-` itself becomes the previous member (a literal hyphen).
+                    prev_member_was_class_escape = false;
+                    prev_member_exists = true;
+                }
+                _ => {
+                    prev_member_was_class_escape = false;
+                    prev_member_exists = true;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '[' => {
+                in_class = true;
+                class_start = i + 1;
+                prev_member_exists = false;
+                prev_member_was_class_escape = false;
+                i += 1;
+            }
+            // A lone `]` / `}` PatternCharacter is forbidden under `/u`; the valid
+            // occurrences (a class close, a quantifier or `\u{…}` / `\p{…}` brace)
+            // are consumed before reaching here.
+            ']' | '}' => return true,
+            '{' => match parse_braced_quantifier(&chars, i) {
+                Some(end) => i = end + 1,
+                None => return true,
+            },
+            '(' => {
+                let is_assertion = matches!(chars.get(i + 1), Some('?'))
+                    && (matches!(chars.get(i + 2), Some('=') | Some('!'))
+                        || (matches!(chars.get(i + 2), Some('<'))
+                            && matches!(chars.get(i + 3), Some('=') | Some('!'))));
+                paren_is_assertion.push(is_assertion);
+                i += 1;
+            }
+            ')' => {
+                let was_assertion = paren_is_assertion.pop().unwrap_or(false);
+                if was_assertion {
+                    let quantified = matches!(chars.get(i + 1), Some('*') | Some('+') | Some('?'))
+                        || (matches!(chars.get(i + 1), Some('{'))
+                            && parse_braced_quantifier(&chars, i + 1).is_some());
+                    if quantified {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
 fn is_regex_identity_escape(ch: char) -> bool {
     matches!(
         ch,
@@ -1265,8 +1481,118 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::has_unicode_forbidden_pattern;
     use super::js_regex_to_rust;
     use super::normalize_quantified_lookaround;
+
+    #[test]
+    fn unicode_forbidden_pattern_rejects_annex_b_leniencies() {
+        // test262 built-ins/RegExp/unicode_restricted_* — Annex B.1.4 does NOT
+        // apply under `/u`, so each of these must be a SyntaxError.
+        let forbidden = [
+            // Standalone brackets (unicode_restricted_brackets).
+            "]",
+            "}",
+            "{",
+            // Incomplete quantifiers (unicode_restricted_incomplete_quantifier).
+            "a{",
+            "a{1",
+            "a{1,",
+            "a{1,2",
+            "{1",
+            "{1,",
+            "{1,2",
+            // ClassEscape in a range (unicode_restricted_character_class_escape).
+            "[\\d-a]",
+            "[\\D-a]",
+            "[\\s-a]",
+            "[\\S-a]",
+            "[\\w-a]",
+            "[\\W-a]",
+            "[a-\\d]",
+            "[a-\\w]",
+            "[\\d-\\d]",
+            "[\\s-\\S]",
+            // Quantified assertions (unicode_restricted_quantifiable_assertion).
+            "(?=.)*",
+            "(?=.)+",
+            "(?=.)?",
+            "(?=.){1}",
+            "(?=.){1,2}",
+            "(?=.)*?",
+            "(?!.)*",
+            "(?<=.)*",
+            "(?<!.)*",
+            // Forbidden IdentityEscapes (unicode_restricted_identity_escape[_alpha]).
+            "\\A",
+            "\\T",
+            "\\a",
+            "\\z",
+            "\\-",
+            "\\@",
+            "\\~",
+            // Bare incomplete escapes — also forbidden under `/u`.
+            "\\x",
+            "\\u",
+            "\\p",
+            "\\k",
+            "\\x4",
+            "\\u{}",
+            "[\\B]",
+        ];
+        for p in forbidden {
+            assert!(
+                has_unicode_forbidden_pattern(p),
+                "expected `/{p}/u` to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_forbidden_pattern_accepts_valid_unicode_patterns() {
+        // None of these may be falsely rejected — they are all valid under `/u`.
+        let allowed = [
+            "abc",
+            "a{1,2}",
+            "a{2}",
+            "a{2,}",
+            "(?=.)",
+            "(?:ab)*",
+            "(ab)?c",
+            "(?<name>x)",
+            "[a-z]",
+            "[\\d]",
+            "[\\d-]",
+            "[-\\d]",
+            "[\\w_]",
+            "[\\b]",
+            "[\\p{L}]",
+            "\\d+",
+            "\\w\\s\\b\\B",
+            "\\.",
+            "\\/",
+            "\\]",
+            "\\}",
+            "\\{",
+            "\\x41",
+            "\\u0041",
+            "\\u{1F600}",
+            "\\p{L}",
+            "\\P{N}",
+            "\\cA",
+            "\\n\\r\\t\\v\\f",
+            "\\k<n>(?<n>x)",
+            "[\\-]",
+            "a|b",
+            "^$",
+        ];
+        for p in allowed {
+            assert!(
+                !has_unicode_forbidden_pattern(p),
+                "expected `/{p}/u` to be accepted"
+            );
+        }
+    }
 
     #[test]
     fn quantified_lookaround_normalizes() {

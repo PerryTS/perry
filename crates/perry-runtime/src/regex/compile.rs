@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use regex::Regex;
 
-use super::grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
+use super::grammar::{
+    has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape,
+    has_unicode_forbidden_pattern, js_regex_to_rust,
+};
 use super::{
     build_fancy_regex, build_std_regex, get_or_compile_regex, is_regex_pointer, is_valid_ptr,
     is_valid_regex_ptr, js_regexp_get_flags, js_regexp_get_source, js_string_from_str,
@@ -84,6 +87,22 @@ pub extern "C" fn js_regexp_compile_value(
     // Same SyntaxError validation as `js_regexp_new`: only reject patterns that
     // neither the `regex` crate nor `fancy-regex` accept.
     if has_invalid_repeated_quantifier(pattern_str) {
+        throw_regexp_syntax_error(&format!(
+            "Invalid regular expression: /{}/: invalid pattern",
+            pattern_str
+        ));
+    }
+    // Annex B.1.4 leniencies are hard `SyntaxError`s under `/u` (mirror of
+    // `js_regexp_new`): legacy escapes for `u`/`v`, plus the structural
+    // restrictions for `u` specifically.
+    let unicode = flags_str.contains('u') || flags_str.contains('v');
+    if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
+        throw_regexp_syntax_error(&format!(
+            "Invalid regular expression: /{}/: invalid pattern",
+            pattern_str
+        ));
+    }
+    if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
         throw_regexp_syntax_error(&format!(
             "Invalid regular expression: /{}/: invalid pattern",
             pattern_str
