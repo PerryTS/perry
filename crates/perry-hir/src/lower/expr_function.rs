@@ -578,6 +578,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // in a class field initializer. Cleared here, restored at the end.
     let saved_field_init = ctx.in_class_field_init;
     ctx.in_class_field_init = false;
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
 
     // Lower parameters and collect destructuring info.
     //
@@ -1217,6 +1219,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.in_class_field_init = saved_field_init;
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Scope popped: `ctx.locals.id_set()` is now the enclosing scope's locals.
     let (captures, mutable_captures) =

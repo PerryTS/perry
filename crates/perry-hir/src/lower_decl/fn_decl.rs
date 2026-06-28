@@ -68,6 +68,8 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
 
     // Pre-scan body for `arguments` references. If the function references
     // `arguments`, we synthesize a hidden raw-arguments parameter so
@@ -372,6 +374,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Exit type parameter scope
     ctx.exit_type_param_scope();

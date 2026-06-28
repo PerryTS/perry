@@ -62,6 +62,8 @@ pub(super) fn lower_nested_fn_decl(
     };
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
 
     // Lower parameters. Skip the TypeScript `this:` annotation —
     // it has no runtime existence (see the sibling site above for
@@ -194,6 +196,7 @@ pub(super) fn lower_nested_fn_decl(
     }
 
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Detect captured variables
     let mut all_refs = Vec::new();

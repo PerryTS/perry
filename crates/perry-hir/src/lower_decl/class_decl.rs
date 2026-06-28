@@ -1045,8 +1045,11 @@ pub fn lower_class_decl(
                 // such method right after static field init, so they
                 // run once at module startup.
                 let scope_mark = ctx.enter_scope();
+                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+                ctx.in_nonarrow_fn = true;
                 let body = lower_block_stmt(ctx, &block.body)?;
                 ctx.exit_scope(scope_mark);
+                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
                 let block_idx = static_methods
                     .iter()
@@ -1814,8 +1817,11 @@ pub fn lower_class_from_ast(
             }
             ast::ClassMember::StaticBlock(block) => {
                 let scope_mark = ctx.enter_scope();
+                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+                ctx.in_nonarrow_fn = true;
                 let body = lower_block_stmt(ctx, &block.body)?;
                 ctx.exit_scope(scope_mark);
+                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
                 let block_idx = static_methods
                     .iter()

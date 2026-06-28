@@ -175,6 +175,7 @@ impl LoweringContext {
             fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
             expr_lower_depth: 0,
             prelowered_member_receiver: None,
+            in_nonarrow_fn: false,
         }
     }
 

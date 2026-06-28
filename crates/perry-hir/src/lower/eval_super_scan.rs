@@ -183,6 +183,14 @@ pub(crate) fn check_direct_eval_super_private(
             "'arguments' is not allowed in class field initializer",
         ));
     }
+    // ES2025 §15.2.1.1: `new.target` in a direct eval body is only legal when
+    // the eval is contained in function code that is NOT an ArrowFunction.
+    // At module/script top-level and inside arrow functions, it is a SyntaxError.
+    if scan.new_target && !ctx.in_nonarrow_fn {
+        return Some(throw_eval_syntax_error_expr(
+            "new.target expression is not allowed here",
+        ));
+    }
     check_private_refs(&scan, |name| {
         ctx.private_scopes
             .iter()

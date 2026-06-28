@@ -15,6 +15,8 @@ pub fn lower_constructor(
     ctor: &ast::Constructor,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Track that we're inside a constructor body so `new.target` can resolve
@@ -210,6 +212,7 @@ pub fn lower_constructor(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.in_constructor_class = saved_ctor_class;
 
     Ok(Function {
@@ -469,6 +472,8 @@ pub fn lower_class_method_with_name(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
@@ -641,6 +646,7 @@ pub fn lower_class_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Exit method's type param scope
     ctx.exit_type_param_scope();
@@ -710,6 +716,8 @@ pub fn lower_getter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance getters
@@ -747,6 +755,7 @@ pub fn lower_getter_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
@@ -788,6 +797,8 @@ pub fn lower_setter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance setters
@@ -870,6 +881,7 @@ pub fn lower_setter_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),

@@ -783,4 +783,12 @@ pub struct LoweringContext {
     /// idempotent w.r.t. the value produced (the fluent-success path already
     /// reuses the same lowered receiver), so reusing it is semantics-preserving.
     pub(crate) prelowered_member_receiver: Option<((u32, u32), Expr)>,
+    /// True when the eval call site is lexically inside a non-arrow function
+    /// (ordinary `function` declaration/expression, method, constructor, getter,
+    /// setter, or static block). Used by `check_direct_eval_super_private` to
+    /// enforce the spec rule: `new.target` in a direct eval body is only legal
+    /// when the eval is contained in function code that is NOT an ArrowFunction
+    /// (ES2025 §15.2.1.1, early error for `new.target` in eval). ArrowFunction
+    /// bodies and module/script top-level both leave this false.
+    pub(crate) in_nonarrow_fn: bool,
 }

@@ -80,6 +80,8 @@ pub fn lower_private_method(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
@@ -190,6 +192,7 @@ pub fn lower_private_method(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.exit_type_param_scope();
 
     let func_id = ctx.fresh_func();
@@ -232,6 +235,8 @@ pub fn lower_private_getter(
 ) -> Result<Function> {
     let name = format!("get_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
     ctx.define_local("this".to_string(), Type::Any);
 
@@ -250,6 +255,7 @@ pub fn lower_private_getter(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
@@ -276,6 +282,8 @@ pub fn lower_private_setter(
 ) -> Result<Function> {
     let name = format!("set_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
     ctx.define_local("this".to_string(), Type::Any);
 
@@ -326,6 +334,7 @@ pub fn lower_private_setter(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
