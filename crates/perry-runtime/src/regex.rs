@@ -368,6 +368,27 @@ pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
     }
 }
 
+/// Spec `Set(R, "lastIndex", n, true)` — the lastIndex updates in
+/// RegExpBuiltinExec (steps 14/18) are performed with the *Throw* flag set.
+/// A user can make `lastIndex` non-writable
+/// (`Object.defineProperty(re, "lastIndex", { writable: false })`); the
+/// throwing setter then raises a `TypeError` rather than silently dropping the
+/// write (test262 prototype/{exec,test}/y-fail-lastindex-no-write). When
+/// `lastIndex` is writable (the default) this just stores the number.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn set_last_index_throwing(re: *mut RegExpHeader, n: usize) {
+    let writable = crate::object::get_property_attrs(re as usize, "lastIndex")
+        .map(|a| a.writable())
+        .unwrap_or(true);
+    if !writable {
+        let message = b"Cannot assign to read only property 'lastIndex' of object";
+        let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let err = crate::error::js_typeerror_new(msg);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    store_last_index_number(re, n);
+}
+
 /// Check if a pointer is valid (not null and not a small invalid value from bad NaN-unboxing)
 #[inline]
 pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {

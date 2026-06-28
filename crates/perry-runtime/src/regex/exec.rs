@@ -51,14 +51,15 @@ pub extern "C" fn js_regexp_exec(
         // BOTH global and sticky regexes (and lastIndex is reset/updated for
         // either). A sticky match must additionally *anchor* at lastIndex.
         let use_last_index = global || sticky;
-        // Spec: for non-global/non-sticky, lastIndex is treated as 0 and NOT
-        // read (so a `valueOf`-bearing lastIndex isn't observed). Only consult
-        // (and ToLength-coerce) it when stateful.
-        let last_index = if use_last_index {
-            regex_last_index_offset(re)
-        } else {
-            0
-        };
+        // Spec RegExpBuiltinExec step 4 reads `lastIndex` (Get → ToLength) once,
+        // up front and *before* the global/sticky branch (step 8). So the read
+        // — and any `valueOf`/`toString` side effect of a coercible lastIndex —
+        // is observed exactly once even for a non-global/non-sticky regex
+        // (test262 prototype/exec/{success,failure}-lastindex-access).
+        let last_index_read = regex_last_index_offset(re);
+        // Step 8: a non-global/non-sticky search always starts at 0; the value
+        // read above only drives the search start for a stateful regex.
+        let last_index = if use_last_index { last_index_read } else { 0 };
 
         let search_start_byte = if use_last_index && last_index > 0 {
             let mut byte_off = 0;
@@ -77,7 +78,7 @@ pub extern "C" fn js_regexp_exec(
 
         if search_start_byte > str_data.len() {
             if use_last_index {
-                store_last_index_number(re, 0);
+                set_last_index_throwing(re, 0);
             }
             LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
             LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -120,7 +121,7 @@ pub extern "C" fn js_regexp_exec(
                     }
                     if use_last_index {
                         let match_str = full.as_str();
-                        store_last_index_number(re, match_char_offset + match_str.chars().count());
+                        set_last_index_throwing(re, match_char_offset + match_str.chars().count());
                     }
                     set_exec_array_metadata(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
@@ -153,7 +154,7 @@ pub extern "C" fn js_regexp_exec(
         if let Some(result) = fancy_captures {
             if result.is_null() {
                 if use_last_index {
-                    store_last_index_number(re, 0);
+                    set_last_index_throwing(re, 0);
                 }
                 LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
                 LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
@@ -175,7 +176,7 @@ pub extern "C" fn js_regexp_exec(
                 if use_last_index {
                     let match_end_byte = caps.get(0).unwrap().end() + search_start_byte;
                     let match_end_char = str_data[..match_end_byte].chars().count();
-                    store_last_index_number(re, match_end_char);
+                    set_last_index_throwing(re, match_end_char);
                 }
 
                 // Create match array: [fullMatch, group1, group2, ...]
@@ -268,7 +269,7 @@ pub extern "C" fn js_regexp_exec(
             }
             None => {
                 if use_last_index {
-                    store_last_index_number(re, 0);
+                    set_last_index_throwing(re, 0);
                 }
                 LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
                 LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
