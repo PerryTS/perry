@@ -1696,6 +1696,122 @@ pub(crate) extern "C" fn number_format_bound_to_parts_thunk(
     parts_to_js_array(&number_instance_parts(obj, number))
 }
 
+/// Coerce a `formatRange`/`formatRangeToParts` endpoint to its `f64`
+/// mathematical value and run the two endpoint checks ECMA-402 places before
+/// rendering: `undefined` is a TypeError (the explicit `start`/`end` undefined
+/// guard), and a value that coerces to NaN is a RangeError
+/// (PartitionNumberRangePattern step 1). Every other value — BigInt, numeric
+/// String, ±Infinity, ±0 — coerces and is formatted. Returns the clipped pair.
+fn number_range_endpoints(method: &str, start: f64, end: f64) -> (f64, f64) {
+    let sj = JSValue::from_bits(start.to_bits());
+    let ej = JSValue::from_bits(end.to_bits());
+    if sj.is_undefined() || ej.is_undefined() {
+        throw_type_error(&format!(
+            "Intl.NumberFormat.prototype.{method} called with undefined start or end"
+        ));
+    }
+    let x = nf_coerce_number(start);
+    let y = nf_coerce_number(end);
+    if x.is_nan() || y.is_nan() {
+        throw_range_error(&format!(
+            "Intl.NumberFormat.prototype.{method} called with a NaN argument"
+        ));
+    }
+    (x, y)
+}
+
+/// Two endpoints are "mathematically equal" for range-collapse purposes when
+/// they are the same Number — including `+0`/`-0`, which compare equal — so the
+/// range renders as a single value rather than the approximate (`~`) form.
+fn range_endpoints_equal(x: f64, y: f64) -> bool {
+    x == y
+}
+
+/// `Intl.NumberFormat.prototype.formatRange` — a best-effort
+/// PartitionNumberRangePattern: render both endpoints with the instance's
+/// formatter, collapse to a single value when the endpoints are mathematically
+/// equal, mark the result approximate (`~`) when distinct endpoints round to the
+/// same string, and otherwise join the two renderings with an en dash. The exact
+/// ICU field-collapsing / locale range pattern is not reproduced.
+pub(crate) fn number_format_range_value(
+    obj: *const ObjectHeader,
+    method: &str,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let (x, y) = number_range_endpoints(method, start, end);
+    let r = nf_load(obj);
+    let sx: String = number_parts_from_resolved(&r, x)
+        .iter()
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if range_endpoints_equal(x, y) {
+        return string_value(&sx);
+    }
+    let sy: String = number_parts_from_resolved(&r, y)
+        .iter()
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if sx == sy {
+        string_value(&format!("~{sx}"))
+    } else {
+        string_value(&format!("{sx}\u{2013}{sy}"))
+    }
+}
+
+/// `Intl.NumberFormat.prototype.formatRangeToParts` — the parts shape of
+/// [`number_format_range_value`]. Each segment carries a `source`
+/// (`"startRange"`/`"endRange"`/`"shared"`); a collapsed range tags every
+/// segment `"shared"`, and the approximate form prepends an `approximatelySign`.
+pub(crate) fn number_format_range_parts_value(
+    obj: *const ObjectHeader,
+    method: &str,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let (x, y) = number_range_endpoints(method, start, end);
+    let r = nf_load(obj);
+    let tag = |parts: Vec<(&'static str, String)>, source: &'static str| {
+        parts.into_iter().map(move |(t, v)| (t, v, source))
+    };
+    let x_parts = number_parts_from_resolved(&r, x);
+    if range_endpoints_equal(x, y) {
+        let shared: Vec<_> = tag(x_parts, "shared").collect();
+        return super::date_collator::range_parts_to_js_array(&shared);
+    }
+    let y_parts = number_parts_from_resolved(&r, y);
+    let sx: String = x_parts.iter().map(|(_, v)| v.as_str()).collect();
+    let sy: String = y_parts.iter().map(|(_, v)| v.as_str()).collect();
+    if sx == sy {
+        let mut parts: Vec<(&'static str, String, &'static str)> =
+            vec![("approximatelySign", "~".to_string(), "shared")];
+        parts.extend(tag(x_parts, "shared"));
+        return super::date_collator::range_parts_to_js_array(&parts);
+    }
+    let mut parts: Vec<(&'static str, String, &'static str)> = tag(x_parts, "startRange").collect();
+    parts.push(("literal", "\u{2013}".to_string(), "shared"));
+    parts.extend(tag(y_parts, "endRange"));
+    super::date_collator::range_parts_to_js_array(&parts)
+}
+
+pub(crate) extern "C" fn number_format_range_thunk(
+    _closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let obj = this_intl_object("formatRange", KIND_NUMBER);
+    number_format_range_value(obj, "formatRange", start, end)
+}
+
+pub(crate) extern "C" fn number_format_range_to_parts_thunk(
+    _closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let obj = this_intl_object("formatRangeToParts", KIND_NUMBER);
+    number_format_range_parts_value(obj, "formatRangeToParts", start, end)
+}
+
 pub(crate) fn number_format_resolved_options_object(obj: *const ObjectHeader) -> f64 {
     let r = nf_load(obj);
     let out = js_object_alloc(0, 16);
