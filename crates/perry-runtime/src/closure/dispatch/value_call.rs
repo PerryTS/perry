@@ -432,8 +432,16 @@ pub unsafe extern "C" fn js_closure_call_array(
                 let bits = raw.to_bits();
                 // Same INT32_TAG unboxing the per-arity dispatchers do
                 // below — keep the body's `fadd` arithmetic working when
-                // the args came from `v8_to_native`.
-                let unboxed = if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000 {
+                // the args came from `v8_to_native`. EXCEPT class refs: a
+                // class/class-prototype ref is ALSO 0x7FFE-tagged (the cid in
+                // the low 32 bits), so unboxing it would turn an imported
+                // class passed through `f(...args)` into the plain number
+                // `cid` — breaking `typeof Filter === 'function'` in
+                // `@nestjs` `@UseFilters`/`@UseGuards` metadata. Skip the
+                // unbox for a registered class-ref (never a v8 int32).
+                let unboxed = if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000
+                    && crate::object::class_ref_id(raw).is_none()
+                {
                     ((bits & 0xFFFF_FFFF) as i32) as f64
                 } else {
                     raw
@@ -461,7 +469,13 @@ pub unsafe extern "C" fn js_closure_call_array(
         }
         let raw = *args_ptr.add(i);
         let bits = raw.to_bits();
-        if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000 {
+        // Skip the unbox for a registered class-ref: it is 0x7FFE-tagged like
+        // a v8 int32 but must stay a class ref (see the rest-bundled loop
+        // above) so an imported class spread through `f(...args)` keeps
+        // `typeof === 'function'`.
+        if (bits & 0xFFFF_0000_0000_0000) == 0x7FFE_0000_0000_0000
+            && crate::object::class_ref_id(raw).is_none()
+        {
             let int_val = (bits & 0xFFFF_FFFF) as i32;
             return int_val as f64;
         }

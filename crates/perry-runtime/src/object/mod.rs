@@ -51,6 +51,7 @@ pub(crate) mod map_set_subclass;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
+pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
