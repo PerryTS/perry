@@ -599,3 +599,173 @@ pub(crate) fn finally_route_condition(route: &FinallyRoute, state_id: LocalId) -
         }),
     }
 }
+
+/// `result === null || (typeof result !== "object" && typeof result !== "function")`
+/// — `Type(result) is not Object`. Used to enforce the spec requirement that a
+/// delegated `return()`/`next()` result be an Object.
+fn not_object_condition(result: Expr) -> Expr {
+    Expr::Logical {
+        op: LogicalOp::Or,
+        left: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(result.clone()),
+            right: Box::new(Expr::Null),
+        }),
+        right: Box::new(Expr::Logical {
+            op: LogicalOp::And,
+            left: Box::new(Expr::Compare {
+                op: CompareOp::Ne,
+                left: Box::new(Expr::TypeOf(Box::new(result.clone()))),
+                right: Box::new(Expr::String("object".to_string())),
+            }),
+            right: Box::new(Expr::Compare {
+                op: CompareOp::Ne,
+                left: Box::new(Expr::TypeOf(Box::new(result))),
+                right: Box::new(Expr::String("function".to_string())),
+            }),
+        }),
+    }
+}
+
+/// Build the `gen.return(v)` forwarding routes for an async generator's `.return`
+/// closure. When the generator is suspended inside a `yield *` delegation
+/// (`state` within a recorded [`DelegationRoute`] interval), `return(v)` must
+/// forward to the delegated iterator's `return` method rather than completing
+/// the outer generator directly — spec `yield *` step 6.c:
+///
+/// ```text
+///   return = GetMethod(iterator, "return")
+///   if return is undefined -> return Completion(received)   // complete with v
+///   innerResult = ? Await(? Call(return, iterator, «v»))
+///   if Type(innerResult) is not Object -> throw a TypeError
+///   if IteratorComplete(innerResult) -> return Completion{return, IteratorValue} // complete
+///   else -> AsyncGeneratorYield(IteratorValue(innerResult))   // re-yield, stay suspended
+/// ```
+///
+/// Each route emits an `if (state in interval) { ... }`; at most one matches and
+/// it always returns, so control only falls through to the generic completion
+/// path when not suspended in a `yield *`. The thrown `TypeError` and the
+/// returned iter-results are caught / promise-wrapped by
+/// `wrap_generator_resume_body`. Empty for sync generators (no routes recorded).
+pub(crate) fn build_yield_star_return_routes(
+    delegations: &[DelegationRoute],
+    state_id: LocalId,
+    return_param_id: LocalId,
+    done_id: LocalId,
+    next_local_id: &mut u32,
+) -> Vec<Stmt> {
+    let mut out = Vec::with_capacity(delegations.len());
+    for route in delegations {
+        let m_id = alloc_local(next_local_id); // captured `return` method
+        let r_id = alloc_local(next_local_id); // awaited inner result
+
+        let in_interval = Expr::Logical {
+            op: LogicalOp::And,
+            left: Box::new(Expr::Compare {
+                op: CompareOp::Gt,
+                left: Box::new(Expr::LocalGet(state_id)),
+                right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
+            }),
+            right: Box::new(Expr::Compare {
+                op: CompareOp::Le,
+                left: Box::new(Expr::LocalGet(state_id)),
+                right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
+            }),
+        };
+
+        // let __m = iterator.return;
+        let read_method = Stmt::Let {
+            id: m_id,
+            name: "__yield_star_ret_m".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(route.iter_id)),
+                property: "return".to_string(),
+            }),
+        };
+        // if (__m === undefined || __m === null) { done = true; return {v, true}; }
+        let no_method = Stmt::If {
+            condition: Expr::Logical {
+                op: LogicalOp::Or,
+                left: Box::new(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(m_id)),
+                    right: Box::new(Expr::Undefined),
+                }),
+                right: Box::new(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(m_id)),
+                    right: Box::new(Expr::Null),
+                }),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Return(Some(make_iter_result(
+                    Expr::LocalGet(return_param_id),
+                    true,
+                ))),
+            ],
+            else_branch: None,
+        };
+        // let __r = await __m.call(iterator, v);
+        let call_ret = Stmt::Let {
+            id: r_id,
+            name: "__yield_star_ret_r".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Await(Box::new(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(m_id)),
+                    property: "call".to_string(),
+                }),
+                args: vec![
+                    Expr::LocalGet(route.iter_id),
+                    Expr::LocalGet(return_param_id),
+                ],
+                type_args: vec![],
+                byte_offset: 0,
+            }))),
+        };
+        // if (Type(__r) is not Object) throw new TypeError(...);
+        let obj_check = Stmt::If {
+            condition: not_object_condition(Expr::LocalGet(r_id)),
+            then_branch: vec![Stmt::Throw(Expr::TypeErrorNew(Box::new(Expr::String(
+                "Iterator result is not an object".to_string(),
+            ))))],
+            else_branch: None,
+        };
+        // if (__r.done) { done = true; return {__r.value, true}; }
+        // else            return {__r.value, false};   // re-yield, generator not done
+        let dispatch_done = Stmt::If {
+            condition: Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(r_id)),
+                property: "done".to_string(),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Return(Some(make_iter_result(
+                    Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(r_id)),
+                        property: "value".to_string(),
+                    },
+                    true,
+                ))),
+            ],
+            else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
+                Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(r_id)),
+                    property: "value".to_string(),
+                },
+                false,
+            )))]),
+        };
+
+        out.push(Stmt::If {
+            condition: in_interval,
+            then_branch: vec![read_method, no_method, call_ret, obj_check, dispatch_done],
+            else_branch: None,
+        });
+    }
+    out
+}

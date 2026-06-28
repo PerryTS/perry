@@ -17,8 +17,8 @@ mod yield_await;
 pub(crate) use abrupt::{
     build_abrupt_routing, build_async_catch_route_body, build_async_throw_body,
     build_completion_resume_stmts, build_dispatch_catch_handler, build_finally_run_stmts,
-    catch_route_condition, finally_abrupt_condition, finally_route_condition,
-    rewrite_dispatch_continue_to_suspend, wrap_dispatch_loop,
+    build_yield_star_return_routes, catch_route_condition, finally_abrupt_condition,
+    finally_route_condition, rewrite_dispatch_continue_to_suspend, wrap_dispatch_loop,
 };
 pub(crate) use async_step::{
     build_async_catch_route_body_direct, build_async_step_driver_direct,
@@ -172,6 +172,7 @@ pub fn transform_generator_function_with_extra_captures(
     // async-iterator protocol (await each delegated `next()`); see the `yield*`
     // arms in `linearize.rs`.
     super::linearize::set_linearize_async_generator(is_async_generator);
+    super::linearize::reset_delegation_routes();
     linearize_body(
         &func.body,
         &mut states,
@@ -183,6 +184,10 @@ pub fn transform_generator_function_with_extra_captures(
         &mut catches,
         &mut finallys,
     );
+    // `yield *` delegation regions (async generators only), used below so that
+    // `gen.return(v)` while suspended inside a `yield *` forwards into the
+    // delegated iterator's `return` method (spec `yield *` step 6.c).
+    let delegations = super::linearize::take_delegation_routes();
     let extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
 
     // Push final state (code after last yield / end of function)
@@ -739,6 +744,18 @@ pub fn transform_generator_function_with_extra_captures(
             executing_id,
             Box::new(Expr::Bool(true)),
         )));
+        // Spec `yield *` step 6.c: when suspended inside a `yield *`, `return(v)`
+        // forwards to the delegated iterator's `return` method (async generators
+        // only; `delegations` is empty otherwise). Each route returns on a match,
+        // so control falls through to the generic completion below only when not
+        // suspended in a delegation.
+        return_resume_body.extend(build_yield_star_return_routes(
+            &delegations,
+            state_id,
+            return_param_id,
+            done_id,
+            next_local_id,
+        ));
         // Unhandled path: mark done, run pending non-yielding finallys, return
         // {v, true}. A finally that itself `return`s supersedes `v` (rewritten to
         // an iter-result return inside build_finally_run_stmts); a finally that

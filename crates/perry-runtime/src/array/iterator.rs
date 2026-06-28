@@ -335,17 +335,35 @@ fn async_from_sync_rest_args(rest: f64) -> (usize, f64) {
 
 fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Option<f64>, f64> {
     let method_value = named_field(iter, method);
-    if method_value.to_bits() == crate::value::TAG_UNDEFINED {
+    // Spec `%AsyncFromSyncIteratorPrototype%.{return,throw}` (and the sync
+    // `yield *` close) do `GetMethod(syncIterator, name)` ONCE and then
+    // `Call(method, syncIterator, args)` on that captured value. Re-dispatching
+    // by NAME here re-read the property a second time, firing a `get return` /
+    // `get throw` accessor twice and diverging from Node's operation order
+    // (test262 yield-star-sync-return). So when a callable method was found,
+    // invoke the already-fetched value with `this = iter`.
+    let callable = if method_value.to_bits() == crate::value::TAG_UNDEFINED {
         let raw = crate::value::js_nanbox_get_pointer(iter) as usize;
         if method != b"next" || !is_builtin_iterator_class_id(raw) {
             return Ok(None);
         }
+        // A builtin iterator that exposes no readable `next` property: fall back
+        // to method dispatch (string/typed-array iterators tower their `next`
+        // through the class-id method table).
+        false
     } else if !is_callable_value(method_value) {
         return Err(async_from_sync_type_error(
             b"Async-from-sync iterator method is not callable",
         ));
-    }
+    } else {
+        true
+    };
 
+    let prev_this = if callable {
+        Some(crate::object::js_implicit_this_set(iter))
+    } else {
+        None
+    };
     let trap_buf = crate::exception::js_try_push();
     let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
     let result = if jumped == 0 {
@@ -354,14 +372,18 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         } else {
             args.as_ptr()
         };
-        let value = unsafe {
-            crate::object::js_native_call_method(
-                iter,
-                method.as_ptr() as *const i8,
-                method.len(),
-                args_ptr,
-                args.len(),
-            )
+        let value = if callable {
+            unsafe { crate::closure::js_native_call_value(method_value, args_ptr, args.len()) }
+        } else {
+            unsafe {
+                crate::object::js_native_call_method(
+                    iter,
+                    method.as_ptr() as *const i8,
+                    method.len(),
+                    args_ptr,
+                    args.len(),
+                )
+            }
         };
         Ok(Some(value))
     } else {
@@ -369,6 +391,9 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         crate::exception::js_clear_exception();
         Err(exc)
     };
+    if let Some(prev) = prev_this {
+        crate::object::js_implicit_this_set(prev);
+    }
     crate::exception::js_try_end();
     result
 }

@@ -34,7 +34,9 @@ pub(crate) use helpers::{
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
 pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
 pub(crate) use iter_result_rewrite::rewrite_stmt;
-pub(crate) use linearize::{linearize_body, CatchRoute, FinallyRoute, State, StateExit};
+pub(crate) use linearize::{
+    linearize_body, CatchRoute, DelegationRoute, FinallyRoute, State, StateExit,
+};
 pub(crate) use lower::{
     transform_generator_function, transform_generator_function_with_extra_captures,
 };
