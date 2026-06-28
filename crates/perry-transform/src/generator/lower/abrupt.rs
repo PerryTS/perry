@@ -798,14 +798,30 @@ pub(crate) fn build_yield_star_return_routes(
 /// loop is the async-generator abrupt-resume machinery the `.return()` path does
 /// not need (a `return` always completes or re-yields, never resumes the body).
 ///
+/// An abrupt completion *of the delegation protocol itself* — `iterator.throw`
+/// rejecting, a non-object inner result, or the `throw`-undefined TypeError —
+/// occurs at the `yield *` site, so an outer `try/catch` around the delegation
+/// must be able to handle it (spec `?`/`ReturnIfAbrupt` semantics). The protocol
+/// work is therefore wrapped in a generated `try/catch` whose handler routes the
+/// caught error into the matching outer catch's linearized states (via
+/// [`build_abrupt_routing`], then re-driving the dispatch loop, so a `yield`
+/// inside that catch suspends) or, when no catch matches, runs pending
+/// non-yielding finallys and re-throws to reject the generator.
+///
 /// Each route returns or throws from inside its `while(true)` continuation loop,
 /// so control falls through to the catch-routing fallback only when not
 /// suspended in a delegation. Empty for sync generators (no routes recorded).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_yield_star_throw_routes(
     delegations: &[DelegationRoute],
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
     state_id: LocalId,
     throw_param_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
     while_body: &[Stmt],
+    hoisted_ids: &std::collections::HashSet<LocalId>,
     next_local_id: &mut u32,
 ) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(delegations.len());
@@ -813,6 +829,7 @@ pub(crate) fn build_yield_star_throw_routes(
         let m_id = alloc_local(next_local_id); // captured `throw` method
         let ret_m_id = alloc_local(next_local_id); // `return` method (close path)
         let ic_id = alloc_local(next_local_id); // awaited inner-close result
+        let de_id = alloc_local(next_local_id); // caught delegation-protocol error
 
         let in_interval = Expr::Logical {
             op: LogicalOp::And,
@@ -948,13 +965,47 @@ pub(crate) fn build_yield_star_throw_routes(
             else_branch: None,
         };
 
-        // Re-drive the dispatch loop from the drive loop's condition state: it
-        // reads `__del_result.done` and either exits the loop (resuming the
-        // outer body past the `yield *`) or re-yields `__del_result.value`.
+        // On success, re-drive the dispatch loop from the drive loop's condition
+        // state: it reads `__del_result.done` and either exits the loop (resuming
+        // the outer body past the `yield *`) or re-yields `__del_result.value`.
         let set_state = Stmt::Expr(Expr::LocalSet(
             state_id,
             Box::new(Expr::Number(route.resume_state as f64)),
         ));
+
+        // Wrap the protocol work so an abrupt completion at the `yield *` site
+        // (inner `throw` rejection / non-object result / `throw`-undefined
+        // TypeError) routes into the enclosing `try`'s catch states instead of
+        // escaping straight to the generator-level rejection. `state` is still
+        // the delegation suspend state here (set_state runs last, only on the
+        // success path), so it falls inside the outer try's protected interval.
+        // When no catch matches, run pending non-yielding finallys and re-throw.
+        let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
+        fallback.push(Stmt::Throw(Expr::LocalGet(de_id)));
+        let route_to_outer_catch = build_abrupt_routing(
+            catches,
+            &[], // async can't re-raise from a yielding finally; finallys handled in fallback
+            state_id,
+            pending_type_id,
+            pending_value_id,
+            &Expr::LocalGet(de_id),
+            true,
+            1.0,
+            false,
+            false,
+            fallback,
+        );
+        let protocol = Stmt::Try {
+            body: vec![read_method, no_method, call_throw, obj_check, set_state],
+            catch: Some(CatchClause {
+                param: Some((de_id, "__yield_star_throw_e".to_string())),
+                body: route_to_outer_catch,
+            }),
+            finally: None,
+        };
+        // Both the success path (state = resume_state) and a routed catch (state
+        // = catch_entry_state) fall through to this loop, which dispatches from
+        // the freshly-set state.
         let drive = Stmt::While {
             condition: Expr::Bool(true),
             body: while_body.to_vec(),
@@ -962,14 +1013,7 @@ pub(crate) fn build_yield_star_throw_routes(
 
         out.push(Stmt::If {
             condition: in_interval,
-            then_branch: vec![
-                read_method,
-                no_method,
-                call_throw,
-                obj_check,
-                set_state,
-                drive,
-            ],
+            then_branch: vec![protocol, drive],
             else_branch: None,
         });
     }

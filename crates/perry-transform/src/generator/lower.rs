@@ -849,9 +849,14 @@ pub fn transform_generator_function_with_extra_captures(
         // Empty for sync generators (`delegations` is only recorded for async).
         let yield_star_throw_routes = build_yield_star_throw_routes(
             &delegations,
+            &catches,
+            &finallys,
             state_id,
             throw_param_id,
+            pending_type_id,
+            pending_value_id,
             &while_body_for_throw,
+            &hoisted_ids,
             next_local_id,
         );
         // #4374: sync generators continue the state machine after a catch
