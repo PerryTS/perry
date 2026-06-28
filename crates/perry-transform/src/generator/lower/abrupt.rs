@@ -979,7 +979,14 @@ pub(crate) fn build_yield_star_throw_routes(
         // escaping straight to the generator-level rejection. `state` is still
         // the delegation suspend state here (set_state runs last, only on the
         // success path), so it falls inside the outer try's protected interval.
-        // When no catch matches, run pending non-yielding finallys and re-throw.
+        // When no catch matches, run pending non-yielding finallys and re-throw
+        // — identical to `build_async_throw_body`'s own async fallback. Routing
+        // an abrupt completion *into* a YIELDING finally needs the
+        // pending-completion re-raise machinery that is gated `!is_async_generator`
+        // (an async yielding finally never re-raises the pending throw, so routing
+        // there would swallow the error). That async-wide limitation is out of
+        // scope here; matching the existing async fallback keeps the error
+        // propagating rather than being silently dropped.
         let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
         fallback.push(Stmt::Throw(Expr::LocalGet(de_id)));
         let route_to_outer_catch = build_abrupt_routing(
