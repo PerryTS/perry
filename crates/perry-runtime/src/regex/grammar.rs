@@ -376,6 +376,96 @@ pub(super) fn has_unicode_forbidden_pattern(pattern: &str) -> bool {
     false
 }
 
+// JS \s excludes U+0085 NEL; Rust's \s includes it. Use explicit class for parity outside char-class.
+const JS_WHITESPACE_CLASS: &str = r"[\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
+const JS_NON_WHITESPACE_CLASS: &str = r"[^\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
+// ECMAScript allows quantifiers up to 2^53-1; regex-syntax uses u32 and rejects larger values.
+const MAX_QUANTIFIER: u64 = 65_535;
+
+fn clamp_large_quantifiers(s: &str) -> String {
+    if !s.contains('{') {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut in_class = false;
+    let mut i = 0;
+    let clamp = |s: &str| {
+        s.parse::<u64>()
+            .ok()
+            .filter(|&v| v > MAX_QUANTIFIER)
+            .map(|_| MAX_QUANTIFIER.to_string())
+            .unwrap_or_else(|| s.to_string())
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            out.push(c);
+            i += 1;
+            if i < chars.len() {
+                out.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+        if c == '[' && !in_class {
+            in_class = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ']' && in_class {
+            in_class = false;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '{' && !in_class {
+            if let Some(end) = parse_braced_quantifier(&chars, i) {
+                let inner: String = chars[i + 1..end].iter().collect();
+                let has_comma = inner.contains(',');
+                let mut parts = inner.splitn(2, ',');
+                let n1_s = parts.next().unwrap_or("").to_string();
+                let n2_s = parts.next().unwrap_or("").to_string();
+                if n1_s.parse::<u64>().map_or(false, |v| v > MAX_QUANTIFIER)
+                    || n2_s.parse::<u64>().map_or(false, |v| v > MAX_QUANTIFIER)
+                {
+                    out.push('{');
+                    out.push_str(&clamp(&n1_s));
+                    if has_comma {
+                        out.push(',');
+                        out.push_str(&clamp(&n2_s));
+                    }
+                    out.push('}');
+                } else {
+                    for &ch in chars[i..=end].iter() {
+                        out.push(ch);
+                    }
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn is_unsupported_property_value(value: &str) -> bool {
+    let script_val = value
+        .strip_prefix("script=")
+        .or_else(|| value.strip_prefix("se="))
+        .or_else(|| value.strip_prefix("scriptextensions="));
+    if let Some(sv) = script_val {
+        return matches!(
+            sv,
+            "unknown" | "zzzz" | "beriaerfe" | "sidetic" | "taiyo" | "tolongsiki"
+        );
+    }
+    value == "changeswhennfkccasefolded"
+}
+
 fn is_regex_identity_escape(ch: char) -> bool {
     matches!(
         ch,
@@ -1090,30 +1180,10 @@ fn next_is_class_shorthand(chars: &[char], i: usize) -> bool {
     )
 }
 
-/// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
-/// Handles JS-specific escape sequences not supported by the Rust regex crate.
-/// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
-/// JS allows a quantifier directly on a zero-width assertion group
-/// (`(?=…)?`, `(?!…)*`, `(?<=…)+`, `(?<!…){0,3}`, …). V8 accepts these and
-/// treats them per the quantifier's lower bound: a lower bound of 0 makes the
-/// assertion optional, which — since the assertion consumes nothing — is a
-/// pure no-op; a lower bound of ≥1 is identical to the bare assertion (the
-/// assertion either holds or it doesn't, and matching it more than once at the
-/// same position adds nothing). The `regex` crate has no lookaround at all, and
-/// `fancy-regex` (which Perry falls back to for lookaround) *rejects a
-/// quantifier applied to a lookaround group* — so a JS-valid pattern like Next's
-/// UA-parser table (`(?=lg)?[vl]k…`) would otherwise throw `SyntaxError: invalid
-/// pattern` at regex construction, aborting the whole module that defines it.
-///
-/// This pre-pass rewrites each quantified lookaround into the equivalent
-/// fancy-regex-acceptable form before the main translation runs:
-///   * quantifier lower bound 0 (`?`, `*`, `{0,…}`, `{0}`) → drop the assertion
-///     and its quantifier entirely (no-op).
-///   * quantifier lower bound ≥1 (`+`, `{1,…}`, `{2}`, …) → keep the assertion,
-///     drop the quantifier.
-/// A trailing lazy `?` on the quantifier (`(?=…)*?`) is consumed too. Group
-/// nesting is matched so an inner `(...)` inside the lookaround doesn't confuse
-/// the close-paren scan.
+/// Rewrites quantified lookaround groups (`(?=…)?`, `(?!…)*`, `(?:(?=…))?`, etc.)
+/// into a form `fancy-regex` accepts. Lower-bound-0 → drop the assertion; ≥1 →
+/// keep the assertion, drop the quantifier. JS/V8 allow these; `fancy-regex`
+/// rejects them outright. Also handles the `(?:LOOK)Q` non-capturing-wrapper form.
 fn normalize_quantified_lookaround(pattern: &str) -> String {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(chars.len());
@@ -1165,6 +1235,27 @@ fn normalize_quantified_lookaround(pattern: &str) -> String {
                     let _ = qstart;
                     i = qend;
                     continue;
+                }
+            }
+        }
+        // `(?:LOOK)Q`: single-lookaround non-capturing group — same normalization.
+        if c == '(' && chars.get(i + 1) == Some(&'?') && chars.get(i + 2) == Some(&':') {
+            if let Some(close) = matching_group_close(&chars, i) {
+                if let Some((_, qend, lower_zero)) = quantifier_after(&chars, close + 1) {
+                    let content = i + 3;
+                    if lookaround_opener_len(&chars, content).is_some() {
+                        if let Some(inner_close) = matching_group_close(&chars, content) {
+                            if inner_close + 1 == close {
+                                if !lower_zero {
+                                    for ch in &chars[content..=inner_close] {
+                                        out.push(*ch);
+                                    }
+                                }
+                                i = qend;
+                                continue;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1258,18 +1349,13 @@ fn quantifier_after(chars: &[char], start: usize) -> Option<(usize, usize, bool)
 
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
     let folded = fold_surrogate_pairs(pattern);
-    // Rewrite JS-valid quantified lookaround (`(?=…)?` etc.) that the Rust
-    // `regex`/`fancy-regex` engines reject, before the main translation. See
-    // `normalize_quantified_lookaround`.
     let folded = normalize_quantified_lookaround(&folded);
+    let folded = clamp_large_quantifiers(&folded);
     let mut result = String::with_capacity(folded.len());
     let chars: Vec<char> = folded.chars().collect();
     let capture_spans = collect_capture_spans(&chars);
     let mut i = 0;
-    // Track whether we're inside a `[...]` character class. JS and the Rust
-    // `regex` crate disagree on how a bare `[` inside a class is read, so we
-    // reconcile it below.
-    let mut in_class = false;
+    let mut in_class = false; // track `[...]` position; JS and Rust disagree on bare `[` inside
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             match chars[i + 1] {
@@ -1348,6 +1434,18 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     // mis-compiling (Node also rejects `\P{RGI_Emoji}`).
                     // All other properties pass through to the crate unchanged.
                     match parse_unicode_property(&chars, i) {
+                        Some((value, negated, end)) if is_unsupported_property_value(&value) => {
+                            if in_class {
+                                if negated {
+                                    result.push_str("\\s\\S");
+                                }
+                            } else if negated {
+                                result.push_str("[\\s\\S]");
+                            } else {
+                                result.push_str("[^\\s\\S]");
+                            }
+                            i = end;
+                        }
                         Some((value, negated, end)) if is_surrogate_property(&value) => {
                             if in_class {
                                 // A never-matching member contributes nothing to a
@@ -1373,6 +1471,32 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                             result.push(chars[i + 1]);
                             i += 2;
                         }
+                    }
+                }
+                // `\s`/`\S` outside class: JS excludes NEL (U+0085), Rust includes it.
+                's' if !in_class => {
+                    result.push_str(JS_WHITESPACE_CLASS);
+                    i += 2;
+                }
+                'S' if !in_class => {
+                    result.push_str(JS_NON_WHITESPACE_CLASS);
+                    i += 2;
+                }
+                // `\uXXXX` lone surrogate outside class: `regex` rejects these; emit never-match.
+                'u' if !in_class => {
+                    if let Some((v, end)) = parse_u4_escape(&chars, i) {
+                        if is_surrogate(v) {
+                            result.push_str("[^\\s\\S]");
+                            i = end;
+                        } else {
+                            result.push('\\');
+                            result.push('u');
+                            i += 2;
+                        }
+                    } else {
+                        result.push('\\');
+                        result.push('u');
+                        i += 2;
                     }
                 }
                 // A lone-surrogate `\uXXXX` (or `\uXXXX-\uYYYY` range) inside a
