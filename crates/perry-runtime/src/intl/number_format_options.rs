@@ -135,7 +135,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // values like 3 or 5000.1.
     let rounding_increment = read_rounding_increment(options);
 
-    let rounding_mode = get_string_option_enum(
+    let rounding_mode = enum_option_strict(
         options,
         "roundingMode",
         &[
@@ -293,12 +293,72 @@ pub(crate) fn is_well_formed_currency_code(code: &str) -> bool {
     code.len() == 3 && code.bytes().all(|b| b.is_ascii_alphabetic())
 }
 
-/// A core unit identifier is a `-`-separated sequence of lowercase ASCII
-/// segments (optionally a `per-` compound). This is a structural check, not a
-/// validity check against the CLDR sanctioned-unit list.
+/// ECMA-402 Table 2 — sanctioned single unit identifiers (includes hyphenated
+/// atoms like "fluid-ounce" and "mile-scandinavian").
+const SANCTIONED_UNITS: &[&str] = &[
+    "acre",
+    "bit",
+    "byte",
+    "celsius",
+    "centimeter",
+    "day",
+    "degree",
+    "fahrenheit",
+    "fluid-ounce",
+    "foot",
+    "gallon",
+    "gigabit",
+    "gigabyte",
+    "gram",
+    "hectare",
+    "hour",
+    "inch",
+    "kilobit",
+    "kilobyte",
+    "kilogram",
+    "kilometer",
+    "liter",
+    "megabit",
+    "megabyte",
+    "meter",
+    "microsecond",
+    "mile",
+    "mile-scandinavian",
+    "milliliter",
+    "millimeter",
+    "millisecond",
+    "minute",
+    "month",
+    "nanosecond",
+    "ounce",
+    "percent",
+    "petabyte",
+    "pound",
+    "second",
+    "stone",
+    "terabit",
+    "terabyte",
+    "week",
+    "yard",
+    "year",
+];
+
+fn is_sanctioned_single_unit(unit: &str) -> bool {
+    SANCTIONED_UNITS.contains(&unit)
+}
+
+/// ECMA-402 IsWellFormedUnitIdentifier: a simple sanctioned unit, or a
+/// compound `<sanctioned>-per-<sanctioned>` with exactly one `-per-` separator.
 pub(crate) fn is_well_formed_unit_identifier(unit: &str) -> bool {
-    !unit.is_empty()
-        && unit
-            .split('-')
-            .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_alphabetic()))
+    if is_sanctioned_single_unit(unit) {
+        return true;
+    }
+    match unit.split_once("-per-") {
+        Some((numerator, denominator)) => {
+            !denominator.contains("-per-")
+                && is_sanctioned_single_unit(numerator)
+                && is_sanctioned_single_unit(denominator)
+        }
+        None => false,
+    }
 }

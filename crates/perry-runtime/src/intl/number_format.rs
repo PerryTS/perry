@@ -535,6 +535,25 @@ pub(crate) fn grouping_enabled(use_grouping: &str, int_len: usize) -> bool {
     }
 }
 
+/// Locale-specific display symbol for USD. Most locales use "$"; Korean and
+/// Traditional/Simplified Chinese use "US$" to disambiguate from local dollars.
+fn usd_symbol(locale: &str) -> &'static str {
+    if locale.starts_with("ko") || locale.starts_with("zh") {
+        "US$"
+    } else {
+        "$"
+    }
+}
+
+/// Locale-specific NaN string (e.g. zh-TW uses "非數值").
+fn nan_string(locale: &str) -> &'static str {
+    if locale.starts_with("zh") {
+        "非數值"
+    } else {
+        "NaN"
+    }
+}
+
 /// Compact-notation suffix tables for `en` (short and long forms).
 pub(crate) fn compact_suffix(power: u32, long: bool) -> &'static str {
     match (power, long) {
@@ -1302,7 +1321,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
         // NaN is non-negative and non-zero for sign purposes: only `always`
         // prepends a (plus) sign — `+NaN` — every other mode shows bare `NaN`.
         push_sign(&mut parts, &r.sign_display, false, true);
-        parts.push(("nan", "NaN".to_string()));
+        parts.push(("nan", nan_string(&r.locale).to_string()));
         push_style_suffix(&mut parts, r, decimal_sep);
         return parts;
     }
@@ -1525,11 +1544,14 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
     // increment grid and the displayed precision agree — e.g. 3 fraction digits
     // snap on 0.005 steps, not the currency-default 0.05.
     let frac_digits = r.max_frac as usize;
+    // Capture original sign before any rounding.
+    let is_negative = value < 0.0 || (value == 0.0 && value.is_sign_negative());
+    let accounting = r.currency_sign == "accounting";
     // The native float renderer below doesn't honor roundingIncrement; when set,
     // snap the magnitude onto the increment grid first (digit-string rounding,
     // respecting roundingMode) so the renderer formats an already-gridded value.
     let value = if r.rounding_increment != 1.0 && value.is_finite() {
-        let negative = value < 0.0 || (value == 0.0 && value.is_sign_negative());
+        let negative = is_negative;
         set_round_ctx(&r.rounding_mode, negative);
         let abs = value.abs();
         let shortest = format!("{abs}");
@@ -1548,12 +1570,20 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
     } else {
         value
     };
-    let digits = format_number_parts(value, locale, Some(frac_digits), None);
+    // For accounting sign, pass the absolute value so format_number_parts does
+    // not emit a minus-sign segment — we wrap the assembled parts in "()" below.
+    let format_value = if accounting && is_negative {
+        value.abs()
+    } else {
+        value
+    };
+    let digits = format_number_parts(format_value, locale, Some(frac_digits), None);
     let mut numeric: Vec<(&'static str, String)> = Vec::new();
     split_numeric_parts(&digits, locale, &mut numeric);
+    let de_style = locale.eq_ignore_ascii_case("de") || locale.starts_with("de-");
     let mut parts: Vec<(&'static str, String)> = Vec::new();
     match r.currency.as_deref() {
-        Some("EUR") if locale.starts_with("de") => {
+        Some("EUR") if de_style => {
             parts = numeric;
             parts.push(("literal", "\u{00a0}".to_string()));
             parts.push(("currency", "\u{20ac}".to_string()));
@@ -1562,8 +1592,14 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
             parts.push(("currency", "\u{20ac}".to_string()));
             parts.extend(numeric);
         }
+        Some("USD") if de_style => {
+            // de-DE places the currency symbol after the number with NBSP.
+            parts = numeric;
+            parts.push(("literal", "\u{00a0}".to_string()));
+            parts.push(("currency", usd_symbol(locale).to_string()));
+        }
         Some("USD") => {
-            parts.push(("currency", "$".to_string()));
+            parts.push(("currency", usd_symbol(locale).to_string()));
             parts.extend(numeric);
         }
         Some(code) => {
@@ -1572,6 +1608,12 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
             parts.push(("currency", code.to_string()));
         }
         None => parts = numeric,
+    }
+    // Accounting sign: negative amounts are wrapped in parentheses (no minus sign).
+    // Only applied when signDisplay is not "never".
+    if accounting && is_negative && r.sign_display != "never" {
+        parts.insert(0, ("literal", "(".to_string()));
+        parts.push(("literal", ")".to_string()));
     }
     parts
 }
