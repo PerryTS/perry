@@ -196,6 +196,26 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         return obj_value;
     }
 
+    // OrdinarySetPrototypeOf step 7: detect prototype cycles.
+    // Walk the prototype chain of the proposed new prototype; if any ancestor
+    // equals the target object, setting the prototype would form a cycle.
+    if !proto_is_null {
+        const TAG_NULL_U64: u64 = 0x7FFC_0000_0000_0002;
+        let mut p_bits = proto_bits;
+        loop {
+            if p_bits == obj_bits {
+                throw_object_type_error(b"Cyclic __proto__ value");
+            }
+            let p_val = f64::from_bits(p_bits);
+            let next = js_object_get_prototype_of(p_val);
+            let next_bits = next.to_bits();
+            if next_bits == TAG_NULL_U64 || next_bits == p_bits {
+                break;
+            }
+            p_bits = next_bits;
+        }
+    }
+
     // #2820: setting the prototype of a primitive target is a spec no-op that
     // returns the (boxed) primitive value. `value_is_object_like` is false for
     // numbers/strings/booleans, and class refs are handled by the recording

@@ -95,13 +95,44 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
         return crate::temporal::dispatch::call_method(receiver, "toLocaleString", &[]);
     }
     if !jsval.is_pointer() {
-        return js_native_call_method(
-            receiver,
-            b"toString".as_ptr() as *const i8,
-            "toString".len(),
-            std::ptr::null(),
-            0,
-        );
+        // Spec 20.1.3.6 Object.prototype.toLocaleString: step 1 is "Let O be
+        // the this value" (NOT ToObject), step 2 is "Return ? Invoke(O,
+        // 'toString')". Invoke resolves the method on the primitive's prototype
+        // chain and calls it with the original primitive as `this`. A
+        // user-patched Boolean/Number/BigInt/String prototype toString must be
+        // honoured, and a strict callee must receive the raw primitive (not a
+        // boxed wrapper) — call_primitive_closure_value handles both.
+        let builtin_name: &[u8] = if jsval.is_bool() {
+            b"Boolean"
+        } else if jsval.is_bigint() {
+            b"BigInt"
+        } else if jsval.is_any_string() {
+            b"String"
+        } else if unsafe { crate::symbol::js_is_symbol(receiver) } != 0 {
+            b"Symbol"
+        } else {
+            b""
+        };
+        if !builtin_name.is_empty() {
+            if let Some(patched) =
+                unsafe { super::builtin_proto_user_method(builtin_name, "toString") }
+            {
+                if let Some(result) =
+                    unsafe { call_primitive_closure_value(receiver, patched, std::ptr::null(), 0) }
+                {
+                    return result;
+                }
+            }
+        }
+        return unsafe {
+            js_native_call_method(
+                receiver,
+                b"toString".as_ptr() as *const i8,
+                "toString".len(),
+                std::ptr::null(),
+                0,
+            )
+        };
     }
     // An own `toLocaleString` closure wins over the default rendering —
     // notably `%TypedArray%.prototype.toLocaleString()` invoked as a method ON

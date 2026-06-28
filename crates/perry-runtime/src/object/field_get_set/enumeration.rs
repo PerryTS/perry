@@ -243,19 +243,79 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
 }
 
 fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
-    let mut props = crate::closure::closure_dynamic_props_snapshot(ptr)
+    let mut props: Vec<(String, f64)> = Vec::new();
+
+    // Built-in function properties `length` and `name` are non-enumerable by
+    // default. If the caller redefined them via `Object.defineProperty` with
+    // `enumerable: true`, include them here BEFORE user-added dynamic props
+    // so their relative order matches the spec insertion order (built-ins
+    // precede dynamically-added own properties).
+    for builtin_key in &["length", "name"] {
+        if crate::closure::closure_is_key_deleted(ptr, builtin_key) {
+            continue;
+        }
+        // Only include if the side table explicitly marks them enumerable.
+        // Default (no entry in descriptor side table) = non-enumerable for
+        // built-in function properties.
+        if !get_property_attrs(ptr, builtin_key)
+            .map(|attrs| attrs.enumerable())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        // Value: prefer a side-table override written by defineProperty, then
+        // fall back to the built-in computed value so Object.keys / entries
+        // returns the right thing even when defineProperty only changed attrs.
+        let val = crate::closure::closure_get_dynamic_prop(ptr, builtin_key);
+        let value = if val.to_bits() != crate::value::TAG_UNDEFINED {
+            f64::from_bits(val.to_bits())
+        } else if *builtin_key == "length" {
+            let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
+            let len = unsafe {
+                super::super::native_module::bound_native_callable_value_arity(closure_value)
+            }
+            .map(|a| a as f64)
+            .or_else(|| super::super::native_module::builtin_closure_length(ptr).map(|l| l as f64))
+            .or_else(|| {
+                crate::closure::closure_length(ptr as *const crate::closure::ClosureHeader)
+                    .map(|l| l as f64)
+            })
+            .unwrap_or(0.0);
+            len
+        } else {
+            // "name"
+            let func_ptr =
+                unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr as usize };
+            let fname = crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
+            let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        };
+        props.push((builtin_key.to_string(), value));
+    }
+
+    // User-added dynamic props (skip "length"/"name" — handled above so we
+    // don't double-count if defineProperty also wrote a value to dynamic props).
+    let user_props = crate::closure::closure_dynamic_props_snapshot(ptr)
         .into_iter()
         .filter(|(name, _)| {
+            if matches!(name.as_str(), "length" | "name") {
+                return false;
+            }
             get_property_attrs(ptr, name)
                 .map(|attrs| attrs.enumerable())
                 .unwrap_or(true)
         })
         .collect::<Vec<_>>();
+    props.extend(user_props);
+
     for name in super::super::accessor_descriptor_keys_for_obj(ptr) {
         if props.iter().any(|(existing, _)| existing == &name) {
             continue;
         }
         if crate::closure::closure_is_key_deleted(ptr, &name) {
+            continue;
+        }
+        if matches!(name.as_str(), "length" | "name") {
             continue;
         }
         if get_property_attrs(ptr, &name)
