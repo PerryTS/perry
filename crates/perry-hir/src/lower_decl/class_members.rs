@@ -805,6 +805,17 @@ pub fn lower_setter_method_with_name(
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
+        // #5703: a setter with a defaulted parameter (`set a(_ = expr)`) must
+        // apply the default when invoked with `undefined` (e.g. `C.a =
+        // undefined`). Previously the setter param dropped its default
+        // (`default: None`) and emitted no prologue, so the default expression
+        // never ran. Mirror the constructor/method path: lower the default
+        // BEFORE defining the param local so its references resolve to the
+        // enclosing scope rather than the param or the body's hoisted `var`s —
+        // i.e. the separate parameter/body VariableEnvironment the spec
+        // mandates (test262 scope-*-setter-paramsbody-var-open) — then emit the
+        // `if (param === undefined) param = <default>` prologue below.
+        let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
@@ -812,7 +823,7 @@ pub fn lower_setter_method_with_name(
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: None,
+            default: param_default,
             decorators: Vec::new(),
             is_rest: false,
             arguments_object: None,
@@ -844,6 +855,17 @@ pub fn lower_setter_method_with_name(
     if !destructuring_stmts.is_empty() {
         destructuring_stmts.append(&mut body);
         body = destructuring_stmts;
+    }
+
+    // #5703: prepend `if (param === undefined) param = <default>` for a
+    // defaulted setter parameter, so an under-supplied / `undefined` assignment
+    // (`C.a = undefined`) applies the default. Runs before any destructuring
+    // prologue (which destructures the already-defaulted param).
+    let default_stmts = build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.append(&mut body);
+        body = new_body;
     }
 
     ctx.exit_strict_mode();

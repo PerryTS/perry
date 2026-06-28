@@ -184,3 +184,35 @@ var C = class {
         "default applies inside a static async generator"
     );
 }
+
+/// A class-expression static SETTER with a defaulted parameter, invoked via
+/// assignment of `undefined` (`C.a = undefined`). Pre-fix the setter dropped
+/// its default (`default: None`, no prologue), so the default expression never
+/// ran and `probeParams` stayed `undefined`. The default must also evaluate in
+/// the parameter VariableEnvironment — its `x` closure sees the OUTER `x`
+/// ("outside"), distinct from the setter body's `var x = "inside"` — matching
+/// test262 `language/expressions/class/scope-static-setter-paramsbody-var-open`.
+#[test]
+fn class_expr_static_setter_default_param_scope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+var x = "outside";
+var probeParams: any, probeBody: any;
+var C: any = class {
+  static set a(_ = (probeParams = function () { return x; })) {
+    var x = "inside";
+    probeBody = function () { return x; };
+  }
+};
+C.a = undefined;
+console.log(probeParams());
+console.log(probeBody());
+"#,
+    );
+    assert_eq!(
+        stdout, "outside\ninside\n",
+        "defaulted setter param runs its default in the parameter scope"
+    );
+}
