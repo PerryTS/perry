@@ -919,7 +919,12 @@ pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
 /// omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg: f64) {
-    js_set_foreach_impl(set, callback, this_arg, f64::from_bits(crate::value::TAG_UNDEFINED));
+    js_set_foreach_impl(
+        set,
+        callback,
+        this_arg,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
 }
 
 /// `Set.prototype.forEach` for a `class … extends Set` subclass instance: the

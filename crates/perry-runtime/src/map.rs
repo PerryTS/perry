@@ -1402,7 +1402,12 @@ static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_
 /// when omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
-    js_map_foreach_impl(map, callback, this_arg, f64::from_bits(crate::value::TAG_UNDEFINED));
+    js_map_foreach_impl(
+        map,
+        callback,
+        this_arg,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
 }
 
 /// `Map.prototype.forEach` for a `class … extends Map` subclass instance: the

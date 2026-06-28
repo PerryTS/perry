@@ -17,7 +17,8 @@ fn is_backed_collection_method(
 ) -> bool {
     let shared = matches!(
         method,
-        "has" | "delete"
+        "has"
+            | "delete"
             | "clear"
             | "forEach"
             | "keys"
@@ -126,8 +127,13 @@ pub(super) unsafe fn dispatch_map_set(
         // SUBCLASS INSTANCE, not the hidden backing — so chains preserve identity.
         let returns_receiver = matches!(
             (backing, method_name),
-            (super::super::map_set_subclass::CollectionBacking::Map(_), "set")
-                | (super::super::map_set_subclass::CollectionBacking::Set(_), "add")
+            (
+                super::super::map_set_subclass::CollectionBacking::Map(_),
+                "set"
+            ) | (
+                super::super::map_set_subclass::CollectionBacking::Set(_),
+                "add"
+            )
         );
         if returns_receiver {
             return Some(object);
