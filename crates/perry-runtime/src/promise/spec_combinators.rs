@@ -49,10 +49,10 @@ pub enum CombinatorKind {
 
 /// A spec `PromiseCapability` record: the constructed promise plus its
 /// resolving functions, all as NaN-boxed JS values.
-struct Capability {
-    promise: f64,
-    resolve: f64,
-    reject: f64,
+pub(super) struct Capability {
+    pub(super) promise: f64,
+    pub(super) resolve: f64,
+    pub(super) reject: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ extern "C" fn capability_executor_fn(
 /// `NewPromiseCapability(C)`. Throws (via `js_throw`) on the `IsConstructor`
 /// failure, the executor "already called" failure (propagated from the
 /// constructor), and the post-construct "resolve/reject not callable" failure.
-fn new_promise_capability(c: f64) -> Capability {
+pub(super) fn new_promise_capability(c: f64) -> Capability {
     if !crate::object::js_value_is_constructor(c) {
         throw_type_error("Promise.all called on non-constructor");
     }
@@ -207,10 +207,14 @@ fn new_promise_capability(c: f64) -> Capability {
     }
 }
 
-fn is_default_promise_constructor(c: f64) -> bool {
+pub(super) fn is_default_promise_constructor(c: f64) -> bool {
     let promise_ctor =
         crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len());
     !is_undef(promise_ctor) && promise_ctor.to_bits() == c.to_bits()
+}
+
+pub(super) fn is_callable_value(value: f64) -> bool {
+    is_callable(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +670,9 @@ pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
         return js_nanbox_pointer(p as i64);
     }
     let cap = new_promise_capability(this_ctor);
-    let _ = call_with_this(cap.reject, undef(), &[reason]);
+    if let Err(thrown) = call_with_this(cap.reject, undef(), &[reason]) {
+        crate::exception::js_throw(thrown);
+    }
     cap.promise
 }
 
@@ -701,7 +707,9 @@ pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
         }
     }
     let cap = new_promise_capability(this_ctor);
-    let _ = call_with_this(cap.resolve, undef(), &[value]);
+    if let Err(thrown) = call_with_this(cap.resolve, undef(), &[value]) {
+        crate::exception::js_throw(thrown);
+    }
     cap.promise
 }
 

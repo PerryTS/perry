@@ -1173,17 +1173,330 @@ fn throw_promise_finally_non_object() -> ! {
     crate::exception::js_throw(f64::from_bits(err_value))
 }
 
+fn throw_type_error_thunk(msg: &str) -> ! {
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    let v = f64::from_bits(crate::value::JSValue::pointer(err as *const u8).bits());
+    crate::exception::js_throw(v)
+}
+
+// True iff `value` is a JavaScript Object (heap-pointer tagged, not a Symbol or handle).
+fn is_promise_species_object(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return false;
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::is_handle_band(raw) {
+        return false;
+    }
+    !crate::symbol::is_registered_symbol(raw)
+}
+
+fn get_intrinsic_promise() -> f64 {
+    crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len())
+}
+
+// SpeciesConstructor(promiseReceiver, %Promise%) per ECMA-262 §7.3.25.
+// Reads `this.constructor` once, then `C[@@species]`, returns the resolved constructor.
+// Throws TypeError for null/non-object constructor, non-constructor species, or getter throws.
+fn promise_species_constructor(receiver: f64) -> f64 {
+    use crate::value::{TAG_NULL, TAG_UNDEFINED};
+
+    // Step 1: Get(receiver, "constructor") — getter throws → propagate via longjmp.
+    let c = unsafe {
+        crate::value::js_dynamic_object_get_property(
+            receiver,
+            b"constructor".as_ptr() as *const i8,
+            11,
+        )
+    };
+
+    // Step 2: undefined → use intrinsic %Promise%.
+    if c.to_bits() == TAG_UNDEFINED {
+        return get_intrinsic_promise();
+    }
+
+    // Step 3: Type(C) not Object → TypeError.
+    if !is_promise_species_object(c) {
+        throw_type_error_thunk("Promise.prototype.then: constructor property is not an object");
+    }
+
+    // Step 4: S = Get(C, @@species) — getter throws → propagate.
+    let sp = crate::symbol::well_known_symbol("species");
+    let s = if sp.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        let sym_val = f64::from_bits(crate::value::JSValue::pointer(sp as *const u8).bits());
+        unsafe { crate::symbol::js_object_get_symbol_property(c, sym_val) }
+    };
+
+    // Step 5: undefined or null → use intrinsic %Promise%.
+    if s.to_bits() == TAG_UNDEFINED || s.to_bits() == TAG_NULL {
+        return get_intrinsic_promise();
+    }
+
+    // Step 6: IsConstructor(S) → return S.
+    if crate::object::js_value_is_constructor(s) {
+        return s;
+    }
+
+    // Step 7: throw TypeError.
+    throw_type_error_thunk("Promise.prototype.then: species is not a constructor")
+}
+
+// ---------------------------------------------------------------------------
+// PerformPromiseThen with custom capability (ECMA-262 §27.2.5.4 steps 4-12)
+//
+// When SpeciesConstructor returns a non-default constructor C, we create a
+// PromiseCapability via NewPromiseCapability(C) and attach wrapper reactions to
+// `promise` that settle cap.promise. js_promise_then is still used to get the
+// native-promise side-effects (overflow-reaction tracking, already-settled
+// dispatch), but the returned native `next` is discarded — cap.promise is the
+// observable result.
+// ---------------------------------------------------------------------------
+
+// Fulfill reaction wrapper for PerformPromiseThen with capability.
+// Captures: [on_fulfilled_f64, cap_resolve_f64, cap_reject_f64]
+extern "C" fn then_cap_fulfill_fn(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    use crate::closure::{js_closure_get_capture_f64, js_native_call_value};
+    let on_fulfilled = js_closure_get_capture_f64(closure, 0);
+    let cap_resolve = js_closure_get_capture_f64(closure, 1);
+    let cap_reject = js_closure_get_capture_f64(closure, 2);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    let on_ful_cl = arg_to_closure(on_fulfilled);
+    let (result, threw) = if on_ful_cl.is_null() {
+        (value, false)
+    } else {
+        let trap = crate::exception::js_try_push();
+        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap as *mut std::os::raw::c_int) };
+        if jumped == 0 {
+            let ret = crate::closure::js_closure_call1(on_ful_cl, value);
+            crate::exception::js_try_end();
+            (ret, false)
+        } else {
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            crate::exception::js_try_end();
+            (exc, true)
+        }
+    };
+
+    let func = if threw { cap_reject } else { cap_resolve };
+    let args = [result];
+    let _ = unsafe { js_native_call_value(func, args.as_ptr(), 1) };
+    undef
+}
+
+// Reject reaction wrapper for PerformPromiseThen with capability.
+// Captures: [on_rejected_f64, cap_resolve_f64, cap_reject_f64]
+extern "C" fn then_cap_reject_fn(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    use crate::closure::{js_closure_get_capture_f64, js_native_call_value};
+    let on_rejected = js_closure_get_capture_f64(closure, 0);
+    let cap_resolve = js_closure_get_capture_f64(closure, 1);
+    let cap_reject = js_closure_get_capture_f64(closure, 2);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    let on_rej_cl = arg_to_closure(on_rejected);
+    let (result, threw) = if on_rej_cl.is_null() {
+        (reason, true) // passthrough rejection
+    } else {
+        let trap = crate::exception::js_try_push();
+        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap as *mut std::os::raw::c_int) };
+        if jumped == 0 {
+            let ret = crate::closure::js_closure_call1(on_rej_cl, reason);
+            crate::exception::js_try_end();
+            (ret, false)
+        } else {
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            crate::exception::js_try_end();
+            (exc, true)
+        }
+    };
+
+    let func = if threw { cap_reject } else { cap_resolve };
+    let args = [result];
+    let _ = unsafe { js_native_call_value(func, args.as_ptr(), 1) };
+    undef
+}
+
+// PerformPromiseThen with a custom capability (species path).
+fn perform_promise_then_with_cap(
+    promise: *mut Promise,
+    on_fulfilled: f64,
+    on_rejected: f64,
+    cap_resolve: f64,
+    cap_reject: f64,
+    cap_promise: f64,
+) -> f64 {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
+    let ful_wrap = js_closure_alloc(then_cap_fulfill_fn as *const u8, 3);
+    js_closure_set_capture_f64(ful_wrap, 0, on_fulfilled);
+    js_closure_set_capture_f64(ful_wrap, 1, cap_resolve);
+    js_closure_set_capture_f64(ful_wrap, 2, cap_reject);
+
+    let rej_wrap = js_closure_alloc(then_cap_reject_fn as *const u8, 3);
+    js_closure_set_capture_f64(rej_wrap, 0, on_rejected);
+    js_closure_set_capture_f64(rej_wrap, 1, cap_resolve);
+    js_closure_set_capture_f64(rej_wrap, 2, cap_reject);
+
+    // Attach handlers; discard the returned native next promise.
+    let _ = js_promise_then(promise, ful_wrap, rej_wrap);
+    cap_promise
+}
+
+// ---------------------------------------------------------------------------
+// Spec-compliant finally closures (ECMA-262 §27.2.5.3 steps 6a–b)
+//
+// thenFinally(value): call onFinally(), return C.resolve(result).then(valueThunk)
+// catchFinally(reason): call onFinally(), return C.resolve(result).then(thrower)
+// ---------------------------------------------------------------------------
+
+// Captures [value_f64]: ignores its argument and returns the captured value.
+extern "C" fn spec_value_return_fn(
+    closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    crate::closure::js_closure_get_capture_f64(closure, 0)
+}
+
+// Captures [reason_f64]: ignores its argument and throws the captured reason.
+extern "C" fn spec_reason_thrower_fn(
+    closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    let reason = crate::closure::js_closure_get_capture_f64(closure, 0);
+    crate::exception::js_throw(reason)
+}
+
+// thenFinally: captures [C_f64, on_finally_f64], called with fulfilled value.
+extern "C" fn spec_then_finally_fn(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    use crate::closure::{
+        js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
+    };
+    let c = js_closure_get_capture_f64(closure, 0);
+    let on_finally = js_closure_get_capture_f64(closure, 1);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    // Call on_finally() with zero args; if it throws, propagate.
+    let on_finally_cl = arg_to_closure(on_finally);
+    let result = if on_finally_cl.is_null() {
+        undef
+    } else {
+        crate::closure::js_closure_call0(on_finally_cl)
+    };
+
+    // Build valueThunk = () => value
+    let value_thunk_cl = js_closure_alloc(spec_value_return_fn as *const u8, 1);
+    js_closure_set_capture_f64(value_thunk_cl, 0, value);
+    let value_thunk =
+        f64::from_bits(crate::value::JSValue::pointer(value_thunk_cl as *const u8).bits());
+
+    // C.resolve(result) then valueThunk
+    let c_resolved = crate::promise::spec_combinators::js_promise_resolve_spec(c, result);
+    let args = [value_thunk, undef];
+    call_receiver_then(c_resolved, &args)
+}
+
+// catchFinally: captures [C_f64, on_finally_f64], called with rejection reason.
+extern "C" fn spec_catch_finally_fn(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    use crate::closure::{
+        js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
+    };
+    let c = js_closure_get_capture_f64(closure, 0);
+    let on_finally = js_closure_get_capture_f64(closure, 1);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    // Call on_finally() with zero args; if it throws, propagate.
+    let on_finally_cl = arg_to_closure(on_finally);
+    let result = if on_finally_cl.is_null() {
+        undef
+    } else {
+        crate::closure::js_closure_call0(on_finally_cl)
+    };
+
+    // Build thrower = () => { throw reason; }
+    let thrower_cl = js_closure_alloc(spec_reason_thrower_fn as *const u8, 1);
+    js_closure_set_capture_f64(thrower_cl, 0, reason);
+    let thrower = f64::from_bits(crate::value::JSValue::pointer(thrower_cl as *const u8).bits());
+
+    // C.resolve(result) then thrower
+    let c_resolved = crate::promise::spec_combinators::js_promise_resolve_spec(c, result);
+    let args = [thrower, undef];
+    call_receiver_then(c_resolved, &args)
+}
+
+fn ensure_spec_finally_arities_registered() {
+    thread_local! {
+        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    DONE.with(|d| {
+        if d.get() {
+            return;
+        }
+        d.set(true);
+        use crate::closure::js_register_closure_arity;
+        js_register_closure_arity(then_cap_fulfill_fn as *const u8, 1);
+        js_register_closure_arity(then_cap_reject_fn as *const u8, 1);
+        js_register_closure_arity(spec_then_finally_fn as *const u8, 1);
+        js_register_closure_arity(spec_catch_finally_fn as *const u8, 1);
+        js_register_closure_arity(spec_value_return_fn as *const u8, 1);
+        js_register_closure_arity(spec_reason_thrower_fn as *const u8, 1);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Promise.prototype.then (ECMA-262 §27.2.5.4) — SpeciesConstructor-aware
+// ---------------------------------------------------------------------------
+
 pub(crate) extern "C" fn promise_prototype_then_thunk(
     _closure: *const crate::closure::ClosureHeader,
     on_fulfilled: f64,
     on_rejected: f64,
 ) -> f64 {
-    let promise = promise_prototype_receiver("then");
-    box_promise_ptr(js_promise_then(
+    ensure_spec_finally_arities_registered();
+    let receiver = crate::object::js_implicit_this_get();
+    if js_value_is_promise(receiver) == 0 {
+        throw_promise_prototype_incompatible_receiver("then", receiver);
+    }
+    let promise = crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
+
+    // SpeciesConstructor(promise, %Promise%) — reads this.constructor once.
+    let c = promise_species_constructor(receiver);
+
+    if super::spec_combinators::is_default_promise_constructor(c) {
+        // Fast path: native then.
+        return box_promise_ptr(js_promise_then(
+            promise,
+            arg_to_closure(on_fulfilled),
+            arg_to_closure(on_rejected),
+        ));
+    }
+
+    // Slow path: NewPromiseCapability(C) + PerformPromiseThen.
+    let cap = super::spec_combinators::new_promise_capability(c);
+    perform_promise_then_with_cap(
         promise,
-        arg_to_closure(on_fulfilled),
-        arg_to_closure(on_rejected),
-    ))
+        on_fulfilled,
+        on_rejected,
+        cap.resolve,
+        cap.reject,
+        cap.promise,
+    )
 }
 
 pub(crate) extern "C" fn promise_prototype_catch_thunk(
@@ -1195,20 +1508,49 @@ pub(crate) extern "C" fn promise_prototype_catch_thunk(
     call_receiver_then(receiver, &args)
 }
 
+// ---------------------------------------------------------------------------
+// Promise.prototype.finally (ECMA-262 §27.2.5.3) — spec-compliant
+// ---------------------------------------------------------------------------
+
 pub(crate) extern "C" fn promise_prototype_finally_thunk(
     _closure: *const crate::closure::ClosureHeader,
     on_finally: f64,
 ) -> f64 {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
+    ensure_spec_finally_arities_registered();
+
     let receiver = crate::object::js_implicit_this_get();
-    if js_value_is_promise(receiver) != 0 {
-        let promise = crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
-        return box_promise_ptr(js_promise_finally(promise, arg_to_closure(on_finally)));
-    }
+
+    // receiver must be an Object (covers both Promise and non-Promise objects).
     let jsval = crate::value::JSValue::from_bits(receiver.to_bits());
     if !jsval.is_pointer() {
         throw_promise_finally_non_object();
     }
-    let args = [on_finally, on_finally];
+
+    // SpeciesConstructor(receiver, %Promise%).
+    let c = promise_species_constructor(receiver);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    let (then_finally, catch_finally) = if !super::spec_combinators::is_callable_value(on_finally) {
+        // Not callable: pass on_finally as both args (§27.2.5.3 step 5).
+        (on_finally, on_finally)
+    } else {
+        // Build spec-compliant thenFinally and catchFinally closures.
+        let tf = js_closure_alloc(spec_then_finally_fn as *const u8, 2);
+        js_closure_set_capture_f64(tf, 0, c);
+        js_closure_set_capture_f64(tf, 1, on_finally);
+
+        let cf = js_closure_alloc(spec_catch_finally_fn as *const u8, 2);
+        js_closure_set_capture_f64(cf, 0, c);
+        js_closure_set_capture_f64(cf, 1, on_finally);
+
+        let tf_f = f64::from_bits(crate::value::JSValue::pointer(tf as *const u8).bits());
+        let cf_f = f64::from_bits(crate::value::JSValue::pointer(cf as *const u8).bits());
+        (tf_f, cf_f)
+    };
+
+    // Invoke(receiver, "then", [thenFinally, catchFinally]).
+    let args = [then_finally, catch_finally];
     call_receiver_then(receiver, &args)
 }
 
