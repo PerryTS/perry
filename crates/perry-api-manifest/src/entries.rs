@@ -115,6 +115,9 @@ pub const NATIVE_MODULES: &[&str] = &[
     "v8",
     "vm",
     "process",
+    // Bare `perry` builtin — embedded-asset introspection (#5731):
+    // `embeddedFiles`, `readEmbedded`, `isStandaloneExecutable`.
+    "perry",
     "perry/tui",
     "perry/yoga",
     "perry/ui",
@@ -206,6 +209,9 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "dns",
     "dns/promises",
     "process",
+    // #5731 — `perry` embed API is served entirely from perry-runtime
+    // (registry + fs interception); no perry-stdlib surface needed.
+    "perry",
     "perry/ui",
     "perry/system",
     "perry/widget",

@@ -1347,6 +1347,20 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         ],
         TypeSpec::Any,
     ),
+    // #5731 — `perry` embedded-asset API for standalone executables.
+    // `readEmbedded(path)` returns the bytes of an asset baked in via
+    // `perry compile --embed`; `embeddedFiles` / `isStandaloneExecutable`
+    // are value (property) exports resolved at read time.
+    method_sig(
+        "perry",
+        "readEmbedded",
+        false,
+        None,
+        &[p_str("path")],
+        TypeSpec::Buffer,
+    ),
+    method_sig("perry", "embeddedFiles", false, None, &[], TypeSpec::Any),
+    property("perry", "isStandaloneExecutable"),
     method_sig(
         "perry/thread",
         "parallelMap",

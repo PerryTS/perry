@@ -4926,6 +4926,32 @@ pub fn run_with_parse_cache(
         });
     }
 
+    // #5731 — embed static assets into the binary. Merge `--embed` with
+    // `perry.embed` / `[compile] embed`, expand globs/directories relative to
+    // the project root, and emit a registration object linked alongside the
+    // user objects. The runtime serves these via `perry` / node:fs at runtime.
+    let embedded_assets = embed::resolve_embedded_assets(&args.embed, &project_root)?;
+    if !embedded_assets.is_empty() {
+        if let Some(obj) =
+            embed::generate_embedded_asset_object(&embedded_assets, &object_output_dir)?
+        {
+            obj_cleanup_paths.push(obj.clone());
+            obj_paths.push(obj);
+            obj_fingerprints.push(None);
+        }
+        let total: u64 = embedded_assets
+            .iter()
+            .filter_map(|(_, p)| fs::metadata(p).ok().map(|m| m.len()))
+            .sum();
+        if let OutputFormat::Text = format {
+            println!(
+                "Embedding {} asset(s) ({} bytes) into the executable",
+                embedded_assets.len(),
+                total
+            );
+        }
+    }
+
     match format {
         OutputFormat::Text => {
             if ctx.needs_stdlib {

@@ -293,6 +293,7 @@ fn build_once(
         app_bundle_id: None,
         output_type: "executable".to_string(),
         bundle_extensions: None,
+        embed: Vec::new(),
         type_check: false,
         minify: false,
         features: None,

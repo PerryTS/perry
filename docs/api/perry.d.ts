@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1947 entries across 113 modules
+// Coverage: 1950 entries across 114 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2318,6 +2318,15 @@ declare module "perf_hooks" {
   export function monitorEventLoopDelay(...args: any[]): any;
   /** stdlib */
   export function timerify(...args: any[]): any;
+}
+
+declare module "perry" {
+  /** stdlib */
+  export const isStandaloneExecutable: any;
+  /** stdlib */
+  export function embeddedFiles(...args: any[]): any;
+  /** stdlib */
+  export function readEmbedded(path: string): Buffer;
 }
 
 declare module "perry/ads" {

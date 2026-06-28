@@ -138,6 +138,16 @@ pub struct CompileArgs {
     #[arg(long)]
     pub bundle_extensions: Option<PathBuf>,
 
+    /// Embed static assets/files into the standalone executable (#5731).
+    /// Accepts files, directories, or `**`/`*`-style glob patterns relative to
+    /// the project root, e.g. `--embed "./dist/**" --embed ./logo.png`. The
+    /// matched bytes are baked into the binary; at runtime they are readable
+    /// via `import { embeddedFiles, readEmbedded } from "perry"` and through
+    /// `node:fs` at their `$perryfs/<path>` virtual path. Merged with
+    /// `perry.embed` (package.json) / `[compile] embed` (perry.toml). Repeatable.
+    #[arg(long)]
+    pub embed: Vec<String>,
+
     /// Enable type checking via tsgo (Microsoft's native TypeScript checker).
     /// Resolves cross-file types, interfaces, and generics for better optimization.
     /// Requires: npm install -g @typescript/native-preview
@@ -527,6 +537,13 @@ pub struct CompilationContext {
     pub package_aliases: HashMap<String, String>,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
     pub compile_packages: HashSet<String>,
+    /// #5731 — assets to embed into the standalone executable, as
+    /// `(embed-relative name, absolute source path)` pairs. Populated by
+    /// merging the `--embed` flag with `perry.embed` / `[compile] embed` and
+    /// expanding globs/directories. The embed-relative name (e.g.
+    /// `dist/index.html`) is the runtime registry key and `$perryfs/` virtual
+    /// path suffix.
+    pub embedded_assets: Vec<(String, PathBuf)>,
     /// #1681 (Phase 3 of #1677): true when this is the build-time capture
     /// stage (the `current_exe` subprocess), so `precompile(EXPR)` sites
     /// emit their build-time value instead of substituting. Re-installed on
@@ -954,6 +971,7 @@ impl CompilationContext {
             native_libraries: Vec::new(),
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
+            embedded_assets: Vec::new(),
             precompile_capture: false,
             precompile_results: HashMap::new(),
             fast_math: false,

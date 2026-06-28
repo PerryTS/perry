@@ -39,6 +39,12 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_ads_banner_destroy", VOID, &[DOUBLE]);
     module.declare_function("js_ads_request_consent", I64, &[]);
 
+    // ========== perry embedded-asset API (#5731) ==========
+    // readEmbedded(path) → *mut BufferHeader (returned as I64 pointer).
+    module.declare_function("js_perry_read_embedded", I64, &[DOUBLE]);
+    // embeddedFiles() → *mut ArrayHeader (returned as I64 pointer).
+    module.declare_function("js_perry_embedded_files", I64, &[]);
+
     // ========== perry/thread (parallelMap, parallelFilter, spawn) ==========
     module.declare_function("js_thread_parallel_map", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_thread_parallel_filter", DOUBLE, &[DOUBLE, DOUBLE]);

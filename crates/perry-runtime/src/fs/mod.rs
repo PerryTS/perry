@@ -432,6 +432,15 @@ fn read_file_bytes_with_options(path_value: f64, options_value: f64) -> Option<V
             return Some(bytes);
         }
         let path_str = decode_path_value(path_value)?;
+        // #5731 — virtual filesystem: a `$perryfs/...` path (or a bare key that
+        // matches an embedded asset) is served from the in-binary registry
+        // before any disk access, so `fs.readFileSync`/`readFile` (text and
+        // binary) transparently read embedded files in a standalone executable.
+        if crate::embedded::is_embedded_path(&path_str) {
+            if let Some(bytes) = crate::embedded::lookup(&path_str) {
+                return Some(bytes.to_vec());
+            }
+        }
         let flag = read_file_flag(options_value);
         let mut file = open_file_for_read_flag(&path_str, &flag).ok()?;
         let mut bytes = Vec::new();
@@ -550,6 +559,11 @@ pub extern "C" fn js_fs_exists_sync(path_value: f64) -> i32 {
             Some(s) => s,
             None => return 0,
         };
+
+        // #5731 — embedded assets exist for the life of the process.
+        if crate::embedded::is_embedded_path(&path_str) {
+            return 1;
+        }
 
         if Path::new(&path_str).exists() {
             1

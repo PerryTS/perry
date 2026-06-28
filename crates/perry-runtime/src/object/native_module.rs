@@ -766,6 +766,13 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         });
     }
 
+    // #5731 — `perry.isStandaloneExecutable` value export (always `true` at
+    // runtime). `embeddedFiles` / `readEmbedded` are callable exports dispatched
+    // via the native call table, not value reads.
+    if module_name == "perry" && property_name == "isStandaloneExecutable" {
+        return crate::embedded::is_standalone_executable_value();
+    }
+
     if module_name == "util" && property_name == "debug" {
         return bound_native_callable_export_value("util", "debuglog");
     }
