@@ -38,6 +38,13 @@ const CONN_MAP = new Map<number, St>();
 
 let phase = 0;
 let done = false;
+let passed = false;
+// Accumulate echoed bytes per phase: TCP gives no 1-write-to-1-'data'
+// guarantee, so a fragmented (or coalesced) echo must not be mistaken for a
+// mismatch. We only advance / succeed once the *full* expected payload has
+// arrived, which is what actually proves the round-trip (mirrors #5021).
+let phase0Echo = '';
+let phase1Echo = '';
 
 const sock = net.createConnection(ECHO_PORT, ECHO_HOST);
 CONN_MAP.set(1, { sock });
@@ -64,36 +71,50 @@ sock.on('connect', () => {
 });
 
 sock.on('data', (buf: Buffer) => {
-    const s = buf.toString('utf8');
+    const chunk = buf.toString('utf8');
     if (phase === 0) {
-        if (s !== SMALL_PAYLOAD) {
-            console.log('FAIL phase0: got "' + s + '"');
+        phase0Echo += chunk;
+        if (phase0Echo !== SMALL_PAYLOAD.slice(0, phase0Echo.length)) {
+            console.log('FAIL phase0: got "' + phase0Echo + '"');
             done = true;
             sock.end();
             return;
         }
-        console.log('phase0 ok: priming echo received');
-        phase = 1;
-        // Kick a one-shot setInterval pump that performs the Map-retrieved
-        // write. This is the exact pattern #5540 dropped on the floor.
-        const iv = setInterval(() => {
-            clearInterval(iv);
-            flush(1);
-        }, 0);
-    } else if (phase === 1) {
-        if (s === LARGE_PAYLOAD) {
-            console.log('phase1 ok: map write from timer reached the wire');
-            console.log('OK');
-        } else {
-            console.log('FAIL phase1: got ' + s.length + ' bytes, expected ' + LARGE_PAYLOAD.length);
+        if (phase0Echo === SMALL_PAYLOAD) {
+            console.log('phase0 ok: priming echo received');
+            phase = 1;
+            // Kick a one-shot setInterval pump that performs the Map-retrieved
+            // write. This is the exact pattern #5540 dropped on the floor.
+            const iv = setInterval(() => {
+                clearInterval(iv);
+                flush(1);
+            }, 0);
         }
+        return;
+    }
+
+    // phase 1: the bounce of the Map-retrieved write-from-timer.
+    phase1Echo += chunk;
+    if (phase1Echo !== LARGE_PAYLOAD.slice(0, phase1Echo.length)) {
+        console.log('FAIL phase1: mismatch after ' + phase1Echo.length + ' bytes');
+        done = true;
+        sock.end();
+        return;
+    }
+    if (phase1Echo === LARGE_PAYLOAD) {
+        console.log('phase1 ok: map write from timer reached the wire');
+        console.log('OK');
+        passed = true;
         done = true;
         sock.end();
     }
 });
 
 sock.on('close', () => {
-    process.exit(0);
+    // Only exit 0 once the OK path has been reached — every FAIL branch also
+    // calls sock.end() and lands here, so an unconditional exit(0) would mask
+    // a real failure.
+    process.exit(passed ? 0 : 1);
 });
 
 sock.on('error', (err: string) => {
