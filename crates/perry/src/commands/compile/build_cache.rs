@@ -462,22 +462,41 @@ fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> Stri
     // time, and size+mtime is the conventional, cheap freshness signal (a fresh
     // checkout bumps mtime → safe rebuild; the only miss is a content change
     // that preserves both size and mtime, which real edits don't do).
-    if let Ok(assets) = super::embed::resolve_embedded_assets(&args.embed, project_root) {
-        for (name, path) in &assets {
-            hash_field(&mut hasher, "embed-name", name);
-            if let Ok(meta) = fs::metadata(path) {
-                hash_field(&mut hasher, "embed-size", &meta.len().to_string());
-                if let Ok(mtime) = meta.modified() {
-                    if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                        hash_field(
-                            &mut hasher,
-                            "embed-mtime",
-                            &format!("{}.{:09}", dur.as_secs(), dur.subsec_nanos()),
-                        );
+    //
+    // Fail closed on resolution / per-asset stat failures. `run_pipeline`
+    // treats `resolve_embedded_assets` as fatal (the `?` at its embed step), so
+    // the cache must not let a broken `perry.embed` / `[compile] embed` config —
+    // or a file that vanished or can't be stat'd — silently drop the embed
+    // inputs and fall back to the non-embed key, which could reuse a stale
+    // manifest and mask the error. Folding a sentinel field on every error path
+    // makes the key diverge from any successful build (which never emits these
+    // field names), so the probe misses, `run_pipeline` re-runs, and the real
+    // error surfaces instead of a stale binary.
+    match super::embed::resolve_embedded_assets(&args.embed, project_root) {
+        Ok(assets) => {
+            for (name, path) in &assets {
+                hash_field(&mut hasher, "embed-name", name);
+                match fs::metadata(path) {
+                    Ok(meta) => {
+                        hash_field(&mut hasher, "embed-size", &meta.len().to_string());
+                        match meta
+                            .modified()
+                            .ok()
+                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                        {
+                            Some(dur) => hash_field(
+                                &mut hasher,
+                                "embed-mtime",
+                                &format!("{}.{:09}", dur.as_secs(), dur.subsec_nanos()),
+                            ),
+                            None => hash_field(&mut hasher, "embed-mtime-unavailable", name),
+                        }
                     }
+                    Err(e) => hash_field(&mut hasher, "embed-stat-error", &format!("{name}: {e}")),
                 }
             }
         }
+        Err(e) => hash_field(&mut hasher, "embed-resolve-error", &e.to_string()),
     }
     hex::encode(hasher.finalize())
 }
