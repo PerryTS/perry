@@ -302,6 +302,14 @@ pub(super) unsafe fn dispatch_common(
                     ));
                 }
             }
+            // perry's hidden `__perry_*` runtime-internal own keys (the
+            // `class … extends Map/Set` backing field) live in the instance
+            // keys_array but are never observable — report non-enumerable.
+            if (*obj_ptr).class_id != 0
+                && crate::object::field_get_set::is_internal_runtime_key(key_name)
+            {
+                return Some(f64::from_bits(JSValue::bool(false).bits()));
+            }
             if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
                 return Some(f64::from_bits(JSValue::bool(false).bits()));
             }

@@ -5,6 +5,49 @@ use super::proto_dispatch::*;
 use super::typed_array::*;
 use super::*;
 
+/// Whether `method` is a backing-store collection method for a `class … extends
+/// Map/Set` instance whose backing is `backing`. Map-only vs Set-only methods
+/// are kept distinct (mirrors the codegen `is_collection_method_for_kind`). The
+/// iterator names (`Symbol.iterator`/`@@iterator`) are included so spreading a
+/// subclass instance still routes through the backing iterator. Anything else
+/// (Object.prototype methods, user methods) must NOT be redirected.
+fn is_backed_collection_method(
+    backing: super::super::map_set_subclass::CollectionBacking,
+    method: &str,
+) -> bool {
+    let shared = matches!(
+        method,
+        "has" | "delete"
+            | "clear"
+            | "forEach"
+            | "keys"
+            | "values"
+            | "entries"
+            | "size"
+            | "Symbol.iterator"
+            | "@@iterator"
+    );
+    match backing {
+        super::super::map_set_subclass::CollectionBacking::Map(_) => {
+            shared || matches!(method, "get" | "set")
+        }
+        super::super::map_set_subclass::CollectionBacking::Set(_) => {
+            shared
+                || matches!(
+                    method,
+                    "add"
+                        | "union"
+                        | "intersection"
+                        | "difference"
+                        | "symmetricDifference"
+                        | "isSubsetOf"
+                        | "isSupersetOf"
+                        | "isDisjointFrom"
+                )
+        }
+    }
+}
+
 pub(super) unsafe fn dispatch_map_set(
     root_scope: &crate::gc::RuntimeHandleScope,
     object_handle: &crate::gc::RuntimeHandle,
@@ -21,11 +64,45 @@ pub(super) unsafe fn dispatch_map_set(
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
     let _ = (root_scope, object_handle, &refreshed_args, raw_bits, jsval);
     let _ = (method_name_ptr, method_name_len);
-    // `class X extends Map | Set` instance — redirect the method onto the
+    // `class X extends Map | Set` instance — redirect the OPERATION onto the
     // hidden backing collection so `has`/`get`/`set`/`delete`/`clear`/`size`/
     // `forEach`/`keys`/`values`/`entries` (and the Set composition methods)
-    // dispatch as if called on a real Map/Set.
+    // dispatch as if called on a real Map/Set. Receiver-sensitive methods,
+    // however, must keep the SUBCLASS INSTANCE as the observable receiver:
+    //   * `set`/`add` return `this` (the instance) so chaining works
+    //     (`m.set(a,1).set(b,2)`),
+    //   * `forEach` callbacks receive the instance as their 3rd argument,
+    // while `clear` → undefined and `has`/`get`/`size`/`delete` read through.
     if let Some(backing) = super::super::map_set_subclass::subclass_backing_of(object) {
+        // Only redirect ACTUAL collection methods to the backing. A non-collection
+        // method (`hasOwnProperty`, `propertyIsEnumerable`, `toString`, a
+        // user-defined subclass method, …) must fall through to the normal
+        // object/vtable/prototype dispatch — redirecting it onto the backing
+        // returned `undefined` for every such call (and hid finding 6's
+        // `propertyIsEnumerable` filter). Returning `None` here lets the outer
+        // dispatcher resolve it against `Object.prototype` / the class vtable.
+        if !is_backed_collection_method(backing, method_name) {
+            return None;
+        }
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let args = if !args_ptr.is_null() && args_len > 0 {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        } else {
+            &[]
+        };
+        // forEach: run over the backing but observe the subclass instance.
+        if method_name == "forEach" && !args.is_empty() {
+            let this_arg = args.get(1).copied().unwrap_or(undefined);
+            match backing {
+                super::super::map_set_subclass::CollectionBacking::Map(m) => {
+                    crate::map::js_map_foreach_with_collection(m, args[0], this_arg, object);
+                }
+                super::super::map_set_subclass::CollectionBacking::Set(s) => {
+                    crate::set::js_set_foreach_with_collection(s, args[0], this_arg, object);
+                }
+            }
+            return Some(undefined);
+        }
         let backing_value = match backing {
             super::super::map_set_subclass::CollectionBacking::Map(m) => {
                 f64::from_bits(JSValue::pointer(m as *const u8).bits())
@@ -34,7 +111,7 @@ pub(super) unsafe fn dispatch_map_set(
                 f64::from_bits(JSValue::pointer(s as *const u8).bits())
             }
         };
-        return dispatch_map_set(
+        let result = dispatch_map_set(
             root_scope,
             object_handle,
             arg_handles,
@@ -45,6 +122,17 @@ pub(super) unsafe fn dispatch_map_set(
             args_ptr,
             args_len,
         );
+        // `Map.prototype.set` / `Set.prototype.add` return the receiver — the
+        // SUBCLASS INSTANCE, not the hidden backing — so chains preserve identity.
+        let returns_receiver = matches!(
+            (backing, method_name),
+            (super::super::map_set_subclass::CollectionBacking::Map(_), "set")
+                | (super::super::map_set_subclass::CollectionBacking::Set(_), "add")
+        );
+        if returns_receiver {
+            return Some(object);
+        }
+        return result;
     }
     // Check Map/Set registries for raw or NaN-boxed pointers.
     // Maps/Sets are allocated with plain alloc (no GcHeader), so they can't be

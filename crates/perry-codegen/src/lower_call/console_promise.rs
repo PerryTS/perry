@@ -746,9 +746,15 @@ pub fn try_lower_native_method_str_dispatch(
         // so route them through `js_native_call_method` (whose `dispatch_map_set`
         // redirects onto the backing collection). Mirrors the
         // `is_well_known_proto_method` carve-out.
+        // Only Map/Set subclasses get a runtime backing installed at `super()`
+        // (via `js_map_set_subclass_init`); WeakMap/WeakSet subclasses have NO
+        // backing, so leave their method calls on the NORMAL class-dispatch path
+        // instead of suppressing it toward a non-existent backing (which would
+        // also shadow a user's own override on a WeakMap/WeakSet subclass).
         let is_collection_subclass_method = class_name_opt
             .as_deref()
             .and_then(|n| class_builtin_collection_kind(ctx, n))
+            .filter(|kind| matches!(*kind, "Map" | "Set"))
             .is_some_and(|kind| is_collection_method_for_kind(kind, property.as_str()));
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))

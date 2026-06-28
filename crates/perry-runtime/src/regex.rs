@@ -163,6 +163,30 @@ pub(crate) fn regex_header_has_magic(re: *const RegExpHeader) -> bool {
     }
 }
 
+/// The GC-VISIBLE slots of a `RegExpHeader`. Only three fields can hold a
+/// heap reference the collector must mark/relocate:
+///   * `pattern_ptr` — the original-source `StringHeader`,
+///   * `flags_ptr`   — the flags `StringHeader`,
+///   * `last_index`  — a writable JSValue (`re.lastIndex = …`) that may be a
+///     NaN-boxed heap pointer.
+/// `regex_ptr`/`fancy_ptr` point to OFF-heap leaked Rust allocations and the
+/// bool/`magic` fields are never heap refs, so they must NOT be scanned.
+///
+/// `pattern_ptr` and `flags_ptr` are consecutive equal-width fields, so under
+/// `#[repr(C)]` they are adjacent and form a 2-slot contiguous range; the
+/// returned tuple is `(range_start, range_slot_count, last_index_slot)`. Offsets
+/// are taken from the actual struct via `addr_of_mut!` (no hardcoded layout).
+#[inline]
+pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usize, *mut u64) {
+    let pattern = std::ptr::addr_of_mut!((*re).pattern_ptr) as *mut u64;
+    let flags = std::ptr::addr_of_mut!((*re).flags_ptr) as *mut u64;
+    let last_index = std::ptr::addr_of_mut!((*re).last_index) as *mut u64;
+    // `pattern_ptr` then `flags_ptr` must be adjacent for the 2-slot range to be
+    // exact; assert so a future field reorder is caught in debug builds.
+    debug_assert_eq!(flags as usize - pattern as usize, 8);
+    (pattern, 2, last_index)
+}
+
 #[cfg(feature = "regex-engine")]
 thread_local! {
     /// Cache of compiled regex objects, keyed by (pattern, flags).

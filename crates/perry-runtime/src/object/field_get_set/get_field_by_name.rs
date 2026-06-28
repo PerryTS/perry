@@ -67,15 +67,25 @@ pub extern "C" fn js_object_get_field_by_name(
             if std::slice::from_raw_parts(name_ptr, name_len) == b"size"
                 && !super::super::own_key_present(obj as *mut ObjectHeader, key)
             {
-                let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-                match crate::object::map_set_subclass::subclass_backing_of(boxed) {
-                    Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
-                        return JSValue::number(crate::map::js_map_size(m) as f64);
+                // A subclass may also OVERRIDE `size` on its prototype
+                // (`class M extends Map { get size() { return 42 } }`). Such an
+                // inherited getter lives in the class vtable, not as an own key,
+                // so check the class chain first and fall through to the normal
+                // class/prototype resolution when it shadows the backing size.
+                let class_id = super::super::js_object_get_class_id(obj);
+                let has_inherited_size = class_id != 0
+                    && super::super::native_module::class_instance_has_member(class_id, "size");
+                if !has_inherited_size {
+                    let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+                    match crate::object::map_set_subclass::subclass_backing_of(boxed) {
+                        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+                            return JSValue::number(crate::map::js_map_size(m) as f64);
+                        }
+                        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+                            return JSValue::number(crate::set::js_set_size(s) as f64);
+                        }
+                        None => {}
                     }
-                    Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
-                        return JSValue::number(crate::set::js_set_size(s) as f64);
-                    }
-                    None => {}
                 }
             }
         }

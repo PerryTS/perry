@@ -1268,7 +1268,9 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             let key_val = crate::array::js_array_get(keys, pos(i));
             if hide_private {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
-                    if b.first() == Some(&b'#') {
+                    if b.first() == Some(&b'#')
+                        || super::field_get_set::is_internal_runtime_key_bytes(b)
+                    {
                         continue;
                     }
                 }

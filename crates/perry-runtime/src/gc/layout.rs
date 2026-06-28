@@ -1115,14 +1115,16 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             // forwarded pointer "inside" the regex at an offset far past its
             // size). This is a latent pre-existing bug — exposed deterministically
             // once Wall 18 grew the header. Detect the regex via its
-            // self-identifying magic and scan EXACTLY its own fixed payload (every
-            // non-heap slot — `regex_ptr`/`fancy_ptr` off-heap, `magic`, the
-            // bool flags — is harmlessly skipped by `try_rewrite_value`, while the
-            // real heap fields `pattern_ptr`/`flags_ptr`/`last_index` are covered).
+            // self-identifying magic and scan EXACTLY its GC-visible slots —
+            // `pattern_ptr`/`flags_ptr` (a 2-slot contiguous payload range) and
+            // `last_index` (the prefix slot). The off-heap `regex_ptr`/`fancy_ptr`,
+            // the bool flags, the `magic` sentinel, and any tail padding are never
+            // inspected, so evacuation can never touch raw native data.
             if crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader) {
-                let payload_slots = ((*header).size as usize).saturating_sub(GC_HEADER_SIZE) / 8;
-                let range = HeapSlotRange::new(user_ptr as *mut u64, payload_slots);
-                return HeapChildSlotIterator::new(header, None, range);
+                let (pattern_slot, slot_count, last_index_slot) =
+                    crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpHeader);
+                let range = HeapSlotRange::new(pattern_slot, slot_count);
+                return HeapChildSlotIterator::new(header, Some(last_index_slot), range);
             }
             let obj = user_ptr as *mut crate::object::ObjectHeader;
             let Some(range) = crate::object::gc_field_slot_range(obj) else {

@@ -1166,13 +1166,18 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             }
         }
         if !re_regs.is_empty() {
-            let insert_at = if matches!(body.last(), Some(Stmt::Return(_))) {
-                body.len() - 1
-            } else {
-                body.len()
-            };
-            for (i, s) in re_regs.into_iter().enumerate() {
-                body.insert(insert_at + i, s);
+            // Refresh the snapshot before EVERY reachable `return` in the body
+            // (not only a trailing one): an EARLY `return <class>` after the
+            // captured locals are assigned would otherwise return a class with
+            // the stale declaration-time snapshot. The walk descends statement
+            // children (if/loops/try/switch/labeled) but NOT into nested
+            // closures — their `return`s belong to a different function.
+            insert_class_capture_refresh_before_returns(&mut body, &re_regs);
+            // Fallthrough (implicit return at body end). When the body already
+            // ends in a `return`, the walk above handled it; otherwise append so
+            // a no-early-return fallthrough path also records the final values.
+            if !matches!(body.last(), Some(Stmt::Return(_))) {
+                body.extend(re_regs.iter().cloned());
             }
         }
     }
@@ -1246,6 +1251,72 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         is_generator: fn_expr.function.is_generator,
         is_strict,
     })
+}
+
+/// Insert a copy of `re_regs` (class-capture refresh statements) immediately
+/// before EVERY reachable `Stmt::Return` in `stmts`, descending into nested
+/// statement bodies (if/loops/try/switch/labeled) but NOT into nested closures
+/// — a closure's `return` exits a different function and must keep its own
+/// snapshot. Each return path then records the live capture values at that
+/// point. See the call site in `lower_fn_expr_anon` (CodeRabbit #5739).
+fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>, re_regs: &[Stmt]) {
+    let mut i = 0;
+    while i < stmts.len() {
+        insert_class_capture_refresh_into_stmt(&mut stmts[i], re_regs);
+        if matches!(&stmts[i], Stmt::Return(_)) {
+            for (j, s) in re_regs.iter().cloned().enumerate() {
+                stmts.insert(i + j, s);
+            }
+            i += re_regs.len();
+        }
+        i += 1;
+    }
+}
+
+/// Recurse into a single statement's child statement lists for
+/// [`insert_class_capture_refresh_before_returns`].
+fn insert_class_capture_refresh_into_stmt(stmt: &mut Stmt, re_regs: &[Stmt]) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            insert_class_capture_refresh_before_returns(then_branch, re_regs);
+            if let Some(eb) = else_branch {
+                insert_class_capture_refresh_before_returns(eb, re_regs);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            insert_class_capture_refresh_before_returns(body, re_regs);
+        }
+        Stmt::For { init, body, .. } => {
+            if let Some(init) = init {
+                insert_class_capture_refresh_into_stmt(init, re_regs);
+            }
+            insert_class_capture_refresh_before_returns(body, re_regs);
+        }
+        Stmt::Labeled { body, .. } => insert_class_capture_refresh_into_stmt(body, re_regs),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            insert_class_capture_refresh_before_returns(body, re_regs);
+            if let Some(c) = catch {
+                insert_class_capture_refresh_before_returns(&mut c.body, re_regs);
+            }
+            if let Some(f) = finally {
+                insert_class_capture_refresh_before_returns(f, re_regs);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for c in cases {
+                insert_class_capture_refresh_before_returns(&mut c.body, re_regs);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Shared closure-capture analysis used by both `lower_arrow` and

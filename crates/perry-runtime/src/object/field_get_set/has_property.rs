@@ -446,6 +446,13 @@ unsafe fn ordinary_has_property(
 ) -> bool {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let key_name = super::super::has_own_helpers::str_from_string_header(key);
+    // Wall 10 follow-up: if `Object.setPrototypeOf(instance, proto)` recorded an
+    // explicit replacement `[[Prototype]]` for THIS instance, the class-vtable
+    // fallback below must be skipped — the recorded chain (walked above) is now
+    // authoritative, so a key that was deleted/replaced off the prototype must
+    // not be resurrected from the original class vtable.
+    let has_recorded_prototype =
+        super::super::prototype_chain::object_static_prototype(obj_ptr as usize).is_some();
     let mut cur = obj_ptr;
     let mut last_valid = obj_ptr;
     let mut guard = 0u32;
@@ -496,10 +503,14 @@ unsafe fn ordinary_has_property(
     // `keys_array`, so the own-key + recorded-prototype walk above misses them.
     // Check the class chain so `'method' in instance` is `true` (e.g. NestJS's
     // app Proxy gating on `'listen' in receiver`).
-    if let Some(name) = key_name {
-        let class_id = unsafe { (*obj_ptr).class_id };
-        if class_id != 0 && super::super::native_module::class_instance_has_member(class_id, name) {
-            return true;
+    if !has_recorded_prototype {
+        if let Some(name) = key_name {
+            let class_id = unsafe { (*obj_ptr).class_id };
+            if class_id != 0
+                && super::super::native_module::class_instance_has_member(class_id, name)
+            {
+                return true;
+            }
         }
     }
     // Inherited `Object.prototype` properties (`toString`, `hasOwnProperty`, …,
