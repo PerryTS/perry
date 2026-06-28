@@ -778,7 +778,10 @@ fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
         for i in [0u32, 1, 42, 256, 257, 300, 599] {
             let name = format!("w{}", i);
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            assert!(own_key_present(obj, key), "present key {name} must be found");
+            assert!(
+                own_key_present(obj, key),
+                "present key {name} must be found"
+            );
         }
         // Absent keys fall through the index miss to the linear scan → false.
         for name in ["nope", "w600", "w-1", ""] {
@@ -803,7 +806,10 @@ fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
             let num = f64::from_bits(v.bits());
             let idx = num as usize;
             assert_eq!(num, idx as f64, "Object.values must yield integer payloads");
-            assert!((idx as u32) < n, "Object.values yielded out-of-range value {num}");
+            assert!(
+                (idx as u32) < n,
+                "Object.values yielded out-of-range value {num}"
+            );
             assert!(!seen[idx], "Object.values yielded duplicate value {idx}");
             seen[idx] = true;
         }
