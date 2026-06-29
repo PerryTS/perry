@@ -47,6 +47,16 @@ unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
     }
 }
 
+#[inline]
+unsafe fn dynamic_number_operand(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_number() || jsval.is_int32() {
+        value
+    } else {
+        crate::builtins::js_number_coerce(value)
+    }
+}
+
 #[cold]
 unsafe fn throw_add_type_error(message: &[u8]) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -213,7 +223,7 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mul);
     }
-    a * b
+    dynamic_number_operand(a) * dynamic_number_operand(b)
 }
 
 /// Dynamic add: BigInt + BigInt if either operand is BigInt, else f64 + f64.
@@ -383,7 +393,7 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_sub);
     }
-    a - b
+    dynamic_number_operand(a) - dynamic_number_operand(b)
 }
 
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
@@ -392,7 +402,7 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_div);
     }
-    a / b
+    dynamic_number_operand(a) / dynamic_number_operand(b)
 }
 
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
@@ -401,6 +411,8 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mod);
     }
+    let a = dynamic_number_operand(a);
+    let b = dynamic_number_operand(b);
     // Float modulo: a - trunc(a / b) * b
     a - (a / b).trunc() * b
 }
@@ -499,7 +511,7 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_pow);
     }
-    crate::math::js_math_pow(a, b)
+    crate::math::js_math_pow(dynamic_number_operand(a), dynamic_number_operand(b))
 }
 
 /// Dynamic unsigned right shift. BigInts have no `>>>` operator in

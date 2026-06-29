@@ -89,6 +89,18 @@ print("strings", {
   url: z.string().url().safeParse("https://example.com/a?b=1").success,
   datetime: z.string().datetime().safeParse("2020-01-02T03:04:05.000Z").success,
   ip: z.string().ip().safeParse("127.0.0.1").success,
+  cuid: z.string().cuid().safeParse("ckj8lp2e90000v4j5x6j8s9abc").success,
+  cuid2: z.string().cuid2().safeParse("tz4a98xxat96iws9zmbrgj3a").success,
+  ulid: z.string().ulid().safeParse("01ARZ3NDEKTSV4RRFFQ69G5FAV").success,
+  emoji: z.string().emoji().safeParse("😀").success,
+  nanoid: z.string().nanoid().safeParse("V1StGXR8_Z5jdHi6B-myT").success,
+  base64: z.string().base64().safeParse("aGVsbG8=").success,
+  base64url: z.string().base64url().safeParse("aGVsbG8").success,
+  jwt: z.string().jwt().safeParse("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature").success,
+  date: z.string().date().safeParse("2020-01-02").success,
+  time: z.string().time().safeParse("03:04:05").success,
+  duration: z.string().duration().safeParse("P1Y2M3DT4H5M6S").success,
+  cidr: z.string().cidr().safeParse("192.168.0.0/24").success,
 });
 
 print("numbers", {
@@ -98,6 +110,21 @@ print("numbers", {
   lt: z.number().lt(3).safeParse(3).success,
   lte: z.number().lte(3).safeParse(3).success,
   multiple: z.number().multipleOf(5).safeParse(15).success,
+  positive: z.number().positive().safeParse(1).success,
+  nonpositive: z.number().nonpositive().safeParse(0).success,
+  negative: z.number().negative().safeParse(-1).success,
+  nonnegative: z.number().nonnegative().safeParse(0).success,
+  safe: z.number().safe().safeParse(Number.MAX_SAFE_INTEGER + 1).success,
+});
+
+print("bigints", {
+  gt: z.bigint().gt(1n).safeParse(2n).success,
+  gte: z.bigint().gte(2n).safeParse(2n).success,
+  lt: z.bigint().lt(3n).safeParse(3n).success,
+  lte: z.bigint().lte(3n).safeParse(3n).success,
+  multiple: z.bigint().multipleOf(5n).safeParse(15n).success,
+  positive: z.bigint().positive().safeParse(1n).success,
+  nonpositive: z.bigint().nonpositive().safeParse(0n).success,
 });
 
 const eventSchema = z.discriminatedUnion("type", [
@@ -175,6 +202,9 @@ print("effects", {
 });
 
 print("modifiers", {
+  ostring: z.ostring().parse(undefined) === undefined,
+  onumber: z.onumber().parse(undefined) === undefined,
+  oboolean: z.oboolean().parse(undefined) === undefined,
   optional: z.string().optional().parse(undefined) === undefined,
   nullable: z.string().nullable().parse(null) === null,
   nullish: z.string().nullish().parse(undefined) === undefined,
@@ -182,6 +212,10 @@ print("modifiers", {
   catch: z.number().catch(9).parse("bad"),
   brand: z.string().brand<"FixtureId">().parse("id-1"),
   described: z.string().describe("fixture string").description,
+  optionalUnwrap: z.string().optional().unwrap().parse("wrapped"),
+  nullableUnwrap: z.string().nullable().unwrap().parse("wrapped"),
+  arrayElement: z.array(z.string()).element.parse("element"),
+  promiseUnwrap: z.promise(z.number()).unwrap().parse(3),
   readonlyFrozen: Object.isFrozen(z.object({ id: z.number() }).readonly().parse({ id: 1 })),
 });
 

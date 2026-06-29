@@ -202,6 +202,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
                 }
             }
+            if matches!(
+                op,
+                BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow
+            ) && (!crate::type_analysis::is_numeric_expr(ctx, left)
+                || !crate::type_analysis::is_numeric_expr(ctx, right)
+                || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left)
+                || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right))
+            {
+                let helper = match op {
+                    BinaryOp::Sub => "js_dynamic_sub",
+                    BinaryOp::Mul => "js_dynamic_mul",
+                    BinaryOp::Div => "js_dynamic_div",
+                    BinaryOp::Mod => "js_dynamic_mod",
+                    BinaryOp::Pow => "js_dynamic_pow",
+                    _ => unreachable!(),
+                };
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, helper, &[(DOUBLE, &l), (DOUBLE, &r)]));
+            }
             // Fast path: `<integer-valued> % <integer literal>` (the
             // factorial / `i % 1000` loop shape). `frem double` lowers
             // to a libm `fmod()` call on ARM — no hardware instruction
