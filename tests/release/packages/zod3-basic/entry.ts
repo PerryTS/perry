@@ -161,13 +161,35 @@ print("union", [primitiveSchema.safeParse("id-42").success, primitiveSchema.safe
 
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
 const nestedObject = z.object({ nested: z.object({ label: z.string() }) });
+const categorySchema: z.ZodType<any> = z.object({
+  name: z.string(),
+  get subcategories() {
+    return z.array(categorySchema);
+  },
+});
+const authorSchema: z.ZodType<any> = z.object({
+  email: z.string().email(),
+  get posts() {
+    return z.array(postSchema);
+  },
+});
+const postSchema: z.ZodType<any> = z.object({
+  title: z.string(),
+  get author() {
+    return authorSchema;
+  },
+});
 print("objects", {
   strip: objectBase.parse({ id: 1, name: "a", extra: true } as unknown),
+  explicitStrip: objectBase.strip().parse({ id: 1, name: "a", extra: true } as unknown),
   strict: objectBase.strict().safeParse({ id: 1, name: "a", extra: true }).success,
+  strictObject: z.strictObject({ name: z.string() }).safeParse({ name: "a", extra: true }).success,
+  nonstrict: objectBase.nonstrict().parse({ id: 1, name: "a", extra: true } as unknown),
   passthrough: objectBase.passthrough().parse({ id: 1, name: "a", extra: true } as unknown),
   catchall: z.object({ id: z.number() }).catchall(z.string()).safeParse({ id: 1, extra: "ok" }).success,
   extend: objectBase.extend({ role: z.literal("admin") }).parse({ id: 1, name: "a", role: "admin" }),
   augment: z.object({ id: z.number() }).augment({ name: z.string() }).parse({ id: 1, name: "a" }),
+  setKey: z.object({ id: z.number() }).setKey("name", z.string()).parse({ id: 1, name: "a" }),
   merge: objectBase.merge(z.object({ role: z.string() })).parse({ id: 1, name: "a", role: "user" }),
   strictMessage: z.object({ id: z.number() }).strict("no extras").safeParse({ id: 1, extra: true }).success,
   keyof: objectBase.keyof().parse("name"),
@@ -178,6 +200,11 @@ print("objects", {
   deepPartial: nestedObject.deepPartial().parse({ nested: {} }),
   required: objectBase.required().safeParse({ id: 1, name: "a" }).success,
   requiredActive: objectBase.required({ active: true }).safeParse({ id: 1, name: "a" }).success,
+});
+
+print("recursiveObjects", {
+  category: categorySchema.parse({ name: "root", subcategories: [{ name: "leaf", subcategories: [] }] }),
+  mutual: postSchema.parse({ title: "post", author: { email: "a@example.com", posts: [] } }).author.email,
 });
 
 print("arrays.tuples", {
