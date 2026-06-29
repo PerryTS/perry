@@ -151,7 +151,11 @@ fn format_parts_with_dtf_obj(
 
     let hour12_v = {
         let v = JSValue::from_bits(get_field(obj, KEY_HOUR12).to_bits());
-        if v.is_bool() { Some(v.as_bool()) } else { None }
+        if v.is_bool() {
+            Some(v.as_bool())
+        } else {
+            None
+        }
     };
     let hour_cycle = get_string_field(obj, KEY_HOUR_CYCLE);
     let use_24h = resolve_24h(hour12_v, hour_cycle.as_deref());
@@ -159,12 +163,18 @@ fn format_parts_with_dtf_obj(
     // Apply same Temporal-kind style filtering as format_ms_with_dtf_obj.
     let (eff_date_style, eff_time_style) = match temporal_kind {
         Some(PlainDate | PlainYearMonth | PlainMonthDay) => {
-            if date_style.is_some() { (date_style.as_deref(), None) }
-            else { (date_style.as_deref(), time_style.as_deref()) }
+            if date_style.is_some() {
+                (date_style.as_deref(), None)
+            } else {
+                (date_style.as_deref(), time_style.as_deref())
+            }
         }
         Some(PlainTime) => {
-            if time_style.is_some() { (None, time_style.as_deref()) }
-            else { (date_style.as_deref(), time_style.as_deref()) }
+            if time_style.is_some() {
+                (None, time_style.as_deref())
+            } else {
+                (date_style.as_deref(), time_style.as_deref())
+            }
         }
         _ => (date_style.as_deref(), time_style.as_deref()),
     };
@@ -231,10 +241,15 @@ fn format_parts_with_dtf_obj(
                 ]
             }
         } else {
-            let (h, ampm) = if hour == 0 { (12u32, "AM") }
-                else if hour < 12 { (hour, "AM") }
-                else if hour == 12 { (12, "PM") }
-                else { (hour - 12, "PM") };
+            let (h, ampm) = if hour == 0 {
+                (12u32, "AM")
+            } else if hour < 12 {
+                (hour, "AM")
+            } else if hour == 12 {
+                (12, "PM")
+            } else {
+                (hour - 12, "PM")
+            };
             if inc_secs {
                 vec![
                     ("hour", h.to_string()),
@@ -266,35 +281,66 @@ fn format_parts_with_dtf_obj(
         }
         (Some(ds), None) => match temporal_kind {
             Some(PlainYearMonth) => vec![
-                ("month", match ds {
-                    "medium" => MONTH_ABBR[mi].to_string(),
-                    "long" | "full" => MONTH_FULL[mi].to_string(),
-                    _ => month.to_string(),
-                }),
-                ("literal", if matches!(ds, "long" | "medium" | "full") { " ".to_string() } else { "/".to_string() }),
-                ("year", if ds == "short" { format!("{:02}", year.rem_euclid(100)) } else { year.to_string() }),
+                (
+                    "month",
+                    match ds {
+                        "medium" => MONTH_ABBR[mi].to_string(),
+                        "long" | "full" => MONTH_FULL[mi].to_string(),
+                        _ => month.to_string(),
+                    },
+                ),
+                (
+                    "literal",
+                    if matches!(ds, "long" | "medium" | "full") {
+                        " ".to_string()
+                    } else {
+                        "/".to_string()
+                    },
+                ),
+                (
+                    "year",
+                    if ds == "short" {
+                        format!("{:02}", year.rem_euclid(100))
+                    } else {
+                        year.to_string()
+                    },
+                ),
             ],
             Some(PlainMonthDay) => vec![
-                ("month", match ds {
-                    "medium" => MONTH_ABBR[mi].to_string(),
-                    "long" | "full" => MONTH_FULL[mi].to_string(),
-                    _ => month.to_string(),
-                }),
-                ("literal", if matches!(ds, "long" | "medium" | "full") { " ".to_string() } else { "/".to_string() }),
+                (
+                    "month",
+                    match ds {
+                        "medium" => MONTH_ABBR[mi].to_string(),
+                        "long" | "full" => MONTH_FULL[mi].to_string(),
+                        _ => month.to_string(),
+                    },
+                ),
+                (
+                    "literal",
+                    if matches!(ds, "long" | "medium" | "full") {
+                        " ".to_string()
+                    } else {
+                        "/".to_string()
+                    },
+                ),
                 ("day", day.to_string()),
             ],
             _ => date_parts(ds),
         },
         (None, Some(ts)) => time_parts(ts),
         (None, None) => {
-            let is_default =
-                get_field(obj, KEY_DT_IS_DEFAULT).to_bits() == crate::value::TAG_TRUE;
+            let is_default = get_field(obj, KEY_DT_IS_DEFAULT).to_bits() == crate::value::TAG_TRUE;
             let no_primary = dtf_primary_mask(obj) == 0;
             let ampm_for = |h: u32| -> (u32, &'static str) {
-                if h == 0 { (12, "AM") }
-                else if h < 12 { (h, "AM") }
-                else if h == 12 { (12, "PM") }
-                else { (h - 12, "PM") }
+                if h == 0 {
+                    (12, "AM")
+                } else if h < 12 {
+                    (h, "AM")
+                } else if h == 12 {
+                    (12, "PM")
+                } else {
+                    (h - 12, "PM")
+                }
             };
             // When default DTF or only supplementary options are used with a
             // Temporal type, emit Temporal-type-appropriate default parts.
@@ -312,21 +358,24 @@ fn format_parts_with_dtf_obj(
                 match temporal_kind {
                     Some(PlainDateTime) => {
                         let (h, ampm) = ampm_for(hour);
-                        return append_era(vec![
-                            ("month", month.to_string()),
-                            ("literal", "/".to_string()),
-                            ("day", day.to_string()),
-                            ("literal", "/".to_string()),
-                            ("year", year.to_string()),
-                            ("literal", ", ".to_string()),
-                            ("hour", h.to_string()),
-                            ("literal", ":".to_string()),
-                            ("minute", format!("{:02}", minute)),
-                            ("literal", ":".to_string()),
-                            ("second", format!("{:02}", second)),
-                            ("literal", " ".to_string()),
-                            ("dayPeriod", ampm.to_string()),
-                        ], true);
+                        return append_era(
+                            vec![
+                                ("month", month.to_string()),
+                                ("literal", "/".to_string()),
+                                ("day", day.to_string()),
+                                ("literal", "/".to_string()),
+                                ("year", year.to_string()),
+                                ("literal", ", ".to_string()),
+                                ("hour", h.to_string()),
+                                ("literal", ":".to_string()),
+                                ("minute", format!("{:02}", minute)),
+                                ("literal", ":".to_string()),
+                                ("second", format!("{:02}", second)),
+                                ("literal", " ".to_string()),
+                                ("dayPeriod", ampm.to_string()),
+                            ],
+                            true,
+                        );
                     }
                     Some(PlainTime) => {
                         let (h, ampm) = ampm_for(hour);
@@ -348,11 +397,14 @@ fn format_parts_with_dtf_obj(
                         ];
                     }
                     Some(PlainYearMonth) => {
-                        return append_era(vec![
-                            ("month", month.to_string()),
-                            ("literal", "/".to_string()),
-                            ("year", year.to_string()),
-                        ], true);
+                        return append_era(
+                            vec![
+                                ("month", month.to_string()),
+                                ("literal", "/".to_string()),
+                                ("year", year.to_string()),
+                            ],
+                            true,
+                        );
                     }
                     _ => {}
                 }
@@ -367,10 +419,22 @@ fn format_parts_with_dtf_obj(
             let weekday_opt = get_string_field(obj, KEY_WEEKDAY);
             let era_opt = get_string_field(obj, KEY_ERA);
             build_parts_from_components(
-                year, month, day, hour, minute, second, secs, mi,
-                year_opt.as_deref(), month_opt.as_deref(), day_opt.as_deref(),
-                hour_opt.as_deref(), minute_opt.as_deref(), second_opt.as_deref(),
-                weekday_opt.as_deref(), era_opt.as_deref(),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                secs,
+                mi,
+                year_opt.as_deref(),
+                month_opt.as_deref(),
+                day_opt.as_deref(),
+                hour_opt.as_deref(),
+                minute_opt.as_deref(),
+                second_opt.as_deref(),
+                weekday_opt.as_deref(),
+                era_opt.as_deref(),
                 use_24h,
             )
         }
@@ -379,11 +443,22 @@ fn format_parts_with_dtf_obj(
 
 /// Build `formatToParts` parts from individual component options (no dateStyle/timeStyle).
 fn build_parts_from_components(
-    year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32,
-    secs: i64, mi: usize,
-    year_opt: Option<&str>, month_opt: Option<&str>, day_opt: Option<&str>,
-    hour_opt: Option<&str>, minute_opt: Option<&str>, second_opt: Option<&str>,
-    weekday_opt: Option<&str>, era_opt: Option<&str>,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    secs: i64,
+    mi: usize,
+    year_opt: Option<&str>,
+    month_opt: Option<&str>,
+    day_opt: Option<&str>,
+    hour_opt: Option<&str>,
+    minute_opt: Option<&str>,
+    second_opt: Option<&str>,
+    weekday_opt: Option<&str>,
+    era_opt: Option<&str>,
     use_24h: bool,
 ) -> Vec<(&'static str, String)> {
     let mut parts: Vec<(&'static str, String)> = Vec::new();
@@ -416,25 +491,46 @@ fn build_parts_from_components(
             if let Some(day_s) = day_opt {
                 let sep = if is_named { " " } else { "/" };
                 parts.push(("literal", sep.to_string()));
-                let day_str = if day_s == "2-digit" { format!("{:02}", day) } else { day.to_string() };
+                let day_str = if day_s == "2-digit" {
+                    format!("{:02}", day)
+                } else {
+                    day.to_string()
+                };
                 parts.push(("day", day_str));
             }
             if let Some(year_s) = year_opt {
                 let sep = if is_named { ", " } else { "/" };
-                if day_opt.is_some() { parts.push(("literal", sep.to_string())); }
-                else { parts.push(("literal", sep.to_string())); }
-                let year_str = if year_s == "2-digit" { format!("{:02}", year.rem_euclid(100)) } else { year.to_string() };
+                if day_opt.is_some() {
+                    parts.push(("literal", sep.to_string()));
+                } else {
+                    parts.push(("literal", sep.to_string()));
+                }
+                let year_str = if year_s == "2-digit" {
+                    format!("{:02}", year.rem_euclid(100))
+                } else {
+                    year.to_string()
+                };
                 parts.push(("year", year_str));
             }
         } else {
             // No month in the options
             if let Some(day_s) = day_opt {
-                let day_str = if day_s == "2-digit" { format!("{:02}", day) } else { day.to_string() };
+                let day_str = if day_s == "2-digit" {
+                    format!("{:02}", day)
+                } else {
+                    day.to_string()
+                };
                 parts.push(("day", day_str));
-                if year_opt.is_some() { parts.push(("literal", "/".to_string())); }
+                if year_opt.is_some() {
+                    parts.push(("literal", "/".to_string()));
+                }
             }
             if let Some(year_s) = year_opt {
-                let year_str = if year_s == "2-digit" { format!("{:02}", year.rem_euclid(100)) } else { year.to_string() };
+                let year_str = if year_s == "2-digit" {
+                    format!("{:02}", year.rem_euclid(100))
+                } else {
+                    year.to_string()
+                };
                 parts.push(("year", year_str));
             }
         }
@@ -449,11 +545,17 @@ fn build_parts_from_components(
         let inc_mins = minute_opt.is_some() || inc_secs;
         if use_24h {
             if let Some(h_s) = hour_opt {
-                let h_str = if h_s == "2-digit" { format!("{:02}", hour) } else { hour.to_string() };
+                let h_str = if h_s == "2-digit" {
+                    format!("{:02}", hour)
+                } else {
+                    hour.to_string()
+                };
                 parts.push(("hour", h_str));
             }
             if inc_mins {
-                if hour_opt.is_some() { parts.push(("literal", ":".to_string())); }
+                if hour_opt.is_some() {
+                    parts.push(("literal", ":".to_string()));
+                }
                 parts.push(("minute", format!("{:02}", minute)));
             }
             if inc_secs {
@@ -461,16 +563,27 @@ fn build_parts_from_components(
                 parts.push(("second", format!("{:02}", second)));
             }
         } else {
-            let (h, ampm) = if hour == 0 { (12u32, "AM") }
-                else if hour < 12 { (hour, "AM") }
-                else if hour == 12 { (12, "PM") }
-                else { (hour - 12, "PM") };
+            let (h, ampm) = if hour == 0 {
+                (12u32, "AM")
+            } else if hour < 12 {
+                (hour, "AM")
+            } else if hour == 12 {
+                (12, "PM")
+            } else {
+                (hour - 12, "PM")
+            };
             if let Some(h_s) = hour_opt {
-                let h_str = if h_s == "2-digit" { format!("{:02}", h) } else { h.to_string() };
+                let h_str = if h_s == "2-digit" {
+                    format!("{:02}", h)
+                } else {
+                    h.to_string()
+                };
                 parts.push(("hour", h_str));
             }
             if inc_mins {
-                if hour_opt.is_some() { parts.push(("literal", ":".to_string())); }
+                if hour_opt.is_some() {
+                    parts.push(("literal", ":".to_string()));
+                }
                 parts.push(("minute", format!("{:02}", minute)));
             }
             if inc_secs {
@@ -488,8 +601,8 @@ fn build_parts_from_components(
     // the only option (era-only DTF: just emit the era tag so callers like
     // formatToParts can detect its presence via part.type === "era").
     if let Some(era_s) = era_opt {
-        let has_date_content = year_opt.is_some() || month_opt.is_some()
-            || day_opt.is_some() || weekday_opt.is_some();
+        let has_date_content =
+            year_opt.is_some() || month_opt.is_some() || day_opt.is_some() || weekday_opt.is_some();
         if has_date_content || (!has_date && !has_time) {
             if !parts.is_empty() {
                 parts.push(("literal", " ".to_string()));
@@ -500,9 +613,7 @@ fn build_parts_from_components(
 
     if parts.is_empty() {
         // Absolute fallback.
-        return date_range_parts_from_ms(
-            (secs * 1000) as f64,
-        );
+        return date_range_parts_from_ms((secs * 1000) as f64);
     }
     parts
 }
@@ -713,9 +824,27 @@ fn era_string(year: i32, style: &str) -> &'static str {
     // "narrow": "A"/"B", "short": "AD"/"BC", "long": "Anno Domini"/"Before Christ"
     let is_ad = year > 0;
     match style {
-        "narrow" => if is_ad { "A" } else { "B" },
-        "long" => if is_ad { "Anno Domini" } else { "Before Christ" },
-        _ => if is_ad { "AD" } else { "BC" },
+        "narrow" => {
+            if is_ad {
+                "A"
+            } else {
+                "B"
+            }
+        }
+        "long" => {
+            if is_ad {
+                "Anno Domini"
+            } else {
+                "Before Christ"
+            }
+        }
+        _ => {
+            if is_ad {
+                "AD"
+            } else {
+                "BC"
+            }
+        }
     }
 }
 
@@ -740,7 +869,7 @@ fn format_date_style(year: i32, month: u32, day: u32, secs: i64, style: &str) ->
 fn format_year_month_style(year: i32, month: u32, style: &str) -> String {
     let mi = month.saturating_sub(1).min(11) as usize;
     match style {
-        "short" => format!("{}/{}", month, year.rem_euclid(100)),
+        "short" => format!("{}/{:02}", month, year.rem_euclid(100)),
         "medium" => format!("{} {}", MONTH_ABBR[mi], year),
         "long" | "full" => format!("{} {}", MONTH_FULL[mi], year),
         _ => format!("{}/{}", month, year),
@@ -905,24 +1034,36 @@ fn format_components(
         None
     };
 
+    // Weekday-only: skip the M/D/YYYY fallback — core should be empty so the
+    // caller only sees the weekday name (with era optionally appended).
     let core = match (date_part, time_part) {
         (Some(d), Some(t)) => format!("{}, {}", d, t),
         (Some(d), None) => d,
         (None, Some(t)) => t,
-        (None, None) => format!("{}/{}/{}", month, day, year),
+        (None, None) => {
+            if weekday_opt.is_none() && era_opt.is_none() {
+                format!("{}/{}/{}", month, day, year)
+            } else {
+                String::new()
+            }
+        }
     };
     // Prepend weekday and append era if requested.
     let with_weekday = if let Some(wk_s) = weekday_opt {
         let wk = weekday_name(secs, wk_s);
-        format!("{}, {}", wk, core)
+        if core.is_empty() {
+            wk
+        } else {
+            format!("{}, {}", wk, core)
+        }
     } else {
         core
     };
     if let Some(era_s) = era_opt {
-        if year_opt.is_some() || month_opt.is_some() || day_opt.is_some() || weekday_opt.is_some() {
-            format!("{} {}", with_weekday, era_string(year, era_s))
+        if with_weekday.is_empty() {
+            era_string(year, era_s).to_string()
         } else {
-            with_weekday
+            format!("{} {}", with_weekday, era_string(year, era_s))
         }
     } else {
         with_weekday
@@ -995,43 +1136,74 @@ fn format_ms_with_dtf_obj(
                 if is_default || no_primary {
                     match temporal_kind {
                         Some(PlainDateTime) => (
-                            Some("numeric".to_string()), Some("numeric".to_string()),
-                            Some("numeric".to_string()), Some("numeric".to_string()),
-                            Some("numeric".to_string()), Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
                         ),
                         Some(PlainTime) => (
-                            None, None, None,
-                            Some("numeric".to_string()), Some("numeric".to_string()),
+                            None,
+                            None,
+                            None,
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
                             Some("numeric".to_string()),
                         ),
                         Some(PlainMonthDay) => (
-                            None, Some("numeric".to_string()), Some("numeric".to_string()),
-                            None, None, None,
+                            None,
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            None,
+                            None,
+                            None,
                         ),
                         Some(PlainYearMonth) => (
-                            Some("numeric".to_string()), Some("numeric".to_string()), None,
-                            None, None, None,
+                            Some("numeric".to_string()),
+                            Some("numeric".to_string()),
+                            None,
+                            None,
+                            None,
+                            None,
                         ),
                         _ => (
-                            get_string_field(obj, KEY_YEAR), get_string_field(obj, KEY_MONTH),
-                            get_string_field(obj, KEY_DAY), get_string_field(obj, KEY_HOUR),
-                            get_string_field(obj, KEY_MINUTE), get_string_field(obj, KEY_SECOND),
+                            get_string_field(obj, KEY_YEAR),
+                            get_string_field(obj, KEY_MONTH),
+                            get_string_field(obj, KEY_DAY),
+                            get_string_field(obj, KEY_HOUR),
+                            get_string_field(obj, KEY_MINUTE),
+                            get_string_field(obj, KEY_SECOND),
                         ),
                     }
                 } else {
                     (
-                        get_string_field(obj, KEY_YEAR), get_string_field(obj, KEY_MONTH),
-                        get_string_field(obj, KEY_DAY), get_string_field(obj, KEY_HOUR),
-                        get_string_field(obj, KEY_MINUTE), get_string_field(obj, KEY_SECOND),
+                        get_string_field(obj, KEY_YEAR),
+                        get_string_field(obj, KEY_MONTH),
+                        get_string_field(obj, KEY_DAY),
+                        get_string_field(obj, KEY_HOUR),
+                        get_string_field(obj, KEY_MINUTE),
+                        get_string_field(obj, KEY_SECOND),
                     )
                 };
             let weekday_opt = get_string_field(obj, KEY_WEEKDAY);
             let era_opt = get_string_field(obj, KEY_ERA);
             format_components(
-                year, month, day, hour, minute, second, secs,
-                year_opt.as_deref(), month_opt.as_deref(), day_opt.as_deref(),
-                hour_opt.as_deref(), minute_opt.as_deref(), second_opt.as_deref(),
-                weekday_opt.as_deref(), era_opt.as_deref(),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                secs,
+                year_opt.as_deref(),
+                month_opt.as_deref(),
+                day_opt.as_deref(),
+                hour_opt.as_deref(),
+                minute_opt.as_deref(),
+                second_opt.as_deref(),
+                weekday_opt.as_deref(),
+                era_opt.as_deref(),
                 use_24h,
             )
         }
@@ -1232,8 +1404,22 @@ pub(crate) fn temporal_locale_string(
         (Some(ds), None) => format_date_style(year, month, day, secs, ds),
         (None, Some(ts)) => format_time_style(hour, minute, second, ts, use_24h),
         (None, None) => format_components(
-            year, month, day, hour, minute, second, secs, eff_year, eff_month, eff_day, eff_hour,
-            eff_min, eff_sec, weekday_opt.as_deref(), era_opt.as_deref(), use_24h,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            secs,
+            eff_year,
+            eff_month,
+            eff_day,
+            eff_hour,
+            eff_min,
+            eff_sec,
+            weekday_opt.as_deref(),
+            era_opt.as_deref(),
+            use_24h,
         ),
     };
     string_value(&result)
@@ -1343,13 +1529,20 @@ pub(crate) fn date_time_format_range_parts_value(
         parts.into_iter().map(move |(t, v)| (t, v, source))
     };
     if sx == sy {
-        let shared: Vec<_> = tag(format_parts_with_dtf_obj(obj, x, temporal_kind), "shared").collect();
+        let shared: Vec<_> =
+            tag(format_parts_with_dtf_obj(obj, x, temporal_kind), "shared").collect();
         return range_parts_to_js_array(&shared);
     }
-    let mut parts: Vec<(&'static str, String, &'static str)> =
-        tag(format_parts_with_dtf_obj(obj, x, temporal_kind), "startRange").collect();
+    let mut parts: Vec<(&'static str, String, &'static str)> = tag(
+        format_parts_with_dtf_obj(obj, x, temporal_kind),
+        "startRange",
+    )
+    .collect();
     parts.push(("literal", " \u{2013} ".to_string(), "shared"));
-    parts.extend(tag(format_parts_with_dtf_obj(obj, y, temporal_kind), "endRange"));
+    parts.extend(tag(
+        format_parts_with_dtf_obj(obj, y, temporal_kind),
+        "endRange",
+    ));
     range_parts_to_js_array(&parts)
 }
 
