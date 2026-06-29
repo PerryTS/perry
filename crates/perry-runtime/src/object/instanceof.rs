@@ -27,6 +27,10 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     }
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
+        let bits = value.to_bits();
+        if bits > 0x10000 && bits <= crate::value::POINTER_MASK {
+            return crate::closure::is_closure_ptr(bits as usize);
+        }
         return false;
     }
     crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
@@ -63,6 +67,89 @@ fn value_addr(value: f64) -> usize {
     } else {
         0
     }
+}
+
+fn prototype_identity_key(value: f64) -> Option<u64> {
+    let bits = value.to_bits();
+    if let Some(class_id) = super::class_prototype_ref_id(value) {
+        return Some(0xFFFF_0000_0000_0000 | class_id as u64);
+    }
+    match bits >> 48 {
+        0x7FFD => {
+            let ptr = (bits & crate::value::POINTER_MASK) as usize;
+            super::class_registry::class_id_for_decl_prototype_object(ptr)
+                .map(|class_id| 0xFFFF_0000_0000_0000 | class_id as u64)
+                .or(Some(ptr as u64))
+        }
+        0x7FFE if super::class_ref_id(value).is_some() => Some(bits),
+        0 if bits > 0x10000 => {
+            super::class_registry::class_id_for_decl_prototype_object(bits as usize)
+                .map(|class_id| 0xFFFF_0000_0000_0000 | class_id as u64)
+                .or(Some(bits))
+        }
+        _ => None,
+    }
+}
+
+fn prototype_identity_chain_contains(value: f64, target_proto: f64) -> bool {
+    if !unsafe { crate::object::value_is_object_like(value) } {
+        return false;
+    }
+    if !unsafe { crate::object::value_is_object_like(target_proto) }
+        && super::class_ref_id(target_proto).is_none()
+        && super::class_prototype_ref_id(target_proto).is_none()
+    {
+        return false;
+    }
+
+    let Some(target_key) = prototype_identity_key(target_proto) else {
+        return false;
+    };
+    let mut current = value;
+    for _ in 0..128 {
+        current = super::object_ops::js_object_get_prototype_of(current);
+        let bits = current.to_bits();
+        if bits == crate::value::TAG_NULL || bits == crate::value::TAG_UNDEFINED {
+            return false;
+        }
+        if prototype_identity_key(current) == Some(target_key) {
+            return true;
+        }
+    }
+    false
+}
+
+fn ordinary_function_has_instance(value: f64, type_ref: f64) -> Option<f64> {
+    if !value_is_callable(type_ref) {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
+    let bits = type_ref.to_bits();
+    let ptr_bits = if (bits >> 48) == 0x7FFD {
+        bits & crate::value::POINTER_MASK
+    } else if bits > 0x10000 && bits <= crate::value::POINTER_MASK {
+        bits
+    } else {
+        return None;
+    };
+    let ptr = ptr_bits as *const ObjectHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    let proto = js_object_get_field_by_name_f64(ptr, key);
+    if unsafe { crate::object::value_is_object_like(proto) }
+        || super::class_ref_id(proto).is_some()
+        || super::class_prototype_ref_id(proto).is_some()
+    {
+        return Some(f64::from_bits(
+            if prototype_identity_chain_contains(value, proto) {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            },
+        ));
+    }
+    None
 }
 
 fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
@@ -180,6 +267,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 }
             }
         }
+    }
+    if let Some(result) = ordinary_function_has_instance(value, type_ref) {
+        return result;
     }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;

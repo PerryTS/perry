@@ -43,6 +43,10 @@ print("primitives", {
   number: z.number().parse(1.5),
   int: z.number().int().safeParse(2.2).success,
   boolean: z.boolean().parse(false),
+  bigint: z.bigint().parse(10n).toString(),
+  symbol: typeof z.symbol().parse(Symbol.for("fixture")),
+  nan: Number.isNaN(z.nan().parse(NaN)),
+  void: z.void().parse(undefined) === undefined,
   null: z.null().parse(null),
   undefined: z.undefined().parse(undefined) === undefined,
   any: z.any().parse({ a: 1 }).a,
@@ -57,10 +61,14 @@ print("coerce", {
   date: z.coerce.date().parse("2020-01-02T00:00:00.000Z").toISOString(),
 });
 
+const colorEnum = z.enum(["red", "blue", "green"]);
 print("literals.enums", {
   literal: z.literal("ready").safeParse("ready").success,
   literalFail: z.literal(3).safeParse(4).success,
-  enum: z.enum(["red", "blue"]).parse("blue"),
+  enum: colorEnum.parse("blue"),
+  enumOptions: colorEnum.options.join("|"),
+  enumExtract: colorEnum.extract(["red", "green"]).safeParse("blue").success,
+  enumExclude: colorEnum.exclude(["blue"]).parse("green"),
   nativeEnum: z.nativeEnum({ A: "a", B: "b" } as const).parse("a"),
 });
 
@@ -105,20 +113,25 @@ const primitiveSchema = z.union([z.string().regex(/^id-/), z.number().int()]);
 print("union", [primitiveSchema.safeParse("id-42").success, primitiveSchema.safeParse(4.5).success]);
 
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
+const nestedObject = z.object({ nested: z.object({ label: z.string() }) });
 print("objects", {
   strip: objectBase.parse({ id: 1, name: "a", extra: true } as unknown),
   strict: objectBase.strict().safeParse({ id: 1, name: "a", extra: true }).success,
   passthrough: objectBase.passthrough().parse({ id: 1, name: "a", extra: true } as unknown),
   catchall: z.object({ id: z.number() }).catchall(z.string()).safeParse({ id: 1, extra: "ok" }).success,
   extend: objectBase.extend({ role: z.literal("admin") }).parse({ id: 1, name: "a", role: "admin" }),
+  merge: objectBase.merge(z.object({ role: z.string() })).parse({ id: 1, name: "a", role: "user" }),
+  keyof: objectBase.keyof().parse("name"),
   pick: objectBase.pick({ id: true }).parse({ id: 1 }),
   omit: objectBase.omit({ active: true }).parse({ id: 1, name: "a" }),
   partial: objectBase.partial().parse({ id: 1 }),
+  deepPartial: nestedObject.deepPartial().parse({ nested: {} }),
   required: objectBase.required().safeParse({ id: 1, name: "a" }).success,
 });
 
 print("arrays.tuples", {
   array: z.array(z.number()).min(2).max(3).parse([1, 2]),
+  exactLength: z.array(z.string()).length(2).safeParse(["a", "b"]).success,
   nonempty: z.array(z.string()).nonempty().safeParse([]).success,
   tuple: z.tuple([z.string(), z.number()]).parse(["a", 1]),
   tupleRest: z.tuple([z.string()]).rest(z.number()).parse(["a", 1, 2]),
@@ -167,6 +180,8 @@ print("modifiers", {
   nullish: z.string().nullish().parse(undefined) === undefined,
   default: z.string().default("fallback").parse(undefined),
   catch: z.number().catch(9).parse("bad"),
+  brand: z.string().brand<"FixtureId">().parse("id-1"),
+  described: z.string().describe("fixture string").description,
   readonlyFrozen: Object.isFrozen(z.object({ id: z.number() }).readonly().parse({ id: 1 })),
 });
 
@@ -199,7 +214,20 @@ print("function", {
 });
 
 const asyncSchema = z.string().refine(async (value) => value === "ok");
-print("async", await asyncSchema.safeParseAsync("ok"));
+const promisedNumber = await z.promise(z.number()).parse(Promise.resolve(5));
+const promisedFailure = await (async () => {
+  try {
+    await z.promise(z.number()).parse(Promise.resolve("bad"));
+    return false;
+  } catch {
+    return true;
+  }
+})();
+print("async", {
+  refine: await asyncSchema.safeParseAsync("ok"),
+  promise: promisedNumber,
+  promiseRejects: promisedFailure,
+});
 
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
 if (!formatted.success) {

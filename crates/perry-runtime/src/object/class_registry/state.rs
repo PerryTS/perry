@@ -424,6 +424,35 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
     }
 }
 
+fn builtin_prototype_value_for_class_id(class_id: u32) -> Option<f64> {
+    let name = match class_id {
+        crate::error::CLASS_ID_ERROR => "Error",
+        crate::error::CLASS_ID_TYPE_ERROR => "TypeError",
+        crate::error::CLASS_ID_RANGE_ERROR => "RangeError",
+        crate::error::CLASS_ID_REFERENCE_ERROR => "ReferenceError",
+        crate::error::CLASS_ID_SYNTAX_ERROR => "SyntaxError",
+        crate::error::CLASS_ID_EVAL_ERROR => "EvalError",
+        crate::error::CLASS_ID_URI_ERROR => "URIError",
+        crate::error::CLASS_ID_AGGREGATE_ERROR => "AggregateError",
+        0xFFFF0020 => "Date",
+        0xFFFF0021 => "RegExp",
+        0xFFFF0022 => "Map",
+        0xFFFF0023 => "Set",
+        0xFFFF0024 => "Array",
+        0xFFFF0025 => "ArrayBuffer",
+        0xFFFF0027 => "Promise",
+        0xFFFF0050 => "Object",
+        0xFFFF00D0 => "Number",
+        0xFFFF00D1 => "String",
+        0xFFFF00D2 => "Boolean",
+        0xFFFF00D3 => "BigInt",
+        0xFFFF00D4 => "Symbol",
+        _ => return None,
+    };
+    let proto = crate::object::builtin_prototype_value(name);
+    ((proto.to_bits() >> 48) == 0x7FFD).then_some(proto)
+}
+
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     if class_id == 0 || class_name_for_id(class_id).is_none() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -478,9 +507,12 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     let parent_proto_bits = get_parent_class_id(class_id)
         .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
         .and_then(|parent_id| {
-            let parent_proto = class_decl_prototype_value(parent_id);
-            let parent_bits = parent_proto.to_bits();
-            ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
+            builtin_prototype_value_for_class_id(parent_id)
+                .or_else(|| {
+                    let parent_proto = class_decl_prototype_value(parent_id);
+                    ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
+                })
+                .map(f64::to_bits)
         })
         .or_else(global_object_prototype_bits);
     if let Some(bits) = parent_proto_bits {
@@ -488,6 +520,27 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     }
 
     crate::value::js_nanbox_pointer(proto as i64)
+}
+
+pub(crate) fn refresh_class_decl_prototype_parent(class_id: u32) {
+    let proto = class_decl_prototype_object(class_id);
+    if proto.is_null() {
+        return;
+    }
+    let parent_proto_bits = get_parent_class_id(class_id)
+        .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+        .and_then(|parent_id| {
+            builtin_prototype_value_for_class_id(parent_id)
+                .or_else(|| {
+                    let parent_proto = class_decl_prototype_value(parent_id);
+                    ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
+                })
+                .map(f64::to_bits)
+        })
+        .or_else(global_object_prototype_bits);
+    if let Some(bits) = parent_proto_bits {
+        super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
+    }
 }
 
 pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Option<f64> {

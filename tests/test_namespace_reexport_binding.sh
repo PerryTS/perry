@@ -41,6 +41,11 @@ export * from "./external.js";
 export { z };
 export default z;
 TS
+cat >"$TMPDIR/index.ts" <<'TS'
+import z4 from "./barrel.js";
+export * from "./barrel.js";
+export default z4;
+TS
 cat >"$TMPDIR/main.ts" <<'TS'
 import { z } from "./barrel.js";
 if (typeof z !== "object") throw new Error(`typeof z: ${typeof z}`);
@@ -48,6 +53,10 @@ if (typeof (z as any).object !== "function") throw new Error("z.object missing")
 if (typeof (z as any).coerce !== "object") throw new Error("z.coerce missing");
 if ((z as any).coerce.number() !== 42) throw new Error("z.coerce.number() wrong");
 if ((z as any).object() !== "obj") throw new Error("z.object() wrong");
+import { z as zViaExportAll } from "./index.js";
+if (typeof zViaExportAll !== "object") throw new Error(`typeof zViaExportAll: ${typeof zViaExportAll}`);
+if ((zViaExportAll as any).coerce.number() !== 42) throw new Error("zViaExportAll.coerce.number() wrong");
+if ((zViaExportAll as any).object() !== "obj") throw new Error("zViaExportAll.object() wrong");
 import * as pkg from "./barrel.js";
 if (!Object.keys(pkg).includes("coerce")) throw new Error("pkg.coerce not enumerable");
 if ((pkg as any).coerce.number() !== 42) throw new Error("pkg.coerce.number() wrong");

@@ -880,23 +880,14 @@ pub unsafe extern "C" fn js_new_function_construct(
         let fp = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
         if fp != 0 && crate::closure::is_closure_ptr(fp) {
             let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
-            let dp = JSValue::from_bits(dyn_proto.to_bits());
-            if dp.is_pointer() {
-                let raw = dp.as_pointer::<u8>() as usize;
-                let is_array = raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
-                    let hdr = unsafe {
-                        &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
-                    };
-                    hdr.obj_type == crate::gc::GC_TYPE_ARRAY
-                        || hdr.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
-                };
-                if is_array {
-                    super::super::prototype_chain::object_set_static_prototype(
-                        obj_ptr as usize,
-                        dyn_proto.to_bits(),
-                    );
-                    linked_user_proto = true;
-                }
+            let is_object_prototype = unsafe { super::super::value_is_object_like(dyn_proto) }
+                || super::super::class_ref_id(dyn_proto).is_some();
+            if is_object_prototype {
+                super::super::prototype_chain::object_set_static_prototype(
+                    obj_ptr as usize,
+                    dyn_proto.to_bits(),
+                );
+                linked_user_proto = true;
             }
         }
     }

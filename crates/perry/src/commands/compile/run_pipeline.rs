@@ -2714,6 +2714,30 @@ pub fn run_with_parse_cache(
                                 continue;
                             }
                         }
+
+                        let lookup = |name: &str| module_name_to_module.get(name);
+                        let transitive_namespace_source =
+                            perry_hir::flatten_exports(&src_hir.name, &lookup)
+                                .into_iter()
+                                .find(|entry| {
+                                    entry.name == exported_name
+                                        && entry.nested_namespace_of.is_some()
+                                })
+                                .and_then(|entry| entry.nested_namespace_of);
+                        if let Some(namespace_module_name) = transitive_namespace_source {
+                            if let Some(namespace_path) = module_name_to_path.get(&namespace_module_name)
+                            {
+                                if let Some(target_mod) = ctx.native_modules.get(namespace_path) {
+                                    namespace_imports.push(local_name.clone());
+                                    namespace_import_prefixes.insert(
+                                        local_name.clone(),
+                                        sanitize_name(&target_mod.name),
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+
                         for export in &src_hir.exports {
                             let perry_hir::Export::Named { local, exported } = export else {
                                 continue;
