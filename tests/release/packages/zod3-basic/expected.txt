@@ -23,6 +23,7 @@ instances.dates={"instanceof":"ok","date":"2020-01-02T00:00:00.000Z","dateMin":t
 function={"valid":4,"asyncValid":6,"parameters":2,"returnType":true,"invalidArgs":true,"invalidReturns":true,"invalidAsyncReturn":true}
 async={"refine":{"success":true,"data":"ok"},"parseAsync":"ok","spa":true,"promise":5,"methodPromise":3,"promiseRejects":true}
 errors={"formatKeys":["_errors","id","name"],"flatten":{"formErrors":[],"fieldErrors":{"id":["Expected number, received string"],"name":["Expected string, received number"]}},"nestedTagErrors":["Array must contain at least 2 element(s)"],"nestedTagItemErrors":["String must contain at least 2 character(s)"]}
+customErrors={"required":"required string","invalidType":"not a string","min":"too short","path":"root","perParseMap":"local:invalid_type"}
 array=[{"id":1,"role":"admin"}]
 standard={"vendor":"zod","version":1,"ok":{"id":1,"name":"a"},"badIssues":2}
 errorMap={"mapped":"mapped:invalid_type"}

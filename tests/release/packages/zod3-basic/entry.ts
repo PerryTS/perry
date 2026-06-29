@@ -403,6 +403,25 @@ if (!formatted.success) {
   });
 }
 
+const customMessageString = z.string({
+  required_error: "required string",
+  invalid_type_error: "not a string",
+});
+const requiredStringResult = customMessageString.safeParse(undefined);
+const invalidStringResult = customMessageString.safeParse(1);
+const minMessageResult = z.string().min(3, "too short").safeParse("x");
+const parsePathResult = z.string().safeParse(1, { path: ["root"] });
+const perParseMapResult = z.string().safeParse(1, {
+  errorMap: (issue) => ({ message: `local:${issue.code}` }),
+});
+print("customErrors", {
+  required: requiredStringResult.success ? "ok" : requiredStringResult.error.issues[0].message,
+  invalidType: invalidStringResult.success ? "ok" : invalidStringResult.error.issues[0].message,
+  min: minMessageResult.success ? "ok" : minMessageResult.error.issues[0].message,
+  path: parsePathResult.success ? "ok" : parsePathResult.error.issues[0].path.join("."),
+  perParseMap: perParseMapResult.success ? "ok" : perParseMapResult.error.issues[0].message,
+});
+
 const summarySchema = z.array(userSchema.pick({ id: true, role: true })).min(1);
 print("array", summarySchema.parse([{ id: 1, role: "admin" }]));
 
