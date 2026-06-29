@@ -323,3 +323,12 @@ if (!formatted.success) {
 
 const summarySchema = z.array(userSchema.pick({ id: true, role: true })).min(1);
 print("array", summarySchema.parse([{ id: 1, role: "admin" }]));
+
+const standardOk = objectBase["~standard"].validate({ id: 1, name: "a" });
+const standardBad = objectBase["~standard"].validate({ id: "x", name: 1 });
+print("standard", {
+  vendor: objectBase["~standard"].vendor,
+  version: objectBase["~standard"].version,
+  ok: "value" in standardOk ? standardOk.value : null,
+  badIssues: "issues" in standardBad ? standardBad.issues?.length : 0,
+});

@@ -23,3 +23,4 @@ function={"valid":4,"parameters":2,"returnType":true,"invalidArgs":true,"invalid
 async={"refine":{"success":true,"data":"ok"},"parseAsync":"ok","spa":true,"promise":5,"promiseRejects":true}
 errors={"formatKeys":["_errors","id","name"],"flatten":{"formErrors":[],"fieldErrors":{"id":["Expected number, received string"],"name":["Expected string, received number"]}}}
 array=[{"id":1,"role":"admin"}]
+standard={"vendor":"zod","version":1,"ok":{"id":1,"name":"a"},"badIssues":2}
