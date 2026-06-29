@@ -58,6 +58,7 @@ print("coerce", {
   string: z.coerce.string().parse(42),
   number: z.coerce.number().parse("12.5"),
   boolean: z.coerce.boolean().parse(1),
+  bigint: z.coerce.bigint().parse("42").toString(),
   date: z.coerce.date().parse("2020-01-02T00:00:00.000Z").toISOString(),
 });
 
@@ -66,7 +67,9 @@ print("literals.enums", {
   literal: z.literal("ready").safeParse("ready").success,
   literalFail: z.literal(3).safeParse(4).success,
   enum: colorEnum.parse("blue"),
+  enumBlue: colorEnum.enum.blue,
   enumOptions: colorEnum.options.join("|"),
+  enumKeys: Object.keys(colorEnum.enum).sort(),
   enumExtract: colorEnum.extract(["red", "green"]).safeParse("blue").success,
   enumExclude: colorEnum.exclude(["blue"]).parse("green"),
   nativeEnum: z.nativeEnum({ A: "a", B: "b" } as const).parse("a"),
@@ -89,6 +92,8 @@ print("strings", {
   url: z.string().url().safeParse("https://example.com/a?b=1").success,
   datetime: z.string().datetime().safeParse("2020-01-02T03:04:05.000Z").success,
   ip: z.string().ip().safeParse("127.0.0.1").success,
+  length: z.string().length(3).safeParse("abc").success,
+  lowercase: z.string().toLowerCase().parse("ABC"),
   cuid: z.string().cuid().safeParse("ckj8lp2e90000v4j5x6j8s9abc").success,
   cuid2: z.string().cuid2().safeParse("tz4a98xxat96iws9zmbrgj3a").success,
   ulid: z.string().ulid().safeParse("01ARZ3NDEKTSV4RRFFQ69G5FAV").success,
@@ -149,11 +154,13 @@ print("objects", {
   extend: objectBase.extend({ role: z.literal("admin") }).parse({ id: 1, name: "a", role: "admin" }),
   merge: objectBase.merge(z.object({ role: z.string() })).parse({ id: 1, name: "a", role: "user" }),
   keyof: objectBase.keyof().parse("name"),
+  shapeName: objectBase.shape.name.safeParse("a").success,
   pick: objectBase.pick({ id: true }).parse({ id: 1 }),
   omit: objectBase.omit({ active: true }).parse({ id: 1, name: "a" }),
   partial: objectBase.partial().parse({ id: 1 }),
   deepPartial: nestedObject.deepPartial().parse({ nested: {} }),
   required: objectBase.required().safeParse({ id: 1, name: "a" }).success,
+  requiredActive: objectBase.required({ active: true }).safeParse({ id: 1, name: "a" }).success,
 });
 
 print("arrays.tuples", {
@@ -168,11 +175,14 @@ const parsedMap = z.map(z.string(), z.number()).parse(new Map([["a", 1], ["b", 2
 const parsedSet = z.set(z.string()).min(2).parse(new Set(["a", "b"]));
 print("collections", {
   record: z.record(z.number()).safeParse({ a: 1, b: 2 }).success,
+  keyedRecord: z.record(z.enum(["a", "b"]), z.number()).safeParse({ a: 1, b: 2 }).success,
   recordFail: z.record(z.number()).refine((scores) => Object.values(scores).every((score) => score >= 0)).safeParse({ a: 1, b: -1 }).success,
   map: Array.from(parsedMap.entries()),
   mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,
   set: Array.from(parsedSet.values()),
   setFail: z.set(z.string()).min(2).safeParse(new Set(["a"])).success,
+  setMax: z.set(z.string()).max(2).safeParse(new Set(["a", "b", "c"])).success,
+  setSize: z.set(z.string()).size(2).safeParse(new Set(["a", "b"])).success,
 });
 
 print("composition", {
@@ -232,14 +242,25 @@ class Box {
 print("instances.dates", {
   instanceof: z.instanceof(Box).parse(new Box("ok")).value,
   date: z.date().parse(new Date("2020-01-02T00:00:00.000Z")).toISOString(),
+  dateMin: z.date().min(new Date("2020-01-01T00:00:00.000Z")).safeParse(new Date("2020-01-02T00:00:00.000Z")).success,
+  dateMax: z.date().max(new Date("2020-01-03T00:00:00.000Z")).safeParse(new Date("2020-01-04T00:00:00.000Z")).success,
 });
 
 const validatedFn = z.function().args(z.string()).returns(z.number()).implement((value) => value.trim().length);
+const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
 print("function", {
   valid: validatedFn(" tuna "),
   invalidArgs: (() => {
     try {
       (validatedFn as unknown as (value: number) => number)(1);
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+  invalidReturns: (() => {
+    try {
+      invalidReturnFn("x");
       return false;
     } catch {
       return true;
