@@ -56,6 +56,105 @@ pub(crate) fn widen_mutable_captures_stmts(stmts: &mut [Stmt]) {
     }
 }
 
+/// Insert preallocated boxes when a closure is created before a later lexical
+/// binding that it captures. Later lowering may split/in-line expressions into
+/// `let getter = () => value; let value = ...`; the closure must capture the
+/// future binding's box, not its current undefined snapshot.
+pub(crate) fn preallocate_forward_captured_lets_stmts(stmts: &mut Vec<Stmt>) {
+    let mut forward = collect_forward_captured_let_ids(stmts);
+    if !forward.is_empty() {
+        forward.sort();
+        forward.dedup();
+        match stmts.first_mut() {
+            Some(Stmt::PreallocateBoxes(existing)) => {
+                for id in forward {
+                    if !existing.contains(&id) {
+                        existing.push(id);
+                    }
+                }
+                existing.sort();
+            }
+            _ => stmts.insert(0, Stmt::PreallocateBoxes(forward)),
+        }
+    }
+
+    for stmt in stmts.iter_mut() {
+        preallocate_forward_captured_lets_stmt(stmt);
+    }
+}
+
+fn collect_forward_captured_let_ids(stmts: &[Stmt]) -> Vec<LocalId> {
+    let mut scope_lets = std::collections::HashSet::new();
+    for stmt in stmts {
+        if let Stmt::Let { id, .. } = stmt {
+            scope_lets.insert(*id);
+        }
+    }
+
+    let mut declared = std::collections::HashSet::new();
+    let mut out = std::collections::HashSet::new();
+    for stmt in stmts {
+        let mut captures = std::collections::HashSet::new();
+        collect_closure_captures_stmt(stmt, &mut captures);
+        for id in captures {
+            if scope_lets.contains(&id) && !declared.contains(&id) {
+                out.insert(id);
+            }
+        }
+        if let Stmt::Let { id, .. } = stmt {
+            declared.insert(*id);
+        }
+    }
+
+    out.into_iter().collect()
+}
+
+fn preallocate_forward_captured_lets_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            preallocate_forward_captured_lets_stmts(then_branch);
+            if let Some(else_branch) = else_branch {
+                preallocate_forward_captured_lets_stmts(else_branch);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            preallocate_forward_captured_lets_stmts(body);
+        }
+        Stmt::For { init, body, .. } => {
+            if let Some(init) = init {
+                preallocate_forward_captured_lets_stmt(init);
+            }
+            preallocate_forward_captured_lets_stmts(body);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            preallocate_forward_captured_lets_stmts(body);
+            if let Some(catch) = catch {
+                preallocate_forward_captured_lets_stmts(&mut catch.body);
+            }
+            if let Some(finally) = finally {
+                preallocate_forward_captured_lets_stmts(finally);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for case in cases {
+                preallocate_forward_captured_lets_stmts(&mut case.body);
+            }
+        }
+        Stmt::Labeled { body, .. } => {
+            preallocate_forward_captured_lets_stmt(body);
+        }
+        _ => {}
+    }
+}
+
 fn widen_mutable_captures_stmt(
     stmt: &mut Stmt,
     scope_mutable: &std::collections::HashSet<LocalId>,
