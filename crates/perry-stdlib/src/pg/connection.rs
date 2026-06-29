@@ -203,7 +203,10 @@ pub unsafe extern "C" fn js_pg_client_query(
 
         if let Some(wrapper) = get_handle_mut::<PgConnectionHandle>(client_handle) {
             if let Some(conn) = wrapper.connection.as_mut() {
-                match sqlx::query(&sql).fetch_all(conn).await {
+                match sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
+                    .fetch_all(conn)
+                    .await
+                {
                     Ok(rows) => {
                         // Get column info from first row (if any)
                         let columns: Vec<_> = if !rows.is_empty() {
@@ -366,7 +369,7 @@ pub unsafe extern "C" fn js_pg_client_query_params(
 
         if let Some(wrapper) = get_handle_mut::<PgConnectionHandle>(client_handle) {
             if let Some(conn) = wrapper.connection.as_mut() {
-                let mut query = sqlx::query(&sql);
+                let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                 for param in &param_values {
                     query = match param {
                         ParamValue::Null => query.bind(Option::<String>::None),

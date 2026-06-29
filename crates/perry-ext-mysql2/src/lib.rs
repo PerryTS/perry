@@ -581,7 +581,7 @@ unsafe fn run_connection_query(
                     .connection
                     .as_mut()
                     .ok_or_else(|| "Connection already closed".to_string())?;
-                let mut q = sqlx::query(&sql);
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                 for p in &param_values {
                     q = match p {
                         ParamValue::Null => q.bind(Option::<String>::None),
@@ -943,7 +943,7 @@ unsafe fn run_pool_query(
                 let wrapper = get_handle_mut::<MysqlPoolHandle>(pool_handle)
                     .ok_or_else(|| "Invalid pool handle".to_string())?;
                 let pool = &wrapper.pool;
-                let mut q = sqlx::query(&sql);
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                 for p in &param_values {
                     q = match p {
                         ParamValue::Null => q.bind(Option::<String>::None),
@@ -1066,7 +1066,7 @@ unsafe fn run_pool_conn_query(
                     .connection
                     .as_mut()
                     .ok_or_else(|| "Pool connection released".to_string())?;
-                let mut q = sqlx::query(&sql);
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                 for p in &param_values {
                     q = match p {
                         ParamValue::Null => q.bind(Option::<String>::None),
