@@ -479,11 +479,25 @@ print("asyncEffects", {
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
 if (!formatted.success) {
   const nestedFormatted = z.object({ user: z.object({ tags: z.array(z.string().min(2)).min(2) }) }).safeParse({ user: { tags: ["x"] } });
+  const unionFailure = z
+    .union([
+      z.object({ kind: z.literal("a"), value: z.string() }),
+      z.object({ kind: z.literal("b"), count: z.number() }),
+    ])
+    .safeParse({ kind: "a", value: 1 });
+  const discriminatedFailure = eventSchema.safeParse({ type: "missing", value: true });
+  const unionIssue = unionFailure.success ? null : unionFailure.error.issues[0];
+  const discriminatedIssue = discriminatedFailure.success ? null : discriminatedFailure.error.issues[0];
   print("errors", {
     formatKeys: Object.keys(formatted.error.format()).sort(),
     flatten: formatted.error.flatten(),
     nestedTagErrors: nestedFormatted.success ? [] : nestedFormatted.error.format().user?.tags?._errors,
     nestedTagItemErrors: nestedFormatted.success ? [] : nestedFormatted.error.format().user?.tags?.[0]?._errors,
+    unionIssue: unionIssue?.code,
+    unionBranchIssueCounts: unionIssue?.code === "invalid_union" ? unionIssue.unionErrors.map((error) => error.issues.length) : [],
+    unionFirstBranchPath: unionIssue?.code === "invalid_union" ? unionIssue.unionErrors[0].issues[0].path.join(".") : "",
+    discriminatedIssue: discriminatedIssue?.code,
+    discriminatedPath: discriminatedIssue?.path.join("."),
   });
 }
 
