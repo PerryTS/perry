@@ -377,11 +377,16 @@ pub fn lower_private_prop(
 
     // Lower initializer expression if present — field-initializer context for
     // the direct-eval `arguments` early error (see `lower_class_prop`).
+    // Also set `in_nonarrow_fn` so a direct eval in the initializer allows
+    // `new.target` (ES2025 §sec-performeval-rules-in-initializer: the eval
+    // runs "inside a function" for new.target purposes).
     // NamedEvaluation: an anonymous function initializer takes the private
     // field's name including the `#` (`static #field = function(){}` →
     // `.name === "#field"`, test262 static-field-anonymous-function-name).
     let saved_field_init = ctx.in_class_field_init;
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_class_field_init = true;
+    ctx.in_nonarrow_fn = true;
     let init = prop
         .value
         .as_ref()
@@ -397,6 +402,7 @@ pub fn lower_private_prop(
         })
         .transpose();
     ctx.in_class_field_init = saved_field_init;
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
     Ok(ClassField {

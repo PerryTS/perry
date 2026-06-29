@@ -943,12 +943,17 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     // Lower initializer expression if present. Mark the field-initializer
     // context so a direct `eval` in the initializer rejects `arguments`
     // (PerformEval early error — field initializers have no arguments object).
+    // Also set `in_nonarrow_fn` so a direct eval in the initializer allows
+    // `new.target` (ES2025 §sec-performeval-rules-in-initializer: the eval
+    // runs "inside a function" for new.target purposes).
     // NamedEvaluation: an anonymous function/arrow/class initializer takes
     // the field's name (`static fromArgs = function(){}` → `.name ===
     // "fromArgs"`, test262 elements/static-field-anonymous-function-name).
     // Computed keys (key_expr) have no compile-time name to confer.
     let saved_field_init = ctx.in_class_field_init;
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_class_field_init = true;
+    ctx.in_nonarrow_fn = true;
     let init = prop
         .value
         .as_ref()
@@ -964,6 +969,7 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
         })
         .transpose();
     ctx.in_class_field_init = saved_field_init;
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
     Ok(ClassField {
