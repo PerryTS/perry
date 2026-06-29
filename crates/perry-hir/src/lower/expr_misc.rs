@@ -326,6 +326,15 @@ pub(super) fn lower_meta_prop(
             // `new.target === C` identity (a fresh object never equals the
             // class ref). `ctx.in_constructor_class` is no longer consulted
             // here.
+            //
+            // ES2025 §15.7.10: class field initializers are invoked with
+            // [[Call]] (not [[Construct]]), so [[NewTarget]] is `undefined`
+            // throughout the initializer, including inside arrow functions
+            // (which inherit it lexically) and direct eval bodies
+            // (which share the calling context's new.target binding).
+            if ctx.in_class_field_init {
+                return Ok(Expr::Undefined);
+            }
             Ok(Expr::NewTarget)
         }
     }
