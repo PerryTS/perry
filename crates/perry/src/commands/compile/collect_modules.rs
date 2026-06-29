@@ -2004,11 +2004,15 @@ mod eval_worker_tests {
         let p2 = materialize_eval_worker_source(src).expect("materialize again");
         // Content-addressed: identical source → identical path.
         assert_eq!(p1, p2);
-        assert!(p1.ends_with(".js"), "worker file must be a .js module: {p1}");
+        assert!(
+            p1.ends_with(".js"),
+            "worker file must be a .js module: {p1}"
+        );
         let written = std::fs::read_to_string(&p1).expect("read back");
         assert_eq!(written, src);
         // Different source → different path.
-        let other = materialize_eval_worker_source("console.log('x');\n").expect("materialize other");
+        let other =
+            materialize_eval_worker_source("console.log('x');\n").expect("materialize other");
         assert_ne!(p1, other);
     }
 }
