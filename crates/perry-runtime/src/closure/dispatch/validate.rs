@@ -16,8 +16,11 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
         if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
             return closure;
         }
-        let type_tag =
-            unsafe { std::ptr::read_volatile((closure as *const u8).add(12) as *const u32) };
+        let type_tag = unsafe {
+            std::ptr::read_volatile(
+                (closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32
+            )
+        };
         if type_tag != CLOSURE_MAGIC {
             return closure;
         }
@@ -62,7 +65,9 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
         return std::ptr::null();
     }
-    let type_tag = unsafe { std::ptr::read_volatile((closure as *const u8).add(12) as *const u32) };
+    let type_tag = unsafe {
+        std::ptr::read_volatile((closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32)
+    };
     if type_tag != CLOSURE_MAGIC {
         return std::ptr::null();
     }

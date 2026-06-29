@@ -135,7 +135,8 @@ pub extern "C" fn js_object_get_own_field_or_undef(
             return f64::from_bits(TAG_UNDEF);
         }
         // Skip closures sharing the GC_TYPE_OBJECT slot (CLOSURE_MAGIC at +12).
-        let type_tag_at_12 = *((obj as *const u8).add(12) as *const u32);
+        let type_tag_at_12 =
+            *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
             return f64::from_bits(TAG_UNDEF);
         }

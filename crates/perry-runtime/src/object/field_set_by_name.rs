@@ -617,7 +617,8 @@ pub extern "C" fn js_object_set_field_by_name(
         // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
         // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
         // Without this check, (*obj).keys_array reads capture[0] → corruption/crash.
-        let type_tag_at_12 = *((obj as *const u8).add(12) as *const u32);
+        let type_tag_at_12 =
+            *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
             if !key.is_null() {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());

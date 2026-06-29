@@ -534,7 +534,8 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
                 get_cached(&TYPEOF_OBJECT, "object")
             } else {
                 // ClosureHeader has type_tag at offset 12 (after func_ptr:8 + capture_count:4)
-                let type_tag = unsafe { *(ptr.add(12) as *const u32) };
+                let type_tag =
+                    unsafe { *(ptr.add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     get_cached(&TYPEOF_FUNCTION, "function")
                 } else if crate::object::is_class_object_ptr(ptr) {

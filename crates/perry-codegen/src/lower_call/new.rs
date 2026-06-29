@@ -905,7 +905,12 @@ fn lower_new_impl(
         } else {
             // Compile-time layout constants.
             const GC_HEADER_SIZE: u64 = 8;
-            const OBJECT_HEADER_SIZE: u64 = 24;
+            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit but
+            // 20 on ILP32 (4-byte `keys_array` pointer). Derive from the target
+            // triple so the inline alloc size and field-region base match the
+            // target-compiled runtime (no-op on 64-bit; see `target_layout`).
+            let object_header_size: u64 =
+                crate::target_layout::object_header_size_bytes(ctx.target_triple);
             const FIELD_SLOT_SIZE: u64 = 8;
             const MIN_FIELD_SLOTS: u64 = 8;
             const GC_TYPE_OBJECT: u64 = 2;
@@ -918,7 +923,7 @@ fn lower_new_impl(
             const OBJECT_TYPE_REGULAR: u64 = 1;
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-            let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
+            let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
             let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
             let total_size_str = total_size.to_string();
 
@@ -1057,7 +1062,7 @@ fn lower_new_impl(
             // crashed with "Cannot read properties of undefined". Slots start at
             // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
             for i in 0..alloc_field_count {
-                let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
+                let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
                 // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
                 blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);

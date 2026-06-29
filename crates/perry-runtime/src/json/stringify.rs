@@ -510,7 +510,8 @@ pub(crate) unsafe fn is_closure_value(bits: u64) -> bool {
             return false;
         }
         // Check for ClosureHeader magic at offset 8 (type_tag field)
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag =
+            *((ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         type_tag == crate::closure::CLOSURE_MAGIC
     } else {
         false
@@ -1204,7 +1205,8 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             // in a Next.js render object crashed exactly here). Real closures
             // live far above the band.
             if crate::value::addr_class::is_above_handle_band(ptr_candidate as usize) {
-                let type_tag = *(ptr_candidate.add(12) as *const u32);
+                let type_tag =
+                    *(ptr_candidate.add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     found = true;
                     break;

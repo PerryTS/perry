@@ -335,7 +335,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
         return false;
     }
     unsafe {
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         type_tag == CLOSURE_MAGIC
     }
 }
@@ -643,7 +643,7 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
     }
     // Check CLOSURE_MAGIC
     unsafe {
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag != CLOSURE_MAGIC {
             return val;
         }

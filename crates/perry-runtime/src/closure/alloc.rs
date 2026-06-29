@@ -49,6 +49,20 @@ pub struct ClosureHeader {
     pub type_tag: u32,
 }
 
+/// Byte offset of `type_tag` (the `CLOSURE_MAGIC` slot) within `ClosureHeader`.
+///
+/// On 64-bit targets this is 12 (`func_ptr` 8 bytes + `capture_count` 4 bytes);
+/// on arm64_32 / wasm32 (32-bit pointers) `func_ptr` is 4 bytes, so it is 8.
+/// Every site that probes a heap pointer for `CLOSURE_MAGIC` MUST read at this
+/// offset, never a hardcoded `12`: that literal was correct only for 64-bit and
+/// was the arm64_32 watchOS startup-crash root cause. On a 32-bit watch every
+/// real closure failed the magic probe (the read landed 4 bytes past
+/// `type_tag`), so a getter/function value was judged non-callable and the
+/// resulting `TypeError` value-coercion dereferenced the closure as an
+/// `ObjectHeader` → `EXC_BAD_ACCESS` before the first frame rendered.
+/// `offset_of!` tracks the real per-target layout, so this is a no-op on 64-bit.
+pub const CLOSURE_TYPE_TAG_OFFSET: usize = std::mem::offset_of!(ClosureHeader, type_tag);
+
 #[inline]
 pub fn closure_payload_size(actual_count: usize) -> usize {
     std::mem::size_of::<ClosureHeader>() + actual_count * std::mem::size_of::<u64>()

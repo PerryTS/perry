@@ -386,6 +386,23 @@ pub(crate) fn try_read_as_search_params(
         return None;
     }
     unsafe {
+        // arm64_32 watchOS hardening: validate `params` is a real heap
+        // `GC_TYPE_OBJECT` *before* dereferencing `class_id` / `keys_array`
+        // below. Callers guard only with the magnitude check
+        // `!is_handle_band(ptr)`, which on 32-bit pointers cannot distinguish a
+        // low heap address from a misclassified non-pointer (e.g. a closure
+        // whose `CLOSURE_MAGIC` probe missed — see `CLOSURE_TYPE_TAG_OFFSET`).
+        // Without this, the raw field reads below dereference garbage → SIGSEGV
+        // (the documented watchOS startup crash, stage 2). `try_read_gc_header`
+        // rejects the handle band and implausible addresses without touching
+        // memory; a genuine URLSearchParams is an ordinary `GC_TYPE_OBJECT`
+        // allocation, so this is a no-op for every value that legitimately
+        // reaches here (mirrors the guard `is_url_object_shape` already applies
+        // to the sibling `js_url_href_if_url` probe).
+        match crate::value::addr_class::try_read_gc_header(params as usize) {
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            _ => return None,
+        }
         // A genuine URLSearchParams is always allocated with `class_id == 0`
         // (an ordinary object, see `create_url_search_params`). Other native
         // classes — notably `util.MIMEParams` — ALSO store their data in a
