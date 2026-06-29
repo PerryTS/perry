@@ -210,8 +210,9 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
 /// - BigInt: throws `TypeError` ("Do not know how to serialize a BigInt") —
 ///   some serializer paths (e.g. `write_replaced_scalar`) write raw BigInts as
 ///   plain strings rather than throwing, so we must reject here proactively.
-/// - Symbol: return `None` (JSON omits symbols).
-/// - Non-wrapper: return `None`.
+/// - Symbol/non-wrapper: return `None`; callers continue with normal
+///   scalar/object dispatch, which omits primitive Symbols but still handles
+///   boxed Symbol objects through the object path.
 #[inline]
 pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
     let (class_id, payload) = boxed_primitive_payload(value)?;
