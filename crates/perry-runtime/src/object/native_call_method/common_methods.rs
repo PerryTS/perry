@@ -273,8 +273,7 @@ pub(super) unsafe fn dispatch_common(
             // `global`/`ignoreCase`/`multiline` (test262 S15.10.7.x_A8).
             if let Some(kind) = super::exotic_expando::exotic_expando_kind(raw) {
                 use super::exotic_expando::ExoticKind;
-                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str)
-                else {
+                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
                     return Some(f64::from_bits(JSValue::bool(false).bits()));
                 };
                 // User-added expando property — honour the stored descriptor.
