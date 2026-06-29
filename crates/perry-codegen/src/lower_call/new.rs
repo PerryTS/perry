@@ -924,7 +924,13 @@ fn lower_new_impl(
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
             let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
-            let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
+            // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
+            // bump allocator's offset invariant (below) requires every
+            // allocation to be a multiple of 8; on ILP32 `object_header_size`
+            // is 20, so an unpadded total is 4-skewed (e.g. 92) and would
+            // misalign the next bump. No-op on 64-bit (8 + 24 + 8·n is already
+            // 8-aligned → 96 for ≤8 fields).
+            let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
             let total_size_str = total_size.to_string();
 
             // Lazy: allocate the per-function arena-state slot on the
