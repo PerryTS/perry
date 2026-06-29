@@ -332,25 +332,30 @@ fn worker_options_is_eval(new_expr: &ast::NewExpr) -> bool {
     let ast::Expr::Object(obj) = &*opts.expr else {
         return false;
     };
+    // Evaluate props in order so the LAST `eval` wins (JS duplicate-key
+    // semantics), and a spread conservatively clears any earlier static
+    // `eval: true` — its runtime value could override it, and misclassifying a
+    // file Worker as eval-mode is worse than missing an obscure spread case.
+    let mut eval = false;
     for prop in &obj.props {
-        let ast::PropOrSpread::Prop(prop) = prop else {
-            continue;
-        };
-        let ast::Prop::KeyValue(kv) = &**prop else {
-            continue;
-        };
-        let is_eval_key = match &kv.key {
-            ast::PropName::Ident(i) => &*i.sym == "eval",
-            ast::PropName::Str(s) => &*s.value == "eval",
-            _ => false,
-        };
-        if is_eval_key {
-            if let ast::Expr::Lit(ast::Lit::Bool(b)) = &*kv.value {
-                return b.value;
+        match prop {
+            ast::PropOrSpread::Spread(_) => eval = false,
+            ast::PropOrSpread::Prop(prop) => {
+                let ast::Prop::KeyValue(kv) = &**prop else {
+                    continue;
+                };
+                let is_eval_key = match &kv.key {
+                    ast::PropName::Ident(i) => &*i.sym == "eval",
+                    ast::PropName::Str(s) => &*s.value == "eval",
+                    _ => false,
+                };
+                if is_eval_key {
+                    eval = matches!(&*kv.value, ast::Expr::Lit(ast::Lit::Bool(b)) if b.value);
+                }
             }
         }
     }
-    false
+    eval
 }
 
 pub(crate) fn is_worker_threads_module_name(module_name: &str) -> bool {
