@@ -1034,21 +1034,22 @@ fn format_components(
         None
     };
 
-    // Weekday-only: skip the M/D/YYYY fallback — core should be empty so the
-    // caller only sees the weekday name (with era optionally appended).
+    // Weekday-only (no year/month/day/time fields): suppress the M/D/YYYY
+    // fallback so the caller only sees the weekday name. For era-only or any
+    // other no-field combination, keep the fallback so there's date context.
     let core = match (date_part, time_part) {
         (Some(d), Some(t)) => format!("{}, {}", d, t),
         (Some(d), None) => d,
         (None, Some(t)) => t,
         (None, None) => {
-            if weekday_opt.is_none() && era_opt.is_none() {
-                format!("{}/{}/{}", month, day, year)
-            } else {
+            if weekday_opt.is_some() {
                 String::new()
+            } else {
+                format!("{}/{}/{}", month, day, year)
             }
         }
     };
-    // Prepend weekday and append era if requested.
+    // Prepend weekday; if core is empty the weekday stands alone.
     let with_weekday = if let Some(wk_s) = weekday_opt {
         let wk = weekday_name(secs, wk_s);
         if core.is_empty() {
@@ -1059,11 +1060,18 @@ fn format_components(
     } else {
         core
     };
+    // Append era when: (a) there are date/weekday fields, or (b) no fields at
+    // all (era-only DTF — the fallback date string already has date context).
     if let Some(era_s) = era_opt {
-        if with_weekday.is_empty() {
-            era_string(year, era_s).to_string()
-        } else {
+        if year_opt.is_some()
+            || month_opt.is_some()
+            || day_opt.is_some()
+            || weekday_opt.is_some()
+            || (!has_date && !has_time && weekday_opt.is_none())
+        {
             format!("{} {}", with_weekday, era_string(year, era_s))
+        } else {
+            with_weekday
         }
     } else {
         with_weekday
