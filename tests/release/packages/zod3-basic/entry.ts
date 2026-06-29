@@ -462,6 +462,23 @@ if (!formatted.success) {
   });
 }
 
+const manualError = new z.ZodError([]);
+manualError.addIssue({ code: z.ZodIssueCode.custom, path: ["manual"], message: "manual issue" });
+manualError.addIssues([{ code: z.ZodIssueCode.custom, path: ["more"], message: "more issue" }]);
+const createdError = z.ZodError.create([
+  { code: z.ZodIssueCode.custom, path: ["create"], message: "created issue" },
+]);
+const mappedFormat = objectBase.safeParse({ id: "x", name: 1 });
+print("errorMethods", {
+  manualCount: manualError.issues.length,
+  manualEmpty: manualError.isEmpty,
+  manualFlatten: manualError.flatten((issue) => `${issue.path.join(".")}:${issue.message}`),
+  created: createdError.issues[0].message,
+  mappedFormat: mappedFormat.success
+    ? null
+    : mappedFormat.error.format((issue) => `${issue.code}:${issue.message}`).id?._errors,
+});
+
 const customMessageString = z.string({
   required_error: "required string",
   invalid_type_error: "not a string",
