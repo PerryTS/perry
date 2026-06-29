@@ -293,7 +293,27 @@ const superRefineSchema = z.array(z.number()).superRefine((values, ctx) => {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "duplicates" });
   }
 });
+const fatalCalls: string[] = [];
+const fatalRefineSchema = z
+  .string()
+  .superRefine((value, ctx) => {
+    fatalCalls.push(`first:${value}`);
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "stop", fatal: true });
+    return z.NEVER;
+  })
+  .superRefine(() => {
+    fatalCalls.push("second");
+  });
+const neverTransformSchema = z
+  .string()
+  .transform((value, ctx) => {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `bad transform:${value}` });
+    return z.NEVER;
+  })
+  .pipe(z.string());
 const matchingPasswordsResult = matchingPasswords.safeParse({ password: "a", confirm: "b" });
+const fatalRefineResult = fatalRefineSchema.safeParse("x");
+const neverTransformResult = neverTransformSchema.safeParse("x");
 print("effects", {
   preprocess: preprocessSchema.parse(" ok "),
   pipe: z.string().transform((value) => value.length).pipe(z.number().min(2)).safeParse("abc").success,
@@ -301,6 +321,11 @@ print("effects", {
   custom: z.custom<string>((value) => value === "token").safeParse("token").success,
   refinePath: matchingPasswordsResult.success ? "ok" : matchingPasswordsResult.error.issues[0].path.join("."),
   refineMessage: matchingPasswordsResult.success ? "ok" : matchingPasswordsResult.error.issues[0].message,
+  fatalCalls,
+  fatalIssue: fatalRefineResult.success ? "ok" : fatalRefineResult.error.issues[0].message,
+  fatalFlag: fatalRefineResult.success ? false : fatalRefineResult.error.issues[0].fatal === true,
+  neverTransform: neverTransformResult.success ? "ok" : neverTransformResult.error.issues[0].message,
+  neverStatus: z.NEVER.status,
 });
 
 print("modifiers", {
