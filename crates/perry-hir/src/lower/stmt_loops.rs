@@ -942,13 +942,12 @@ pub(crate) fn lower_stmt_for_of(
         // For Array/Object destructuring (`for (const [a, b] of gen())`), pre-register
         // all leaf variables via collect_for_of_pattern_leaves (so the body can reference
         // them), then emit the destructuring assignments via emit_for_of_pattern_binding.
-        let binding_pat: Option<&ast::Pat> = if let ast::ForHead::VarDecl(var_decl) =
-            &for_of_stmt.left
-        {
-            var_decl.decls.first().map(|d| &d.name)
-        } else {
-            None
-        };
+        let binding_pat: Option<&ast::Pat> =
+            if let ast::ForHead::VarDecl(var_decl) = &for_of_stmt.left {
+                var_decl.decls.first().map(|d| &d.name)
+            } else {
+                None
+            };
         let value_expr = Expr::PropertyGet {
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
