@@ -55,7 +55,11 @@ unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
         return None;
     }
     let sym_f64 = f64::from_bits(0x7FFD_0000_0000_0000 | (sym as u64 & 0x0000_FFFF_FFFF_FFFF));
-    let tag_value = crate::symbol::own_symbol_property(value, sym_f64)?;
+    // Spec §20.1.3.6 step 6: Get(O, @@toStringTag) — own property first, then
+    // the explicit prototype chain (set via Object.setPrototypeOf or the
+    // runtime's object_set_static_prototype).
+    let tag_value = crate::symbol::own_symbol_property(value, sym_f64)
+        .or_else(|| crate::symbol::inherited_symbol_property(value, sym_f64))?;
     string_value_to_owned(tag_value)
 }
 

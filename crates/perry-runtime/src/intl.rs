@@ -292,6 +292,8 @@ fn coerce_option_string(value: f64) -> Option<String> {
         Some("null".to_string())
     } else if js.is_any_string() {
         string_from_string_value(value)
+    } else if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        throw_type_error("Cannot convert a Symbol value to a string")
     } else {
         Some(value_to_string(value))
     }
