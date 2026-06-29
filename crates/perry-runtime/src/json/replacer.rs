@@ -1169,6 +1169,14 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
 
 /// Spec §25.5.2 step 7a: truncate a spacer string to its first 10 UTF-16 code
 /// units. Walks `char_indices` to stay on Rust char boundaries.
+///
+/// Known deviation: when the 10th UTF-16 unit would be the high surrogate of a
+/// supplementary-plane character (e.g. spacer `"123456789😀"`), we stop before
+/// the character rather than emitting a lone surrogate. The spec's WTF-16
+/// semantics would produce a lone high surrogate at position 10. Perry does not
+/// support lone surrogates in its WTF-8 string representation (known gap), so
+/// this deviation is accepted. The test262 `space-string-range.js` test uses
+/// only ASCII spacers and passes regardless.
 fn truncate_to_10_utf16_units(s: &str) -> String {
     let mut utf16_units = 0usize;
     for (byte_idx, c) in s.char_indices() {

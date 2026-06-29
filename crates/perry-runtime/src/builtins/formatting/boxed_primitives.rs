@@ -207,14 +207,19 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
 /// - Boolean: use [[BooleanData]] directly (stored payload).
 /// - Number: call ToNumber(wrapper) — honours a custom `valueOf` on the object.
 /// - String: call ToString(wrapper) — honours a custom `toString` on the object.
-/// - BigInt: stored payload (BigInt is unserializable and will throw later).
+/// - BigInt: throws `TypeError` ("Do not know how to serialize a BigInt") —
+///   some serializer paths (e.g. `write_replaced_scalar`) write raw BigInts as
+///   plain strings rather than throwing, so we must reject here proactively.
 /// - Symbol: return `None` (JSON omits symbols).
 /// - Non-wrapper: return `None`.
 #[inline]
 pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
     let (class_id, payload) = boxed_primitive_payload(value)?;
     match class_id {
-        CLASS_ID_BOXED_BOOLEAN | CLASS_ID_BOXED_BIGINT => Some(payload),
+        CLASS_ID_BOXED_BOOLEAN => Some(payload),
+        CLASS_ID_BOXED_BIGINT => {
+            crate::collection_iter::throw_type_error("Do not know how to serialize a BigInt");
+        }
         CLASS_ID_BOXED_NUMBER => {
             // ToNumber(wrapper): honours a custom `valueOf` on the instance.
             Some(js_number_coerce(value))
