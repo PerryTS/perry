@@ -727,6 +727,7 @@ fn worker_new_visitor_descends_into_closure_bodies() {
             paths: vec![],
             filename: Box::new(Expr::String("./worker.js".to_string())),
             options: None,
+            is_eval: false,
         })],
         captures: vec![],
         mutable_captures: vec![],

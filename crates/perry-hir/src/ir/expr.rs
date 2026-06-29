@@ -2622,6 +2622,10 @@ pub enum Expr {
         paths: Vec<String>,
         filename: Box<Expr>,
         options: Option<Box<Expr>>,
+        /// `true` when the Worker options carry `eval: true` — i.e. the first
+        /// argument is JS SOURCE, not a filename (Node eval-mode Worker, used by
+        /// e.g. `@perryts/threads`). Parsed from the options object at lowering.
+        is_eval: bool,
     },
 }
 

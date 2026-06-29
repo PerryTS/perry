@@ -932,12 +932,20 @@ fn collect_module_one(
     let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
     perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
         if let perry_hir::Expr::WorkerNew {
-            paths, filename, ..
+            paths,
+            filename,
+            is_eval,
+            ..
         } = expr
         {
             if !paths.is_empty() {
                 return;
             }
+            // Eval-mode Worker (`new Worker(src, { eval: true })`): the resolved
+            // value is the worker SOURCE, not a path — parsed from the options
+            // object at lowering (authoritative; handles single-line sources and
+            // doesn't misclassify multi-line filenames).
+            let eval_mode = *is_eval;
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_context(
                 filename.as_ref(),
@@ -947,12 +955,6 @@ fn collect_module_one(
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(mut set) => {
-                    // Eval-mode Worker (`new Worker(src, { eval: true })`):
-                    // the resolved value is the worker SOURCE, not a path. A
-                    // file path / URL is always a single line, so an embedded
-                    // newline is an unambiguous "this is source code" tell
-                    // (no false positives on real worker filenames).
-                    let eval_mode = set.len() == 1 && set[0].contains('\n');
                     if !eval_mode && set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                         dyn_errors.push(format!(
                             "worker_threads Worker in module {}: filename resolves to {} possible paths \

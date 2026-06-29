@@ -7,11 +7,22 @@
 
 use anyhow::{anyhow, Result};
 use std::fs;
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Per-process counter for unique temp filenames (no Date/rand needed).
+static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
 /// Write an eval-mode Worker's inline source to a content-addressed `.js` file
 /// under the system temp dir and return its absolute path. Content addressing
-/// keeps the path stable across compiles (so the object cache hits) and avoids
-/// races between parallel lowering threads writing the same source.
+/// keeps the path stable across compiles (so the object cache hits).
+///
+/// Written atomically: a unique temp file is fully written then `rename`d into
+/// the shared content-addressed path, so a concurrent rayon lowering thread can
+/// never observe a half-written file, and reuse is gated on a full BYTE compare
+/// (a size-only check could accept a truncated/corrupt same-length file).
+/// Concurrent writers of the same source produce byte-identical content, so
+/// whichever rename wins leaves a correct file.
 pub(super) fn materialize_eval_worker_source(source: &str) -> Result<String> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -21,15 +32,30 @@ pub(super) fn materialize_eval_worker_source(source: &str) -> Result<String> {
     let dir = std::env::temp_dir().join("perry-eval-workers");
     fs::create_dir_all(&dir).map_err(|e| anyhow!("create {}: {}", dir.display(), e))?;
     let path = dir.join(format!("perry-eval-worker-{hex}.js"));
-    // Content-addressed: only write when missing (or size differs) so
-    // concurrent threads don't clobber an identical file mid-read.
-    let needs_write = match fs::metadata(&path) {
-        Ok(meta) => meta.len() != source.len() as u64,
-        Err(_) => true,
-    };
-    if needs_write {
-        fs::write(&path, source).map_err(|e| anyhow!("write {}: {}", path.display(), e))?;
+
+    // Reuse only if the existing file's bytes match exactly.
+    if let Ok(existing) = fs::read(&path) {
+        if existing == source.as_bytes() {
+            return Ok(path.to_string_lossy().into_owned());
+        }
     }
+
+    // Write to a unique temp file, then atomically rename into place.
+    let tmp = dir.join(format!(
+        "perry-eval-worker-{hex}.{}.{}.tmp",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    {
+        let mut f =
+            fs::File::create(&tmp).map_err(|e| anyhow!("create {}: {}", tmp.display(), e))?;
+        f.write_all(source.as_bytes())
+            .map_err(|e| anyhow!("write {}: {}", tmp.display(), e))?;
+    }
+    fs::rename(&tmp, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        anyhow!("rename {} -> {}: {}", tmp.display(), path.display(), e)
+    })?;
     Ok(path.to_string_lossy().into_owned())
 }
 
