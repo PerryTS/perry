@@ -124,9 +124,15 @@ print("arrays.tuples", {
   tupleRest: z.tuple([z.string()]).rest(z.number()).parse(["a", 1, 2]),
 });
 
+const parsedMap = z.map(z.string(), z.number()).parse(new Map([["a", 1], ["b", 2]]));
+const parsedSet = z.set(z.string()).min(2).parse(new Set(["a", "b"]));
 print("collections", {
   record: z.record(z.number()).safeParse({ a: 1, b: 2 }).success,
   recordFail: z.record(z.number()).refine((scores) => Object.values(scores).every((score) => score >= 0)).safeParse({ a: 1, b: -1 }).success,
+  map: Array.from(parsedMap.entries()),
+  mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,
+  set: Array.from(parsedSet.values()),
+  setFail: z.set(z.string()).min(2).safeParse(new Set(["a"])).success,
 });
 
 print("composition", {

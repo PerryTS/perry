@@ -178,14 +178,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             //      param shadows it — and the `resolve_class_alias().is_none()`
             //      guard on the reroute block below would then skip it.
             //
-            // Capturing the binding here (when no real class of this name is in
-            // scope) keeps the reroute stable against both.
-            let callee_local_at_entry: Option<LocalId> = if ctx.lookup_class(&class_name).is_none()
-            {
-                ctx.lookup_local(&class_name)
-            } else {
-                None
-            };
+            // Capturing the binding here keeps the reroute stable against both,
+            // and also lets a lexical binding shadow a same-named class.
+            let callee_local_at_entry = ctx.lookup_local(ident.sym.as_ref());
+            if ctx.lookup_class(&class_name).is_some() {
+                if let Some(local_id) = callee_local_at_entry {
+                    let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::LocalGet(local_id)),
+                        args,
+                        byte_offset: new_byte_offset,
+                    });
+                }
+            }
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
