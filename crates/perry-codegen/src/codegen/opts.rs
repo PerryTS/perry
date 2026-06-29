@@ -175,6 +175,10 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// Namespace import local → target module prefix. Used when the namespace
+    /// binding itself is read as a value so codegen can return the producer's
+    /// real module namespace object, including nested `export * as` members.
+    pub namespace_import_prefixes: std::collections::HashMap<String, String>,
     /// When true, `compile_module` returns the textual LLVM IR (`.ll`)
     /// as bytes instead of invoking `clang -c` to produce an object file.
     /// Used by the bitcode-link path (`PERRY_LLVM_BITCODE_LINK=1`).
@@ -567,6 +571,8 @@ pub(crate) struct CrossModuleCtx {
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// See `CompileOptions::namespace_import_prefixes`.
+    pub namespace_import_prefixes: std::collections::HashMap<String, String>,
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine

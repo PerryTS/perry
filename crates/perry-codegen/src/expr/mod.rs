@@ -439,6 +439,9 @@ pub(crate) struct FnCtx<'a> {
     /// by namespace member access lowering to disambiguate when the same
     /// export name appears in multiple `import * as X / Y` sources.
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
+    /// Namespace import local → target module prefix for whole-namespace value
+    /// reads.
+    pub namespace_import_prefixes: &'a std::collections::HashMap<String, String>,
     /// Names of imported functions that are async. Used to wrap
     /// cross-module calls in promise machinery.
     // #854: cross-module async-import wrapping context; currently routed via

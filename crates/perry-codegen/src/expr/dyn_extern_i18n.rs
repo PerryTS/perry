@@ -726,6 +726,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // dedicated arms above; this catch-all only fires for
             // names with no resolution at all.
             if ctx.namespace_imports.contains(name) {
+                if let Some(prefix) = ctx.namespace_import_prefixes.get(name) {
+                    return Ok(ctx.block().load(DOUBLE, &format!("@__perry_ns_{}", prefix)));
+                }
                 // A namespace import used as a whole VALUE (passed to a
                 // function, iterated by `Object.keys`/`for…in`/`Object.entries`,
                 // spread, …) must be a real object whose OWN ENUMERABLE

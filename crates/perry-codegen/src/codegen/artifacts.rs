@@ -1203,6 +1203,39 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             namespace_key_globals.push((gname, byte_len));
         }
     }
+    let mut namespace_extern_prefixes = std::collections::BTreeSet::new();
+    for entry in &cross_module.namespace_entries {
+        if let super::opts::NamespaceEntryKind::NestedNamespace { source_prefix } = &entry.kind {
+            if source_prefix != module_prefix {
+                namespace_extern_prefixes.insert(source_prefix.clone());
+            }
+        }
+    }
+    for source_prefix in cross_module.namespace_import_prefixes.values() {
+        if source_prefix != module_prefix {
+            namespace_extern_prefixes.insert(source_prefix.clone());
+        }
+    }
+    for source_prefix in namespace_extern_prefixes {
+        llmod.add_external_global(&format!("__perry_ns_{}", source_prefix), DOUBLE);
+    }
+    for export in &hir.exports {
+        let perry_hir::Export::Named { local, exported } = export else {
+            continue;
+        };
+        let Some(source_prefix) = cross_module.namespace_import_prefixes.get(local) else {
+            continue;
+        };
+        let getter_name = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+        if llmod.has_function(&getter_name) {
+            continue;
+        }
+        let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
+        let _ = getter.create_block("entry");
+        let blk = getter.block_mut(0).unwrap();
+        let value = blk.load(DOUBLE, &format!("@__perry_ns_{}", source_prefix));
+        blk.ret(DOUBLE, &value);
+    }
     // For each `Expr::DynamicImport` target this module dispatches to,
     // declare the foreign module's `@__perry_ns_<target_prefix>` as an
     // extern global so the dispatch site can load it. Deduped via

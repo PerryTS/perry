@@ -1782,8 +1782,7 @@ fn lower_new_impl(
                 // to match the symbol's real signature (see codegen/mod.rs).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
-                let saved_new_target =
-                    set_imported_ctor_new_target(ctx, class_name, &ctor);
+                let saved_new_target = set_imported_ctor_new_target(ctx, class_name, &ctor);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 restore_imported_ctor_new_target(ctx, saved_new_target);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
@@ -1811,8 +1810,7 @@ fn lower_new_impl(
                 // ("value is not a function" on `new Chalk(...).red(...)`).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
-                let saved_new_target =
-                    set_imported_ctor_new_target(ctx, class_name, &ctor);
+                let saved_new_target = set_imported_ctor_new_target(ctx, class_name, &ctor);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 restore_imported_ctor_new_target(ctx, saved_new_target);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);

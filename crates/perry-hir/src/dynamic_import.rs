@@ -156,18 +156,25 @@ fn flatten_into<'a, F>(
                 imported,
                 exported,
             } => {
-                // The value lives in `source`; if `source` re-exports it
-                // again, we want to follow that chain so codegen reaches
-                // the ULTIMATE owner. But for the MVP we surface one hop
-                // — the cross-module access pattern works regardless of
-                // how many hops away the value's defining module is, as
-                // long as we name the directly-importing source.
-                out.push(FlatExport {
-                    name: exported.clone(),
-                    source_module: source.clone(),
-                    source_local: imported.clone(),
-                    nested_namespace_of: None,
-                });
+                let resolved = flatten_exports(source, lookup)
+                    .into_iter()
+                    .rev()
+                    .find(|entry| entry.name == *imported);
+                if let Some(entry) = resolved {
+                    out.push(FlatExport {
+                        name: exported.clone(),
+                        source_module: entry.source_module,
+                        source_local: entry.source_local,
+                        nested_namespace_of: entry.nested_namespace_of,
+                    });
+                } else {
+                    out.push(FlatExport {
+                        name: exported.clone(),
+                        source_module: source.clone(),
+                        source_local: imported.clone(),
+                        nested_namespace_of: None,
+                    });
+                }
             }
             Export::ExportAll { source } => {
                 // Recursively flatten the source's exports into ours.

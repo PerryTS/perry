@@ -22,6 +22,17 @@ errorUtil.toString = (message: any) => typeof message === "string" ? message : m
 const value = errorUtil.toString(undefined);
 console.log(value, typeof value, value === undefined);
 console.log(JSON.stringify({ message: value }));
+
+const builder: any = {
+  toUpperCase() {
+    return { parse: () => "schema-method" };
+  },
+  trim() {
+    return { parse: () => "trim-method" };
+  },
+};
+console.log(builder.toUpperCase().parse());
+console.log(builder.trim().parse());
 TS
 
 BIN="$TMPDIR/out"
@@ -49,6 +60,8 @@ fi
 cat > "$TMPDIR/expected.log" <<'EOF_EXPECTED'
 undefined undefined true
 {}
+schema-method
+trim-method
 EOF_EXPECTED
 
 if ! diff -u "$TMPDIR/expected.log" "$TMPDIR/run.log"; then

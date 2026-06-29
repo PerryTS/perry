@@ -1147,6 +1147,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_reexport_named_imports: opts.namespace_reexport_named_imports.clone(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
+        namespace_import_prefixes: opts.namespace_import_prefixes,
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
         local_generator_funcs,

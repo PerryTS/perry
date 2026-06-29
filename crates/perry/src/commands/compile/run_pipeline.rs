@@ -1733,12 +1733,34 @@ pub fn run_with_parse_cache(
         }
         out
     };
+    let sanitize_member_name = |s: &str| -> String {
+        if s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return sanitize_module_name(s);
+        }
+        let mut out = String::from("u_");
+        for c in s.chars() {
+            if c.is_ascii_alphanumeric() {
+                out.push(c);
+            } else {
+                out.push('_');
+                out.push_str(&format!("{:x}", c as u32));
+                out.push('_');
+            }
+        }
+        out
+    };
     let mut path_to_module_name: HashMap<PathBuf, String> = HashMap::new();
     let mut module_name_to_path: HashMap<String, PathBuf> = HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         path_to_module_name.insert(path.clone(), hir_module.name.clone());
-        module_name_to_path.insert(hir_module.name.clone(), path.clone());
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            path_to_module_name.insert(canonical.clone(), hir_module.name.clone());
+            module_name_to_path.insert(hir_module.name.clone(), canonical);
+        } else {
+            module_name_to_path.insert(hir_module.name.clone(), path.clone());
+        }
     }
+    let normalize_namespace_path = |path: PathBuf| std::fs::canonicalize(&path).unwrap_or(path);
     // Build a normalized HIR-by-name map for `flatten_exports`. Each
     // module's `Export::ReExport::source`, `Export::ExportAll::source`,
     // and `Export::NamespaceReExport::source` strings hold the raw
@@ -1762,6 +1784,7 @@ pub fn run_with_parse_cache(
                         &ctx.compile_packages,
                         &ctx.compile_package_dirs,
                     ) {
+                        let resolved_path = normalize_namespace_path(resolved_path);
                         if let Some(name) = path_to_module_name.get(&resolved_path) {
                             *source = name.clone();
                         }
@@ -1772,8 +1795,8 @@ pub fn run_with_parse_cache(
         }
         module_name_to_module.insert(hir_module.name.clone(), rewritten);
     }
-    // Set of native-module paths that are dynamic-import targets. We
-    // also build a parallel set keyed by Module::name for flatten_exports.
+    // Set of native-module paths that are dynamic-import targets. Those
+    // drive dynamic-import dispatch maps below.
     let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for hir_module in ctx.native_modules.values() {
         for import in &hir_module.imports {
@@ -1785,14 +1808,73 @@ pub fn run_with_parse_cache(
                 continue;
             }
             if let Some(rp) = &import.resolved_path {
-                dyn_target_paths.insert(PathBuf::from(rp));
+                dyn_target_paths.insert(normalize_namespace_path(PathBuf::from(rp)));
+            }
+        }
+    }
+
+    // Namespace objects are needed for more than dynamic import:
+    // `import * as ns` values and `export * as ns from "./mod"` both need the
+    // producer module to emit/populate `@__perry_ns_<prefix>`. Dynamic imports
+    // are still a subset because `await import()` resolves to that same object.
+    let mut namespace_target_paths = dyn_target_paths.clone();
+    for (path, hir_module) in &ctx.native_modules {
+        for import in &hir_module.imports {
+            if import.type_only {
+                continue;
+            }
+            let has_namespace_import = import
+                .specifiers
+                .iter()
+                .any(|spec| matches!(spec, perry_hir::ImportSpecifier::Namespace { .. }));
+            if has_namespace_import {
+                if let Some(rp) = &import.resolved_path {
+                    namespace_target_paths.insert(normalize_namespace_path(PathBuf::from(rp)));
+                }
+            }
+        }
+        for export in &hir_module.exports {
+            if let perry_hir::Export::NamespaceReExport { source, .. } = export {
+                if let Some((resolved_path, _)) = resolve_import(
+                    source,
+                    path,
+                    &ctx.project_root,
+                    &ctx.compile_packages,
+                    &ctx.compile_package_dirs,
+                ) {
+                    namespace_target_paths.insert(normalize_namespace_path(resolved_path));
+                }
+            }
+        }
+    }
+
+    // A namespace target can itself expose nested namespace re-exports. Include
+    // those nested sources too so `export * as coerce from "./coerce.js"` can
+    // load a real `@__perry_ns_<coerce>` when building its parent namespace.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let targets: Vec<PathBuf> = namespace_target_paths.iter().cloned().collect();
+        for target_path in targets {
+            let Some(target_hir) = ctx.native_modules.get(&target_path) else {
+                continue;
+            };
+            let lookup = |s: &str| module_name_to_module.get(s);
+            for fe in perry_hir::flatten_exports(&target_hir.name, &lookup) {
+                if let Some(nested) = &fe.nested_namespace_of {
+                    if let Some(nested_path) = module_name_to_path.get(nested) {
+                        if namespace_target_paths.insert(nested_path.clone()) {
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
     }
     // Per-module precomputed namespace_entries (keyed by path).
     let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
         HashMap::new();
-    for target_path in &dyn_target_paths {
+    for target_path in &namespace_target_paths {
         let target_hir = match ctx.native_modules.get(target_path) {
             Some(m) => m,
             None => continue, // native/JS module — handled elsewhere
@@ -1825,7 +1907,7 @@ pub fn run_with_parse_cache(
                     let scoped = format!(
                         "perry_fn_{}__{}",
                         sanitize_module_name(&target_hir.name),
-                        sanitize_module_name(&func.name)
+                        sanitize_member_name(&func.name)
                     );
                     perry_codegen::NamespaceEntryKind::LocalFunction {
                         wrap_symbol: format!("__perry_wrap_{}", scoped),
@@ -1848,13 +1930,13 @@ pub fn run_with_parse_cache(
                     );
                     perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
                 } else {
-                    // Best-effort: treat unknown locals as Var sourced
-                    // by getter. This covers re-export shapes that the
-                    // local-detection misses; the cross-module getter
-                    // for the same module returns the value too.
+                    // Best-effort: treat unknown locals as getter-backed vars.
+                    // For renamed exports (`export { _null as null }`) the
+                    // producer emits the public getter name, so prefer the
+                    // namespace key over the private local spelling here.
                     perry_codegen::NamespaceEntryKind::ForeignVar {
                         source_prefix: sanitize_module_name(&target_hir.name),
-                        source_local: fe.source_local.clone(),
+                        source_local: fe.name.clone(),
                     }
                 }
             } else {
@@ -2094,7 +2176,7 @@ pub fn run_with_parse_cache(
                         continue;
                     }
                     if let Some(resolved) = &import.resolved_path {
-                        let resolved_path = PathBuf::from(resolved);
+                        let resolved_path = normalize_namespace_path(PathBuf::from(resolved));
                         if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
                             push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
                         }
@@ -2117,6 +2199,7 @@ pub fn run_with_parse_cache(
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
                         ) {
+                            let resolved_path = normalize_namespace_path(resolved_path);
                             if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
                                 push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
                             }
@@ -2195,6 +2278,8 @@ pub fn run_with_parse_cache(
             // export the same member name. Keyed by `(namespace_local,
             // member_name)` → `source_prefix`.
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
+                std::collections::HashMap::new();
+            let mut namespace_import_prefixes: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
             // Issue #321: subset of `namespace_imports` populated only by the
@@ -2359,6 +2444,12 @@ pub fn run_with_parse_cache(
                     };
                     if let Some(local) = namespace_like_local {
                         namespace_imports.push(local.clone());
+                        let resolved_key =
+                            normalize_namespace_path(PathBuf::from(&resolved_path_str));
+                        if let Some(target_mod) = ctx.native_modules.get(&resolved_key) {
+                            let prefix = sanitize_name(&target_mod.name);
+                            namespace_import_prefixes.insert(local.clone(), prefix);
+                        }
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                             for (export_name, origin_path) in exports {
@@ -2603,6 +2694,60 @@ pub fn run_with_parse_cache(
                     // + register the namespace target's full export surface.
                     let mut handled_as_namespace_reexport = false;
                     if let Some(src_hir) = source_module {
+                        let direct_namespace_source = src_hir.imports.iter().find_map(|import| {
+                            import.specifiers.iter().find_map(|spec| match spec {
+                                perry_hir::ImportSpecifier::Namespace { local: ns_local }
+                                    if ns_local == &exported_name =>
+                                {
+                                    import.resolved_path.as_ref()
+                                }
+                                _ => None,
+                            })
+                        });
+                        if let Some(namespace_source) = direct_namespace_source {
+                            let resolved_key =
+                                normalize_namespace_path(PathBuf::from(namespace_source));
+                            if let Some(target_mod) = ctx.native_modules.get(&resolved_key) {
+                                namespace_imports.push(local_name.clone());
+                                namespace_import_prefixes
+                                    .insert(local_name.clone(), sanitize_name(&target_mod.name));
+                                continue;
+                            }
+                        }
+                        for export in &src_hir.exports {
+                            let perry_hir::Export::Named { local, exported } = export else {
+                                continue;
+                            };
+                            if exported != &exported_name {
+                                continue;
+                            }
+                            let namespace_source = src_hir.imports.iter().find_map(|import| {
+                                import.specifiers.iter().find_map(|spec| match spec {
+                                    perry_hir::ImportSpecifier::Namespace { local: ns_local }
+                                        if ns_local == local =>
+                                    {
+                                        import.resolved_path.as_ref()
+                                    }
+                                    _ => None,
+                                })
+                            });
+                            let Some(namespace_source) = namespace_source else {
+                                continue;
+                            };
+                            let resolved_key =
+                                normalize_namespace_path(PathBuf::from(namespace_source));
+                            let Some(target_mod) = ctx.native_modules.get(&resolved_key) else {
+                                continue;
+                            };
+                            namespace_imports.push(local_name.clone());
+                            namespace_import_prefixes
+                                .insert(local_name.clone(), sanitize_name(&target_mod.name));
+                            handled_as_namespace_reexport = true;
+                            break;
+                        }
+                        if handled_as_namespace_reexport {
+                            continue;
+                        }
                         for export in &src_hir.exports {
                             if let perry_hir::Export::NamespaceReExport {
                                 source: ns_src,
@@ -3990,6 +4135,7 @@ pub fn run_with_parse_cache(
                 namespace_node_submodules,
                 namespace_v8_specifiers,
                 namespace_member_prefixes,
+                namespace_import_prefixes,
                 emit_ir_only: bitcode_link,
                 verify_native_regions,
                 disable_buffer_fast_path,
@@ -4020,10 +4166,10 @@ pub fn run_with_parse_cache(
                 fast_math: ctx.fast_math,
                 fp_contract_mode: ctx.fp_contract_mode,
                 app_metadata: ctx.app_metadata.clone(),
-                // Issue #100: namespace_entries empty unless this
-                // module is a dynamic-import target; the consumer-side
-                // dispatch map is empty unless this module performs
-                // dynamic imports.
+                // Namespace entries are emitted for modules whose namespace is
+                // observable: dynamic import targets, `import * as` targets,
+                // and `export * as` nested targets. The dynamic dispatch map is
+                // still limited to modules that actually perform dynamic imports.
                 namespace_entries: per_module_namespace_entries
                     .get(path)
                     .cloned()
@@ -4035,14 +4181,11 @@ pub fn run_with_parse_cache(
                 nextjs_path_init_modules,
                 deferred_module_prefixes,
                 module_init_deps,
-                // Issue #842: signal side-effect-only dynamic-import
-                // targets to codegen so it still emits
-                // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`
-                // is the authoritative set built from every consumer's
-                // `import.is_dynamic` resolved paths; `namespace_entries`
-                // alone is insufficient because it's empty when the
-                // target has no `export` statements.
-                is_dynamic_import_target: dyn_target_paths.contains(path),
+                // Issue #842 plus static namespace imports/re-exports: signal
+                // namespace-producing modules even when the entry list is empty.
+                // The field name is historical from dynamic import support, but
+                // the codegen behavior is "emit namespace global + populator".
+                is_dynamic_import_target: namespace_target_paths.contains(path),
                 // #5247: source-location tracking for the dynamic call-dispatch
                 // throw path. Gated by `--debug-symbols` so the default build is
                 // unchanged (no source read, no per-call emission). When on, read
