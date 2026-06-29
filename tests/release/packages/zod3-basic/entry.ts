@@ -99,6 +99,7 @@ print("strings", {
   ipv4: z.string().ip({ version: "v4" }).safeParse("127.0.0.1").success,
   ipv6: z.string().ip({ version: "v6" }).safeParse("::1").success,
   length: z.string().length(3).safeParse("abc").success,
+  nonempty: z.string().nonempty().safeParse("").success,
   timePrecision: z.string().time({ precision: 0 }).safeParse("03:04:05.123").success,
   includesPosition: z.string().includes("b", { position: 1 }).safeParse("abc").success,
   lowercase: z.string().toLowerCase().parse("ABC"),
@@ -166,7 +167,9 @@ print("objects", {
   passthrough: objectBase.passthrough().parse({ id: 1, name: "a", extra: true } as unknown),
   catchall: z.object({ id: z.number() }).catchall(z.string()).safeParse({ id: 1, extra: "ok" }).success,
   extend: objectBase.extend({ role: z.literal("admin") }).parse({ id: 1, name: "a", role: "admin" }),
+  augment: z.object({ id: z.number() }).augment({ name: z.string() }).parse({ id: 1, name: "a" }),
   merge: objectBase.merge(z.object({ role: z.string() })).parse({ id: 1, name: "a", role: "user" }),
+  strictMessage: z.object({ id: z.number() }).strict("no extras").safeParse({ id: 1, extra: true }).success,
   keyof: objectBase.keyof().parse("name"),
   shapeName: objectBase.shape.name.safeParse("a").success,
   pick: objectBase.pick({ id: true }).parse({ id: 1 }),
@@ -267,8 +270,11 @@ print("instances.dates", {
 
 const validatedFn = z.function().args(z.string()).returns(z.number()).implement((value) => value.trim().length);
 const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
+const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 print("function", {
   valid: validatedFn(" tuna "),
+  parameters: functionSchema.parameters().items.length,
+  returnType: functionSchema.returnType().safeParse(true).success,
   invalidArgs: (() => {
     try {
       (validatedFn as unknown as (value: number) => number)(1);
@@ -289,6 +295,8 @@ print("function", {
 
 const asyncSchema = z.string().refine(async (value) => value === "ok");
 const promisedNumber = await z.promise(z.number()).parse(Promise.resolve(5));
+const asyncParsed = await asyncSchema.parseAsync("ok");
+const spaResult = await z.string().spa("ok");
 const promisedFailure = await (async () => {
   try {
     await z.promise(z.number()).parse(Promise.resolve("bad"));
@@ -299,6 +307,8 @@ const promisedFailure = await (async () => {
 })();
 print("async", {
   refine: await asyncSchema.safeParseAsync("ok"),
+  parseAsync: asyncParsed,
+  spa: spaResult.success,
   promise: promisedNumber,
   promiseRejects: promisedFailure,
 });
