@@ -284,6 +284,8 @@ print("modifiers", {
   catchFunction: z.number().catch((ctx) => ctx.error.issues.length).parse("bad"),
   brand: z.string().brand<"FixtureId">().parse("id-1"),
   described: z.string().describe("fixture string").description,
+  describedObject: z.object({ id: z.number() }).describe("fixture object").description,
+  describedParse: z.string().describe("parse still works").parse("described"),
   optionalUnwrap: z.string().optional().unwrap().parse("wrapped"),
   nullableUnwrap: z.string().nullable().unwrap().parse("wrapped"),
   arrayElement: z.array(z.string()).element.parse("element"),
