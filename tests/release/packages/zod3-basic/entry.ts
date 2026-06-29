@@ -164,9 +164,13 @@ print("discriminatedUnion", [
   eventSchema.parse({ type: "text", value: "hello" }),
   eventSchema.parse({ type: "count", value: 3 }),
 ]);
+print("discriminatedUnion.options", eventSchema.options.length);
 
 const primitiveSchema = z.union([z.string().regex(/^id-/), z.number().int()]);
-print("union", [primitiveSchema.safeParse("id-42").success, primitiveSchema.safeParse(4.5).success]);
+print("union", {
+  results: [primitiveSchema.safeParse("id-42").success, primitiveSchema.safeParse(4.5).success],
+  options: primitiveSchema.options.length,
+});
 
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
 const nestedObject = z.object({ nested: z.object({ label: z.string() }) });
@@ -219,11 +223,17 @@ print("recursiveObjects", {
   mutual: postSchema.parse({ title: "post", author: { email: "a@example.com", posts: [] } }).author.email,
 });
 
+const arrayElementIssue = z.array(z.string()).safeParse([1]);
+const tupleLengthIssue = z.tuple([z.string()]).safeParse(["a", "b"]);
 print("arrays.tuples", {
   array: z.array(z.number()).min(2).max(3).parse([1, 2]),
+  transformedArray: z.array(z.string().transform((value) => value.length)).parse(["aa", "bbb"]),
   exactLength: z.array(z.string()).length(2).safeParse(["a", "b"]).success,
   nonempty: z.array(z.string()).nonempty().safeParse([]).success,
+  elementDescription: z.array(z.string().describe("array item")).element.description,
+  elementIssuePath: arrayElementIssue.success ? "ok" : arrayElementIssue.error.issues[0].path.join("."),
   tuple: z.tuple([z.string(), z.number()]).parse(["a", 1]),
+  tupleLengthIssue: tupleLengthIssue.success ? "ok" : tupleLengthIssue.error.issues[0].code,
   tupleRest: z.tuple([z.string()]).rest(z.number()).parse(["a", 1, 2]),
 });
 
@@ -326,9 +336,19 @@ class Box {
     this.value = value;
   }
 }
+const invalidBoxResult = z.instanceof(Box, { message: "not a box" }).safeParse({});
+const customDateSchema = z.date({
+  required_error: "required date",
+  invalid_type_error: "not a date",
+});
+const requiredDateResult = customDateSchema.safeParse(undefined);
+const invalidDateResult = customDateSchema.safeParse("nope");
 print("instances.dates", {
   instanceof: z.instanceof(Box).parse(new Box("ok")).value,
+  instanceMessage: invalidBoxResult.success ? "ok" : invalidBoxResult.error.issues[0].message,
   date: z.date().parse(new Date("2020-01-02T00:00:00.000Z")).toISOString(),
+  dateRequired: requiredDateResult.success ? "ok" : requiredDateResult.error.issues[0].message,
+  dateInvalid: invalidDateResult.success ? "ok" : invalidDateResult.error.issues[0].message,
   dateMin: z.date().min(new Date("2020-01-01T00:00:00.000Z")).safeParse(new Date("2020-01-02T00:00:00.000Z")).success,
   dateMax: z.date().max(new Date("2020-01-03T00:00:00.000Z")).safeParse(new Date("2020-01-04T00:00:00.000Z")).success,
 });
@@ -383,6 +403,14 @@ const promisedFailure = await (async () => {
     return true;
   }
 })();
+const rejectedReason = await (async () => {
+  try {
+    await z.promise(z.number()).parse(Promise.reject(new Error("promise boom")));
+    return "ok";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+})();
 print("async", {
   refine: await asyncSchema.safeParseAsync("ok"),
   parseAsync: asyncParsed,
@@ -390,6 +418,7 @@ print("async", {
   promise: promisedNumber,
   methodPromise: methodPromisedNumber,
   promiseRejects: promisedFailure,
+  rejectedReason,
 });
 
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
