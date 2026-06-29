@@ -139,6 +139,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_new_function_construct_apply",
                 &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
             );
+            // Write-back: when the callee is a statically-known user class,
+            // propagate constructor mutations (e.g. `++called`) back to the
+            // outer captured locals. The runtime construction path stores
+            // mutations to `inst.__perry_cap_*` but cannot reach the caller's
+            // outer alloca slots directly.
+            // Also handles `LocalGet(id)` where the local was assigned a
+            // ClassRef (e.g. `const ctor = C; new (ctor as any)(...args)`).
+            let class_name: Option<String> = match callee.as_ref() {
+                Expr::ClassRef(cn) => Some(cn.clone()),
+                Expr::LocalGet(id) => ctx
+                    .local_id_to_name
+                    .get(id)
+                    .and_then(|name| ctx.local_class_aliases.get(name))
+                    .cloned(),
+                _ => None,
+            };
+            if let Some(cn) = class_name {
+                if let Some(class) = ctx.classes.get(cn.as_str()).copied() {
+                    let bits = ctx.block().bitcast_double_to_i64(&result);
+                    let inst_handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle);
+                }
+            }
             Ok(result)
         }
 

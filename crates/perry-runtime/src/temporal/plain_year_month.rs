@@ -3,7 +3,9 @@
 //! A calendar year + month (e.g. a billing period), no day/time/timezone.
 
 use super::dispatch::{self, boolean, ok_or_throw, raw_arg, string, undefined};
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::PlainYearMonth;
 
@@ -47,7 +49,7 @@ pub fn construct(args: &[f64]) -> f64 {
 /// (read in spec order with `constrain` overflow). No recognized field, a
 /// Symbol, or any non-string primitive → TypeError.
 fn coerce_ym(v: f64) -> PlainYearMonth {
-    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref(v) {
+    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref_or_subclass(v) {
         return ym.clone();
     }
     let jv = JSValue::from_bits(v.to_bits());
@@ -81,7 +83,7 @@ pub fn from_static(args: &[f64]) -> f64 {
         let _ = super::options::overflow(opts);
         return wrap(ym);
     }
-    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref(item) {
+    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref_or_subclass(item) {
         let _ = super::options::overflow(opts);
         return wrap(ym.clone());
     }

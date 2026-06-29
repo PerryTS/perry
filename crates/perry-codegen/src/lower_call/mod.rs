@@ -34,6 +34,7 @@ use crate::expr::{variant_name, FnCtx};
 mod atomics;
 mod buffer_intrinsic;
 mod builtin;
+mod capture_writeback;
 mod closure_analysis;
 mod console_promise;
 mod early_branches;
@@ -103,8 +104,8 @@ pub(crate) use native::lower_native_method_call;
 // etc. keep resolving after the split.
 pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
 pub(crate) use new::{
-    bind_inline_constructor_params, lower_new, lower_new_member_captured,
-    restore_inline_constructor_scope, CaptureFill,
+    bind_inline_constructor_params, emit_class_capture_writeback, lower_new,
+    lower_new_member_captured, restore_inline_constructor_scope, CaptureFill,
 };
 // The derived-ctor no-super static-throw predicates (shared with the
 // standalone-ctor-symbol path in `codegen/method.rs`, which is the default

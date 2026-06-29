@@ -1,0 +1,82 @@
+//! Post-construction capture write-back.
+//!
+//! After a `new ClassName(args…)` or `Reflect.construct(…)` that inlines a
+//! constructor which may mutate captured outer locals, this module reads the
+//! updated value back from the instance's `__perry_cap_<id>` fields and stores
+//! it to the outer local's LLVM alloca slot so the mutation is visible to the
+//! caller.
+
+use crate::expr::FnCtx;
+use crate::nanbox::POINTER_MASK_I64;
+use crate::types::{DOUBLE, I32, I64};
+
+/// After construction of a class whose constructor may have mutated captured
+/// outer locals (via `++captured_var`, `captured_var = x`, etc.), read back
+/// each `__perry_cap_<id>` field from the freshly-constructed instance and
+/// store the updated value to the outer local's LLVM slot.
+///
+/// ECMAScript requires shared-binding semantics for captured variables: a
+/// class nested inside a function shares the SAME binding as the outer scope.
+/// Perry's capture mechanism passes the captured value as an extra constructor
+/// param (by value), so `++called` inside the constructor only updates the
+/// constructor-local copy. After construction completes, this helper reads the
+/// mutated value back from `this.__perry_cap_*` and writes it to the outer
+/// local's alloca slot, making the mutation visible to the caller.
+///
+/// `obj_handle` is the raw i64 object pointer (not nanboxed).
+pub(crate) fn emit_class_capture_writeback(
+    ctx: &mut FnCtx<'_>,
+    class: &perry_hir::Class,
+    obj_handle: &str,
+) {
+    // Cap params are synthesized in `synthesize_class_captures` as extra
+    // constructor params with name `__perry_cap_<outer_id>`. They are NOT in
+    // `class.fields` — they are PropertySet stmts on `this` in the ctor body.
+    // Iterate ctor params to find which outer locals were captured.
+    let Some(ctor) = class.constructor.as_ref() else {
+        return;
+    };
+    for param in &ctor.params {
+        let Some(id_str) = param.name.strip_prefix("__perry_cap_") else {
+            continue;
+        };
+        let Ok(outer_id) = id_str.parse::<u32>() else {
+            continue;
+        };
+        // Only write back to locals that are actually in scope (same-function
+        // construction). Cross-module construction has no accessible outer local.
+        let Some(outer_slot) = ctx.locals.get(&outer_id).cloned() else {
+            continue;
+        };
+        // Read the updated capture value from the instance field.
+        let field_name = &param.name;
+        let key_idx = ctx.strings.intern(field_name);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+        let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+        let key_handle = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+        let val = ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_by_name_f64",
+            &[(I64, obj_handle), (I64, &key_handle)],
+        );
+        // Store the updated value. Handle boxed locals (shared across multiple
+        // closures) via js_box_set; plain locals via a direct slot store.
+        if ctx.boxed_vars.contains(&outer_id) {
+            let box_dbl = ctx.block().load(DOUBLE, &outer_slot);
+            let box_ptr = ctx.block().bitcast_double_to_i64(&box_dbl);
+            ctx.block()
+                .call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &val)]);
+        } else {
+            ctx.block().store(DOUBLE, &val, &outer_slot);
+            // If this local also has an i32 fast-path slot (counter / integer
+            // local), keep it in sync. Use fptosi→i64→trunc→i32 to handle
+            // unsigned values safely (direct fptosi→i32 is UB above INT32_MAX).
+            if let Some(i32_slot) = ctx.i32_counter_slots.get(&outer_id).cloned() {
+                let v_i64 = ctx.block().fptosi(DOUBLE, &val, crate::types::I64);
+                let v_i32 = ctx.block().trunc(crate::types::I64, &v_i64, I32);
+                ctx.block().store(I32, &v_i32, &i32_slot);
+            }
+        }
+    }
+}

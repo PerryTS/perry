@@ -699,11 +699,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let t = lower_expr(ctx, target)?;
             let a = lower_expr(ctx, args)?;
             let nt = lower_expr(ctx, new_target)?;
-            Ok(ctx.block().call(
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_reflect_construct",
                 &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &nt)],
-            ))
+            );
+            // Write-back captured outer locals: when `target` is a
+            // statically-known user class, the constructor body stores
+            // mutations to `this.__perry_cap_*` but can't reach the
+            // caller's outer alloca slots. Read the fields back here
+            // (e.g. `++called` in a subclass constructor is visible
+            // after `Reflect.construct(Sub, args)` returns).
+            let class_name: Option<String> = match target.as_ref() {
+                Expr::ClassRef(cn) => Some(cn.clone()),
+                Expr::LocalGet(id) => ctx
+                    .local_id_to_name
+                    .get(id)
+                    .and_then(|name| ctx.local_class_aliases.get(name))
+                    .cloned(),
+                _ => None,
+            };
+            if let Some(cn) = class_name {
+                if let Some(class) = ctx.classes.get(cn.as_str()).copied() {
+                    let bits = ctx.block().bitcast_double_to_i64(&result);
+                    let inst_handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle);
+                }
+            }
+            Ok(result)
         }
         Expr::ReflectDefineProperty {
             target,

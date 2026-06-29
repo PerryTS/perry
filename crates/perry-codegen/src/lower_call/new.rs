@@ -503,6 +503,8 @@ fn emit_typed_shape_layout_init(ctx: &mut FnCtx<'_>, class_name: &str, obj_handl
     );
 }
 
+pub(crate) use super::capture_writeback::emit_class_capture_writeback;
+
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
 /// Strategy: allocate an anonymous object via `js_object_alloc(0, N)`
@@ -1226,6 +1228,13 @@ fn lower_new_impl(
             // The inline-ctor path does this at its tail (below); this
             // standalone-symbol path returns here, so it must do it too.
             emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
+            // Write-back: propagate constructor mutations to outer captured locals.
+            // The standalone constructor symbol receives captured values by value
+            // and stores mutations to `this.__perry_cap_*` fields, but never
+            // updates the outer local's alloca slot. Read the fields back here so
+            // the enclosing scope sees the updated values (e.g. `++called` in a
+            // subclass constructor is visible after `new SubClass(...)` returns).
+            emit_class_capture_writeback(ctx, class, &obj_handle);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
