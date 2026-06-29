@@ -82,7 +82,9 @@ mod walk;
 mod tests;
 
 pub use call_sites::{rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_with_local_pass};
-pub use detect::{analyze_producer, body_has_closure, detect_producers, stmt_contains_return};
+pub use detect::{
+    analyze_producer, body_has_closure, body_has_super_ref, detect_producers, stmt_contains_return,
+};
 pub use out_usage::OutUsageAnalyzer;
 pub use producer_rewrite::{rewrite_producer_body, SubstituteLocal};
 pub use scan::{scan_funcref_misuses, scan_producers_used_in_closures, scan_unsafe_call_sites};
@@ -186,46 +188,65 @@ pub fn run(module: &mut Module) {
     // but here the call sites are ordinary statement bodies we can rewrite
     // rather than bail on). Producers are only ever free functions
     // (`analyze_producer` runs on `module.functions`), so no skip is needed.
+    //
+    // Exception: skip member bodies that contain super references. Super
+    // property reads resolve their [[HomeObject]] through runtime context
+    // that can be disrupted by injecting new locals (the `let v = []`
+    // temp that the rewrite inserts) before the super expression. The
+    // fourth detection pass already excludes producers whose only call
+    // sites live in super-containing bodies, so this guard is defence in
+    // depth — it ensures Phase 3 never touches those bodies even if the
+    // detection pass misses an edge case. Refs #5780.
     for class in &mut module.classes {
         if let Some(ctor) = &mut class.constructor {
-            rewrite_call_sites_in_stmts(
-                &mut ctor.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super_ref(&ctor.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut ctor.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for method in &mut class.methods {
-            rewrite_call_sites_in_stmts(
-                &mut method.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super_ref(&method.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut method.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for (_, getter) in &mut class.getters {
-            rewrite_call_sites_in_stmts(
-                &mut getter.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super_ref(&getter.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut getter.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for (_, setter) in &mut class.setters {
-            rewrite_call_sites_in_stmts(
-                &mut setter.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super_ref(&setter.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut setter.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for method in &mut class.static_methods {
-            rewrite_call_sites_in_stmts(
-                &mut method.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super_ref(&method.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut method.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
     }
 }

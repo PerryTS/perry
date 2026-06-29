@@ -397,6 +397,110 @@ fn deforests_producer_called_from_class_method() {
     );
 }
 
+#[test]
+fn rejects_producer_called_from_super_containing_method() {
+    // Refs #5780. A producer called from a class method that ALSO
+    // contains a super reference must NOT be deforested: Phase 3 skips
+    // super-containing method bodies (to avoid disturbing [[HomeObject]]
+    // context), so rewriting the producer's signature (adding the +1
+    // out-param) while leaving the call site with original arity would
+    // miscompile — same class as the in-closure bail (#5136).
+    //
+    //   function helper() { const out = []; out.push(1); return out; }
+    //   class C extends Base {
+    //     m() {
+    //       const data = helper();   // ← call site in super-containing body
+    //       return super.count + data.length;
+    //     }
+    //   }
+    let helper = make_simple_producer(); // id=1, the producer
+
+    let method = Function {
+        id: 2,
+        name: "m".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 30,
+                name: "data".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+            },
+            // return super.count + data.length  (super ref present)
+            Stmt::Return(Some(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::SuperPropertyGet {
+                    property: "count".to_string(),
+                }),
+                right: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+
+    let class = perry_hir::Class {
+        id: 10,
+        name: "C".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: Vec::new(),
+        constructor: None,
+        methods: vec![method],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        is_nested: false,
+        aliases: Vec::new(),
+    };
+
+    let mut module = Module::new("m");
+    module.functions = vec![helper];
+    module.classes = vec![class];
+
+    // Detection must drop the producer: its only call site is in a
+    // super-containing method body, and Phase 3 will skip that body.
+    assert!(
+        detect_producers(&module).is_empty(),
+        "producer called from a super-containing method must not be deforested"
+    );
+
+    // And `run` must leave the producer's signature untouched.
+    run(&mut module);
+    let helper_after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert!(
+        helper_after.params.is_empty(),
+        "producer signature must be unchanged when called from a super-containing method"
+    );
+}
+
 fn make_simple_producer() -> Function {
     Function {
         id: 1,

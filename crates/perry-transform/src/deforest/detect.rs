@@ -92,6 +92,14 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
     // inside a closure would have its signature rewritten while the
     // in-closure call site kept the original arity — a mismatch that
     // miscompiles to a SIGSEGV. Refs #5136.
+    //
+    // Additionally, bail on any candidate called from a class member
+    // body that contains a super reference. Phase 3 skips those bodies
+    // (the `body_has_super_ref` guard in mod.rs) to avoid disturbing the
+    // [[HomeObject]] context. If the producer were still deforested, its
+    // call site in the super-containing body would keep the original
+    // arity while the producer gained the +1 out-param — same
+    // arity-mismatch class as the in-closure bail. Refs #5780.
     let mut in_closure: HashSet<FuncId> = HashSet::new();
     for func in &module.functions {
         scan_producers_used_in_closures(&func.body, &candidates, &mut in_closure);
@@ -99,19 +107,39 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
     scan_producers_used_in_closures(&module.init, &candidates, &mut in_closure);
     for class in &module.classes {
         for m in &class.methods {
-            scan_producers_used_in_closures(&m.body, &candidates, &mut in_closure);
+            if body_has_super_ref(&m.body) {
+                scan_candidate_funcrefs_in_stmts(&m.body, &candidates, &mut in_closure);
+            } else {
+                scan_producers_used_in_closures(&m.body, &candidates, &mut in_closure);
+            }
         }
         if let Some(ctor) = &class.constructor {
-            scan_producers_used_in_closures(&ctor.body, &candidates, &mut in_closure);
+            if body_has_super_ref(&ctor.body) {
+                scan_candidate_funcrefs_in_stmts(&ctor.body, &candidates, &mut in_closure);
+            } else {
+                scan_producers_used_in_closures(&ctor.body, &candidates, &mut in_closure);
+            }
         }
         for (_, getter) in &class.getters {
-            scan_producers_used_in_closures(&getter.body, &candidates, &mut in_closure);
+            if body_has_super_ref(&getter.body) {
+                scan_candidate_funcrefs_in_stmts(&getter.body, &candidates, &mut in_closure);
+            } else {
+                scan_producers_used_in_closures(&getter.body, &candidates, &mut in_closure);
+            }
         }
         for (_, setter) in &class.setters {
-            scan_producers_used_in_closures(&setter.body, &candidates, &mut in_closure);
+            if body_has_super_ref(&setter.body) {
+                scan_candidate_funcrefs_in_stmts(&setter.body, &candidates, &mut in_closure);
+            } else {
+                scan_producers_used_in_closures(&setter.body, &candidates, &mut in_closure);
+            }
         }
         for m in &class.static_methods {
-            scan_producers_used_in_closures(&m.body, &candidates, &mut in_closure);
+            if body_has_super_ref(&m.body) {
+                scan_candidate_funcrefs_in_stmts(&m.body, &candidates, &mut in_closure);
+            } else {
+                scan_producers_used_in_closures(&m.body, &candidates, &mut in_closure);
+            }
         }
     }
     candidates.retain(|id, _| !in_closure.contains(id));
@@ -377,4 +405,207 @@ pub fn stmt_contains_return(stmt: &Stmt) -> bool {
         Stmt::Labeled { body, .. } => stmt_contains_return(body),
         _ => false,
     }
+}
+
+/// Returns true if any expression anywhere in `stmts` (or nested stmts)
+/// is a super reference variant. Used to gate deforestation and Phase 3
+/// call-site rewriting on class member bodies — rewriting those bodies
+/// can disturb the [[HomeObject]] context that super reads rely on
+/// (issue #5780).
+pub fn body_has_super_ref(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_has_super_ref)
+}
+
+fn stmt_has_super_ref(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(|e| expr_has_super_ref(e)),
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_has_super_ref(e),
+        Stmt::Return(opt) => opt.as_ref().is_some_and(|e| expr_has_super_ref(e)),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_has_super_ref(condition)
+                || body_has_super_ref(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|eb| body_has_super_ref(eb))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_has_super_ref(condition) || body_has_super_ref(body)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|i| stmt_has_super_ref(i))
+                || condition.as_ref().is_some_and(|e| expr_has_super_ref(e))
+                || update.as_ref().is_some_and(|e| expr_has_super_ref(e))
+                || body_has_super_ref(body)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body_has_super_ref(body)
+                || catch.as_ref().is_some_and(|c| body_has_super_ref(&c.body))
+                || finally.as_ref().is_some_and(|f| body_has_super_ref(f))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_has_super_ref(discriminant)
+                || cases.iter().any(|c| {
+                    c.test.as_ref().is_some_and(|e| expr_has_super_ref(e))
+                        || body_has_super_ref(&c.body)
+                })
+        }
+        Stmt::Labeled { body, .. } => stmt_has_super_ref(body),
+        _ => false,
+    }
+}
+
+fn expr_has_super_ref(e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::SuperCall(_)
+            | Expr::SuperCallSpread(_)
+            | Expr::SuperMethodCall { .. }
+            | Expr::SuperMethodCallSpread { .. }
+            | Expr::SuperPropertyGet { .. }
+            | Expr::SuperPropertySet { .. }
+            | Expr::ObjectSuperPropertyGet { .. }
+            | Expr::ObjectSuperPropertySet { .. }
+            | Expr::ObjectSuperMethodCall { .. }
+    ) {
+        return true;
+    }
+    let mut found = false;
+    walk_expr_children(e, &mut |child| {
+        if !found {
+            found = expr_has_super_ref(child);
+        }
+    });
+    found
+}
+
+/// Marks every `FuncRef(id)` that appears anywhere in `stmts` —
+/// including inside closure bodies and all control-flow branches —
+/// as excluded from deforestation. Used in the fourth detection pass
+/// for class member bodies that contain super references: since Phase 3
+/// skips those bodies, any producer called there would gain the +1
+/// out-param while its call site kept the original arity (the same
+/// arity-mismatch miscompile as the in-closure case, #5780).
+fn scan_candidate_funcrefs_in_stmts(
+    stmts: &[Stmt],
+    candidates: &HashMap<FuncId, ProducerInfo>,
+    out: &mut HashSet<FuncId>,
+) {
+    for s in stmts {
+        scan_candidate_funcrefs_in_stmt(s, candidates, out);
+    }
+}
+
+fn scan_candidate_funcrefs_in_stmt(
+    stmt: &Stmt,
+    candidates: &HashMap<FuncId, ProducerInfo>,
+    out: &mut HashSet<FuncId>,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                scan_candidate_funcrefs_in_expr(e, candidates, out);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => scan_candidate_funcrefs_in_expr(e, candidates, out),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                scan_candidate_funcrefs_in_expr(e, candidates, out);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scan_candidate_funcrefs_in_expr(condition, candidates, out);
+            scan_candidate_funcrefs_in_stmts(then_branch, candidates, out);
+            if let Some(eb) = else_branch {
+                scan_candidate_funcrefs_in_stmts(eb, candidates, out);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            scan_candidate_funcrefs_in_expr(condition, candidates, out);
+            scan_candidate_funcrefs_in_stmts(body, candidates, out);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                scan_candidate_funcrefs_in_stmt(i, candidates, out);
+            }
+            if let Some(c) = condition {
+                scan_candidate_funcrefs_in_expr(c, candidates, out);
+            }
+            if let Some(u) = update {
+                scan_candidate_funcrefs_in_expr(u, candidates, out);
+            }
+            scan_candidate_funcrefs_in_stmts(body, candidates, out);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            scan_candidate_funcrefs_in_stmts(body, candidates, out);
+            if let Some(c) = catch {
+                scan_candidate_funcrefs_in_stmts(&c.body, candidates, out);
+            }
+            if let Some(f) = finally {
+                scan_candidate_funcrefs_in_stmts(f, candidates, out);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            scan_candidate_funcrefs_in_expr(discriminant, candidates, out);
+            for c in cases {
+                if let Some(t) = &c.test {
+                    scan_candidate_funcrefs_in_expr(t, candidates, out);
+                }
+                scan_candidate_funcrefs_in_stmts(&c.body, candidates, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => scan_candidate_funcrefs_in_stmt(body, candidates, out),
+        _ => {}
+    }
+}
+
+fn scan_candidate_funcrefs_in_expr(
+    e: &Expr,
+    candidates: &HashMap<FuncId, ProducerInfo>,
+    out: &mut HashSet<FuncId>,
+) {
+    if let Expr::FuncRef(id) = e {
+        if candidates.contains_key(id) {
+            out.insert(*id);
+        }
+    }
+    // walk_expr_children only visits closure param defaults, not bodies;
+    // recurse explicitly so nested closures are covered too.
+    if let Expr::Closure { body, .. } = e {
+        scan_candidate_funcrefs_in_stmts(body, candidates, out);
+    }
+    walk_expr_children(e, &mut |child| {
+        scan_candidate_funcrefs_in_expr(child, candidates, out)
+    });
 }
