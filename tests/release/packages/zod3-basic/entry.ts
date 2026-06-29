@@ -395,6 +395,20 @@ print("function", {
 });
 
 const asyncSchema = z.string().refine(async (value) => value === "ok");
+const asyncTransformSchema = z.string().transform(async (value) => value.trim().length);
+const asyncPipeSchema = z
+  .string()
+  .transform(async (value) => value.length)
+  .pipe(z.number().min(2));
+const asyncSuperRefineSchema = z.string().superRefine(async (value, ctx) => {
+  if (value !== "ok") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "bad async" });
+  }
+});
+const asyncPreprocessSchema = z.preprocess(
+  async (value) => (typeof value === "string" ? value.trim() : value),
+  z.string().min(2),
+);
 const promisedNumber = await z.promise(z.number()).parse(Promise.resolve(5));
 const methodPromisedNumber = await z.number().promise().parse(Promise.resolve(3));
 const asyncParsed = await asyncSchema.parseAsync("ok");
@@ -423,6 +437,18 @@ print("async", {
   methodPromise: methodPromisedNumber,
   promiseRejects: promisedFailure,
   rejectedReason,
+});
+const asyncSuperRefineResult = await asyncSuperRefineSchema.safeParseAsync("bad");
+const asyncRefineMessageResult = await z
+  .string()
+  .refine(async (value) => value === "ok", { message: "not ok" })
+  .safeParseAsync("bad");
+print("asyncEffects", {
+  transform: await asyncTransformSchema.parseAsync(" tuna "),
+  pipe: await asyncPipeSchema.safeParseAsync("abc"),
+  superRefineMessage: asyncSuperRefineResult.success ? "ok" : asyncSuperRefineResult.error.issues[0].message,
+  refineMessage: asyncRefineMessageResult.success ? "ok" : asyncRefineMessageResult.error.issues[0].message,
+  preprocess: await asyncPreprocessSchema.parseAsync(" ok "),
 });
 
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
