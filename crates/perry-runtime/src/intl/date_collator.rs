@@ -388,45 +388,49 @@ fn format_components(
     let has_time = hour_opt.is_some() || minute_opt.is_some() || second_opt.is_some();
 
     let date_part = if has_date {
+        let has_m = month_opt.is_some();
+        let has_d = day_opt.is_some();
+        let has_y = year_opt.is_some();
         let fmt_month = match month_opt {
             Some("long") => MONTH_FULL[month.saturating_sub(1).min(11) as usize].to_string(),
             Some("short") | Some("narrow") => {
                 MONTH_ABBR[month.saturating_sub(1).min(11) as usize].to_string()
             }
             Some("2-digit") => format!("{:02}", month),
-            _ => month.to_string(),
+            Some(_) => month.to_string(), // "numeric" or unrecognised
+            None => String::new(),        // absent — do NOT leak the raw month
         };
         let fmt_day = match day_opt {
             Some("2-digit") => format!("{:02}", day),
-            _ if day_opt.is_some() => day.to_string(),
-            _ => String::new(),
+            Some(_) => day.to_string(),
+            None => String::new(),
         };
         let fmt_year = match year_opt {
             Some("2-digit") => format!("{:02}", year.rem_euclid(100)),
-            _ if year_opt.is_some() => year.to_string(),
-            _ => String::new(),
+            Some(_) => year.to_string(),
+            None => String::new(),
         };
-        // Use named-month format for long/short/narrow, numeric M/D/YYYY otherwise.
+        // Named-month styles (long/short/narrow) use word-first layout.
+        // Numeric styles assemble the present fields with "/" separators —
+        // only fields whose option is Some appear in the output.
         match month_opt {
-            Some("long") | Some("short") | Some("narrow") => {
-                let has_y = year_opt.is_some();
-                let has_d = day_opt.is_some();
-                Some(match (has_d, has_y) {
-                    (true, true) => format!("{} {}, {}", fmt_month, fmt_day, fmt_year),
-                    (true, false) => format!("{} {}", fmt_month, fmt_day),
-                    (false, true) => format!("{} {}", fmt_month, fmt_year),
-                    (false, false) => fmt_month,
-                })
-            }
+            Some("long") | Some("short") | Some("narrow") => Some(match (has_d, has_y) {
+                (true, true) => format!("{} {}, {}", fmt_month, fmt_day, fmt_year),
+                (true, false) => format!("{} {}", fmt_month, fmt_day),
+                (false, true) => format!("{} {}", fmt_month, fmt_year),
+                (false, false) => fmt_month,
+            }),
             _ => {
-                let has_y = year_opt.is_some();
-                let has_d = day_opt.is_some();
-                Some(match (has_d, has_y) {
-                    (true, true) => format!("{}/{}/{}", fmt_month, fmt_day, fmt_year),
-                    (true, false) => format!("{}/{}", fmt_month, fmt_day),
-                    (false, true) => format!("{}/{}", fmt_month, fmt_year),
-                    (false, false) => fmt_month,
-                })
+                // Build "M/D/YYYY" using only the fields that are present.
+                let parts: Vec<&str> = [
+                    if has_m { fmt_month.as_str() } else { "" },
+                    if has_d { fmt_day.as_str() } else { "" },
+                    if has_y { fmt_year.as_str() } else { "" },
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+                Some(parts.join("/"))
             }
         }
     } else {
@@ -652,59 +656,46 @@ pub(crate) fn temporal_locale_string(
                 second_opt.as_deref(),
             )
         } else {
-            // No options given — apply spec defaults for this Temporal type.
+            // No options given — apply ECMA-402 defaults for this Temporal
+            // type.  The spec says `toLocaleString(locales, options)` is
+            // equivalent to `new Intl.DateTimeFormat(locales, options).format(this)`.
+            // With `options = undefined`, DTF always resolves to
+            // `{ year: "numeric", month: "numeric", day: "numeric" }`.
+            // Each Temporal type maps its fields to an epoch-ms value for
+            // formatting; the date components of that value are what the DTF
+            // defaults select.  Type-specific component overrides (e.g.
+            // time for PlainTime) only apply when the user explicitly passes
+            // options — not as defaults.
+            //
+            // ZonedDateTime is the sole exception: its toLocaleString spec
+            // mandates that the output includes both date and time components
+            // when no options are given (analogous to how ZDT carries a
+            // timezone that no ordinary DTF object can represent).
             match ctx {
-                TemporalLocaleCtx::PlainDate => (
-                    None,
-                    None,
-                    Some("numeric"),
-                    Some("numeric"),
-                    Some("numeric"),
-                    None,
-                    None,
-                    None,
-                ),
-                TemporalLocaleCtx::PlainDateTime
+                TemporalLocaleCtx::PlainDate
+                | TemporalLocaleCtx::PlainDateTime
                 | TemporalLocaleCtx::Instant
-                | TemporalLocaleCtx::ZonedDateTime => (
+                | TemporalLocaleCtx::PlainTime
+                | TemporalLocaleCtx::PlainYearMonth
+                | TemporalLocaleCtx::PlainMonthDay => (
                     None,
                     None,
                     Some("numeric"),
                     Some("numeric"),
                     Some("numeric"),
-                    Some("numeric"),
-                    Some("2-digit"),
-                    Some("2-digit"),
-                ),
-                TemporalLocaleCtx::PlainTime => (
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some("numeric"),
-                    Some("2-digit"),
-                    Some("2-digit"),
-                ),
-                TemporalLocaleCtx::PlainYearMonth => (
-                    None,
-                    None,
-                    Some("numeric"),
-                    Some("numeric"),
-                    None,
                     None,
                     None,
                     None,
                 ),
-                TemporalLocaleCtx::PlainMonthDay => (
-                    None,
+                TemporalLocaleCtx::ZonedDateTime => (
                     None,
                     None,
                     Some("numeric"),
                     Some("numeric"),
-                    None,
-                    None,
-                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    Some("2-digit"),
+                    Some("2-digit"),
                 ),
             }
         };
