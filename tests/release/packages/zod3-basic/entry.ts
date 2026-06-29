@@ -95,6 +95,8 @@ print("strings", {
   url: z.string().url().safeParse("https://example.com/a?b=1").success,
   datetime: z.string().datetime().safeParse("2020-01-02T03:04:05.000Z").success,
   datetimeOffset: z.string().datetime({ offset: true }).safeParse("2020-01-02T03:04:05+02:00").success,
+  datetimePrecision: z.string().datetime({ precision: 3 }).safeParse("2020-01-02T03:04:05.123Z").success,
+  datetimeLocal: z.string().datetime({ local: true }).safeParse("2020-01-02T03:04:05").success,
   ip: z.string().ip().safeParse("127.0.0.1").success,
   ipv4: z.string().ip({ version: "v4" }).safeParse("127.0.0.1").success,
   ipv6: z.string().ip({ version: "v6" }).safeParse("::1").success,
@@ -102,6 +104,7 @@ print("strings", {
   nonempty: z.string().nonempty().safeParse("").success,
   timePrecision: z.string().time({ precision: 0 }).safeParse("03:04:05.123").success,
   includesPosition: z.string().includes("b", { position: 1 }).safeParse("abc").success,
+  includesPositionFail: z.string().includes("b", { position: 2 }).safeParse("abc").success,
   lowercase: z.string().toLowerCase().parse("ABC"),
   cuid: z.string().cuid().safeParse("ckj8lp2e90000v4j5x6j8s9abc").success,
   cuid2: z.string().cuid2().safeParse("tz4a98xxat96iws9zmbrgj3a").success,
@@ -116,6 +119,8 @@ print("strings", {
   duration: z.string().duration().safeParse("P1Y2M3DT4H5M6S").success,
   cidr: z.string().cidr().safeParse("192.168.0.0/24").success,
   cidrv4: z.string().cidr({ version: "v4" }).safeParse("192.168.0.0/24").success,
+  cidrv6: z.string().cidr({ version: "v6" }).safeParse("2001:db8::/32").success,
+  regexFail: z.string().regex(/^[a-z]+$/).safeParse("abc1").success,
 });
 
 print("numbers", {
