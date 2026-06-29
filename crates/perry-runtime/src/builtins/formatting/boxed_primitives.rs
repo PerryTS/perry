@@ -222,7 +222,9 @@ pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
         CLASS_ID_BOXED_STRING => {
             // ToString(wrapper): honours a custom `toString` on the instance.
             let s_ptr = crate::value::js_jsvalue_to_string(value);
-            Some(f64::from_bits(crate::value::JSValue::string_ptr(s_ptr).bits()))
+            Some(f64::from_bits(
+                crate::value::JSValue::string_ptr(s_ptr).bits(),
+            ))
         }
         _ => None,
     }
