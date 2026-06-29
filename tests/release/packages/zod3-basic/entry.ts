@@ -207,8 +207,10 @@ print("composition", {
   intersection: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
   or: z.string().or(z.number()).parse(5),
   and: z.object({ a: z.string() }).and(z.object({ b: z.boolean() })).parse({ a: "x", b: true }),
+  strictObject: z.strictObject({ id: z.number() }).safeParse({ id: 1, extra: true }).success,
   schemaArray: z.string().array().parse(["a", "b"]),
   schemaOr: z.literal("a").or(z.literal("b")).parse("b"),
+  pipelineFactory: z.pipeline(z.string().transform((value) => value.length), z.number().min(2)).safeParse("abc").success,
 });
 
 const csvSchema = z
@@ -240,6 +242,7 @@ print("modifiers", {
   nullish: z.string().nullish().parse(undefined) === undefined,
   default: z.string().default("fallback").parse(undefined),
   catch: z.number().catch(9).parse("bad"),
+  catchFunction: z.number().catch((ctx) => ctx.error.issues.length).parse("bad"),
   brand: z.string().brand<"FixtureId">().parse("id-1"),
   described: z.string().describe("fixture string").description,
   optionalUnwrap: z.string().optional().unwrap().parse("wrapped"),
@@ -295,6 +298,7 @@ print("function", {
 
 const asyncSchema = z.string().refine(async (value) => value === "ok");
 const promisedNumber = await z.promise(z.number()).parse(Promise.resolve(5));
+const methodPromisedNumber = await z.number().promise().parse(Promise.resolve(3));
 const asyncParsed = await asyncSchema.parseAsync("ok");
 const spaResult = await z.string().spa("ok");
 const promisedFailure = await (async () => {
@@ -310,6 +314,7 @@ print("async", {
   parseAsync: asyncParsed,
   spa: spaResult.success,
   promise: promisedNumber,
+  methodPromise: methodPromisedNumber,
   promiseRejects: promisedFailure,
 });
 
@@ -331,4 +336,12 @@ print("standard", {
   version: objectBase["~standard"].version,
   ok: "value" in standardOk ? standardOk.value : null,
   badIssues: "issues" in standardBad ? standardBad.issues?.length : 0,
+});
+
+const originalErrorMap = z.getErrorMap();
+z.setErrorMap((issue) => ({ message: `mapped:${issue.code}` }));
+const mappedError = z.string().safeParse(1);
+z.setErrorMap(originalErrorMap);
+print("errorMap", {
+  mapped: mappedError.success ? "ok" : mappedError.error.issues[0].message,
 });
