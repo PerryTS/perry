@@ -397,6 +397,187 @@ fn deforests_producer_called_from_class_method() {
     );
 }
 
+#[test]
+fn rejects_deforest_when_class_method_uses_super() {
+    // Regression for #5780 cluster A / #5772. A producer called from a
+    // class method that also uses `super.prop` must NOT be deforested —
+    // the call-site rewrite introduces synthetic locals that corrupt the
+    // method's [[HomeObject]] setup, causing `super.x` to throw at
+    // runtime ("Cannot convert undefined or null to object").
+    //
+    //   function helper() { const out = []; out.push(1); return out; }
+    //   class C extends Base {
+    //     m() { const v = helper(); return super.foo; }
+    //   }
+    let helper = make_simple_producer(); // id=1, the producer
+
+    let method_with_super = Function {
+        id: 2,
+        name: "m".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Any,
+        body: vec![
+            // const v = helper();
+            Stmt::Let {
+                id: 30,
+                name: "v".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+            },
+            // return super.foo;
+            Stmt::Return(Some(Expr::SuperPropertyGet {
+                property: "foo".to_string(),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+
+    let class = perry_hir::Class {
+        id: 10,
+        name: "C".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: Vec::new(),
+        constructor: None,
+        methods: vec![method_with_super],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        is_nested: false,
+        aliases: Vec::new(),
+    };
+
+    let mut module = Module::new("m");
+    module.functions = vec![helper];
+    module.classes = vec![class];
+
+    // Detection must exclude the producer — the super-using body makes
+    // it unsafe to deforest.
+    assert!(
+        detect_producers(&module).is_empty(),
+        "producer called from a super-using method must not be deforested (#5780)"
+    );
+
+    // run() must leave the producer's signature untouched.
+    run(&mut module);
+    let helper_after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert!(
+        helper_after.params.is_empty(),
+        "producer signature must be unchanged when its call site is in a super-using method"
+    );
+}
+
+#[test]
+fn still_deforests_when_method_has_no_super() {
+    // Control for `rejects_deforest_when_class_method_uses_super`: the
+    // SAME producer called from a class method that does NOT use super
+    // is still deforested (the existing #5772 fix must not regress).
+    //
+    // This is the same scenario as `deforests_producer_called_from_class_method`
+    // but added here for symmetry with the super test above.
+    let helper = make_simple_producer(); // id=1
+
+    let plain_method = Function {
+        id: 2,
+        name: "m".to_string(),
+        type_params: vec![],
+        params: vec![],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: 30,
+                name: "v".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(30)),
+                property: "length".to_string(),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+
+    let class = perry_hir::Class {
+        id: 10,
+        name: "C".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: Vec::new(),
+        constructor: None,
+        methods: vec![plain_method],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        is_nested: false,
+        aliases: Vec::new(),
+    };
+
+    let mut module = Module::new("m");
+    module.functions = vec![helper];
+    module.classes = vec![class];
+
+    assert!(
+        !detect_producers(&module).is_empty(),
+        "producer with a super-free class-method caller should still deforest"
+    );
+
+    run(&mut module);
+    let helper_after = module.functions.iter().find(|f| f.id == 1).unwrap();
+    assert_eq!(
+        helper_after.params.len(),
+        1,
+        "producer should gain the synthetic accumulator param"
+    );
+}
+
 fn make_simple_producer() -> Function {
     Function {
         id: 1,

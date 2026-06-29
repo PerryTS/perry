@@ -82,7 +82,9 @@ mod walk;
 mod tests;
 
 pub use call_sites::{rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_with_local_pass};
-pub use detect::{analyze_producer, body_has_closure, detect_producers, stmt_contains_return};
+pub use detect::{
+    analyze_producer, body_has_closure, body_has_super, detect_producers, stmt_contains_return,
+};
 pub use out_usage::OutUsageAnalyzer;
 pub use producer_rewrite::{rewrite_producer_body, SubstituteLocal};
 pub use scan::{scan_funcref_misuses, scan_producers_used_in_closures, scan_unsafe_call_sites};
@@ -188,44 +190,59 @@ pub fn run(module: &mut Module) {
     // (`analyze_producer` runs on `module.functions`), so no skip is needed.
     for class in &mut module.classes {
         if let Some(ctor) = &mut class.constructor {
-            rewrite_call_sites_in_stmts(
-                &mut ctor.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            // Super-using bodies are excluded from deforestation by the
+            // detect phase (their producer calls are marked as unsafe
+            // call sites so no producer is admitted for them). Guard
+            // here too so the rewrite is a guaranteed no-op for those
+            // bodies and can never inadvertently corrupt [[HomeObject]].
+            if !body_has_super(&ctor.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut ctor.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for method in &mut class.methods {
-            rewrite_call_sites_in_stmts(
-                &mut method.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super(&method.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut method.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for (_, getter) in &mut class.getters {
-            rewrite_call_sites_in_stmts(
-                &mut getter.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super(&getter.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut getter.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for (_, setter) in &mut class.setters {
-            rewrite_call_sites_in_stmts(
-                &mut setter.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super(&setter.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut setter.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
         for method in &mut class.static_methods {
-            rewrite_call_sites_in_stmts(
-                &mut method.body,
-                &producers,
-                &out_param_ids,
-                &mut next_local,
-            );
+            if !body_has_super(&method.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut method.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
         }
     }
 }

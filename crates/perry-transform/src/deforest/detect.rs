@@ -67,19 +67,46 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
     scan_unsafe_call_sites(&module.init, &candidates, &mut unsupported_call);
     for class in &module.classes {
         for m in &class.methods {
-            scan_unsafe_call_sites(&m.body, &candidates, &mut unsupported_call);
+            // A member body that references `super` can't have its
+            // producer call sites rewritten — the deforest rewrite
+            // introduces synthetic locals that corrupt [[HomeObject]]
+            // setup, breaking `super.x` / `super[e]` / `super(...)`.
+            // Treat any producer called from such a body as an unsafe
+            // call site to exclude it from deforestation entirely.
+            // Refs #5780 cluster A / #5772.
+            if body_has_super(&m.body) {
+                flag_producer_calls_in_super_body(&m.body, &candidates, &mut unsupported_call);
+            } else {
+                scan_unsafe_call_sites(&m.body, &candidates, &mut unsupported_call);
+            }
         }
         if let Some(ctor) = &class.constructor {
-            scan_unsafe_call_sites(&ctor.body, &candidates, &mut unsupported_call);
+            if body_has_super(&ctor.body) {
+                flag_producer_calls_in_super_body(&ctor.body, &candidates, &mut unsupported_call);
+            } else {
+                scan_unsafe_call_sites(&ctor.body, &candidates, &mut unsupported_call);
+            }
         }
         for (_, getter) in &class.getters {
-            scan_unsafe_call_sites(&getter.body, &candidates, &mut unsupported_call);
+            if body_has_super(&getter.body) {
+                flag_producer_calls_in_super_body(&getter.body, &candidates, &mut unsupported_call);
+            } else {
+                scan_unsafe_call_sites(&getter.body, &candidates, &mut unsupported_call);
+            }
         }
         for (_, setter) in &class.setters {
-            scan_unsafe_call_sites(&setter.body, &candidates, &mut unsupported_call);
+            if body_has_super(&setter.body) {
+                flag_producer_calls_in_super_body(&setter.body, &candidates, &mut unsupported_call);
+            } else {
+                scan_unsafe_call_sites(&setter.body, &candidates, &mut unsupported_call);
+            }
         }
         for m in &class.static_methods {
-            scan_unsafe_call_sites(&m.body, &candidates, &mut unsupported_call);
+            if body_has_super(&m.body) {
+                flag_producer_calls_in_super_body(&m.body, &candidates, &mut unsupported_call);
+            } else {
+                scan_unsafe_call_sites(&m.body, &candidates, &mut unsupported_call);
+            }
         }
     }
     candidates.retain(|id, _| !unsupported_call.contains(id));
@@ -331,6 +358,206 @@ fn expr_has_closure(e: &Expr) -> bool {
         }
     });
     found
+}
+
+/// Returns true if any expression anywhere in `stmts` (including
+/// nested stmts and nested control flow) is a `super` reference:
+/// `SuperPropertyGet`, `SuperCall`, `SuperMethodCall`, etc.
+///
+/// Used to exclude class member bodies that use `super` from deforest
+/// call-site rewrites — the rewrite introduces synthetic locals that
+/// corrupt [[HomeObject]] setup, breaking super property access and
+/// super calls. Refs #5780 cluster A.
+pub fn body_has_super(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_has_super)
+}
+
+fn stmt_has_super(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_super),
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_has_super(e),
+        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_has_super),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_has_super(condition)
+                || body_has_super(then_branch)
+                || else_branch.as_ref().is_some_and(|eb| body_has_super(eb))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_has_super(condition) || body_has_super(body)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|i| stmt_has_super(i))
+                || condition.as_ref().is_some_and(expr_has_super)
+                || update.as_ref().is_some_and(expr_has_super)
+                || body_has_super(body)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body_has_super(body)
+                || catch.as_ref().is_some_and(|c| body_has_super(&c.body))
+                || finally.as_ref().is_some_and(|f| body_has_super(f))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_has_super(discriminant)
+                || cases
+                    .iter()
+                    .any(|c| c.test.as_ref().is_some_and(expr_has_super) || body_has_super(&c.body))
+        }
+        Stmt::Labeled { body, .. } => stmt_has_super(body),
+        _ => false,
+    }
+}
+
+fn expr_has_super(e: &Expr) -> bool {
+    if matches!(
+        e,
+        Expr::SuperCall(_)
+            | Expr::SuperCallSpread(_)
+            | Expr::SuperMethodCall { .. }
+            | Expr::SuperMethodCallSpread { .. }
+            | Expr::SuperPropertyGet { .. }
+            | Expr::SuperPropertySet { .. }
+            | Expr::ObjectSuperPropertyGet { .. }
+            | Expr::ObjectSuperPropertySet { .. }
+            | Expr::ObjectSuperMethodCall { .. }
+    ) {
+        return true;
+    }
+    let mut found = false;
+    walk_expr_children(e, &mut |child| {
+        if !found && expr_has_super(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Flag every call to a candidate producer found anywhere in `stmts`
+/// as an unsafe call site. Used for class member bodies that contain
+/// `super` references — all positions are unsafe because the rewrite
+/// would corrupt [[HomeObject]].
+fn flag_producer_calls_in_super_body(
+    stmts: &[Stmt],
+    candidates: &HashMap<FuncId, ProducerInfo>,
+    out: &mut HashSet<FuncId>,
+) {
+    for s in stmts {
+        flag_producer_calls_in_stmt(s, candidates, out);
+    }
+}
+
+fn flag_producer_calls_in_stmt(
+    stmt: &Stmt,
+    candidates: &HashMap<FuncId, ProducerInfo>,
+    out: &mut HashSet<FuncId>,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                flag_producer_calls_in_expr(e, candidates, out);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => flag_producer_calls_in_expr(e, candidates, out),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                flag_producer_calls_in_expr(e, candidates, out);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            flag_producer_calls_in_expr(condition, candidates, out);
+            flag_producer_calls_in_super_body(then_branch, candidates, out);
+            if let Some(eb) = else_branch {
+                flag_producer_calls_in_super_body(eb, candidates, out);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            flag_producer_calls_in_expr(condition, candidates, out);
+            flag_producer_calls_in_super_body(body, candidates, out);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                flag_producer_calls_in_stmt(i, candidates, out);
+            }
+            if let Some(c) = condition {
+                flag_producer_calls_in_expr(c, candidates, out);
+            }
+            if let Some(u) = update {
+                flag_producer_calls_in_expr(u, candidates, out);
+            }
+            flag_producer_calls_in_super_body(body, candidates, out);
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            flag_producer_calls_in_super_body(body, candidates, out);
+            if let Some(c) = catch {
+                flag_producer_calls_in_super_body(&c.body, candidates, out);
+            }
+            if let Some(f) = finally {
+                flag_producer_calls_in_super_body(f, candidates, out);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            flag_producer_calls_in_expr(discriminant, candidates, out);
+            for c in cases {
+                if let Some(t) = &c.test {
+                    flag_producer_calls_in_expr(t, candidates, out);
+                }
+                flag_producer_calls_in_super_body(&c.body, candidates, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => flag_producer_calls_in_stmt(body, candidates, out),
+        _ => {}
+    }
+}
+
+fn flag_producer_calls_in_expr(
+    e: &Expr,
+    candidates: &HashMap<FuncId, ProducerInfo>,
+    out: &mut HashSet<FuncId>,
+) {
+    match e {
+        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
+            if let Expr::FuncRef(id) = callee.as_ref() {
+                if candidates.contains_key(id) {
+                    out.insert(*id);
+                }
+            }
+        }
+        _ => {}
+    }
+    walk_expr_children(e, &mut |child| {
+        flag_producer_calls_in_expr(child, candidates, out)
+    });
 }
 
 /// Recursive: returns true if `stmt` (or any nested stmt inside it)
