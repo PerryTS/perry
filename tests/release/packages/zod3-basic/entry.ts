@@ -253,16 +253,23 @@ print("transform", csvSchema.parse("a, b, c"));
 print("refine", csvSchema.safeParse("single").success);
 
 const preprocessSchema = z.preprocess((value) => (typeof value === "string" ? value.trim() : value), z.string().min(2));
+const matchingPasswords = z.object({ password: z.string(), confirm: z.string() }).refine((values) => values.password === values.confirm, {
+  path: ["confirm"],
+  message: "password mismatch",
+});
 const superRefineSchema = z.array(z.number()).superRefine((values, ctx) => {
   if (new Set(values).size !== values.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "duplicates" });
   }
 });
+const matchingPasswordsResult = matchingPasswords.safeParse({ password: "a", confirm: "b" });
 print("effects", {
   preprocess: preprocessSchema.parse(" ok "),
   pipe: z.string().transform((value) => value.length).pipe(z.number().min(2)).safeParse("abc").success,
   superRefine: superRefineSchema.safeParse([1, 1]).success,
   custom: z.custom<string>((value) => value === "token").safeParse("token").success,
+  refinePath: matchingPasswordsResult.success ? "ok" : matchingPasswordsResult.error.issues[0].path.join("."),
+  refineMessage: matchingPasswordsResult.success ? "ok" : matchingPasswordsResult.error.issues[0].message,
 });
 
 print("modifiers", {
@@ -352,9 +359,12 @@ print("async", {
 
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
 if (!formatted.success) {
+  const nestedFormatted = z.object({ user: z.object({ tags: z.array(z.string().min(2)).min(2) }) }).safeParse({ user: { tags: ["x"] } });
   print("errors", {
     formatKeys: Object.keys(formatted.error.format()).sort(),
     flatten: formatted.error.flatten(),
+    nestedTagErrors: nestedFormatted.success ? [] : nestedFormatted.error.format().user?.tags?._errors,
+    nestedTagItemErrors: nestedFormatted.success ? [] : nestedFormatted.error.format().user?.tags?.[0]?._errors,
   });
 }
 
