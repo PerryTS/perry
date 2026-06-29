@@ -227,9 +227,20 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             if tortoise == TAG_NULL_U64 {
                 break;
             }
-            // Advance tortoise one step, hare two steps.
+            // Advance tortoise one step, hare two steps.  Guard the second
+            // advance: if the first step lands on null, calling advance(null)
+            // would invoke js_object_get_prototype_of(null) which throws
+            // "Cannot convert undefined or null to object" (test262
+            // setPrototypeOf/success.js — plain object proto chain ends at null).
             tortoise = advance(tortoise);
-            hare = advance(advance(hare));
+            hare = {
+                let h1 = advance(hare);
+                if h1 == TAG_NULL_U64 {
+                    TAG_NULL_U64
+                } else {
+                    advance(h1)
+                }
+            };
             // If they meet, the existing chain already has a cycle — the walk
             // will never reach null, so we also can never form a new one by
             // setting obj's proto. Just break; the set is safe.

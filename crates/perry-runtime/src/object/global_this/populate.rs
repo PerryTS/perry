@@ -601,6 +601,32 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
         js_object_set_field_by_name(singleton, nkey, nval);
     }
+    // ECMA-262 19.1/19.2/19.3: NaN, Infinity, and undefined are own data
+    // properties of the global object with {writable:false, enumerable:false,
+    // configurable:false}.  Install them so that
+    // `Object.getOwnPropertyDescriptor(globalThis, "NaN")` returns a real
+    // descriptor (test262 15.2.3.3-4-178/179/180) and
+    // `Object.getOwnPropertyNames(globalThis)` includes them (15.2.3.4-4-1).
+    {
+        let non_writable = super::super::PropertyAttrs::new(false, false, false);
+        for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(singleton, key, value);
+            super::super::set_builtin_property_attrs(
+                singleton as usize,
+                name.to_string(),
+                non_writable,
+            );
+        }
+        let undef_key = crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9);
+        let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
+        js_object_set_field_by_name(singleton, undef_key, undef_val);
+        super::super::set_builtin_property_attrs(
+            singleton as usize,
+            "undefined".to_string(),
+            super::super::PropertyAttrs::new(false, false, false),
+        );
+    }
 }
 
 /// Re-point a `Number.<name>` static at the global function of the same name so
