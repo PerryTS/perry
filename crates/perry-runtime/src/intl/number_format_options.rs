@@ -65,6 +65,12 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         }
         set_internal_field(obj, KEY_CURRENCY, string_value(&code.to_ascii_uppercase()));
     }
+    // Throw TypeError for missing currency BEFORE reading currencyDisplay /
+    // currencySign — so proxy-get traps on those keys are never triggered when
+    // currency is missing, matching the spec-observable option-read order.
+    if style == "currency" && currency.is_none() {
+        throw_type_error("Currency code is required with currency style.");
+    }
     let currency_display = get_string_option_enum(
         options,
         "currencyDisplay",
@@ -83,14 +89,6 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         string_value(&currency_display),
     );
     set_internal_field(obj, KEY_NF_CURRENCY_SIGN, string_value(&currency_sign));
-
-    // Spec step: if style=="currency" and no currency was given, throw TypeError
-    // NOW — before reading unit.  This preserves the spec-mandated observable
-    // order: a { style:"currency", unit:"<any>" } call with no currency must
-    // throw TypeError, not a RangeError from unit identifier validation.
-    if style == "currency" && currency.is_none() {
-        throw_type_error("Currency code is required with currency style.");
-    }
 
     let unit = get_option_string(options, "unit");
     if let Some(u) = &unit {
