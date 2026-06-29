@@ -538,6 +538,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // brand-checks `this`, reads `[[DateValue]]` before coercing args,
             // then mutates the cell. Also after the OBJECT_PROTO_METHODS block.
             date_proto_thunks::install_date_proto_setters(proto_obj);
+            // Overwrite the no-op toLocaleString with a real Intl-aware thunk
+            // that forwards locale/options to temporal_locale_string.
+            date_proto_thunks::install_date_proto_to_locale_string(proto_obj);
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",

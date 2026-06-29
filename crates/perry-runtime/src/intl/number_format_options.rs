@@ -84,6 +84,14 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     );
     set_internal_field(obj, KEY_NF_CURRENCY_SIGN, string_value(&currency_sign));
 
+    // Spec step: if style=="currency" and no currency was given, throw TypeError
+    // NOW — before reading unit.  This preserves the spec-mandated observable
+    // order: a { style:"currency", unit:"<any>" } call with no currency must
+    // throw TypeError, not a RangeError from unit identifier validation.
+    if style == "currency" && currency.is_none() {
+        throw_type_error("Currency code is required with currency style.");
+    }
+
     let unit = get_option_string(options, "unit");
     if let Some(u) = &unit {
         if !is_well_formed_unit_identifier(u) {
@@ -101,9 +109,6 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     );
     set_internal_field(obj, KEY_NF_UNIT_DISPLAY, string_value(&unit_display));
 
-    if style == "currency" && currency.is_none() {
-        throw_type_error("Currency code is required with currency style.");
-    }
     if style == "unit" && unit.is_none() {
         throw_type_error("unit is required with unit style.");
     }

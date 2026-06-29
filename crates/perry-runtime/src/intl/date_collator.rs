@@ -656,28 +656,18 @@ pub(crate) fn temporal_locale_string(
                 second_opt.as_deref(),
             )
         } else {
-            // No options given — apply ECMA-402 defaults for this Temporal
-            // type.  The spec says `toLocaleString(locales, options)` is
-            // equivalent to `new Intl.DateTimeFormat(locales, options).format(this)`.
-            // With `options = undefined`, DTF always resolves to
-            // `{ year: "numeric", month: "numeric", day: "numeric" }`.
-            // Each Temporal type maps its fields to an epoch-ms value for
-            // formatting; the date components of that value are what the DTF
-            // defaults select.  Type-specific component overrides (e.g.
-            // time for PlainTime) only apply when the user explicitly passes
-            // options — not as defaults.
-            //
-            // ZonedDateTime is the sole exception: its toLocaleString spec
-            // mandates that the output includes both date and time components
-            // when no options are given (analogous to how ZDT carries a
-            // timezone that no ordinary DTF object can represent).
+            // No options given — apply per-type ECMA-402 / Temporal-spec
+            // defaults.  `ToDateTimeOptions(options, required, defaults)` sets
+            // the default fields differently per type:
+            //   PlainDate         → required="date",  defaults="date"
+            //   PlainDateTime     → required="any",   defaults="any"   (date+time)
+            //   PlainTime         → required="time",  defaults="time"
+            //   PlainYearMonth    → required="year month", defaults="year month"
+            //   PlainMonthDay     → required="month day",  defaults="month day"
+            //   Instant           → required="any",   defaults="all"   (date+time)
+            //   ZonedDateTime     → required="any",   defaults="all"   (date+time)
             match ctx {
-                TemporalLocaleCtx::PlainDate
-                | TemporalLocaleCtx::PlainDateTime
-                | TemporalLocaleCtx::Instant
-                | TemporalLocaleCtx::PlainTime
-                | TemporalLocaleCtx::PlainYearMonth
-                | TemporalLocaleCtx::PlainMonthDay => (
+                TemporalLocaleCtx::PlainDate => (
                     None,
                     None,
                     Some("numeric"),
@@ -687,7 +677,9 @@ pub(crate) fn temporal_locale_string(
                     None,
                     None,
                 ),
-                TemporalLocaleCtx::ZonedDateTime => (
+                TemporalLocaleCtx::PlainDateTime
+                | TemporalLocaleCtx::Instant
+                | TemporalLocaleCtx::ZonedDateTime => (
                     None,
                     None,
                     Some("numeric"),
@@ -696,6 +688,36 @@ pub(crate) fn temporal_locale_string(
                     Some("numeric"),
                     Some("2-digit"),
                     Some("2-digit"),
+                ),
+                TemporalLocaleCtx::PlainTime => (
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("2-digit"),
+                    Some("2-digit"),
+                ),
+                TemporalLocaleCtx::PlainYearMonth => (
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                TemporalLocaleCtx::PlainMonthDay => (
+                    None,
+                    None,
+                    None,
+                    Some("numeric"),
+                    Some("numeric"),
+                    None,
+                    None,
+                    None,
                 ),
             }
         };

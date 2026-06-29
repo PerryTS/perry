@@ -66,7 +66,13 @@ pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__
 /// longer a live Temporal cell.
 #[cfg(feature = "temporal")]
 pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
-    if obj < crate::gc::GC_HEADER_SIZE + 0x1000 || !is_valid_obj_ptr(obj as *const u8) {
+    // Reject any address that isn't a plausible heap pointer.  Proxy ids live
+    // in [0xF0000, 0x100000) — they pass a naïve `>= GC_HEADER_SIZE + 0x1000`
+    // check but are NOT heap pointers.  On Linux (HEAP_MIN = 0x1000) the old
+    // `is_valid_obj_ptr` guard passed them too, causing a SIGSEGV when the
+    // GC header was read at (proxy_id − 8).  `is_plausible_heap_addr` rejects
+    // the entire handle band [0, 0x100000) unconditionally.
+    if !crate::value::addr_class::is_plausible_heap_addr(obj) {
         return None;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
