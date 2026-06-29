@@ -370,6 +370,32 @@ fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool
     false
 }
 
+fn set_imported_ctor_new_target(
+    ctx: &mut FnCtx<'_>,
+    constructed_class_name: &str,
+    ctor: &crate::codegen::ImportedCtor,
+) -> Option<String> {
+    if !ctor.uses_new_target {
+        return None;
+    }
+    ctx.class_ids.get(constructed_class_name).map(|&cid| {
+        let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+        let class_ref = double_literal(f64::from_bits(
+            crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
+        ));
+        ctx.block()
+            .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &class_ref)]);
+        prev
+    })
+}
+
+fn restore_imported_ctor_new_target(ctx: &mut FnCtx<'_>, saved: Option<String>) {
+    if let Some(prev) = saved {
+        ctx.block()
+            .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &prev)]);
+    }
+}
+
 /// Emit a call to the shared standalone `<class>_constructor` symbol and
 /// return the raw value it produced. The standalone ctor function returns
 /// `undefined` for an ordinary constructor (implicit `return this`) or the
@@ -1756,7 +1782,10 @@ fn lower_new_impl(
                 // to match the symbol's real signature (see codegen/mod.rs).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let saved_new_target =
+                    set_imported_ctor_new_target(ctx, class_name, &ctor);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
+                restore_imported_ctor_new_target(ctx, saved_new_target);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers, and pack the rest
@@ -1782,7 +1811,10 @@ fn lower_new_impl(
                 // ("value is not a function" on `new Chalk(...).red(...)`).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let saved_new_target =
+                    set_imported_ctor_new_target(ctx, class_name, &ctor);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
+                restore_imported_ctor_new_target(ctx, saved_new_target);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
                 found_inherited_ctor = true;
             }

@@ -1180,6 +1180,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         symbol: ctor_name,
                         param_count: ic.constructor_param_count,
                         has_own_constructor: ic.has_own_constructor,
+                        uses_new_target: ic.constructor_uses_new_target,
                         has_instance_fields: ic.has_instance_fields,
                         has_rest: ic.constructor_has_rest,
                     },

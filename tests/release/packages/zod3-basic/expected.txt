@@ -1,0 +1,10 @@
+parse={"id":7,"name":"ADA","tags":[],"role":"user","meta":{"active":true,"source":"seed"}}
+safeParse.success=false
+safeParse.issues=[{"path":"id","code":"too_small","message":"Number must be greater than 0"},{"path":"name","code":"too_small","message":"String must contain at least 2 character(s)"},{"path":"tags.1","code":"invalid_type","message":"Expected string, received number"},{"path":"meta.active","code":"invalid_type","message":"Expected boolean, received string"}]
+discriminatedUnion=[{"type":"text","value":"hello"},{"type":"count","value":3}]
+union=[true,false]
+transform=["a","b","c"]
+refine=false
+record=true
+record.refine=false
+array=[{"id":1,"role":"admin"}]

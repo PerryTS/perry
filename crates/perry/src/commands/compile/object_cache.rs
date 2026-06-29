@@ -551,11 +551,12 @@ fn compute_object_cache_key_with_env(
         let mut buf = String::new();
         for c in v {
             buf.push_str(&format!(
-                "{}@{}:ctor={}:own_ctor={}:instance_fields={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
+                "{}@{}:ctor={}:own_ctor={}:ctor_new_target={}:instance_fields={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
                 c.name,
                 c.source_prefix,
                 c.constructor_param_count,
                 if c.has_own_constructor { "1" } else { "0" },
+                if c.constructor_uses_new_target { "1" } else { "0" },
                 if c.has_instance_fields { "1" } else { "0" },
                 c.parent_name.as_deref().unwrap_or(""),
                 c.local_alias.as_deref().unwrap_or(""),
@@ -1355,6 +1356,7 @@ mod object_cache_tests {
             source_prefix: "feature_ts".into(),
             constructor_param_count: 0,
             has_own_constructor: false,
+            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec![],
@@ -1390,6 +1392,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
+            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
@@ -1410,6 +1413,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 2, // different arity
             has_own_constructor: true,
+            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
@@ -1438,6 +1442,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
+            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],

@@ -207,10 +207,15 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     if !proto_is_null {
         const TAG_NULL_U64: u64 = 0x7FFC_0000_0000_0002;
         let advance = |bits: u64| -> u64 {
+            let current_js = crate::value::JSValue::from_bits(bits);
+            if current_js.is_null() || current_js.is_undefined() {
+                return TAG_NULL_U64;
+            }
             let val = f64::from_bits(bits);
             let next = js_object_get_prototype_of(val);
             let nb = next.to_bits();
-            if nb == TAG_NULL_U64 {
+            let next_js = crate::value::JSValue::from_bits(nb);
+            if nb == TAG_NULL_U64 || next_js.is_undefined() {
                 TAG_NULL_U64
             } else {
                 nb

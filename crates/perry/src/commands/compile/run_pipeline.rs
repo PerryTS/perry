@@ -17,6 +17,142 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
+fn expr_uses_new_target(expr: &perry_hir::Expr) -> bool {
+    match expr {
+        perry_hir::Expr::NewTarget => true,
+        perry_hir::Expr::Closure {
+            captures_new_target,
+            ..
+        } => *captures_new_target,
+        _ => {
+            let mut found = false;
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                if !found && expr_uses_new_target(child) {
+                    found = true;
+                }
+            });
+            found
+        }
+    }
+}
+
+fn stmt_uses_new_target(stmt: &perry_hir::Stmt) -> bool {
+    use perry_hir::Stmt;
+    match stmt {
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_uses_new_target),
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            expr_uses_new_target(expr)
+        }
+        Stmt::Return(None) => false,
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_new_target(condition)
+                || then_branch.iter().any(stmt_uses_new_target)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| branch.iter().any(stmt_uses_new_target))
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_uses_new_target(condition) || body.iter().any(stmt_uses_new_target)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_uses_new_target)
+                || condition.as_ref().is_some_and(expr_uses_new_target)
+                || update.as_ref().is_some_and(expr_uses_new_target)
+                || body.iter().any(stmt_uses_new_target)
+        }
+        Stmt::Labeled { body, .. } => stmt_uses_new_target(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().any(stmt_uses_new_target)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| catch.body.iter().any(stmt_uses_new_target))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(stmt_uses_new_target))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_uses_new_target(discriminant)
+                || cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(expr_uses_new_target)
+                        || case.body.iter().any(stmt_uses_new_target)
+                })
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+    }
+}
+
+fn ctor_uses_new_target(class: &perry_hir::Class) -> bool {
+    class
+        .constructor
+        .as_ref()
+        .is_some_and(|ctor| ctor.body.iter().any(stmt_uses_new_target))
+}
+
+fn exported_class_by_name<'a>(
+    exported_classes: &'a BTreeMap<(String, String), &'a perry_hir::Class>,
+    preferred_path: &str,
+    name: &str,
+) -> Option<(String, &'a perry_hir::Class)> {
+    let same_path_key = (preferred_path.to_string(), name.to_string());
+    if let Some(class) = exported_classes.get(&same_path_key) {
+        return Some((preferred_path.to_string(), *class));
+    }
+    exported_classes
+        .iter()
+        .find(|((_, class_name), _)| class_name == name)
+        .map(|((path, _), class)| (path.clone(), *class))
+}
+
+fn class_chain_uses_new_target(
+    exported_classes: &BTreeMap<(String, String), &perry_hir::Class>,
+    class_path: &str,
+    class: &perry_hir::Class,
+) -> bool {
+    if ctor_uses_new_target(class) {
+        return true;
+    }
+    let mut current_path = class_path.to_string();
+    let mut parent = class.extends_name.as_deref();
+    let mut depth = 0usize;
+    while let Some(parent_name) = parent {
+        depth += 1;
+        if depth > 64 {
+            break;
+        }
+        let Some((path, parent_class)) =
+            exported_class_by_name(exported_classes, &current_path, parent_name)
+        else {
+            break;
+        };
+        if ctor_uses_new_target(parent_class) {
+            return true;
+        }
+        current_path = path;
+        parent = parent_class.extends_name.as_deref();
+    }
+    false
+}
+
 /// Same as [`run`] but accepts an optional in-memory [`ParseCache`] that
 /// `perry dev` uses to reuse parsed ASTs across rebuilds in a single session.
 /// Pass `None` for the batch-compile path.
@@ -2319,6 +2455,11 @@ pub fn run_with_parse_cache(
                                             .map(|c| c.params.len())
                                             .unwrap_or(0),
                                         has_own_constructor: class.constructor.is_some(),
+                                        constructor_uses_new_target: class_chain_uses_new_target(
+                                            &exported_classes,
+                                            &key.0,
+                                            class,
+                                        ),
                                         constructor_has_rest: class
                                             .constructor
                                             .as_ref()
@@ -2562,6 +2703,12 @@ pub fn run_with_parse_cache(
                                                 .map(|c| c.params.len())
                                                 .unwrap_or(0),
                                             has_own_constructor: class.constructor.is_some(),
+                                            constructor_uses_new_target:
+                                                class_chain_uses_new_target(
+                                                    &exported_classes,
+                                                    &key.0,
+                                                    class,
+                                                ),
                                             constructor_has_rest: class
                                                 .constructor
                                                 .as_ref()
@@ -2815,6 +2962,11 @@ pub fn run_with_parse_cache(
                                     .map(|c| c.params.len())
                                     .unwrap_or(0),
                                 has_own_constructor: class.constructor.is_some(),
+                                constructor_uses_new_target: class_chain_uses_new_target(
+                                    &exported_classes,
+                                    &key.0,
+                                    class,
+                                ),
                                 constructor_has_rest: class
                                     .constructor
                                     .as_ref()
@@ -2886,6 +3038,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_uses_new_target: class_chain_uses_new_target(
+                                &exported_classes,
+                                &key.0,
+                                class,
+                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -3044,6 +3201,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_uses_new_target: class_chain_uses_new_target(
+                                &exported_classes,
+                                &src_path,
+                                class,
+                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -3517,6 +3679,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_uses_new_target: class_chain_uses_new_target(
+                                &exported_classes,
+                                &src_path,
+                                class,
+                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -3716,6 +3883,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_uses_new_target: class_chain_uses_new_target(
+                                &exported_classes,
+                                &src_path,
+                                class,
+                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()

@@ -465,6 +465,8 @@ pub struct ImportedClass {
     pub constructor_param_count: usize,
     /// Whether the source class declared its own constructor body.
     pub has_own_constructor: bool,
+    /// Whether the source constructor symbol may read `new.target`.
+    pub constructor_uses_new_target: bool,
     /// Whether the source class's constructor's last declared parameter is
     /// `...rest`. Symmetric to `method_has_rest` but for the constructor: the
     /// source module compiled `<class>_constructor(this, arg0, …)` expecting
@@ -539,6 +541,7 @@ pub(crate) struct ImportedCtor {
     pub symbol: String,
     pub param_count: usize,
     pub has_own_constructor: bool,
+    pub uses_new_target: bool,
     pub has_instance_fields: bool,
     /// True when the constructor's last declared param is `...rest`. Tells
     /// the cross-module `new` dispatch to pack the trailing args into an
