@@ -145,7 +145,7 @@ pub(super) unsafe fn dispatch_client_incoming_method(
     method_name: &str,
     args: &[f64],
 ) -> Option<f64> {
-    if !matches!(method_name, "setEncoding" | "on" | "addListener") {
+    if !matches!(method_name, "setEncoding" | "on" | "addListener" | "pipe") {
         return None;
     }
 
@@ -160,6 +160,7 @@ pub(super) unsafe fn dispatch_client_incoming_method(
             event_ptr: *const perry_runtime::StringHeader,
             callback: i64,
         ) -> i64;
+        fn js_http_incoming_message_pipe(handle: i64, dest: f64) -> f64;
     }
 
     if unsafe { js_http_is_incoming_message(handle) } == 0 {
@@ -183,6 +184,10 @@ pub(super) unsafe fn dispatch_client_incoming_method(
             }
             self_ref
         }
+        // `res.pipe(dest)` — register the destination and return it (Node's
+        // pipe-returns-destination contract; node-fetch reads the response
+        // body via `res.pipe(new PassThrough())`).
+        "pipe" if !args.is_empty() => unsafe { js_http_incoming_message_pipe(handle, args[0]) },
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     };
     Some(value)

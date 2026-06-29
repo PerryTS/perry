@@ -88,6 +88,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         body: Vec::new(),
         listeners: incoming_listeners,
         encoding: None,
+        pipes: Vec::new(),
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();

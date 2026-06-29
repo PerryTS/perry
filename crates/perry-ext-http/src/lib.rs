@@ -251,6 +251,11 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
                 visitor.visit_i64_slot(cb);
             }
         }
+        // `.pipe(dest)` destinations are live JS values held until the body
+        // streams through them; relocate them if the copying GC moves them.
+        for dest in &mut msg.pipes {
+            visitor.visit_nanbox_u64_slot(dest);
+        }
     });
 
     // #2154: stored `agent.createConnection` / `.createSocket` closures.
@@ -367,6 +372,12 @@ pub struct IncomingMessageHandle {
     pub body: Vec<u8>,
     pub listeners: HashMap<String, Vec<i64>>,
     pub encoding: Option<String>,
+    /// `.pipe(dest)` destinations as NaN-boxed value bits. Node's
+    /// `readable.pipe(writable)` forwards every body chunk to `dest.write()`
+    /// and ends it with `dest.end()`; node-fetch reads the response body this
+    /// way (`res.pipe(new PassThrough())`), so without it the destination
+    /// stream never receives data and `response.text()` never settles.
+    pub pipes: Vec<u64>,
 }
 
 unsafe impl Send for IncomingMessageHandle {}
@@ -1386,6 +1397,20 @@ pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
         js_node_http_im_set_encoding(handle, encoding_ptr);
     }
     handle
+}
+
+/// `res.pipe(dest)` for a client `IncomingMessage`: remember the destination
+/// writable so the body-delivery handlers forward each chunk to `dest.write()`
+/// and finish it with `dest.end()`. Returns `dest` per Node's
+/// pipe-returns-destination contract (node-fetch keeps only the return value:
+/// `const body = res.pipe(new PassThrough())`). Without this the destination
+/// never receives data and `response.text()` hangs forever.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_incoming_message_pipe(handle: Handle, dest: f64) -> f64 {
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        res.pipes.push(dest.to_bits());
+    });
+    dest
 }
 
 /// Distinct external-client setter for stdlib fallback dispatch. The legacy

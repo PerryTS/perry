@@ -4,6 +4,52 @@
 
 use super::*;
 
+extern "C" {
+    /// perry-runtime method dispatch by string key (`obj[name](args)`,
+    /// binding `this = obj`). Used to drive `dest.write(chunk)` / `dest.end()`
+    /// on a `.pipe(dest)` destination.
+    fn js_native_call_method_str_key(
+        object: f64,
+        name_handle: i64,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64;
+}
+
+/// Forward a body chunk to a `.pipe(dest)` destination: `dest.write(chunk)`.
+/// `dest_bits` is the NaN-boxed destination value captured by `pipe()`.
+unsafe fn forward_pipe_write(dest_bits: u64, bytes: &[u8], encoding: Option<&str>) {
+    if bytes.is_empty() {
+        return;
+    }
+    let name = alloc_string("write");
+    let name_ptr = name.as_raw();
+    if name_ptr.is_null() {
+        return;
+    }
+    let chunk = body_chunk_value(bytes, encoding);
+    if chunk.to_bits() == TAG_UNDEFINED {
+        return;
+    }
+    let args = [chunk];
+    js_native_call_method_str_key(f64::from_bits(dest_bits), name_ptr as i64, args.as_ptr(), 1);
+}
+
+/// Finish a `.pipe(dest)` destination once the response body ends: `dest.end()`.
+unsafe fn forward_pipe_end(dest_bits: u64) {
+    let name = alloc_string("end");
+    let name_ptr = name.as_raw();
+    if name_ptr.is_null() {
+        return;
+    }
+    js_native_call_method_str_key(
+        f64::from_bits(dest_bits),
+        name_ptr as i64,
+        std::ptr::null(),
+        0,
+    );
+}
+
 /// Fire a client request's `event` listeners with no arguments.
 ///
 /// # Safety
@@ -132,6 +178,7 @@ pub(crate) unsafe fn handle_response_event(
         body,
         listeners: HashMap::new(),
         encoding: None,
+        pipes: Vec::new(),
     });
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
@@ -191,6 +238,17 @@ pub(crate) unsafe fn handle_response_event(
         }
     }
 
+    // Forward the buffered body to any `.pipe(dest)` destinations registered
+    // during the response callback above (node-fetch: `res.pipe(new
+    // PassThrough())`). Deliver the whole body as one write, then end.
+    let pipes = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .map(|r| r.pipes.clone())
+        .unwrap_or_default();
+    for dest in pipes {
+        forward_pipe_write(dest, &body_clone, encoding.as_deref());
+        forward_pipe_end(dest);
+    }
+
     // Node emits `'close'` on the request once the response has fully
     // ended (#4905).
     fire_request_close_once(request_handle);
@@ -226,6 +284,7 @@ pub(crate) unsafe fn handle_response_head_event(
         body: Vec::new(),
         listeners: HashMap::new(),
         encoding: None,
+        pipes: Vec::new(),
     });
     let response_callback = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
         req.incoming_handle = incoming;
@@ -267,17 +326,27 @@ pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: 
     if incoming == 0 || done {
         return;
     }
-    let (data_listeners, encoding) = get_handle_mut::<IncomingMessageHandle>(incoming)
+    let (data_listeners, encoding, pipes) = get_handle_mut::<IncomingMessageHandle>(incoming)
         .map(|r| {
             (
                 r.listeners.get("data").cloned().unwrap_or_default(),
                 r.encoding.clone(),
+                r.pipes.clone(),
             )
         })
         .unwrap_or_default();
+    // Forward to `.pipe(dest)` destinations (node-fetch streams the body out
+    // this way and registers no `'data'` listener).
+    for dest in &pipes {
+        forward_pipe_write(*dest, chunk.as_ref(), encoding.as_deref());
+    }
     if data_listeners.is_empty() {
-        if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
-            im.body.extend_from_slice(&chunk);
+        // Buffer for a late `'data'` listener only when the body isn't being
+        // piped out (a pipe consumes it eagerly above).
+        if pipes.is_empty() {
+            if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
+                im.body.extend_from_slice(&chunk);
+            }
         }
         return;
     }
@@ -349,6 +418,15 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
             let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
             let _ = closure.call0();
         }
+    }
+
+    // End any `.pipe(dest)` destinations now that the body is complete (the
+    // body chunks were forwarded as they arrived).
+    let pipes = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .map(|r| r.pipes.clone())
+        .unwrap_or_default();
+    for dest in pipes {
+        forward_pipe_end(dest);
     }
 
     fire_request_close_once(request_handle);
