@@ -315,8 +315,19 @@ print("instances.dates", {
 const validatedFn = z.function().args(z.string()).returns(z.number()).implement((value) => value.trim().length);
 const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
 const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
+const asyncValidatedFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async (value) => value.trim().length);
+const asyncInvalidReturnFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async () => "bad" as unknown as number);
+const invalidAsyncReturn = await (async () => {
+  try {
+    await asyncInvalidReturnFn("x");
+    return false;
+  } catch {
+    return true;
+  }
+})();
 print("function", {
   valid: validatedFn(" tuna "),
+  asyncValid: await asyncValidatedFn(" salmon "),
   parameters: functionSchema.parameters().items.length,
   returnType: functionSchema.returnType().safeParse(true).success,
   invalidArgs: (() => {
@@ -335,6 +346,7 @@ print("function", {
       return true;
     }
   })(),
+  invalidAsyncReturn,
 });
 
 const asyncSchema = z.string().refine(async (value) => value === "ok");
