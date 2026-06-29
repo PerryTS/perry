@@ -295,8 +295,13 @@ fn surrogate_pairs_fold_to_astral_scalars() {
     // Non-surrogate escapes and ordinary classes are untouched.
     assert_eq!(js_regex_to_rust(r"[ˁ\xAA]"), r"[ˁ\xAA]");
     assert_eq!(js_regex_to_rust(r"[A-Za-z]"), r"[A-Za-z]");
-    // A lone high surrogate (no following low unit) is left as-is.
-    assert_eq!(js_regex_to_rust(r"\uD800x"), r"\uD800x");
+    // A lone high surrogate (no following low surrogate) cannot be represented in
+    // Rust's Unicode-only `regex` crate — lone surrogates are not valid Unicode
+    // scalars and cannot appear in any UTF-8 string. Leaving `\uD800` verbatim
+    // would cause the Rust regex engine to reject the pattern at construction time.
+    // We emit a never-match atom `[^\s\S]` so the compiled pattern is valid but
+    // correctly matches nothing (JS/WTF-8 lone-surrogate matching is a known gap).
+    assert_eq!(js_regex_to_rust(r"\uD800x"), r"[^\s\S]x");
 
     // The Test262 `nativeFunctionMatcher.js` ID regexes must now compile.
     let pat = r"(?:[A-Za-z\xAA]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26]|\uD801[\uDC00-\uDC9D])";
