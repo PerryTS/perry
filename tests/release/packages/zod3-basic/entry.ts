@@ -192,6 +192,7 @@ print("objects", {
   nonstrict: objectBase.nonstrict().parse({ id: 1, name: "a", extra: true } as unknown),
   passthrough: objectBase.passthrough().parse({ id: 1, name: "a", extra: true } as unknown),
   catchall: z.object({ id: z.number() }).catchall(z.string()).safeParse({ id: 1, extra: "ok" }).success,
+  catchallFail: z.object({ id: z.number() }).catchall(z.string()).safeParse({ id: 1, extra: 1 }).success,
   extend: objectBase.extend({ role: z.literal("admin") }).parse({ id: 1, name: "a", role: "admin" }),
   augment: z.object({ id: z.number() }).augment({ name: z.string() }).parse({ id: 1, name: "a" }),
   setKey: z.object({ id: z.number() }).setKey("name", z.string()).parse({ id: 1, name: "a" }),
@@ -202,9 +203,11 @@ print("objects", {
   pick: objectBase.pick({ id: true }).parse({ id: 1 }),
   omit: objectBase.omit({ active: true }).parse({ id: 1, name: "a" }),
   partial: objectBase.partial().parse({ id: 1 }),
+  partialName: objectBase.partial({ name: true }).safeParse({ id: 1 }).success,
   deepPartial: nestedObject.deepPartial().parse({ nested: {} }),
   required: objectBase.required().safeParse({ id: 1, name: "a" }).success,
   requiredActive: objectBase.required({ active: true }).safeParse({ id: 1, name: "a" }).success,
+  nestedRequired: nestedObject.required().safeParse({ nested: { label: "x" } }).success,
 });
 
 print("recursiveObjects", {
