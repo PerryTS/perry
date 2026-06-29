@@ -71,11 +71,15 @@ print("literals.enums", {
   literalFail: z.literal(3).safeParse(4).success,
   enum: colorEnum.parse("blue"),
   enumBlue: colorEnum.enum.blue,
+  enumValues: colorEnum.Values.green,
+  enumEnum: colorEnum.Enum.red,
   enumOptions: colorEnum.options.join("|"),
   enumKeys: Object.keys(colorEnum.enum).sort(),
   enumExtract: colorEnum.extract(["red", "green"]).safeParse("blue").success,
+  enumExtractOk: colorEnum.extract(["red", "green"]).parse("red"),
   enumExclude: colorEnum.exclude(["blue"]).parse("green"),
   nativeEnum: z.nativeEnum({ A: "a", B: "b" } as const).parse("a"),
+  nativeEnumNumber: z.nativeEnum({ A: 1, B: 2 } as const).parse(2),
 });
 
 const stringSchema = z
@@ -225,17 +229,31 @@ print("arrays.tuples", {
 
 const parsedMap = z.map(z.string(), z.number()).parse(new Map([["a", 1], ["b", 2]]));
 const parsedSet = z.set(z.string()).min(2).parse(new Set(["a", "b"]));
+const transformedMap = z
+  .map(z.string(), z.string().transform((value) => value.length))
+  .parse(new Map([["size", "abcd"]]));
+const transformedSet = z
+  .set(z.string().transform((value) => value.length))
+  .parse(new Set(["aa", "bbb"]));
 print("collections", {
   record: z.record(z.number()).safeParse({ a: 1, b: 2 }).success,
   keyedRecord: z.record(z.enum(["a", "b"]), z.number()).safeParse({ a: 1, b: 2 }).success,
+  keyedRecordMissing: z.record(z.enum(["a", "b"]), z.number()).safeParse({ a: 1 }).success,
   stringKeyRecord: z.record(z.string().min(1), z.number()).safeParse({ "": 1 }).success,
+  transformedRecord: z
+    .record(z.string().transform((value) => value.length))
+    .parse({ a: "abcd" }),
   recordFail: z.record(z.number()).refine((scores) => Object.values(scores).every((score) => score >= 0)).safeParse({ a: 1, b: -1 }).success,
   map: Array.from(parsedMap.entries()),
+  mapKeyFail: z.map(z.string().min(2), z.number()).safeParse(new Map([["a", 1]])).success,
   mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,
+  transformedMap: Array.from(transformedMap.entries()),
   set: Array.from(parsedSet.values()),
+  setNonempty: z.set(z.string()).nonempty().safeParse(new Set()).success,
   setFail: z.set(z.string()).min(2).safeParse(new Set(["a"])).success,
   setMax: z.set(z.string()).max(2).safeParse(new Set(["a", "b", "c"])).success,
   setSize: z.set(z.string()).size(2).safeParse(new Set(["a", "b"])).success,
+  transformedSet: Array.from(transformedSet.values()),
 });
 
 print("composition", {
