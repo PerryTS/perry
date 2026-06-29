@@ -36,12 +36,13 @@ pub(crate) use date_collator::{
     compare_strings, date_range_parts_from_ms, date_short_utc_from_ms,
     date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
     date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
-    date_time_format_bound_to_parts_thunk, date_time_format_format_thunk,
-    date_time_format_format_value, date_time_format_range_parts_value,
-    date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
-    date_time_format_range_value, date_time_format_resolved_options_object,
-    date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk, date_time_range_clip,
-    range_parts_to_js_array, swedish_collation_key, temporal_locale_string, TemporalLocaleCtx,
+    date_time_format_bound_to_parts_thunk, date_time_format_format_getter_thunk,
+    date_time_format_format_thunk, date_time_format_format_value,
+    date_time_format_range_parts_value, date_time_format_range_thunk,
+    date_time_format_range_to_parts_thunk, date_time_format_range_value,
+    date_time_format_resolved_options_object, date_time_format_resolved_options_thunk,
+    date_time_format_to_parts_thunk, date_time_range_clip, range_parts_to_js_array,
+    swedish_collation_key, temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, collect_string_list,
@@ -152,11 +153,12 @@ const KEY_NF_ROUNDING_INCREMENT: &str = "__intlNfRoundingIncrement";
 const KEY_NF_ROUNDING_MODE: &str = "__intlNfRoundingMode";
 const KEY_NF_ROUNDING_PRIORITY: &str = "__intlNfRoundingPriority";
 const KEY_NF_TRAILING_ZERO: &str = "__intlNfTrailingZero";
-// Hidden [[BoundFormat]] slot. The bound format function is also installed as an
+// Hidden [[BoundFormat]] slots. The bound format function is also installed as an
 // own `format` property for the native dispatch fast path, but the prototype
 // `format` getter reads it from here so user mutation/deletion of the public
 // property can't corrupt what the accessor returns.
 const KEY_NF_BOUND_FORMAT: &str = "__intlNfBoundFormat";
+const KEY_DTF_BOUND_FORMAT: &str = "__intlDtfBoundFormat";
 const KEY_COL_USAGE: &str = "__intlColUsage";
 const KEY_COL_SENSITIVITY: &str = "__intlColSensitivity";
 const KEY_COL_IGNORE_PUNCT: &str = "__intlColIgnorePunct";
@@ -1267,12 +1269,20 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 set_internal_field(obj, KEY_DAY, string_value("numeric"));
                 set_internal_field(obj, KEY_DT_IS_DEFAULT, bool_value(true));
             }
-            install_bound_instance_function(
+            let format_fn = install_bound_instance_function(
                 obj,
                 "format",
                 date_time_format_bound_format_thunk as *const u8,
                 1,
             );
+            if !format_fn.is_null() {
+                crate::object::set_bound_native_closure_name(format_fn, "");
+                set_internal_field(
+                    obj,
+                    KEY_DTF_BOUND_FORMAT,
+                    js_nanbox_pointer(format_fn as i64),
+                );
+            }
             install_bound_instance_function(
                 obj,
                 "formatToParts",
@@ -1796,7 +1806,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         date_time_format_constructor_thunk as *const u8,
         0,
         &[
-            ("format", date_time_format_format_thunk as *const u8, 1),
+            // `format` is an accessor (getter) per ECMA-402 §11.4.3 — see below.
             (
                 "formatToParts",
                 date_time_format_to_parts_thunk as *const u8,
@@ -1814,7 +1824,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
-        &[],
+        &[("format", date_time_format_format_getter_thunk as *const u8)],
     );
     install_constructor(
         ns_obj,
