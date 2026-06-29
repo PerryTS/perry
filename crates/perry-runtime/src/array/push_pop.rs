@@ -42,6 +42,21 @@ pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
     }
 }
 
+/// Guard called from the static `push_single`/`push` codegen path so that
+/// frozen + non-writable-`length` checks fire even for `arr.push()` with no
+/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`.
+#[no_mangle]
+pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    guard_writable_length(arr);
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mut ArrayHeader {
     if arr.is_null() || (arr as usize) < 0x1000 {
@@ -561,13 +576,18 @@ pub extern "C" fn js_array_unshift_variadic(
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so a
-    // non-writable `length` throws before the no-op early return.
+    // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so both
+    // a frozen array and a non-writable `length` throw before the no-op early
+    // return. Frozen check must come first because freeze doesn't record "length"
+    // attrs, so `guard_writable_length` alone wouldn't catch it.
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
     guard_writable_length(arr);
     if count == 0 {
         return arr;
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();

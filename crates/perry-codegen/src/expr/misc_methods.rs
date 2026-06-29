@@ -482,8 +482,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let i32_v = blk.call(
-                I32,
+            let i64_v = blk.call(
+                I64,
                 "js_array_indexOf_jsvalue",
                 &[
                     (I64, &arr_handle),
@@ -492,7 +492,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, has_from),
                 ],
             );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            Ok(blk.sitofp(I64, &i64_v, DOUBLE))
         }
 
         // arr.lastIndexOf(value, fromIndex?) — mirrors ArrayIndexOf + the
@@ -514,8 +514,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let i32_v = blk.call(
-                I32,
+            let i64_v = blk.call(
+                I64,
                 "js_array_last_index_of_jsvalue",
                 &[
                     (I64, &arr_handle),
@@ -524,7 +524,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, has_from),
                 ],
             );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            Ok(blk.sitofp(I64, &i64_v, DOUBLE))
         }
 
         // -------- arr.forEach(callback) — invoke callback for side effects --------

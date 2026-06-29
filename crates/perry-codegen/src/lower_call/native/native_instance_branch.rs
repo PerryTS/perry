@@ -313,6 +313,9 @@
         let blk = ctx.block();
         let mut arr_handle = unbox_to_i64(blk, &arr_box);
         let orig_handle = arr_handle.clone();
+        // Spec §23.1.3.21: Set(O,"length",…,true) fires unconditionally — guard
+        // even when args is empty so frozen / non-writable-length throw correctly.
+        blk.call_void("js_array_push_guard", &[(I64, &arr_handle)]);
         for v in &lowered {
             let blk = ctx.block();
             arr_handle = blk.call(I64, "js_array_push_f64", &[(I64, &arr_handle), (DOUBLE, v)]);

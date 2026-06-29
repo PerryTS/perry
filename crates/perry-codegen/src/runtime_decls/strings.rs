@@ -969,10 +969,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
     // #2804: indexOf/includes carry an optional fromIndex (value, fromIndex, has_from).
-    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE, DOUBLE, I32]);
+    // Return I64 so indices >= 2^31 are not truncated.
+    module.declare_function("js_array_indexOf_jsvalue", I64, &[I64, DOUBLE, DOUBLE, I32]);
     module.declare_function(
         "js_array_last_index_of_jsvalue",
-        I32,
+        I64,
         &[I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);

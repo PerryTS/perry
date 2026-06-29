@@ -1739,6 +1739,12 @@ pub(super) unsafe fn real_array_mutator(
             nanbox_arr(arr)
         }
         "push" => {
+            // Spec §23.1.3.21 step 6 calls Set(O,"length",…) even with 0 args,
+            // so frozen / non-writable-length throws regardless of arg count.
+            if crate::array::array_is_frozen(arr) {
+                crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+            }
+            crate::array::guard_writable_length(arr);
             let mut a = arr;
             for i in 0..args_len {
                 a = crate::array::js_array_push_f64(a, arg_or_undef(args_ptr, args_len, i));
@@ -1746,12 +1752,11 @@ pub(super) unsafe fn real_array_mutator(
             crate::array::js_array_length(a) as f64
         }
         "unshift" => {
-            if args_len == 0 || args_ptr.is_null() {
-                crate::array::js_array_length(arr) as f64
-            } else {
-                let r = crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
-                crate::array::js_array_length(r) as f64
-            }
+            // Route everything through js_array_unshift_variadic so the
+            // frozen / non-writable-length guards fire even for 0-arg calls.
+            let count = if args_ptr.is_null() { 0 } else { args_len };
+            let r = crate::array::js_array_unshift_variadic(arr, args_ptr, count as u32);
+            crate::array::js_array_length(r) as f64
         }
         "sort" => {
             let cmp =

@@ -718,8 +718,14 @@ pub(super) unsafe fn dispatch_common(
 
         // Array methods - delegate to array runtime
         "push" if jsval.is_pointer() => {
-            let mut arr =
+            let arr_ptr =
                 jsval.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
+            // Spec §23.1.3.21: length is Set even with 0 args, so guards fire regardless
+            if crate::array::array_is_frozen(arr_ptr) {
+                crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+            }
+            crate::array::guard_writable_length(arr_ptr);
+            let mut arr = arr_ptr;
             if !args_ptr.is_null() {
                 for i in 0..args_len {
                     let val = *args_ptr.add(i);
