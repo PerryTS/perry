@@ -54,6 +54,13 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
 
+    if a_jsval.is_bigint() && b_jsval.is_bigint() {
+        if crate::bigint::js_bigint_eq(a_jsval.as_bigint_ptr(), b_jsval.as_bigint_ptr()) != 0 {
+            return f64::from_bits(TAG_TRUE);
+        }
+        return f64::from_bits(TAG_FALSE);
+    }
+
     // For everything else, bit-pattern equality
     if a_bits == b_bits {
         f64::from_bits(TAG_TRUE)

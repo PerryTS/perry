@@ -65,6 +65,9 @@ print("coerce", {
 const colorEnum = z.enum(["red", "blue", "green"]);
 print("literals.enums", {
   literal: z.literal("ready").safeParse("ready").success,
+  literalBigint: z.literal(2n).safeParse(2n).success,
+  literalBoolean: z.literal(true).safeParse(false).success,
+  literalNull: z.literal(null).parse(null),
   literalFail: z.literal(3).safeParse(4).success,
   enum: colorEnum.parse("blue"),
   enumBlue: colorEnum.enum.blue,
@@ -91,8 +94,13 @@ print("strings", {
   uuid: z.string().uuid().safeParse("550e8400-e29b-41d4-a716-446655440000").success,
   url: z.string().url().safeParse("https://example.com/a?b=1").success,
   datetime: z.string().datetime().safeParse("2020-01-02T03:04:05.000Z").success,
+  datetimeOffset: z.string().datetime({ offset: true }).safeParse("2020-01-02T03:04:05+02:00").success,
   ip: z.string().ip().safeParse("127.0.0.1").success,
+  ipv4: z.string().ip({ version: "v4" }).safeParse("127.0.0.1").success,
+  ipv6: z.string().ip({ version: "v6" }).safeParse("::1").success,
   length: z.string().length(3).safeParse("abc").success,
+  timePrecision: z.string().time({ precision: 0 }).safeParse("03:04:05.123").success,
+  includesPosition: z.string().includes("b", { position: 1 }).safeParse("abc").success,
   lowercase: z.string().toLowerCase().parse("ABC"),
   cuid: z.string().cuid().safeParse("ckj8lp2e90000v4j5x6j8s9abc").success,
   cuid2: z.string().cuid2().safeParse("tz4a98xxat96iws9zmbrgj3a").success,
@@ -106,15 +114,19 @@ print("strings", {
   time: z.string().time().safeParse("03:04:05").success,
   duration: z.string().duration().safeParse("P1Y2M3DT4H5M6S").success,
   cidr: z.string().cidr().safeParse("192.168.0.0/24").success,
+  cidrv4: z.string().cidr({ version: "v4" }).safeParse("192.168.0.0/24").success,
 });
 
 print("numbers", {
   finite: z.number().finite().safeParse(Number.POSITIVE_INFINITY).success,
+  min: z.number().min(2).safeParse(2).success,
+  max: z.number().max(2).safeParse(3).success,
   gt: z.number().gt(1).safeParse(2).success,
   gte: z.number().gte(2).safeParse(2).success,
   lt: z.number().lt(3).safeParse(3).success,
   lte: z.number().lte(3).safeParse(3).success,
   multiple: z.number().multipleOf(5).safeParse(15).success,
+  step: z.number().step(0.5).safeParse(1.5).success,
   positive: z.number().positive().safeParse(1).success,
   nonpositive: z.number().nonpositive().safeParse(0).success,
   negative: z.number().negative().safeParse(-1).success,
@@ -123,6 +135,8 @@ print("numbers", {
 });
 
 print("bigints", {
+  min: z.bigint().min(2n).safeParse(2n).success,
+  max: z.bigint().max(2n).safeParse(3n).success,
   gt: z.bigint().gt(1n).safeParse(2n).success,
   gte: z.bigint().gte(2n).safeParse(2n).success,
   lt: z.bigint().lt(3n).safeParse(3n).success,
@@ -176,6 +190,7 @@ const parsedSet = z.set(z.string()).min(2).parse(new Set(["a", "b"]));
 print("collections", {
   record: z.record(z.number()).safeParse({ a: 1, b: 2 }).success,
   keyedRecord: z.record(z.enum(["a", "b"]), z.number()).safeParse({ a: 1, b: 2 }).success,
+  stringKeyRecord: z.record(z.string().min(1), z.number()).safeParse({ "": 1 }).success,
   recordFail: z.record(z.number()).refine((scores) => Object.values(scores).every((score) => score >= 0)).safeParse({ a: 1, b: -1 }).success,
   map: Array.from(parsedMap.entries()),
   mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,
@@ -189,6 +204,8 @@ print("composition", {
   intersection: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
   or: z.string().or(z.number()).parse(5),
   and: z.object({ a: z.string() }).and(z.object({ b: z.boolean() })).parse({ a: "x", b: true }),
+  schemaArray: z.string().array().parse(["a", "b"]),
+  schemaOr: z.literal("a").or(z.literal("b")).parse("b"),
 });
 
 const csvSchema = z
@@ -226,6 +243,8 @@ print("modifiers", {
   nullableUnwrap: z.string().nullable().unwrap().parse("wrapped"),
   arrayElement: z.array(z.string()).element.parse("element"),
   promiseUnwrap: z.promise(z.number()).unwrap().parse(3),
+  isOptional: z.string().optional().isOptional(),
+  isNullable: z.string().nullable().isNullable(),
   readonlyFrozen: Object.isFrozen(z.object({ id: z.number() }).readonly().parse({ id: 1 })),
 });
 
