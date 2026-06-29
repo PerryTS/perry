@@ -324,6 +324,10 @@ print("modifiers", {
   isOptional: z.string().optional().isOptional(),
   isNullable: z.string().nullable().isNullable(),
   readonlyFrozen: Object.isFrozen(z.object({ id: z.number() }).readonly().parse({ id: 1 })),
+  readonlyArray: Object.isFrozen(z.array(z.string()).readonly().parse(["a"])),
+  readonlyTuple: Object.isFrozen(z.tuple([z.string()]).readonly().parse(["a"])),
+  readonlyMap: Object.isFrozen(z.map(z.string(), z.number()).readonly().parse(new Map([["a", 1]]))),
+  readonlySet: Object.isFrozen(z.set(z.string()).readonly().parse(new Set(["a"]))),
 });
 
 type Tree = { name: string; children?: Tree[] };
