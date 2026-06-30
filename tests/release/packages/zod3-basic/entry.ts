@@ -416,6 +416,16 @@ print("effects", {
   neverStatus: z.NEVER.status,
 });
 
+const customTokenResult = z.custom<string>((value) => typeof value === "string" && value.startsWith("tok_")).safeParse("tok_123");
+const customTokenFailure = z.custom<string>((value) => typeof value === "string" && value.startsWith("tok_"), {
+  message: "not a token",
+}).safeParse("bad");
+print("customSchemas", {
+  unchecked: z.custom<{ id: number }>().parse({ id: 1 }).id,
+  predicate: customTokenResult.success,
+  message: customTokenFailure.success ? "ok" : customTokenFailure.error.issues[0].message,
+});
+
 print("modifiers", {
   ostring: z.ostring().parse(undefined) === undefined,
   onumber: z.onumber().parse(undefined) === undefined,
