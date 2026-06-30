@@ -311,6 +311,58 @@ pub extern "C" fn js_object_define_property(
             if let Some(name) = super::super::metadata_key_to_string(key_value) {
                 let desc_ptr = extract_obj_ptr(descriptor_value);
                 if !desc_ptr.is_null() {
+                    let desc_has_value = desc_has_field(descriptor_value, b"value");
+                    let desc_has_writable = desc_has_field(descriptor_value, b"writable");
+                    if desc_has_value || desc_has_writable {
+                        let existing_attrs =
+                            super::super::get_property_attrs(target_cid as usize, &name).or_else(
+                                || {
+                                    if matches!(name.as_str(), "name" | "length" | "prototype") {
+                                Some(PropertyAttrs::new(false, false, true))
+                            } else if super::super::class_registry::class_own_static_field_value(
+                                target_cid, &name,
+                            )
+                            .is_some()
+                            {
+                                Some(PropertyAttrs::new(true, true, true))
+                            } else {
+                                None
+                            }
+                                },
+                            );
+                        let value = if desc_has_value {
+                            f64::from_bits(desc_read_field(descriptor_value, b"value").bits())
+                        } else {
+                            super::super::class_registry::class_own_static_field_value(
+                                target_cid, &name,
+                            )
+                            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+                        };
+                        super::super::class_registry::class_dynamic_prop_root_store(
+                            target_cid,
+                            name.clone(),
+                            value,
+                        );
+                        let read_bool = |field: &[u8]| -> Option<bool> {
+                            if !desc_has_field(descriptor_value, field) {
+                                return None;
+                            }
+                            let v = desc_read_field(descriptor_value, field);
+                            Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
+                        };
+                        let attrs = PropertyAttrs::new(
+                            read_bool(b"writable").unwrap_or_else(|| {
+                                existing_attrs.map(|a| a.writable()).unwrap_or(false)
+                            }),
+                            read_bool(b"enumerable").unwrap_or_else(|| {
+                                existing_attrs.map(|a| a.enumerable()).unwrap_or(false)
+                            }),
+                            read_bool(b"configurable").unwrap_or_else(|| {
+                                existing_attrs.map(|a| a.configurable()).unwrap_or(false)
+                            }),
+                        );
+                        super::super::set_property_attrs(target_cid as usize, name.clone(), attrs);
+                    }
                     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
                     let value_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);

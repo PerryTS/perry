@@ -342,6 +342,18 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     && super::class_registry::lookup_static_method_in_chain(class_id, "name")
                         .is_none()
                 {
+                    if let Some(v) =
+                        super::class_registry::class_own_static_field_value(class_id, &method_name)
+                    {
+                        let attrs = super::get_property_attrs(class_id as usize, &method_name)
+                            .unwrap_or_else(|| super::PropertyAttrs::new(false, false, true));
+                        return build_data_descriptor(
+                            v,
+                            attrs.writable(),
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
+                    }
                     if let Some(class_name) = super::class_registry::class_name_for_id(class_id) {
                         let s = crate::string::js_string_from_bytes(
                             class_name.as_ptr(),
@@ -431,7 +443,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     if let Some(v) =
                         super::class_registry::class_own_static_field_value(class_id, &method_name)
                     {
-                        return build_data_descriptor(v, true, true, true);
+                        let attrs = super::get_property_attrs(class_id as usize, &method_name)
+                            .unwrap_or_else(|| super::PropertyAttrs::new(true, true, true));
+                        return build_data_descriptor(
+                            v,
+                            attrs.writable(),
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
                     }
                 }
             }

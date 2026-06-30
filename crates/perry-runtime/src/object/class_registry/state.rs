@@ -100,7 +100,10 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
             .map(|props| {
                 props
                     .keys()
-                    .filter(|k| !k.starts_with('#'))
+                    .filter(|k| {
+                        !k.starts_with('#')
+                            && !matches!(k.as_str(), "length" | "name" | "prototype")
+                    })
                     .cloned()
                     .collect()
             })

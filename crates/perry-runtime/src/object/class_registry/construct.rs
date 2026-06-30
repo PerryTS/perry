@@ -831,6 +831,28 @@ pub unsafe extern "C" fn js_new_function_construct(
             super::super::class_constructors::replay_class_object_constructor(
                 func_value, class_cid, inst, args_ptr, args_len,
             );
+            let dynamic_parent = js_get_dynamic_parent_value(class_cid);
+            let dynamic_parent_is_error = matches!(
+                identify_global_builtin_constructor(dynamic_parent),
+                Some(
+                    "Error"
+                        | "TypeError"
+                        | "RangeError"
+                        | "ReferenceError"
+                        | "SyntaxError"
+                        | "EvalError"
+                        | "URIError"
+                )
+            );
+            if crate::object::class_meta_registry::extends_builtin_error(class_cid)
+                || dynamic_parent_is_error
+            {
+                let key = crate::string::js_string_from_bytes(
+                    b"constructor".as_ptr(),
+                    b"constructor".len() as u32,
+                );
+                super::super::js_object_set_field_by_name_nonenum(inst, key, func_value);
+            }
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
             // can't statically route an aliased parent, so attach the native
