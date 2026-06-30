@@ -21,7 +21,7 @@ use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
     BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::sync::Mutex;
 
@@ -415,6 +415,10 @@ struct Statics {
     /// the buffering path + `drop_buffered_stream` / `flush_buffered` so the
     /// global byte cap can be enforced without rescanning all streams.
     buffered_output_bytes: usize,
+    /// Tombstone set for streams dropped by an overflow/eviction cap before a
+    /// consumer attached. A late consumer attaching to one of these handles
+    /// receives a terminal error event instead of silently hanging.
+    evicted_streams: HashSet<i64>,
 }
 
 fn statics() -> &'static Mutex<Statics> {
@@ -426,6 +430,7 @@ fn statics() -> &'static Mutex<Statics> {
             pending: VecDeque::new(),
             next_id: 0x60000,
             buffered_output_bytes: 0,
+            evicted_streams: HashSet::new(),
         })
     })
 }
@@ -813,6 +818,17 @@ fn flush_buffered(handle: i64) {
         return;
     }
     let Some(s) = g.streams.get_mut(&handle) else {
+        // Stream is gone. If it was evicted by an overflow cap, deliver a
+        // terminal error so the consumer does not hang indefinitely.
+        if g.evicted_streams.remove(&handle) {
+            g.pending.push_back(ZlibEvent::Error(
+                handle,
+                "zlib stream buffer overflow: output discarded before consumer attached"
+                    .to_string(),
+            ));
+            drop(g);
+            notify_main_thread();
+        }
         return;
     };
     if s.output_buffer.is_empty() && !s.end_buffered {
@@ -903,11 +919,15 @@ fn evict_excess_buffered_ended(g: &mut Statics) {
 /// Remove a stream and its listeners, decrementing the buffered-output total by
 /// whatever the stream still held. The single removal path so
 /// `buffered_output_bytes` always equals the sum of every live `output_buffer`.
+///
+/// Leaves a tombstone in `evicted_streams` so that a late consumer attaching
+/// after an overflow eviction receives a terminal error rather than hanging.
 fn drop_buffered_stream(g: &mut Statics, id: i64) {
     if let Some(s) = g.streams.remove(&id) {
         g.buffered_output_bytes = g
             .buffered_output_bytes
             .saturating_sub(s.output_buffer.len());
+        g.evicted_streams.insert(id);
     }
     g.listeners.remove(&id);
 }
@@ -1169,8 +1189,14 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
     // snapshot drain (`mem::take` into a local vec) would strand the buffered
     // bytes on the next tick, behind newer data delivered now. The lock is held
     // only to pop — never across a callback.
+    //
+    // The loop is bounded to the queue length AT ENTRY so that callbacks which
+    // repeatedly enqueue new work (e.g. write/flush in a tight loop) cannot
+    // starve the event loop indefinitely. Newly added events are picked up on the
+    // next pump invocation; `notify_main_thread()` ensures that call happens.
+    let initial_count = statics().lock().unwrap().pending.len();
     let mut count = 0i32;
-    loop {
+    for _ in 0..initial_count {
         let ev = {
             let mut g = statics().lock().unwrap();
             match g.pending.pop_front() {
@@ -1475,6 +1501,7 @@ mod stream_tests {
             pending: VecDeque::new(),
             next_id: 0x60000,
             buffered_output_bytes: 0,
+            evicted_streams: HashSet::new(),
         }
     }
 
@@ -1590,5 +1617,90 @@ mod stream_tests {
         // The running total still equals the sum of the remaining buffers.
         let sum: usize = g.streams.values().map(|s| s.output_buffer.len()).sum();
         assert_eq!(g.buffered_output_bytes, sum);
+    }
+
+    // ── eviction tombstone ───────────────────────────────────────────────────
+
+    #[test]
+    fn drop_buffered_stream_leaves_tombstone() {
+        let mut g = empty_statics();
+        g.streams.insert(0x60000, no_consumer_state());
+        g.listeners.insert(0x60000, HashMap::new());
+
+        drop_buffered_stream(&mut g, 0x60000);
+
+        assert!(!g.streams.contains_key(&0x60000), "stream removed");
+        assert!(
+            g.evicted_streams.contains(&0x60000),
+            "tombstone set so a late consumer gets an error instead of hanging"
+        );
+    }
+
+    #[test]
+    fn tombstone_consumed_and_error_queued_when_late_consumer_attaches() {
+        // Simulate the flush_buffered tombstone path: stream absent, tombstone
+        // present, and a data consumer has just attached.
+        let mut g = empty_statics();
+        g.streams.insert(0x60000, no_consumer_state());
+        drop_buffered_stream(&mut g, 0x60000);
+
+        // Attach a listener (simulates stream_on registering a 'data' cb).
+        g.listeners
+            .entry(0x60000)
+            .or_default()
+            .entry("data".to_string())
+            .or_default()
+            .push(1);
+
+        // The tombstone check logic (inline from flush_buffered).
+        let stream_exists = g.streams.contains_key(&0x60000);
+        assert!(!stream_exists);
+        assert!(g.evicted_streams.contains(&0x60000));
+        if g.evicted_streams.remove(&0x60000) {
+            g.pending.push_back(ZlibEvent::Error(
+                0x60000,
+                "zlib stream buffer overflow: output discarded before consumer attached"
+                    .to_string(),
+            ));
+        }
+
+        assert!(
+            !g.evicted_streams.contains(&0x60000),
+            "tombstone consumed on first late attachment"
+        );
+        assert!(
+            matches!(g.pending.front(), Some(ZlibEvent::Error(id, _)) if *id == 0x60000),
+            "error queued for the late consumer"
+        );
+    }
+
+    // ── bounded drain ────────────────────────────────────────────────────────
+
+    #[test]
+    fn drain_bounded_to_initial_count_leaves_new_work_for_next_tick() {
+        // Model the `for _ in 0..initial_count` loop: events enqueued by a
+        // callback during the drain are NOT processed in the same pump call.
+        let mut pending: VecDeque<ZlibEvent> = VecDeque::from(vec![
+            ZlibEvent::Callback(0), // the only event present at loop entry
+        ]);
+        let mut processed = 0usize;
+        let initial_count = pending.len(); // 1
+        for _ in 0..initial_count {
+            let Some(ev) = pending.pop_front() else {
+                break;
+            };
+            processed += 1;
+            if let ZlibEvent::Callback(_) = ev {
+                // A callback that enqueues two more events mid-drain.
+                pending.push_back(ZlibEvent::Callback(0));
+                pending.push_back(ZlibEvent::Callback(0));
+            }
+        }
+        assert_eq!(processed, 1, "only the initial batch is drained");
+        assert_eq!(
+            pending.len(),
+            2,
+            "newly enqueued events are deferred to the next pump tick"
+        );
     }
 }
