@@ -12,6 +12,37 @@ function summarizeIssues(error: z.ZodError): { path: string; code: string; messa
   }));
 }
 
+function issueMetadata(error: z.ZodError) {
+  return error.issues.map((issue) => {
+    const metadata: Record<string, unknown> = {
+      code: issue.code,
+      path: issue.path.join("."),
+    };
+    for (const key of [
+      "expected",
+      "received",
+      "keys",
+      "options",
+      "validation",
+      "minimum",
+      "maximum",
+      "inclusive",
+      "exact",
+      "multipleOf",
+      "type",
+    ]) {
+      if (key in issue) {
+        metadata[key] = issue[key as keyof typeof issue];
+      }
+    }
+    return metadata;
+  });
+}
+
+function issueMetadataFromResult(result: z.SafeParseReturnType<unknown, unknown>) {
+  return result.success ? [] : issueMetadata(result.error);
+}
+
 const userSchema = z.object({
   id: z.number().int().positive(),
   name: z.string().min(2).transform((value) => value.trim().toUpperCase()),
@@ -576,6 +607,16 @@ if (!formatted.success) {
     discriminatedPath: discriminatedIssue?.path.join("."),
   });
 }
+
+print("issueMetadata", {
+  literal: issueMetadataFromResult(z.literal("ready").safeParse("no")),
+  enum: issueMetadataFromResult(z.enum(["red", "blue"]).safeParse("green")),
+  strict: issueMetadataFromResult(z.object({ id: z.number() }).strict().safeParse({ id: 1, extra: true })),
+  invalidDate: issueMetadataFromResult(z.date().safeParse(new Date("bad"))),
+  tooBigArray: issueMetadataFromResult(z.array(z.string()).max(1).safeParse(["a", "b"])),
+  tooSmallNumber: issueMetadataFromResult(z.number().min(2).safeParse(1)),
+  notMultiple: issueMetadataFromResult(z.number().multipleOf(5).safeParse(12)),
+});
 
 const manualError = new z.ZodError([]);
 manualError.addIssue({ code: z.ZodIssueCode.custom, path: ["manual"], message: "manual issue" });
