@@ -558,50 +558,58 @@ pub extern "C" fn js_regexp_new(
     // ALSO rejects it — otherwise it is a valid JS pattern we route through
     // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
     // the regex crate fails but fancy-regex succeeds; check both here.
+    //
+    // PERF (#5777 follow-up): the ENTIRE validation block is gated on a
+    // REGEX_CACHE miss. Regex validity is a pure function of (pattern, flags):
+    // an invalid pattern throws here BEFORE `get_or_compile_regex` can ever
+    // cache it, and both writers of REGEX_CACHE — this function and
+    // `regex/compile.rs` (`RegExp.prototype.compile`) — run these exact checks
+    // first, so any entry already in the cache is provably valid and
+    // re-validating it can only burn CPU. #5777 already skipped the expensive
+    // both-engines recompile on a hit; this extends the skip to the "cheap"
+    // JS-syntax checks too, which are not actually cheap:
+    // `has_invalid_repeated_quantifier` does a
+    // `pattern.chars().collect::<Vec<char>>()` (a ~51 KB allocation for a
+    // 12,807-char pattern) plus an O(n) scan on EVERY `new RegExp(...)`. The
+    // common `string-width`/`emoji-regex` npm packages construct a fresh
+    // ~12,807-char `/…/g` literal on every measurement and a layout pass can
+    // call them thousands of times, so this re-validation — not the
+    // already-cached compile — became the top hot frame in profiles.
     {
-        if has_invalid_repeated_quantifier(pattern_str) {
-            throw_regexp_syntax_error(&format!(
-                "Invalid regular expression: /{}/: invalid pattern",
-                pattern_str
-            ));
-        }
-        // Annex B.1.4 legacy escapes (`\1` non-backref octal, `\0DD`, `\8`/`\9`,
-        // `\c` without a control letter) are accepted in sloppy patterns but are
-        // a hard SyntaxError under the `/u` (and `/v`) flag — `js_regex_to_rust`
-        // would otherwise silently relax them. (test262 RegExp/
-        // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
-        if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
-            throw_regexp_syntax_error(&format!(
-                "Invalid regular expression: /{}/: invalid pattern",
-                pattern_str
-            ));
-        }
-        // The remaining Annex B.1.4 leniencies (lone `]`/`}`, incomplete `{`
-        // quantifiers, `\d`-style range endpoints, quantified lookarounds, and
-        // forbidden IdentityEscapes) are likewise hard errors under `/u`. Gated
-        // on `u` specifically — `/v`'s ClassSetExpression grammar differs.
-        if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
-            throw_regexp_syntax_error(&format!(
-                "Invalid regular expression: /{}/: invalid pattern",
-                pattern_str
-            ));
-        }
-        // The expensive part of validation is compiling the pattern with both
-        // engines just to confirm it is well-formed. That is REDUNDANT once
-        // this exact (pattern, flags) is in REGEX_CACHE: `get_or_compile_regex`
-        // compiled it on an earlier call, and a cached pattern is by definition
-        // compilable, so the "both engines fail" branch below can never fire
-        // for it. Skipping the recompile on a cache hit is what turns
-        // string-width's per-measurement `emojiRegex()` — which returns a fresh
-        // `/…/g` literal each call — from recompiling the 12807-char emoji
-        // automaton EVERY time (observed: 99% CPU for minutes during ink's
-        // flexbox `calculateLayout`) into a single cache lookup. The cheap
-        // JS-syntax checks above still run on every call.
         let in_cache = REGEX_CACHE.with(|c| {
             c.borrow()
                 .contains_key(&(pattern_str.to_string(), flags_str.to_string()))
         });
         if !in_cache {
+            if has_invalid_repeated_quantifier(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // Annex B.1.4 legacy escapes (`\1` non-backref octal, `\0DD`, `\8`/`\9`,
+            // `\c` without a control letter) are accepted in sloppy patterns but are
+            // a hard SyntaxError under the `/u` (and `/v`) flag — `js_regex_to_rust`
+            // would otherwise silently relax them. (test262 RegExp/
+            // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
+            if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // The remaining Annex B.1.4 leniencies (lone `]`/`}`, incomplete `{`
+            // quantifiers, `\d`-style range endpoints, quantified lookarounds, and
+            // forbidden IdentityEscapes) are likewise hard errors under `/u`. Gated
+            // on `u` specifically — `/v`'s ClassSetExpression grammar differs.
+            if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // The expensive part of validation: compile the pattern with both
+            // engines just to confirm it is well-formed.
             let translated = js_regex_to_rust(pattern_str);
             if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
                 throw_regexp_syntax_error(&format!(
