@@ -1602,6 +1602,111 @@ pub fn try_lower_extern_func_call(
                 abi_slot_index += 1;
             }
         }
+
+        // Issue #5812 item 4 — pad omitted trailing manifest params.
+        //
+        // The loop above only marshals the arguments the caller actually
+        // passed. When a call omits trailing params that the
+        // `perry.nativeLibrary.functions` manifest declares — e.g.
+        // `textureCreateView(tex)` where the `descriptor` param is
+        // optional — the emitted call and its `pending_declares`
+        // declaration had fewer ABI slots than the native function reads.
+        // The C/Rust function then read an uninitialized register/stack
+        // slot for the missing param; for a `JsValue`/`string` descriptor
+        // that garbage got dereferenced (the `read_string` crash on win64
+        // in #5812).
+        //
+        // Fill each omitted slot with a defined null/zero sentinel of the
+        // correct ABI type. This is deliberately NOT routed through the
+        // `js_native_abi_check_*` validators the present-arg path uses:
+        // those throw on `undefined`, which would turn a previously
+        // (luckily) working "native fn ignores the trailing param" call
+        // into a runtime throw. A raw null/zero is what the wrappers
+        // already expect for absent optionals — `read_string`/`read_bytes`
+        // null-check the handle and return `None`, and numeric defaults
+        // read as 0. Structural multi-slot descriptors (pod / pod+count /
+        // buffer+len) genuinely need an object/buffer and have no sound
+        // empty form, so an omitted one routes through the normal helper
+        // (defined error) rather than fabricating a struct.
+        if let Some((manifest_params, _)) = manifest_sig.as_ref() {
+            if manifest_params.len() > args.len() {
+                // `manifest_sig` is owned, but the `lower_*` helpers borrow
+                // `ctx` mutably — clone the omitted descriptors so the loop
+                // doesn't hold a borrow on `manifest_sig`.
+                let omitted: Vec<(usize, NativeAbiType)> = manifest_params
+                    .iter()
+                    .enumerate()
+                    .skip(args.len())
+                    .map(|(idx, d)| (idx, d.clone()))
+                    .collect();
+                for (idx, descriptor) in &omitted {
+                    match descriptor {
+                        NativeAbiType::Pod(pod) => {
+                            lower_manifest_pod_param(
+                                ctx, descriptor, pod, *idx, abi_slot_index,
+                                &Expr::Undefined, &mut lowered, &mut arg_types,
+                            )?;
+                        }
+                        NativeAbiType::PodAndCount(pod) => {
+                            lower_manifest_pod_view_param(
+                                ctx, descriptor, pod, *idx, abi_slot_index,
+                                &Expr::Undefined, &mut lowered, &mut arg_types,
+                            )?;
+                        }
+                        NativeAbiType::BufferAndLen => {
+                            lower_buffer_and_len_param(
+                                ctx, descriptor, *idx, abi_slot_index,
+                                &double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                                &mut lowered, &mut arg_types,
+                            );
+                        }
+                        // Single-slot scalars / pointers / handles: emit a
+                        // null/zero of the right ABI type directly.
+                        // `String` and `Json` both occupy a single `*const
+                        // StringHeader` slot; a null header decodes to
+                        // `None`/empty in the wrapper (`read_string`/serde
+                        // null-check), which is the right "absent" value.
+                        NativeAbiType::String | NativeAbiType::Json => {
+                            let null_ptr = ctx.block().inttoptr(I64, "0");
+                            lowered.push(null_ptr);
+                            arg_types.push(PTR);
+                        }
+                        NativeAbiType::F32 => {
+                            lowered.push("0.0".to_string());
+                            arg_types.push(F32);
+                        }
+                        NativeAbiType::Bool
+                        | NativeAbiType::I32
+                        | NativeAbiType::U32
+                        | NativeAbiType::BufferLen => {
+                            lowered.push("0".to_string());
+                            arg_types.push(I32);
+                        }
+                        NativeAbiType::I64
+                        | NativeAbiType::I64String
+                        | NativeAbiType::U64
+                        | NativeAbiType::USize
+                        | NativeAbiType::Ptr
+                        | NativeAbiType::HandleId
+                        | NativeAbiType::Handle(_)
+                        | NativeAbiType::Promise(_) => {
+                            lowered.push("0".to_string());
+                            arg_types.push(I64);
+                        }
+                        // JsValue / F64 / Void all occupy a NaN-boxed
+                        // `double` slot; `undefined` is the natural empty.
+                        NativeAbiType::JsValue | NativeAbiType::F64 | NativeAbiType::Void => {
+                            lowered.push(double_literal(f64::from_bits(
+                                crate::nanbox::TAG_UNDEFINED,
+                            )));
+                            arg_types.push(DOUBLE);
+                        }
+                    }
+                    abi_slot_index += descriptor.abi_slot_count();
+                }
+            }
+        }
+
         let arg_slices: Vec<(crate::types::LlvmType, &str)> = arg_types
             .iter()
             .zip(lowered.iter())
