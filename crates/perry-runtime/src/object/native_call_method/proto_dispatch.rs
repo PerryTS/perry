@@ -49,7 +49,10 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     // `new` fall back to the allocated object, which is what Object.seal tests
     // expect (they don't care whether the result is callable, only that sealing
     // doesn't throw).
-    if matches!(name, "Function" | "GeneratorFunction" | "AsyncGeneratorFunction") {
+    if matches!(
+        name,
+        "Function" | "GeneratorFunction" | "AsyncGeneratorFunction"
+    ) {
         return None;
     }
     let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
