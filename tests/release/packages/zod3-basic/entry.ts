@@ -592,6 +592,18 @@ const asyncPreprocessSchema = z.preprocess(
   async (value) => (typeof value === "string" ? value.trim() : value),
   z.string().min(2),
 );
+const numericPreprocessSchema = z.preprocess(
+  (value) => (typeof value === "string" ? Number(value) : value),
+  z.number().min(2),
+);
+const objectPipelineSchema = z.pipeline(
+  z.string().transform((value) => ({ len: value.length })),
+  z.object({ len: z.number().min(2) }),
+);
+const transformIssueSchema = z.string().transform((value, ctx) => {
+  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "warn" });
+  return value.length;
+});
 const promisedNumber = await z.promise(z.number()).parse(Promise.resolve(5));
 const methodPromisedNumber = await z.number().promise().parse(Promise.resolve(3));
 const asyncParsed = await asyncSchema.parseAsync("ok");
@@ -638,6 +650,14 @@ print("asyncIssues", {
   pipe: issueMetadataFromResult(await asyncPipeSchema.safeParseAsync("x")),
   preprocess: issueMetadataFromResult(await asyncPreprocessSchema.safeParseAsync(" x ")),
   promiseInner: await issueMetadataFromThrown(() => z.promise(z.number()).parse(Promise.resolve("bad"))),
+});
+
+print("effectFactories", {
+  preprocessNumber: numericPreprocessSchema.parse("3"),
+  preprocessIssue: issueMetadataFromResult(numericPreprocessSchema.safeParse("1")),
+  pipelineObject: objectPipelineSchema.parse("abc"),
+  pipelineIssue: issueMetadataFromResult(objectPipelineSchema.safeParse("a")),
+  transformIssue: issueMetadataFromResult(transformIssueSchema.safeParse("abc")),
 });
 
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
