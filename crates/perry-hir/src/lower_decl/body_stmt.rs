@@ -1175,32 +1175,54 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     init: Some(next_call.clone()),
                 });
 
-                let item_name = if let ast::ForHead::VarDecl(var_decl) = &for_of_stmt.left {
-                    if let Some(decl) = var_decl.decls.first() {
-                        if let ast::Pat::Ident(ident) = &decl.name {
-                            ident.id.sym.to_string()
-                        } else {
-                            "__gen_item".to_string()
-                        }
+                let binding_pat: Option<&ast::Pat> =
+                    if let ast::ForHead::VarDecl(var_decl) = &for_of_stmt.left {
+                        var_decl.decls.first().map(|d| &d.name)
                     } else {
-                        "__gen_item".to_string()
-                    }
-                } else {
-                    "__gen_item".to_string()
+                        None
+                    };
+                let value_expr = Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(result_id)),
+                    property: "value".to_string(),
                 };
-                let item_id = ctx.define_local(item_name.clone(), Type::Any);
 
                 let mut body_stmts: Vec<Stmt> = Vec::new();
-                body_stmts.push(Stmt::Let {
-                    id: item_id,
-                    name: item_name,
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(result_id)),
-                        property: "value".to_string(),
-                    }),
-                });
+                match binding_pat {
+                    Some(ast::Pat::Ident(ident)) => {
+                        let name = ident.id.sym.to_string();
+                        let id = ctx.define_local(name.clone(), Type::Any);
+                        body_stmts.push(Stmt::Let {
+                            id,
+                            name,
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(value_expr),
+                        });
+                    }
+                    Some(pat) => {
+                        let mut var_ids = Vec::new();
+                        collect_for_of_pattern_leaves(ctx, pat, &mut var_ids);
+                        let mut var_idx = 0usize;
+                        emit_for_of_pattern_binding(
+                            ctx,
+                            pat,
+                            value_expr,
+                            &var_ids,
+                            &mut var_idx,
+                            &mut body_stmts,
+                        )?;
+                    }
+                    None => {
+                        let item_id = ctx.define_local("__gen_item".to_string(), Type::Any);
+                        body_stmts.push(Stmt::Let {
+                            id: item_id,
+                            name: "__gen_item".to_string(),
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(value_expr),
+                        });
+                    }
+                }
                 let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
                 if is_node_readable_for_await
                     || is_filehandle_readlines_for_await

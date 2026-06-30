@@ -62,6 +62,11 @@ crates/perry/src/commands/compile/run_pipeline.rs
 # `EvalEnv`/`FIELD_*`/helpers + an `eval` sub-module) rather than a mechanical
 # file cut — deferred to a focused follow-up. Tracked under #1435.
 crates/perry-runtime/src/node_vm.rs
+# Generator for-of destructuring in function bodies: this PR (#5807) added
+# ~22 net lines for pattern-matching VarDecl heads in async-generator iterator
+# bodies. The file is 2018 lines (18 over the gate). A structural split of the
+# generator for-of lowering into a sibling module is tracked as a follow-up.
+crates/perry-hir/src/lower_decl/body_stmt.rs
 EOF
 )
 

@@ -356,7 +356,14 @@ pub(crate) fn lower_generic_property_get(
     let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
     let slot = ctx.block().load(I64, &cache_slot_ptr);
     let offset = ctx.block().shl(I64, &slot, "3");
-    let base = ctx.block().add(I64, &obj_handle, "24");
+    // arm64_32 watchOS: the object fields region begins at
+    // `size_of::<ObjectHeader>()` past the user pointer — 24 on 64-bit, 20 on
+    // ILP32 (the trailing `keys_array` pointer is 4 bytes there). A hardcoded
+    // 24 would read every cached property 4 bytes off on a 32-bit watch. Derive
+    // it from the target triple (no-op on 64-bit; see `target_layout`).
+    let obj_header_size =
+        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let base = ctx.block().add(I64, &obj_handle, &obj_header_size);
     let field_addr = ctx.block().add(I64, &base, &offset);
     let field_ptr = ctx.block().inttoptr(I64, &field_addr);
     let val_hit = ctx.block().load(DOUBLE, &field_ptr);

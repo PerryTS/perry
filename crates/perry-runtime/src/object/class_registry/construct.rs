@@ -883,14 +883,27 @@ pub unsafe extern "C" fn js_new_function_construct(
             let dp = JSValue::from_bits(dyn_proto.to_bits());
             if dp.is_pointer() {
                 let raw = dp.as_pointer::<u8>() as usize;
-                let is_array = raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
-                    let hdr = unsafe {
-                        &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
-                    };
-                    hdr.obj_type == crate::gc::GC_TYPE_ARRAY
-                        || hdr.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
-                };
-                if is_array {
+                // Function objects (closures) are identified by CLOSURE_MAGIC,
+                // not a GC type tag — check them first.
+                let is_fn = crate::closure::is_closure_ptr(raw);
+                let has_user_proto = is_fn
+                    || (raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
+                        let hdr = unsafe {
+                            &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+                        };
+                        // Arrays: test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*.
+                        // Objects: Intl/Temporal constructors install .prototype via
+                        // closure_set_dynamic_prop (bypassing js_set_function_prototype),
+                        // so CLASS_PROTOTYPE_OBJECTS has no entry; ensure_function_prototype_object
+                        // would otherwise create a fresh empty proto and overwrite .prototype.
+                        matches!(
+                            hdr.obj_type,
+                            crate::gc::GC_TYPE_ARRAY
+                                | crate::gc::GC_TYPE_LAZY_ARRAY
+                                | crate::gc::GC_TYPE_OBJECT
+                        )
+                    });
+                if has_user_proto {
                     super::super::prototype_chain::object_set_static_prototype(
                         obj_ptr as usize,
                         dyn_proto.to_bits(),

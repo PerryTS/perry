@@ -265,6 +265,39 @@ pub(super) unsafe fn dispatch_common(
                     .unwrap_or(true);
                 return Some(f64::from_bits(JSValue::bool(enumerable).bits()));
             }
+            // exotic: Date, RegExp, Error, Temporal, Promise — none of their
+            // built-in own properties are enumerable; only user-added expando
+            // keys can be. Without this check, a regex receiver falls through to
+            // the ObjectHeader path below and mis-reads the RegExpHeader bytes,
+            // returning garbage instead of `false` for accessor properties like
+            // `global`/`ignoreCase`/`multiline` (test262 S15.10.7.x_A8).
+            if let Some(kind) = super::exotic_expando::exotic_expando_kind(raw) {
+                use super::exotic_expando::ExoticKind;
+                let Some(key_name) = super::has_own_helpers::str_from_string_header(key_str) else {
+                    return Some(f64::from_bits(JSValue::bool(false).bits()));
+                };
+                // User-added expando property — honour the stored descriptor.
+                if super::exotic_expando::exotic_has_own_property(kind, raw, key_name) {
+                    let enumerable = get_property_attrs(raw, key_name)
+                        .map(|attrs| attrs.enumerable())
+                        .unwrap_or(true);
+                    return Some(f64::from_bits(JSValue::bool(enumerable).bits()));
+                }
+                // Error: delegate to the per-builtin-key enumerability table.
+                if matches!(kind, ExoticKind::Error) {
+                    let enumerable = crate::error::js_error_builtin_own_property_is_enumerable(
+                        raw as *mut crate::error::ErrorHeader,
+                        key_name,
+                    )
+                    .unwrap_or(false);
+                    return Some(f64::from_bits(JSValue::bool(enumerable).bits()));
+                }
+                // RegExp: `lastIndex` is a non-enumerable writable own property;
+                // prototype accessors (global, ignoreCase, multiline, …) are not
+                // own at all. Date / Temporal / Promise have no enumerable builtin
+                // own properties either.
+                return Some(f64::from_bits(JSValue::bool(false).bits()));
+            }
             if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
                 let gc_header =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

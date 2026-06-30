@@ -378,17 +378,28 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         }
         "String" => {
             // #4713: generic-`this` char-access methods + `Symbol.iterator`, and
-            // (this change) every other coercing method (slice/indexOf/split/
-            // replace/…) get real reflective thunks (RequireObjectCoercible +
-            // ToString) installed by `install_string_proto_methods` so
+            // every other coercing method (slice/indexOf/split/replace/…) get real
+            // reflective thunks (RequireObjectCoercible + ToString) so
             // `String.prototype.slice.call(receiver, …)` works on a boxed/object
-            // receiver. Only `toString` (and `valueOf`, via OBJECT_PROTO_METHODS)
-            // stay no-op-backed: they are brand-checked (must throw on a
-            // non-String `this`), not ToString-coercing, so a generic coercing
-            // thunk would be wrong.
+            // receiver.
             string_proto_thunks::install_string_proto_methods("String", proto_obj);
-            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
+            // Install noop Object methods first (includes a noop `valueOf`), then
+            // override `toString` and `valueOf` with brand-checking thunks — they
+            // must throw TypeError for non-String receivers (ECMA-262 §22.1.3.28
+            // `thisStringValue`), unlike the generic coercing methods above.
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            install_proto_method(
+                proto_obj,
+                "toString",
+                primitive_proto_thunks::string_proto_to_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                primitive_proto_thunks::string_proto_value_of_thunk as *const u8,
+                0,
+            );
         }
         "Number" => {
             install_noop_proto_methods(
@@ -538,6 +549,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // brand-checks `this`, reads `[[DateValue]]` before coercing args,
             // then mutates the cell. Also after the OBJECT_PROTO_METHODS block.
             date_proto_thunks::install_date_proto_setters(proto_obj);
+            // Overwrite the no-op toLocaleString with a real Intl-aware thunk
+            // that forwards locale/options to temporal_locale_string.
+            date_proto_thunks::install_date_proto_to_locale_string(proto_obj);
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",

@@ -1032,7 +1032,8 @@ pub unsafe extern "C" fn js_native_call_method(
         // the call result was an empty object stub instead of the
         // dynamic-prop closure's return value.
         let is_closure = gc_type == crate::gc::GC_TYPE_CLOSURE
-            || *((obj as *const u8).add(12) as *const u32) == crate::closure::CLOSURE_MAGIC;
+            || *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32)
+                == crate::closure::CLOSURE_MAGIC;
         if is_closure {
             let dyn_val = crate::closure::closure_get_dynamic_prop(obj as usize, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {

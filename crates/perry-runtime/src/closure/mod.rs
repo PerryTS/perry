@@ -23,6 +23,7 @@ pub use alloc::{
     js_closure_set_capture_f64, js_closure_set_capture_ptr, note_closure_capture_slot,
     rebuild_closure_layout_and_barriers, scan_singleton_closure_roots_mut, ClosureHeader,
     CLOSURE_ALLOC_COUNT, CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
+    CLOSURE_TYPE_TAG_OFFSET,
 };
 
 pub use registry::{

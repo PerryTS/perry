@@ -50,7 +50,9 @@ use super::{
 /// A `new` callee that is a primitive literal — never a constructor, so
 /// `new <it>(…)` is a `TypeError`. Covers number / bool / null / undefined /
 /// string / bigint literals (the cases the runtime construct path can't always
-/// tag-reject, notably `f64` numbers).
+/// tag-reject, notably `f64` numbers) and regex literals (`new /z/()` is a
+/// TypeError: a RegExp instance has no [[Construct]] internal method,
+/// test262 S15.10.7_A2_T1 / S15.10.7_A2_T2).
 fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
     matches!(
         callee,
@@ -62,6 +64,7 @@ fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
             | Expr::String(_)
             | Expr::WtfString(_)
             | Expr::BigInt(_)
+            | Expr::RegExp { .. }
     )
 }
 

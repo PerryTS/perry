@@ -335,7 +335,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
         return false;
     }
     unsafe {
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         type_tag == CLOSURE_MAGIC
     }
 }
@@ -643,7 +643,7 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
     }
     // Check CLOSURE_MAGIC
     unsafe {
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag != CLOSURE_MAGIC {
             return val;
         }
@@ -664,8 +664,9 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         let new_closure = js_closure_alloc(func_ptr, raw_count);
         let source_bits = val_handle.get_nanbox_f64().to_bits();
         let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let source_type_tag =
-            std::ptr::read_volatile((source_ptr as *const u8).add(12) as *const u32);
+        let source_type_tag = std::ptr::read_volatile(
+            (source_ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+        );
         if source_type_tag != CLOSURE_MAGIC {
             return val_handle.get_nanbox_f64();
         }
@@ -873,8 +874,9 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         let new_closure = js_closure_alloc(func_ptr, raw_count);
         let source_bits = closure_handle.get_nanbox_u64();
         let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let source_type_tag =
-            std::ptr::read_volatile((source_ptr as *const u8).add(12) as *const u32);
+        let source_type_tag = std::ptr::read_volatile(
+            (source_ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+        );
         if source_type_tag != CLOSURE_MAGIC {
             return source_bits;
         }

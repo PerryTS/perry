@@ -279,6 +279,27 @@ pub fn temporal_kind(value: f64) -> Option<TemporalKind> {
     temporal_value_ref(value).map(TemporalValue::kind)
 }
 
+/// The calendar identifier string of a Temporal value that carries a calendar
+/// (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay, ZonedDateTime),
+/// or `None` for types without a calendar (Instant, PlainTime, Duration) or
+/// non-Temporal values.
+#[cfg(feature = "temporal")]
+pub fn temporal_calendar_id(value: f64) -> Option<&'static str> {
+    match temporal_value_ref(value)? {
+        TemporalValue::PlainDate(d) => Some(d.calendar().identifier()),
+        TemporalValue::PlainDateTime(dt) => Some(dt.calendar().identifier()),
+        TemporalValue::PlainYearMonth(ym) => Some(ym.calendar().identifier()),
+        TemporalValue::PlainMonthDay(md) => Some(md.calendar().identifier()),
+        TemporalValue::ZonedDateTime(z) => Some(z.calendar().identifier()),
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "temporal"))]
+pub fn temporal_calendar_id(_value: f64) -> Option<&'static str> {
+    None
+}
+
 /// Drop the embedded `temporal_rs` value when a Temporal cell is swept,
 /// releasing any Rust-heap it owns (e.g. a `ZonedDateTime` timezone string).
 /// Registered as the `TemporalCleanup` finalize hook in `gc/types.rs`.

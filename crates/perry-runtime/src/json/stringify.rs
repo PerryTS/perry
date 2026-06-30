@@ -276,6 +276,18 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         serialize_bigint(value, buf);
         return;
     }
+    // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN, so it
+    // would otherwise fall into the `is_nan()` → "null" arm below and silently
+    // drop the value. Decode and emit the signed integer. Integer columns from
+    // the sqlite binding (and other int32-tagged numbers) funnel here; numeric
+    // literals are stored as plain f64 doubles by codegen and never take this
+    // branch. Mirrors the BigInt funnel above.
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == INT32_TAG {
+        let n = (value.to_bits() & INT32_MASK) as u32 as i32;
+        let mut itoa_buf = itoa::Buffer::new();
+        buf.push_str(itoa_buf.format(n));
+        return;
+    }
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
     // `stringify_value`/`stringify_value_depth` before this numeric funnel —
     // so no Date detection is needed here anymore.
@@ -510,7 +522,8 @@ pub(crate) unsafe fn is_closure_value(bits: u64) -> bool {
             return false;
         }
         // Check for ClosureHeader magic at offset 8 (type_tag field)
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag =
+            *((ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         type_tag == crate::closure::CLOSURE_MAGIC
     } else {
         false
@@ -1204,7 +1217,8 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             // in a Next.js render object crashed exactly here). Real closures
             // live far above the band.
             if crate::value::addr_class::is_above_handle_band(ptr_candidate as usize) {
-                let type_tag = *(ptr_candidate.add(12) as *const u32);
+                let type_tag =
+                    *(ptr_candidate.add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     found = true;
                     break;

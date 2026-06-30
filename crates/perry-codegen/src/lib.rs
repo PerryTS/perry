@@ -25,6 +25,7 @@ pub mod runtime_decls;
 pub(crate) mod stmt;
 pub mod strings;
 pub mod stubs;
+pub mod target_layout;
 pub(crate) mod type_analysis;
 pub(crate) mod type_analysis_class_fields;
 pub(crate) mod type_analysis_facts;

@@ -201,18 +201,37 @@ pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRo
 
 /// #3857: `JSON.stringify` of a boxed primitive wrapper (`new String("hi")`,
 /// `new Number(5)`, `new Boolean(true)`, `Object(1n)`) serializes the
-/// *underlying primitive*, not the wrapper object's (empty) own-property set —
-/// otherwise it produced `{}`. Returns the NaN-boxed primitive payload for
-/// String/Number/Boolean/BigInt wrappers; `None` for Symbol wrappers (JSON
-/// omits symbols) and for any non-wrapper value.
+/// *underlying primitive*, not the wrapper object's (empty) own-property set.
+///
+/// Per ECMA-262 §25.5.2.2 step 4:
+/// - Boolean: use [[BooleanData]] directly (stored payload).
+/// - Number: call ToNumber(wrapper) — honours a custom `valueOf` on the object.
+/// - String: call ToString(wrapper) — honours a custom `toString` on the object.
+/// - BigInt: throws `TypeError` ("Do not know how to serialize a BigInt") —
+///   some serializer paths (e.g. `write_replaced_scalar`) write raw BigInts as
+///   plain strings rather than throwing, so we must reject here proactively.
+/// - Symbol/non-wrapper: return `None`; callers continue with normal
+///   scalar/object dispatch, which omits primitive Symbols but still handles
+///   boxed Symbol objects through the object path.
 #[inline]
 pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
     let (class_id, payload) = boxed_primitive_payload(value)?;
     match class_id {
-        CLASS_ID_BOXED_STRING
-        | CLASS_ID_BOXED_NUMBER
-        | CLASS_ID_BOXED_BOOLEAN
-        | CLASS_ID_BOXED_BIGINT => Some(payload),
+        CLASS_ID_BOXED_BOOLEAN => Some(payload),
+        CLASS_ID_BOXED_BIGINT => {
+            crate::collection_iter::throw_type_error("Do not know how to serialize a BigInt");
+        }
+        CLASS_ID_BOXED_NUMBER => {
+            // ToNumber(wrapper): honours a custom `valueOf` on the instance.
+            Some(js_number_coerce(value))
+        }
+        CLASS_ID_BOXED_STRING => {
+            // ToString(wrapper): honours a custom `toString` on the instance.
+            let s_ptr = crate::value::js_jsvalue_to_string(value);
+            Some(f64::from_bits(
+                crate::value::JSValue::string_ptr(s_ptr).bits(),
+            ))
+        }
         _ => None,
     }
 }
@@ -277,6 +296,10 @@ pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
     let ptr = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
         crate::string::js_string_from_bytes(std::ptr::null(), 0)
     } else {
+        // ECMA-262 §22.1.1 step 2b: ToString(value) — throws TypeError for Symbol.
+        if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+        }
         js_string_coerce(value)
     };
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());

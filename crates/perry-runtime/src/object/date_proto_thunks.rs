@@ -378,6 +378,36 @@ date_setter_thunk!(date_set_utc_minutes, 1, 4);
 date_setter_thunk!(date_set_utc_seconds, 1, 5);
 date_setter_thunk!(date_set_utc_milliseconds, 1, 6);
 
+/// `Date.prototype.toLocaleString(locales?, options?)` thunk.
+///
+/// The HIR instance fast path only fires for zero-arg calls (falling through to
+/// `Expr::DateToLocaleString` → `js_date_to_locale_string`).  Non-zero-arg
+/// calls come through the generic method-call path and land here.  Brand-check
+/// `this`, then delegate to `temporal_locale_string` with `PlainDateTime`
+/// defaults ({year, month, day, hour, minute, second}) and no type-specific
+/// restrictions — `Date` accepts `timeZone`, `timeStyle`, `dateStyle`, etc.
+extern "C" fn date_to_locale_string_opts(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let this = require_date_this();
+    let epoch_ms = crate::date::date_cell_timestamp(this);
+    if epoch_ms.is_nan() {
+        let s = crate::date::js_date_to_locale_string(this);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+    let args = super::global_this::global_this_rest_array_values(rest);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let locale = args.get(0).copied().unwrap_or(undef);
+    let opts = args.get(1).copied().unwrap_or(undef);
+    crate::intl::temporal_locale_string(
+        epoch_ms,
+        locale,
+        opts,
+        crate::intl::TemporalLocaleCtx::PlainDateTime,
+    )
+}
+
 /// Install the brand-checked `Date.prototype` setter thunks. Called from
 /// `global_this::populate_builtin_prototype_methods`'s `"Date"` arm AFTER the
 /// no-op block, so these overwrite the no-op setter entries. Each is installed
@@ -415,4 +445,21 @@ pub(crate) fn install_date_proto_setters(proto_obj: *mut ObjectHeader) {
         // one thunk shape covers the 0..=4-arg setters uniformly.
         super::global_this::install_proto_method_rest_with_length(proto_obj, name, ptr, length, 0);
     }
+}
+
+/// Overwrite the no-op `Date.prototype.toLocaleString` with a real
+/// brand-checking thunk that forwards locale/options to the Intl formatter.
+/// Called from `global_this::populate_builtin_prototype_methods`'s `"Date"` arm
+/// after `install_noop_proto_methods`.
+pub(crate) fn install_date_proto_to_locale_string(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    super::global_this::install_proto_method_rest_with_length(
+        proto_obj,
+        "toLocaleString",
+        date_to_locale_string_opts as *const u8,
+        0,
+        0,
+    );
 }

@@ -168,6 +168,18 @@ unsafe fn dispatch_pointer_with_replacer(
         buf.push_str("null");
         return;
     }
+    // #3857 follow-up: a boxed primitive wrapper returned by a replacer function
+    // (`new Boolean(true)`, `new Number(n)`, `new String(s)`) must serialize as
+    // its underlying primitive, not as `{}`. Must run before the GC-type dispatch
+    // below, which would route it to stringify_object and emit `{}`.
+    if let Some(prim) = crate::builtins::boxed_primitive_json_value(replaced) {
+        if indent.is_empty() {
+            stringify_value(prim, TYPE_UNKNOWN, buf);
+        } else {
+            stringify_value_pretty(prim, TYPE_UNKNOWN, buf, indent, depth);
+        }
+        return;
+    }
     // Buffer / Uint8Array have no GcHeader — detect before gc_obj_type so the
     // tag read doesn't deref unrelated memory (issue #639 pattern). This
     // dispatch serves both compact (indent == "") and pretty replacer walks,
@@ -1155,6 +1167,28 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
     }
 }
 
+/// Spec §25.5.2 step 7a: truncate a spacer string to its first 10 UTF-16 code
+/// units. Walks `char_indices` to stay on Rust char boundaries.
+///
+/// Known deviation: when the 10th UTF-16 unit would be the high surrogate of a
+/// supplementary-plane character (e.g. spacer `"123456789😀"`), we stop before
+/// the character rather than emitting a lone surrogate. The spec's WTF-16
+/// semantics would produce a lone high surrogate at position 10. Perry does not
+/// support lone surrogates in its WTF-8 string representation (known gap), so
+/// this deviation is accepted. The test262 `space-string-range.js` test uses
+/// only ASCII spacers and passes regardless.
+fn truncate_to_10_utf16_units(s: &str) -> String {
+    let mut utf16_units = 0usize;
+    for (byte_idx, c) in s.char_indices() {
+        let n = c.len_utf16();
+        if utf16_units + n > 10 {
+            return s[..byte_idx].to_string();
+        }
+        utf16_units += n;
+    }
+    s.to_string()
+}
+
 // ─── Full JSON.stringify(value, replacer, spacer) ───────────────────────────
 
 /// JSON.stringify(value, replacer, spacer) — the full 3-arg form.
@@ -1234,7 +1268,9 @@ pub unsafe extern "C" fn js_json_stringify_full(
         indent_str = String::new();
     } else if spacer_tag == STRING_TAG {
         let sp_ptr = (spacer_bits & POINTER_MASK) as *const StringHeader;
-        indent_str = str_from_header(sp_ptr).unwrap_or("").to_string();
+        // Spec §25.5.2 step 7a: only first 10 UTF-16 code units of string space are used.
+        let full = str_from_header(sp_ptr).unwrap_or("");
+        indent_str = truncate_to_10_utf16_units(full);
     } else if spacer_tag == crate::value::SHORT_STRING_TAG {
         // v0.5.213 SSO: spacer passed as inline short string
         // (e.g. `JSON.stringify(obj, null, "  ")` where "  " is 2
@@ -1243,6 +1279,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let jsval = JSValue::from_bits(spacer_bits);
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut scratch);
+        // SSO strings are at most 5 bytes, always ≤ 10 UTF-16 code units; no truncation needed.
         indent_str = std::str::from_utf8(&scratch[..n]).unwrap_or("").to_string();
     } else if spacer_bits == TAG_TRUE {
         indent_str = String::new();
