@@ -1270,6 +1270,20 @@ print("asyncIssues", {
   promiseInner: await issueMetadataFromThrown(() => z.promise(z.number()).parse(Promise.resolve("bad"))),
 });
 
+const promiseSchema = z.promise(z.number());
+const promiseSafeResult = promiseSchema.safeParse(Promise.resolve(8));
+const promiseObjectValue = await z.promise(z.object({ id: z.number() })).parse(Promise.resolve({ id: 1 }));
+print("promiseSchemas", {
+  safeParse: promiseSafeResult.success,
+  safeValue: promiseSafeResult.success ? await promiseSafeResult.data : null,
+  parseThen: typeof promiseSchema.parse(Promise.resolve(2)).then,
+  parseValue: await promiseSchema.parse(Promise.resolve(2)),
+  nonPromise: issueMetadataFromResult(promiseSchema.safeParse(1)),
+  inner: await issueMetadataFromThrown(() => promiseSchema.parse(Promise.resolve("x"))),
+  object: promiseObjectValue,
+  methodType: z.number().promise()._def.type.constructor.name,
+});
+
 print("effectFactories", {
   preprocessNumber: numericPreprocessSchema.parse("3"),
   preprocessIssue: issueMetadataFromResult(numericPreprocessSchema.safeParse("1")),
