@@ -799,6 +799,34 @@ print("customSchemas", {
   message: customTokenFailure.success ? "ok" : customTokenFailure.error.issues[0].message,
 });
 
+const originalDescriptionSchema = z.string();
+const describedStringSchema = originalDescriptionSchema.describe("fixture string");
+const describedObjectSchema = z.object({ id: z.number().describe("identifier") }).describe("fixture object");
+const describedArraySchema = z.array(z.string().describe("array item")).describe("fixture array");
+const describedOptionalSchema = z.string().describe("inner").optional().describe("outer optional");
+print("descriptions", {
+  original: originalDescriptionSchema.description ?? null,
+  string: [describedStringSchema.description, describedStringSchema._def.description, describedStringSchema.parse("ok")],
+  object: [
+    describedObjectSchema.description,
+    describedObjectSchema._def.description,
+    describedObjectSchema.shape.id.description,
+    describedObjectSchema.parse({ id: 1 }).id,
+  ],
+  array: [
+    describedArraySchema.description,
+    describedArraySchema._def.description,
+    describedArraySchema.element.description,
+    describedArraySchema.parse(["x"]).length,
+  ],
+  optional: [
+    describedOptionalSchema.description,
+    describedOptionalSchema._def.description,
+    describedOptionalSchema._def.innerType.description,
+    describedOptionalSchema.parse(undefined) === undefined,
+  ],
+});
+
 const optionalMetadataSchema = z.string().optional();
 const nullableMetadataSchema = z.string().nullable();
 const defaultMetadataSchema = z.string().default("fallback");
