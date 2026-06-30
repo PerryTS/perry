@@ -177,6 +177,19 @@ const formattedStrings = {
   datetime: z.string().datetime(),
   ip: z.string().ip(),
 };
+const extraFormattedStrings = {
+  base64: z.string().base64(),
+  base64url: z.string().base64url(),
+  cidr: z.string().cidr(),
+  cuid: z.string().cuid(),
+  cuid2: z.string().cuid2(),
+  date: z.string().date(),
+  duration: z.string().duration(),
+  emoji: z.string().emoji(),
+  nanoid: z.string().nanoid(),
+  time: z.string().time(),
+  ulid: z.string().ulid(),
+};
 const boundedNumber = z.number().int().min(1).max(3).finite();
 print("schemaIntrospection", {
   stringBounds: [boundedString.minLength, boundedString.maxLength],
@@ -192,6 +205,19 @@ print("schemaIntrospection", {
       },
     ]),
   ),
+  extraStringFormats: {
+    base64: extraFormattedStrings.base64.isBase64,
+    base64url: extraFormattedStrings.base64url.isBase64url,
+    cidr: extraFormattedStrings.cidr.isCIDR,
+    cuid: extraFormattedStrings.cuid.isCUID,
+    cuid2: extraFormattedStrings.cuid2.isCUID2,
+    date: extraFormattedStrings.date.isDate,
+    duration: extraFormattedStrings.duration.isDuration,
+    emoji: extraFormattedStrings.emoji.isEmoji,
+    nanoid: extraFormattedStrings.nanoid.isNANOID,
+    time: extraFormattedStrings.time.isTime,
+    ulid: extraFormattedStrings.ulid.isULID,
+  },
   numberBounds: [boundedNumber.minValue, boundedNumber.maxValue],
   numberFlags: { isInt: boundedNumber.isInt, isFinite: boundedNumber.isFinite },
 });
