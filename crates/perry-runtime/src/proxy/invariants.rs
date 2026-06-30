@@ -204,6 +204,20 @@ fn is_compatible_descriptor(current: &TargetProp, descriptor: f64) -> bool {
     }
     let ptr = extract_pointer(descriptor.to_bits()) as *const crate::ObjectHeader;
     let desc_is_accessor = desc_has(descriptor, b"get") || desc_has(descriptor, b"set");
+    let desc_is_data = desc_has(descriptor, b"value") || desc_has(descriptor, b"writable");
+
+    // A generic descriptor — only `configurable`/`enumerable`, with no
+    // type-defining field (get/set or value/writable) — is compatible with
+    // any non-configurable current property. Per ValidateAndApplyProperty-
+    // Descriptor, IsGenericDescriptor short-circuits the data/accessor-type
+    // and value/writable checks. `Object.freeze`/`Object.seal` of a Proxy
+    // drives exactly such a descriptor (`{configurable:false}`) onto every
+    // own key, including an accessor key, so treating it as a data descriptor
+    // here wrongly aborted with "incompatible descriptor" (test262
+    // freeze/seal proxy-with-defineProperty-handler).
+    if !desc_is_accessor && !desc_is_data {
+        return true;
+    }
 
     // A non-configurable property cannot switch between data and accessor.
     if desc_is_accessor != current.is_accessor {
