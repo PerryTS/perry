@@ -154,26 +154,73 @@ fn iterator_dequeue(iterator: f64) -> Option<f64> {
     Some(crate::array::js_array_shift_f64(arr))
 }
 
-/// Take (and clear) the pending-slot promise, if a `next()` is currently
-/// awaiting. A pending slot is only ever set while the queue is empty, so a
-/// present slot implies nothing is queued.
-fn iterator_take_pending(iterator: f64) -> Option<*mut crate::promise::Promise> {
-    let value = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))?;
+// Pending pulls are held in a FIFO queue (an iterator-local array of boxed
+// promise pointers), NOT a single slot: concurrent `next()` calls made while
+// the chunk queue is empty each get their own promise, settled in call order
+// as `data`/`end`/`error`/`return` arrive. A single slot would overwrite the
+// first promise (leaving it pending forever) on the second `next()`.
+//
+// Invariant: a pending pull is only ever enqueued while the chunk queue is
+// empty (see `ns_readable_iterator_next`), so a non-empty pending queue implies
+// nothing is buffered, and vice versa.
+
+/// Append a pending pull to the back of the FIFO queue.
+fn iterator_push_pending(iterator: f64, promise: *mut crate::promise::Promise) {
+    let existing = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))
+        .filter(|v| is_array_like_value(*v))
+        .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
+    let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
+    let arr = crate::array::js_array_push_f64(arr, box_pointer(promise as *const u8));
     set_hidden_value(
         iterator,
         hidden_key(READABLE_ITERATOR_PENDING_KEY),
-        f64::from_bits(TAG_UNDEFINED),
+        box_pointer(arr as *const u8),
     );
-    let p = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
+}
+
+/// Take the oldest pending pull off the front of the FIFO queue, or `None`
+/// when no `next()` is currently awaiting.
+fn iterator_shift_pending(iterator: f64) -> Option<*mut crate::promise::Promise> {
+    let value = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))?;
+    if !is_array_like_value(value) {
+        return None;
+    }
+    let arr = raw_ptr_from_value(value) as *mut crate::array::ArrayHeader;
+    if crate::array::js_array_length(arr) == 0 {
+        return None;
+    }
+    let boxed = crate::array::js_array_shift_f64(arr);
+    let p = crate::value::js_nanbox_get_pointer(boxed) as *mut crate::promise::Promise;
     (!p.is_null()).then_some(p)
 }
 
-fn iterator_set_pending(iterator: f64, promise: *mut crate::promise::Promise) {
-    set_hidden_value(
-        iterator,
-        hidden_key(READABLE_ITERATOR_PENDING_KEY),
-        box_pointer(promise as *const u8),
-    );
+/// Whether any `next()` is currently awaiting a chunk.
+fn iterator_has_pending(iterator: f64) -> bool {
+    get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))
+        .filter(|v| is_array_like_value(*v))
+        .is_some_and(|v| {
+            let arr = raw_ptr_from_value(v) as *mut crate::array::ArrayHeader;
+            crate::array::js_array_length(arr) != 0
+        })
+}
+
+/// Resolve every outstanding pending pull with `{done:true}` (used on `end` and
+/// `return()`), so a queued `next()` is never left unresolved.
+fn iterator_resolve_all_pending_done(iterator: f64) {
+    while let Some(p) = iterator_shift_pending(iterator) {
+        crate::promise::js_promise_resolve(p, iterator_result(f64::from_bits(TAG_UNDEFINED), true));
+    }
+}
+
+/// On `error`, reject the oldest outstanding pull with the error, then resolve
+/// the rest with `{done:true}` — mirrors an async generator, whose in-flight
+/// pull observes the throw while later-queued pulls see the now-finished
+/// iterator. Every pull is settled; none is dropped.
+fn iterator_reject_all_pending(iterator: f64, reason: f64) {
+    if let Some(first) = iterator_shift_pending(iterator) {
+        crate::promise::js_promise_reject(first, reason);
+    }
+    iterator_resolve_all_pending_done(iterator);
 }
 
 fn iterator_stream_ended(iterator: f64) -> bool {
@@ -211,9 +258,21 @@ extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64
     if iterator_is_done(iterator) {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if let Some(pending) = iterator_take_pending(iterator) {
+    if let Some(pending) = iterator_shift_pending(iterator) {
         note_yield(iterator);
-        crate::promise::js_promise_resolve(pending, iterator_result(chunk, false));
+        // Resolve the waiting `next()` with the same awaited-chunk handling the
+        // queued path (`readable_iterator_chunk_result`) uses, so a
+        // promise-valued chunk settles to its value instead of leaking as
+        // `{ value: Promise, done:false }`. `js_promise_resolve` does not
+        // assimilate thenables, so a promise chunk is adopted via
+        // `js_promise_resolve_with_promise`.
+        if crate::promise::js_value_is_promise(chunk) == 0 {
+            crate::promise::js_promise_resolve(pending, iterator_result(chunk, false));
+        } else {
+            let result = readable_iterator_chunk_result(chunk);
+            let inner = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
+            crate::promise::js_promise_resolve_with_promise(pending, inner);
+        }
     } else {
         iterator_enqueue(iterator, chunk);
     }
@@ -231,13 +290,14 @@ extern "C" fn ns_readable_iter_on_end(closure: *const ClosureHeader) -> f64 {
     if iterator_is_done(iterator) {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if let Some(pending) = iterator_take_pending(iterator) {
+    // Outstanding pulls imply an empty chunk queue (invariant): finish the
+    // iterator and resolve every waiter with `{done:true}`. With no waiters,
+    // buffered chunks are still delivered by later `next()` calls, which then
+    // observe the ended flag.
+    if iterator_has_pending(iterator) {
         iterator_mark_done(iterator);
         iterator_remove_listeners(iterator);
-        crate::promise::js_promise_resolve(
-            pending,
-            iterator_result(f64::from_bits(TAG_UNDEFINED), true),
-        );
+        iterator_resolve_all_pending_done(iterator);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -253,10 +313,10 @@ extern "C" fn ns_readable_iter_on_error(closure: *const ClosureHeader, reason: f
         return f64::from_bits(TAG_UNDEFINED);
     }
     iterator_set_error(iterator, reason);
-    if let Some(pending) = iterator_take_pending(iterator) {
+    if iterator_has_pending(iterator) {
         iterator_mark_done(iterator);
         iterator_remove_listeners(iterator);
-        crate::promise::js_promise_reject(pending, reason);
+        iterator_reject_all_pending(iterator, reason);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -419,9 +479,10 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     }
 
     // Nothing available yet: hand back a pending promise that the next
-    // `data`/`end`/`error` event resolves.
+    // `data`/`end`/`error` event settles. Concurrent `next()` calls each enqueue
+    // their own promise (FIFO) — none is overwritten or dropped.
     let promise = crate::promise::js_promise_new();
-    iterator_set_pending(iterator, promise);
+    iterator_push_pending(iterator, promise);
     box_pointer(promise as *const u8)
 }
 
@@ -429,9 +490,10 @@ extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 
     let iterator = this_value(closure);
     let already_done = iterator_is_done(iterator);
     iterator_mark_done(iterator);
-    // Drop a never-resolved pending pull and detach from the stream.
-    let _ = iterator_take_pending(iterator);
     iterator_remove_listeners(iterator);
+    // Settle every outstanding pull with `{done:true}` — `return()` must never
+    // drop a pending pull without resolving it.
+    iterator_resolve_all_pending_done(iterator);
     if !already_done && iterator_has_yielded(iterator) && iterator_destroys_on_return(iterator) {
         if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
             call_source_iterator_return(stream);
@@ -509,4 +571,101 @@ pub(super) fn register_arities() {
     crate::closure::js_register_closure_arity(ns_readable_iter_on_data as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_readable_iter_on_end as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_readable_iter_on_error as *const u8, 1);
+}
+
+#[cfg(test)]
+mod fifo_pending_tests {
+    use super::*;
+
+    fn new_iterator() -> f64 {
+        // A dummy stream value is fine: these tests drive the pending-queue
+        // helpers/handler directly and never flow the stream.
+        build_readable_async_iterator(f64::from_bits(TAG_UNDEFINED), true)
+    }
+
+    fn result_field(promise: *mut crate::promise::Promise, field: &[u8]) -> f64 {
+        let boxed = unsafe { (*promise).value };
+        let obj = crate::value::js_nanbox_get_pointer(boxed) as *const crate::object::ObjectHeader;
+        crate::object::js_object_get_field_by_name_f64(obj, hidden_key(field))
+    }
+
+    #[test]
+    fn pending_pulls_settle_in_fifo_order_on_data() {
+        let iterator = new_iterator();
+        let p1 = crate::promise::js_promise_new();
+        let p2 = crate::promise::js_promise_new();
+        // Two `next()` pulls made while the queue is empty: both must be
+        // retained. Pre-fix the single slot dropped p1 on the second push,
+        // leaving its promise pending forever.
+        iterator_push_pending(iterator, p1);
+        iterator_push_pending(iterator, p2);
+
+        let data_cb = js_closure_alloc(ns_readable_iter_on_data as *const u8, 1);
+        js_closure_set_capture_f64(data_cb, 0, iterator);
+
+        // Two data events resolve p1 then p2 in FIFO order.
+        ns_readable_iter_on_data(data_cb, 1.0);
+        ns_readable_iter_on_data(data_cb, 2.0);
+
+        assert_eq!(
+            unsafe { (*p1).state },
+            crate::promise::PromiseState::Fulfilled
+        );
+        assert_eq!(
+            unsafe { (*p2).state },
+            crate::promise::PromiseState::Fulfilled
+        );
+        assert_eq!(result_field(p1, b"value"), 1.0);
+        assert_eq!(result_field(p2, b"value"), 2.0);
+        // Queue fully drained.
+        assert!(iterator_shift_pending(iterator).is_none());
+    }
+
+    #[test]
+    fn return_settles_every_outstanding_pull_done() {
+        let iterator = new_iterator();
+        let p1 = crate::promise::js_promise_new();
+        let p2 = crate::promise::js_promise_new();
+        iterator_push_pending(iterator, p1);
+        iterator_push_pending(iterator, p2);
+
+        // `return()`/`end` must resolve BOTH waiters with {done:true}, never
+        // drop one unsettled.
+        iterator_resolve_all_pending_done(iterator);
+
+        assert_eq!(
+            unsafe { (*p1).state },
+            crate::promise::PromiseState::Fulfilled
+        );
+        assert_eq!(
+            unsafe { (*p2).state },
+            crate::promise::PromiseState::Fulfilled
+        );
+        assert!(crate::value::js_is_truthy(result_field(p1, b"done")) != 0);
+        assert!(crate::value::js_is_truthy(result_field(p2, b"done")) != 0);
+        assert!(iterator_shift_pending(iterator).is_none());
+    }
+
+    #[test]
+    fn error_rejects_oldest_pull_and_finishes_rest() {
+        let iterator = new_iterator();
+        let p1 = crate::promise::js_promise_new();
+        let p2 = crate::promise::js_promise_new();
+        iterator_push_pending(iterator, p1);
+        iterator_push_pending(iterator, p2);
+
+        // Oldest pull observes the error; later pulls see the finished iterator.
+        iterator_reject_all_pending(iterator, 7.0);
+
+        assert_eq!(
+            unsafe { (*p1).state },
+            crate::promise::PromiseState::Rejected
+        );
+        assert_eq!(unsafe { (*p1).reason }, 7.0);
+        assert_eq!(
+            unsafe { (*p2).state },
+            crate::promise::PromiseState::Fulfilled
+        );
+        assert!(crate::value::js_is_truthy(result_field(p2, b"done")) != 0);
+    }
 }
