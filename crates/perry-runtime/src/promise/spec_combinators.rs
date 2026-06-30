@@ -213,7 +213,7 @@ pub(super) fn is_default_promise_constructor(c: f64) -> bool {
     !is_undef(promise_ctor) && promise_ctor.to_bits() == c.to_bits()
 }
 
-pub(super) fn is_callable_value(value: f64) -> bool {
+pub(crate) fn is_callable_value(value: f64) -> bool {
     is_callable(value)
 }
 

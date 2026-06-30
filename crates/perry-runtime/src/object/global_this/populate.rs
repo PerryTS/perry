@@ -110,6 +110,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "WeakMap" => weak_map_constructor_call_thunk as *const u8,
             "WeakSet" => weak_set_constructor_call_thunk as *const u8,
             "WeakRef" => weak_ref_constructor_call_thunk as *const u8,
+            "Promise" => promise_constructor_call_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);

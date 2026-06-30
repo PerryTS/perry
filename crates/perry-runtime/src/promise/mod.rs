@@ -62,8 +62,10 @@ pub use spec_combinators::{
     js_promise_reject_spec, js_promise_resolve_spec, js_promise_try_spec,
     js_promise_with_resolvers_spec,
 };
+pub(crate) use spec_combinators::is_callable_value;
 pub(crate) use then::{
     js_promise_attach_handlers, js_promise_attach_settle_listener, mark_rejection_handled,
+    promise_has_own_constructor, promise_has_own_property, promise_proto_method,
     promise_prototype_catch_thunk, promise_prototype_finally_thunk, promise_prototype_then_thunk,
 };
 pub use then::{

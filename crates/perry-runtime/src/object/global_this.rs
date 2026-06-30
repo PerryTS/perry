@@ -75,14 +75,14 @@ pub(crate) use ctor_thunks::{
     cryptokey_type_getter_thunk, cryptokey_usages_getter_thunk, error_constructor_call_thunk,
     eval_error_constructor_call_thunk, global_this_crypto_getter_thunk,
     global_this_url_pattern_call_thunk, is_function_prototype_object_value,
-    map_constructor_call_thunk, normalize_eval_this_body, range_error_constructor_call_thunk,
-    reference_error_constructor_call_thunk, set_constructor_call_thunk, subtle_crypto_method_value,
-    syntax_error_constructor_call_thunk, type_error_constructor_call_thunk,
-    typed_array_constructor_call_thunk, uri_error_constructor_call_thunk,
-    weak_map_constructor_call_thunk, weak_ref_constructor_call_thunk,
-    weak_set_constructor_call_thunk, webcrypto_get_random_values_thunk,
-    webcrypto_illegal_constructor_thunk, webcrypto_method_value, webcrypto_random_uuid_thunk,
-    webcrypto_subtle_getter_thunk,
+    map_constructor_call_thunk, normalize_eval_this_body, promise_constructor_call_thunk,
+    range_error_constructor_call_thunk, reference_error_constructor_call_thunk,
+    set_constructor_call_thunk, subtle_crypto_method_value, syntax_error_constructor_call_thunk,
+    type_error_constructor_call_thunk, typed_array_constructor_call_thunk,
+    uri_error_constructor_call_thunk, weak_map_constructor_call_thunk,
+    weak_ref_constructor_call_thunk, weak_set_constructor_call_thunk,
+    webcrypto_get_random_values_thunk, webcrypto_illegal_constructor_thunk,
+    webcrypto_method_value, webcrypto_random_uuid_thunk, webcrypto_subtle_getter_thunk,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;

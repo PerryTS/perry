@@ -65,6 +65,13 @@ pub(crate) extern "C" fn weak_ref_constructor_call_thunk(
     super::super::object_ops::throw_object_type_error(b"Constructor WeakRef requires 'new'")
 }
 
+pub(crate) extern "C" fn promise_constructor_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    super::super::object_ops::throw_object_type_error(b"Constructor Promise requires 'new'")
+}
+
 pub(crate) extern "C" fn global_this_url_pattern_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     input: f64,
