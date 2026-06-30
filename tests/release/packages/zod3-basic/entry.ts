@@ -621,6 +621,18 @@ const transformedMap = z
 const transformedSet = z
   .set(z.string().transform((value) => value.length))
   .parse(new Set(["aa", "bbb"]));
+const cloneInput = { nested: { label: "x" }, tags: ["a"] };
+const cloneParsed = z.object({ nested: z.object({ label: z.string() }), tags: z.array(z.string()) }).parse(cloneInput);
+cloneParsed.nested.label = "changed";
+cloneParsed.tags.push("b");
+const cloneMapInput = new Map([["a", { count: 1 }]]);
+const cloneMapParsed = z.map(z.string(), z.object({ count: z.number() })).parse(cloneMapInput);
+cloneMapParsed.get("a")!.count = 2;
+const cloneSetValue = { id: 1 };
+const cloneSetInput = new Set([cloneSetValue]);
+const cloneSetParsed = z.set(z.object({ id: z.number() })).parse(cloneSetInput);
+const cloneSetParsedValue = Array.from(cloneSetParsed)[0];
+cloneSetParsedValue.id = 2;
 const recordMetadataSchema = z.record(z.string(), z.number());
 const mapMetadataSchema = z.map(z.string(), z.number());
 const setMinMetadataSchema = z.set(z.string()).min(1);
@@ -684,6 +696,19 @@ print("collections", {
   mapValueIssues: collectionIssueSummary(z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]]))),
   setElementIssues: collectionIssueSummary(z.set(z.string().min(2)).safeParse(new Set(["a"]))),
   setSizeIssues: collectionIssueSummary(z.set(z.string()).size(2).safeParse(new Set(["a"]))),
+});
+
+print("cloneSemantics", {
+  objectIdentity: cloneParsed !== cloneInput,
+  nestedIdentity: cloneParsed.nested !== cloneInput.nested,
+  arrayIdentity: cloneParsed.tags !== cloneInput.tags,
+  objectSource: cloneInput,
+  mapIdentity: cloneMapParsed !== cloneMapInput,
+  mapValueIdentity: cloneMapParsed.get("a") !== cloneMapInput.get("a"),
+  mapSource: Array.from(cloneMapInput.entries()),
+  setIdentity: cloneSetParsed !== cloneSetInput,
+  setValueIdentity: cloneSetParsedValue !== cloneSetValue,
+  setSource: Array.from(cloneSetInput.values()),
 });
 
 const intersectionObjectSchema = z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() }));

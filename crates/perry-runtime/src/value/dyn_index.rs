@@ -3,10 +3,10 @@
 use super::*;
 
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
-/// static type. Issue #514. Strings → js_string_char_at; objects stringify
-/// numeric keys (`obj[0]` is `obj["0"]`), while arrays/buffers keep numeric
-/// element reads. LAZY_ARRAY / FORWARDED arrays route through
-/// `js_array_get_f64` to chase the materialized chain.
+/// static type. Issue #514. Strings use canonical string-index/property
+/// handling; objects stringify numeric keys (`obj[0]` is `obj["0"]`), while
+/// arrays/buffers keep numeric element reads. LAZY_ARRAY / FORWARDED arrays
+/// route through `js_array_get_f64` to chase the materialized chain.
 #[no_mangle]
 pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     let bits = value.to_bits();
@@ -16,6 +16,10 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // codegen-side guard on the by-name fallback in index_get.rs.
     if bits == TAG_UNDEFINED || bits == TAG_NULL {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
+    let raw_string_ptr = bits as *const crate::StringHeader;
+    if (bits >> 48) == 0 && crate::string::is_valid_string_ptr(raw_string_ptr) {
+        return crate::string::js_string_index_get(raw_string_ptr, index);
     }
     let jsval = JSValue::from_bits(bits);
     // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
@@ -46,16 +50,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         if s_ptr.is_null() {
             return f64::from_bits(TAG_UNDEFINED);
         }
-        let idx_i32 = if index.is_nan() || index.is_infinite() {
-            0
-        } else {
-            index as i32
-        };
-        let result = crate::string::js_string_char_at(s_ptr, idx_i32);
-        if result.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        return f64::from_bits(JSValue::string_ptr(result).bits());
+        return crate::string::js_string_index_get(s_ptr, index);
     }
     // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key]` where `C` is a
     // runtime class-ref value (e.g. a function parameter). Member-expression

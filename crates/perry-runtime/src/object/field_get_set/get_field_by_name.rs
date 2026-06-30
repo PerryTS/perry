@@ -27,6 +27,34 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    if !key.is_null() {
+        let obj_bits = obj as u64;
+        let tagged = f64::from_bits(obj_bits);
+        let tagged_value = crate::value::JSValue::from_bits(obj_bits);
+        let string_ptr = if tagged_value.is_any_string() {
+            crate::value::js_get_string_pointer_unified(tagged) as *const crate::StringHeader
+        } else if obj_bits >= crate::gc::GC_HEADER_SIZE as u64
+            && crate::value::addr_class::is_valid_obj_ptr(obj as *const u8)
+        {
+            let gc_hdr = unsafe {
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
+            };
+            if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_STRING {
+                obj as *const crate::StringHeader
+            } else {
+                std::ptr::null()
+            }
+        } else {
+            std::ptr::null()
+        };
+        if crate::string::is_valid_string_ptr(string_ptr) {
+            let key_value = crate::value::js_nanbox_string(key as i64);
+            let indexed = crate::string::js_string_index_get(string_ptr, key_value);
+            if indexed.to_bits() != crate::value::TAG_UNDEFINED {
+                return JSValue::from_bits(indexed.to_bits());
+            }
+        }
+    }
     // #2846: the receiver may be a Proxy value that arrived through a generic
     // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
     // Proxies are encoded as small fake pointers; deref-ing one as an
