@@ -238,6 +238,44 @@ print("primitiveEdges", {
   coerceDateRejectsInvalid: z.coerce.date().safeParse("not-a-date").success,
 });
 
+const boundedDateSchema = z.date()
+  .min(new Date("2020-01-01T00:00:00.000Z"), "too old")
+  .max(new Date("2020-12-31T00:00:00.000Z"), "too new");
+const primitiveInstanceSchema = z.instanceof(Date);
+print("primitiveMetadata", {
+  types: [
+    z.string()._def.typeName,
+    z.number()._def.typeName,
+    z.bigint()._def.typeName,
+    z.boolean()._def.typeName,
+    z.nan()._def.typeName,
+    z.symbol()._def.typeName,
+    z.any()._def.typeName,
+    z.unknown()._def.typeName,
+    z.never()._def.typeName,
+    z.undefined()._def.typeName,
+    z.null()._def.typeName,
+    z.void()._def.typeName,
+  ],
+  date: {
+    typeName: boundedDateSchema._def.typeName,
+    coerce: boundedDateSchema._def.coerce,
+    minDate: boundedDateSchema.minDate?.toISOString(),
+    maxDate: boundedDateSchema.maxDate?.toISOString(),
+    checks: boundedDateSchema._def.checks.map((check) => ({
+      kind: check.kind,
+      value: check.value,
+      message: check.message,
+    })),
+  },
+  coerceDate: z.coerce.date()._def.coerce,
+  instanceof: {
+    typeName: primitiveInstanceSchema._def.typeName,
+    inner: primitiveInstanceSchema._def.schema.constructor.name,
+    effect: primitiveInstanceSchema._def.effect.type,
+  },
+});
+
 const colorEnum = z.enum(["red", "blue", "green"]);
 const literalReady = z.literal("ready");
 const nativeTextEnum = z.nativeEnum({ A: "a", B: "b" } as const);
