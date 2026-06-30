@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1950 entries across 114 modules
+// Coverage: 1951 entries across 114 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2866,6 +2866,8 @@ declare module "perry/ui" {
   export function alert(...args: any[]): any;
   /** stdlib */
   export function alertWithButtons(...args: any[]): any;
+  /** stdlib */
+  export function appSetActivationPolicy(...args: any[]): any;
   /** stdlib */
   export function appSetMaxSize(...args: any[]): any;
   /** stdlib */
