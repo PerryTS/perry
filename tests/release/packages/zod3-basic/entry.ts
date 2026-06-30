@@ -127,6 +127,33 @@ print("strings", {
   regexFail: z.string().regex(/^[a-z]+$/).safeParse("abc1").success,
 });
 
+const boundedString = z.string().min(2).max(5);
+const formattedStrings = {
+  email: z.string().email(),
+  url: z.string().url(),
+  uuid: z.string().uuid(),
+  datetime: z.string().datetime(),
+  ip: z.string().ip(),
+};
+const boundedNumber = z.number().int().min(1).max(3).finite();
+print("schemaIntrospection", {
+  stringBounds: [boundedString.minLength, boundedString.maxLength],
+  stringFormats: Object.fromEntries(
+    Object.entries(formattedStrings).map(([name, schema]) => [
+      name,
+      {
+        isEmail: schema.isEmail,
+        isURL: schema.isURL,
+        isUUID: schema.isUUID,
+        isDatetime: schema.isDatetime,
+        isIP: schema.isIP,
+      },
+    ]),
+  ),
+  numberBounds: [boundedNumber.minValue, boundedNumber.maxValue],
+  numberFlags: { isInt: boundedNumber.isInt, isFinite: boundedNumber.isFinite },
+});
+
 print("numbers", {
   finite: z.number().finite().safeParse(Number.POSITIVE_INFINITY).success,
   min: z.number().min(2).safeParse(2).success,
