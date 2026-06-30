@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { z as z3 } from "zod/v3";
 
 function print(label: string, value: unknown): void {
   console.log(`${label}=${JSON.stringify(value)}`);
@@ -732,6 +733,13 @@ print("standard", {
   version: objectBase["~standard"].version,
   ok: "value" in standardOk ? standardOk.value : null,
   badIssues: "issues" in standardBad ? standardBad.issues?.length : 0,
+});
+
+const z3SubpathResult = z3.object({ id: z3.number(), name: z3.string().default("subpath") }).parse({ id: 1 });
+const z3SubpathBad = z3.object({ id: z3.number() }).safeParse({ id: "bad" });
+print("packageSubpaths", {
+  v3Default: z3SubpathResult.name,
+  v3Issue: z3SubpathBad.success ? "ok" : z3SubpathBad.error.issues[0].code,
 });
 
 const originalErrorMap = z.getErrorMap();

@@ -34,4 +34,5 @@ errorMethods={"manualCount":2,"manualEmpty":false,"manualFlatten":{"formErrors":
 customErrors={"required":"required string","invalidType":"not a string","min":"too short","path":"root","perParseMap":"local:invalid_type"}
 array=[{"id":1,"role":"admin"}]
 standard={"vendor":"zod","version":1,"ok":{"id":1,"name":"a"},"badIssues":2}
+packageSubpaths={"v3Default":"subpath","v3Issue":"invalid_type"}
 errorMap={"mapped":"mapped:invalid_type"}
