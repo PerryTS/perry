@@ -618,8 +618,16 @@ print("issueMetadata", {
   strict: issueMetadataFromResult(z.object({ id: z.number() }).strict().safeParse({ id: 1, extra: true })),
   invalidDate: issueMetadataFromResult(z.date().safeParse(new Date("bad"))),
   notFinite: issueMetadataFromResult(z.number().finite().safeParse(Infinity)),
+  dateTooSmall: issueMetadataFromResult(
+    z.date().min(new Date("2020-01-02T00:00:00.000Z")).safeParse(new Date("2020-01-01T00:00:00.000Z")),
+  ),
+  dateTooBig: issueMetadataFromResult(
+    z.date().max(new Date("2020-01-02T00:00:00.000Z")).safeParse(new Date("2020-01-03T00:00:00.000Z")),
+  ),
   tooBigArray: issueMetadataFromResult(z.array(z.string()).max(1).safeParse(["a", "b"])),
   tooSmallNumber: issueMetadataFromResult(z.number().min(2).safeParse(1)),
+  exactArray: issueMetadataFromResult(z.array(z.string()).length(2).safeParse(["a"])),
+  exactString: issueMetadataFromResult(z.string().length(2).safeParse("a")),
   notMultiple: issueMetadataFromResult(z.number().multipleOf(5).safeParse(12)),
   invalidIntersection: issueMetadataFromResult(
     z.intersection(z.string().transform(() => 1), z.string().transform(() => 2)).safeParse("x"),
