@@ -398,16 +398,34 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), value: z.string() }),
   z.object({ type: z.literal("count"), value: z.number().int() }),
 ]);
+const unionBranchFailure = z
+  .union([
+    z.object({ kind: z.literal("a"), value: z.string() }),
+    z.object({ kind: z.literal("b"), count: z.number() }),
+  ])
+  .safeParse({ kind: "a", value: 1 });
 print("discriminatedUnion", [
   eventSchema.parse({ type: "text", value: "hello" }),
   eventSchema.parse({ type: "count", value: 3 }),
 ]);
-print("discriminatedUnion.options", eventSchema.options.length);
+print("discriminatedUnion.options", {
+  length: eventSchema.options.length,
+  discriminator: eventSchema.discriminator,
+  optionKeys: Array.from(eventSchema.optionsMap.keys()).join("|"),
+  typeName: eventSchema._def.typeName,
+});
 
 const primitiveSchema = z.union([z.string().regex(/^id-/), z.number().int()]);
 print("union", {
   results: [primitiveSchema.safeParse("id-42").success, primitiveSchema.safeParse(4.5).success],
   options: primitiveSchema.options.length,
+  typeName: primitiveSchema._def.typeName,
+  optionTypes: primitiveSchema._def.options.map((option) => option.constructor.name),
+  branchFailure: unionBranchFailure.success
+    ? []
+    : unionBranchFailure.error.issues[0].unionErrors.map((error) =>
+        error.issues.map((issue) => `${issue.path.join(".")}:${issue.code}`),
+      ),
 });
 
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
@@ -548,8 +566,19 @@ print("collections", {
   setSizeIssues: collectionIssueSummary(z.set(z.string()).size(2).safeParse(new Set(["a"]))),
 });
 
+const intersectionObjectSchema = z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() }));
+const transformedIntersectionSchema = z.intersection(
+  z.string().transform(() => ({ a: 1 })),
+  z.string().transform(() => ({ b: 2 })),
+);
 print("composition", {
-  intersection: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
+  intersection: intersectionObjectSchema.parse({ a: "x", b: 1 }),
+  intersectionTypeName: intersectionObjectSchema._def.typeName,
+  intersectionSides: [
+    intersectionObjectSchema._def.left.constructor.name,
+    intersectionObjectSchema._def.right.constructor.name,
+  ],
+  transformedIntersection: transformedIntersectionSchema.parse("x"),
   or: z.string().or(z.number()).parse(5),
   and: z.object({ a: z.string() }).and(z.object({ b: z.boolean() })).parse({ a: "x", b: true }),
   strictObject: z.strictObject({ id: z.number() }).safeParse({ id: 1, extra: true }).success,
