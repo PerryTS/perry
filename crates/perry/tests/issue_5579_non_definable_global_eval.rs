@@ -41,7 +41,12 @@ fn run_global(src: &str) -> (bool, String) {
 
     let compile = Command::new(perry_bin())
         .current_dir(dir.path())
-        .args(["compile", entry.to_str().unwrap(), "-o", output.to_str().unwrap()])
+        .args([
+            "compile",
+            entry.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
         .env("PERRY_ALLOW_EVAL", "1")
         .env("PERRY_GLOBAL_SCRIPT_THIS", "1")
@@ -87,7 +92,10 @@ console.log("PASS");
 fn direct_eval_non_definable_global_function_throws() {
     let (ok, out) = run_global(DIRECT_NON_DEF_FN);
     assert!(ok, "binary did not exit cleanly\n{out}");
-    assert!(out.contains("PASS"), "expected TypeError for eval(\"function NaN(){{}}\")\n{out}");
+    assert!(
+        out.contains("PASS"),
+        "expected TypeError for eval(\"function NaN(){{}}\")\n{out}"
+    );
 }
 
 /// `eval("function* NaN(){}")` must throw `TypeError` — same `CanDeclareGlobal
@@ -109,7 +117,10 @@ console.log("PASS");
 fn direct_eval_non_definable_global_generator_throws() {
     let (ok, out) = run_global(DIRECT_NON_DEF_GEN);
     assert!(ok, "binary did not exit cleanly\n{out}");
-    assert!(out.contains("PASS"), "expected TypeError for eval(\"function* NaN(){{}}\")\n{out}");
+    assert!(
+        out.contains("PASS"),
+        "expected TypeError for eval(\"function* NaN(){{}}\")\n{out}"
+    );
 }
 
 /// `eval("var x")` on a non-extensible global must throw `TypeError`
@@ -174,7 +185,10 @@ console.log("PASS");
 fn indirect_eval_non_definable_global_function_throws() {
     let (ok, out) = run_global(INDIRECT_NON_DEF_FN);
     assert!(ok, "binary did not exit cleanly\n{out}");
-    assert!(out.contains("PASS"), "expected TypeError for (0,eval)(\"function NaN(){{}}\")\n{out}");
+    assert!(
+        out.contains("PASS"),
+        "expected TypeError for (0,eval)(\"function NaN(){{}}\")\n{out}"
+    );
 }
 
 /// `(0,eval)("function* NaN(){}")` — generator form of the above.
@@ -195,7 +209,10 @@ console.log("PASS");
 fn indirect_eval_non_definable_global_generator_throws() {
     let (ok, out) = run_global(INDIRECT_NON_DEF_GEN);
     assert!(ok, "binary did not exit cleanly\n{out}");
-    assert!(out.contains("PASS"), "expected TypeError for (0,eval)(\"function* NaN(){{}}\")\n{out}");
+    assert!(
+        out.contains("PASS"),
+        "expected TypeError for (0,eval)(\"function* NaN(){{}}\")\n{out}"
+    );
 }
 
 /// Indirect `(0,eval)("var x")` on a non-extensible global (test262
@@ -249,5 +266,8 @@ console.log("PASS");
 fn definable_global_function_still_works() {
     let (ok, out) = run_global(DEFINABLE_GLOBAL_FN);
     assert!(ok, "binary did not exit cleanly\n{out}");
-    assert!(out.contains("PASS"), "definable function should still work\n{out}");
+    assert!(
+        out.contains("PASS"),
+        "definable function should still work\n{out}"
+    );
 }

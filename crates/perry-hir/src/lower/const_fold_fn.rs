@@ -909,17 +909,14 @@ fn stmt_has_var_with_initializer(stmt: &ast::Stmt) -> bool {
     use ast::Stmt;
     match stmt {
         Stmt::Decl(ast::Decl::Var(v)) => {
-            matches!(v.kind, ast::VarDeclKind::Var)
-                && v.decls.iter().any(|d| d.init.is_some())
+            matches!(v.kind, ast::VarDeclKind::Var) && v.decls.iter().any(|d| d.init.is_some())
         }
         Stmt::Decl(_) => false,
         Stmt::Block(b) => b.stmts.iter().any(stmt_has_var_with_initializer),
         Stmt::Labeled(l) => stmt_has_var_with_initializer(&l.body),
         Stmt::If(i) => {
             stmt_has_var_with_initializer(&i.cons)
-                || i.alt
-                    .as_deref()
-                    .is_some_and(stmt_has_var_with_initializer)
+                || i.alt.as_deref().is_some_and(stmt_has_var_with_initializer)
         }
         Stmt::For(f) => {
             matches!(
@@ -934,12 +931,12 @@ fn stmt_has_var_with_initializer(stmt: &ast::Stmt) -> bool {
         Stmt::With(w) => stmt_has_var_with_initializer(&w.body),
         Stmt::Try(t) => {
             t.block.stmts.iter().any(stmt_has_var_with_initializer)
-                || t.handler.as_ref().is_some_and(|h| {
-                    h.body.stmts.iter().any(stmt_has_var_with_initializer)
-                })
-                || t.finalizer.as_ref().is_some_and(|f| {
-                    f.stmts.iter().any(stmt_has_var_with_initializer)
-                })
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.stmts.iter().any(stmt_has_var_with_initializer))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.stmts.iter().any(stmt_has_var_with_initializer))
         }
         Stmt::Switch(s) => s
             .cases
