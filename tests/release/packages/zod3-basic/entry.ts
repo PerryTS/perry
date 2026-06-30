@@ -359,6 +359,21 @@ type Tree = { name: string; children?: Tree[] };
 const treeSchema: z.ZodType<Tree> = z.lazy(() => z.object({ name: z.string(), children: z.array(treeSchema).optional() }));
 print("lazy", treeSchema.parse({ name: "root", children: [{ name: "leaf" }] }));
 
+const lateNodeSchema: z.ZodType<any> = z.late.object(() => ({
+  name: z.string(),
+  children: z.array(lateNodeSchema).default([]),
+}));
+print("factories", {
+  arrayFactory: z.array(z.string()).parse(["factory"]).join("|"),
+  optionalFactory: z.optional(z.string()).parse(undefined) === undefined,
+  nullableFactory: z.nullable(z.string()).parse(null) === null,
+  promiseFactory: await z.promise(z.number()).parse(Promise.resolve(4)),
+  unionFactory: z.union([z.literal("left"), z.literal("right")]).parse("right"),
+  intersectionFactory: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 2 }),
+  lazyFactory: z.lazy(() => z.string()).parse("lazy"),
+  lateObject: lateNodeSchema.parse({ name: "root", children: [{ name: "leaf" }] }),
+});
+
 class Box {
   value: string;
   constructor(value: string) {

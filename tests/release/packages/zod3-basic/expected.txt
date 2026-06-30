@@ -20,6 +20,7 @@ refine=false
 effects={"preprocess":"ok","pipe":true,"superRefine":false,"custom":true,"refinePath":"confirm","refineMessage":"password mismatch","fatalCalls":["first:x"],"fatalIssue":"stop","fatalFlag":true,"neverTransform":"bad transform:x","neverStatus":"aborted"}
 modifiers={"ostring":true,"onumber":true,"oboolean":true,"optional":true,"nullable":true,"nullish":true,"default":"fallback","catch":9,"catchFunction":1,"brand":"id-1","described":"fixture string","describedObject":"fixture object","describedParse":"described","optionalUnwrap":"wrapped","nullableUnwrap":"wrapped","arrayElement":"element","promiseUnwrap":3,"isOptional":true,"isNullable":true,"readonlyFrozen":true,"readonlyArray":true,"readonlyTuple":true,"readonlyMap":true,"readonlySet":true}
 lazy={"name":"root","children":[{"name":"leaf"}]}
+factories={"arrayFactory":"factory","optionalFactory":true,"nullableFactory":true,"promiseFactory":4,"unionFactory":"right","intersectionFactory":{"a":"x","b":2},"lazyFactory":"lazy","lateObject":{"name":"root","children":[{"name":"leaf","children":[]}]}}
 instances.dates={"instanceof":"ok","instanceMessage":"not a box","date":"2020-01-02T00:00:00.000Z","dateRequired":"required date","dateInvalid":"not a date","dateMin":true,"dateMax":false}
 function={"valid":4,"asyncValid":6,"parameters":2,"returnType":true,"invalidArgs":true,"invalidReturns":true,"invalidAsyncReturn":true}
 async={"refine":{"success":true,"data":"ok"},"parseAsync":"ok","spa":true,"promise":5,"methodPromise":3,"promiseRejects":true,"rejectedReason":"promise boom"}
