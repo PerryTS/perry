@@ -610,6 +610,18 @@ const jsonLiteralSchema = z.union([z.string(), z.number(), z.boolean(), z.null()
 const jsonValueSchema: z.ZodType<any> = z.lazy(() =>
   z.union([jsonLiteralSchema, z.array(jsonValueSchema), z.record(jsonValueSchema)]),
 );
+const mergedStaticShape = z.objectUtil.mergeShapes(
+  { a: z.string(), shared: z.string() },
+  { b: z.number(), shared: z.number() },
+);
+const effectAliasSchema = z.effect(z.string(), {
+  type: "transform",
+  transform: (value: string) => value.length,
+});
+const transformerAliasSchema = z.transformer(z.string(), {
+  type: "transform",
+  transform: (value: string) => value.toUpperCase(),
+});
 print("factories", {
   arrayFactory: z.array(z.string()).parse(["factory"]).join("|"),
   optionalFactory: z.optional(z.string()).parse(undefined) === undefined,
@@ -619,6 +631,53 @@ print("factories", {
   intersectionFactory: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 2 }),
   lazyFactory: z.lazy(() => z.string()).parse("lazy"),
   lateObject: lateNodeSchema.parse({ name: "root", children: [{ name: "leaf" }] }),
+});
+
+print("staticFactories", {
+  string: z.ZodString.create().parse("x"),
+  number: z.ZodNumber.create().parse(1),
+  nan: Number.isNaN(z.ZodNaN.create().parse(NaN)),
+  array: z.ZodArray.create(z.string()).parse(["a"]).length,
+  object: z.ZodObject.create({ id: z.number() }).parse({ id: 1 }).id,
+  tuple: z.ZodTuple.create([z.string(), z.number()]).parse(["a", 1])[1],
+  record: z.ZodRecord.create(z.string()).parse({ a: "x" }).a,
+  map: Array.from(z.ZodMap.create(z.string(), z.number()).parse(new Map([["a", 1]])).entries()),
+  set: Array.from(z.ZodSet.create(z.string()).parse(new Set(["a"])).values()),
+  optional: z.ZodOptional.create(z.string()).parse(undefined) === undefined,
+  nullable: z.ZodNullable.create(z.string()).parse(null) === null,
+  promise: await z.ZodPromise.create(z.number()).parse(Promise.resolve(2)),
+  readonly: Object.isFrozen(z.ZodReadonly.create(z.object({ id: z.number() })).parse({ id: 1 })),
+  effectAlias: effectAliasSchema.parse("tuna"),
+  transformerAlias: transformerAliasSchema.parse("tuna"),
+  objectUtil: z.object(mergedStaticShape).parse({ a: "x", b: 1, shared: 2 }),
+  literal: z.ZodLiteral.create("ready").parse("ready"),
+  enum: z.ZodEnum.create(["red", "blue"]).parse("blue"),
+  nativeEnum: z.ZodNativeEnum.create({ A: "a", B: "b" }).parse("a"),
+  date: z.ZodDate.create().parse(new Date("2020-01-02T00:00:00.000Z")).toISOString(),
+  bigint: z.ZodBigInt.create().parse(2n).toString(),
+  boolean: z.ZodBoolean.create().parse(true),
+  any: z.ZodAny.create().parse({ ok: true }).ok,
+  unknown: z.ZodUnknown.create().parse(["x"]).length,
+  never: z.ZodNever.create().safeParse("x").success,
+  undefined: z.ZodUndefined.create().parse(undefined) === undefined,
+  null: z.ZodNull.create().parse(null) === null,
+  void: z.ZodVoid.create().parse(undefined) === undefined,
+  symbol: typeof z.ZodSymbol.create().parse(Symbol.for("x")),
+  union: z.ZodUnion.create([z.string(), z.number()]).parse(3),
+  intersection: z.ZodIntersection.create(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
+  discriminatedUnion: z.ZodDiscriminatedUnion.create("kind", [
+    z.object({ kind: z.literal("a"), value: z.string() }),
+    z.object({ kind: z.literal("b"), value: z.number() }),
+  ]).parse({ kind: "b", value: 2 }).value,
+  function: z.ZodFunction.create()
+    .args(z.string())
+    .returns(z.number())
+    .implement((value) => value.length)("abc"),
+  lazy: z.ZodLazy.create(() => z.string()).parse("lazy"),
+  effects: z.ZodEffects.create(z.string(), { type: "transform", transform: (value: string) => value.length }).parse("fish"),
+  default: z.ZodDefault.create(z.string(), { default: () => "fallback" }).parse(undefined),
+  catch: z.ZodCatch.create(z.number(), { catch: () => 7 }).parse("bad"),
+  pipeline: z.ZodPipeline.create(z.string(), z.coerce.number()).parse("6"),
 });
 
 print("jsonLike", {
