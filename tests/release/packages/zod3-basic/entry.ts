@@ -272,6 +272,8 @@ const transformedMap = z
 const transformedSet = z
   .set(z.string().transform((value) => value.length))
   .parse(new Set(["aa", "bbb"]));
+const collectionIssueSummary = (result: z.SafeParseReturnType<unknown, unknown>) =>
+  result.success ? [] : result.error.issues.map((issue) => ({ code: issue.code, path: issue.path.join(".") }));
 print("collections", {
   record: z.record(z.number()).safeParse({ a: 1, b: 2 }).success,
   keyedRecord: z.record(z.enum(["a", "b"]), z.number()).safeParse({ a: 1, b: 2 }).success,
@@ -291,6 +293,11 @@ print("collections", {
   setMax: z.set(z.string()).max(2).safeParse(new Set(["a", "b", "c"])).success,
   setSize: z.set(z.string()).size(2).safeParse(new Set(["a", "b"])).success,
   transformedSet: Array.from(transformedSet.values()),
+  recordIssues: collectionIssueSummary(z.record(z.number()).safeParse({ ok: 1, bad: "x" })),
+  mapKeyIssues: collectionIssueSummary(z.map(z.string().min(2), z.number()).safeParse(new Map([["a", 1]]))),
+  mapValueIssues: collectionIssueSummary(z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]]))),
+  setElementIssues: collectionIssueSummary(z.set(z.string().min(2)).safeParse(new Set(["a"]))),
+  setSizeIssues: collectionIssueSummary(z.set(z.string()).size(2).safeParse(new Set(["a"]))),
 });
 
 print("composition", {
