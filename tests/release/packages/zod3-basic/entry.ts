@@ -148,6 +148,50 @@ print("packageUtilities", {
   ).message,
 });
 
+const directIssue = z.makeIssue({
+  data: 1,
+  path: ["root"],
+  issueData: { code: z.ZodIssueCode.custom, path: ["leaf"], message: "direct" },
+  errorMaps: [z.defaultErrorMap],
+});
+const mappedIssue = z.makeIssue({
+  data: "bad",
+  path: ["root"],
+  issueData: { code: z.ZodIssueCode.invalid_type, expected: "number", received: "string" },
+  errorMaps: [z.defaultErrorMap],
+});
+const parseContext = {
+  common: { issues: [], async: false },
+  path: ["ctx"],
+  schemaErrorMap: undefined,
+  parent: null,
+  data: "bad",
+  parsedType: z.ZodParsedType.string,
+} as any;
+z.addIssueToContext(parseContext, {
+  code: z.ZodIssueCode.invalid_type,
+  expected: "number",
+  received: "string",
+});
+const transformerSchema = z.ZodTransformer.create(z.string(), {
+  type: "transform",
+  transform: (value: string) => value.length,
+});
+print("parseHelpers", {
+  direct: { code: directIssue.code, path: directIssue.path.join("."), message: directIssue.message },
+  mapped: { path: mappedIssue.path.join("."), message: mappedIssue.message },
+  context: parseContext.common.issues.map((issue: z.ZodIssue) => ({
+    path: issue.path.join("."),
+    message: issue.message,
+  })),
+  aliases: {
+    schema: z.string() instanceof z.ZodSchema,
+    type: z.string() instanceof z.ZodType,
+    transformer: transformerSchema instanceof z.ZodTransformer,
+    transformerParse: transformerSchema.parse("tuna"),
+  },
+});
+
 print("coerce", {
   string: z.coerce.string().parse(42),
   number: z.coerce.number().parse("12.5"),
