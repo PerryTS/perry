@@ -1,3 +1,7 @@
+## v0.5.1209 — fix(hir): #5592 — indirect eval in class field initializers folds to global-scope IIFE
+
+`eval_is_module_top_global` in `const_fold_fn.rs` blocked the completion-IIFE fold with a `ctx.current_class.is_none()` guard. Class field initializers at module top level do not create a new variable environment — `scope_depth` stays 0 and the enclosing scope is still the global scope in global-script mode. The guard was overly conservative: class *methods* are already excluded by the `scope_depth == 0` check (methods call `enter_scope()`). Removing the `current_class` guard fixes four test262 cases: `language/{statements,expressions}/class/elements/{,private-}indirect-eval-contains-arguments`. Two regression tests added to `issue_5579_indirect_eval_global_completion.rs`.
+
 ## v0.5.1208 — test(net): #5540 — lock in Map-stored `socket.write()` from a `setInterval` callback reaching the wire
 
 Issue #5540 reported that `socket.write(buf)` was silently dropped (no `sendto`, bytes never hit the wire) when the socket was reached through a property of a `Map`-stored object **and** the write was issued from a timer (`setInterval`) callback — the exact pattern `@perryts/mysql`'s deferred flush pump uses (`CONN_STATES.get(id).sock.write(bytes)`), so password auth timed out. It was distinct from #5021 (write-from-`'data'`-handler) and #91 (Map-retrieved write from a `'data'` handler), both already fixed.
