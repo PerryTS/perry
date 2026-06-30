@@ -1473,6 +1473,37 @@ pub(crate) fn lower_module_decl(
                             continue;
                         }
 
+                        if let Some((source, imported)) = module.imports.iter().find_map(|import| {
+                            if import.is_native {
+                                return None;
+                            }
+                            import
+                                .specifiers
+                                .iter()
+                                .find_map(|specifier| match specifier {
+                                    ImportSpecifier::Named {
+                                        imported,
+                                        local: imported_local,
+                                    } if imported_local == &local => {
+                                        Some((import.source.clone(), imported.clone()))
+                                    }
+                                    ImportSpecifier::Default {
+                                        local: imported_local,
+                                    } if imported_local == &local => {
+                                        Some((import.source.clone(), "default".to_string()))
+                                    }
+                                    ImportSpecifier::Namespace { .. } => None,
+                                    _ => None,
+                                })
+                        }) {
+                            module.exports.push(Export::ReExport {
+                                source,
+                                imported,
+                                exported: exported.clone(),
+                            });
+                            continue;
+                        }
+
                         module.exports.push(Export::Named {
                             local: local.clone(),
                             exported: exported.clone(),

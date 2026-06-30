@@ -125,6 +125,29 @@ print("packageExports", {
   names: [z.ZodString.name, z.ZodNumber.name, z.ZodObject.name, z.ZodError.name],
 });
 
+const parseStatus = new z.ParseStatus();
+parseStatus.dirty();
+const parseStatusMerged = z.ParseStatus.mergeArray(parseStatus, [z.OK("a"), z.DIRTY("b")]);
+parseStatus.abort();
+const datetimeWithOffset = z.datetimeRegex({ offset: true, precision: 3 });
+print("packageUtilities", {
+  isAsync: [z.isAsync(Promise.resolve(1)), z.isAsync(1)],
+  parseStatus: {
+    dirty: parseStatusMerged.status,
+    merged: parseStatusMerged.value,
+    aborted: parseStatus.value,
+  },
+  quoteless: z.quotelessJson({ a: "x", nested: { b: 1 }, arr: [true, null] }).split("\n").length,
+  datetimeRegex: [
+    datetimeWithOffset.test("2020-01-02T03:04:05.123Z"),
+    datetimeWithOffset.test("2020-01-02T03:04:05Z"),
+  ],
+  defaultError: z.defaultErrorMap(
+    { code: z.ZodIssueCode.invalid_type, expected: "string", received: "number", path: [] },
+    { data: 1, defaultError: "fallback" },
+  ).message,
+});
+
 print("coerce", {
   string: z.coerce.string().parse(42),
   number: z.coerce.number().parse("12.5"),
