@@ -487,6 +487,13 @@ print("union", {
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
 const nestedObject = z.object({ nested: z.object({ label: z.string() }) });
 const defaultedOptionalObject = z.object({ defaulted: z.string().default("tuna").optional() });
+const partialObjectSchema = objectBase.partial();
+const partialNameObjectSchema = objectBase.partial({ name: true });
+const requiredObjectSchema = objectBase.required();
+const requiredActiveObjectSchema = objectBase.required({ active: true });
+const deepPartialObjectSchema = nestedObject.deepPartial();
+const objectShapeTypes = (schema: z.AnyZodObject) =>
+  Object.fromEntries(Object.entries(schema.shape).map(([key, value]) => [key, value.constructor.name]));
 const categorySchema: z.ZodType<any> = z.object({
   name: z.string(),
   get subcategories() {
@@ -528,11 +535,11 @@ print("objects", {
     name: "a",
     role: "user",
   }),
-  partial: objectBase.partial().parse({ id: 1 }),
-  partialName: objectBase.partial({ name: true }).safeParse({ id: 1 }).success,
-  deepPartial: nestedObject.deepPartial().parse({ nested: {} }),
-  required: objectBase.required().safeParse({ id: 1, name: "a" }).success,
-  requiredActive: objectBase.required({ active: true }).safeParse({ id: 1, name: "a" }).success,
+  partial: partialObjectSchema.parse({ id: 1 }),
+  partialName: partialNameObjectSchema.safeParse({ id: 1 }).success,
+  deepPartial: deepPartialObjectSchema.parse({ nested: {} }),
+  required: requiredObjectSchema.safeParse({ id: 1, name: "a" }).success,
+  requiredActive: requiredActiveObjectSchema.safeParse({ id: 1, name: "a" }).success,
   nestedRequired: nestedObject.required().safeParse({ nested: { label: "x" } }).success,
   defaultedOptionalEmpty: defaultedOptionalObject.parse({}),
   defaultedOptionalUndefined: defaultedOptionalObject.parse({ defaulted: undefined }),
@@ -547,6 +554,17 @@ print("objects", {
   strictCreate: z.ZodObject.strictCreate({ id: z.number() }).safeParse({ id: 1, extra: true }).success,
   strictCreateParse: z.ZodObject.strictCreate({ id: z.number() }).parse({ id: 1 }).id,
   lazycreate: z.ZodObject.lazycreate(() => ({ name: z.string() })).parse({ name: "lazy" }).name,
+  shapeMetadata: {
+    partial: objectShapeTypes(partialObjectSchema),
+    partialName: objectShapeTypes(partialNameObjectSchema),
+    partialActiveInner: partialObjectSchema.shape.active._def.innerType.constructor.name,
+    required: objectShapeTypes(requiredObjectSchema),
+    requiredActive: objectShapeTypes(requiredActiveObjectSchema),
+    deepPartial: [
+      deepPartialObjectSchema.shape.nested.constructor.name,
+      deepPartialObjectSchema.shape.nested._def.innerType.shape.label.constructor.name,
+    ],
+  },
 });
 
 print("recursiveObjects", {
