@@ -30,6 +30,7 @@ function issueMetadata(error: z.ZodError) {
       "exact",
       "multipleOf",
       "type",
+      "params",
     ]) {
       if (key in issue) {
         metadata[key] = issue[key as keyof typeof issue];
@@ -610,12 +611,26 @@ if (!formatted.success) {
 
 print("issueMetadata", {
   literal: issueMetadataFromResult(z.literal("ready").safeParse("no")),
+  invalidType: issueMetadataFromResult(z.number().safeParse("x")),
   enum: issueMetadataFromResult(z.enum(["red", "blue"]).safeParse("green")),
+  invalidString: issueMetadataFromResult(z.string().email().safeParse("bad")),
+  invalidRegex: issueMetadataFromResult(z.string().regex(/^a+$/).safeParse("bbb")),
   strict: issueMetadataFromResult(z.object({ id: z.number() }).strict().safeParse({ id: 1, extra: true })),
   invalidDate: issueMetadataFromResult(z.date().safeParse(new Date("bad"))),
+  notFinite: issueMetadataFromResult(z.number().finite().safeParse(Infinity)),
   tooBigArray: issueMetadataFromResult(z.array(z.string()).max(1).safeParse(["a", "b"])),
   tooSmallNumber: issueMetadataFromResult(z.number().min(2).safeParse(1)),
   notMultiple: issueMetadataFromResult(z.number().multipleOf(5).safeParse(12)),
+  invalidIntersection: issueMetadataFromResult(
+    z.intersection(z.string().transform(() => 1), z.string().transform(() => 2)).safeParse("x"),
+  ),
+  custom: issueMetadataFromResult(
+    z.string()
+      .superRefine((value, ctx) => {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `custom:${value}`, params: { kind: "fixture" } });
+      })
+      .safeParse("x"),
+  ),
 });
 
 const manualError = new z.ZodError([]);
