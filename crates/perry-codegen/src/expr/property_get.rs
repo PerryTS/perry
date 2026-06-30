@@ -111,7 +111,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let arr_handle = blk.call(I64, "js_error_get_errors", &[(I64, &recv_handle)]);
-            Ok(nanbox_pointer_inline(blk, &arr_handle))
+            let is_missing = blk.icmp_eq(I64, &arr_handle, "0");
+            let tagged = nanbox_pointer_inline(blk, &arr_handle);
+            let tagged_bits = blk.bitcast_double_to_i64(&tagged);
+            let selected = blk.select(
+                I1,
+                &is_missing,
+                I64,
+                crate::nanbox::TAG_UNDEFINED_I64,
+                &tagged_bits,
+            );
+            Ok(blk.bitcast_i64_to_double(&selected))
         }
 
         Expr::PropertyGet { object, property }

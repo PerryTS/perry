@@ -1072,6 +1072,10 @@ const mappedFormat = objectBase.safeParse({ id: "x", name: 1 });
 print("errorMethods", {
   manualCount: manualError.issues.length,
   manualEmpty: manualError.isEmpty,
+  manualMessage: manualError.message.includes("manual issue"),
+  manualToString: manualError.toString().includes("more issue"),
+  manualErrorsAlias: manualError.errors === manualError.issues,
+  manualFormErrors: manualError.formErrors.fieldErrors.manual?.[0],
   manualFlatten: manualError.flatten((issue) => `${issue.path.join(".")}:${issue.message}`),
   created: createdError.issues[0].message,
   mappedFormat: mappedFormat.success
@@ -1118,9 +1122,16 @@ print("packageSubpaths", {
 });
 
 const originalErrorMap = z.getErrorMap();
-z.setErrorMap((issue) => ({ message: `mapped:${issue.code}` }));
+z.setErrorMap((issue, ctx) => ({ message: `global:${issue.code}:${ctx.defaultError}` }));
 const mappedError = z.string().safeParse(1);
+const schemaMappedError = z.string({ invalid_type_error: "schema invalid" }).safeParse(1);
+const localMappedError = z.string().safeParse(1, {
+  errorMap: (issue, ctx) => ({ message: `local:${issue.code}:${ctx.defaultError}` }),
+});
 z.setErrorMap(originalErrorMap);
 print("errorMap", {
   mapped: mappedError.success ? "ok" : mappedError.error.issues[0].message,
+  schema: schemaMappedError.success ? "ok" : schemaMappedError.error.issues[0].message,
+  local: localMappedError.success ? "ok" : localMappedError.error.issues[0].message,
+  restored: z.getErrorMap() === originalErrorMap,
 });
