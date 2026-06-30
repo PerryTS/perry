@@ -968,6 +968,10 @@ const strictValidatedFn = z.function().args(z.string()).returns(z.number()).stri
 const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
 const strictInvalidReturnFn = z.function().args(z.string()).returns(z.number()).strictImplement(() => "bad" as unknown as number);
 const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
+const functionMetadataSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
+const defaultFunctionMetadataSchema = z.function();
+const argsOnlyFunctionMetadataSchema = z.function().args(z.string());
+const returnsOnlyFunctionMetadataSchema = z.function().returns(z.number());
 const asyncValidatedFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async (value) => value.trim().length);
 const asyncInvalidReturnFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async () => "bad" as unknown as number);
 const functionNestedIssueCount = (issue: z.ZodIssue) => {
@@ -1025,6 +1029,30 @@ print("function", {
   returnIssues: functionIssueSummary(() => invalidReturnFn("x")),
   strictReturnIssues: functionIssueSummary(() => strictInvalidReturnFn("x")),
   invalidAsyncReturn,
+  metadata: {
+    typed: {
+      typeName: functionMetadataSchema._def.typeName,
+      argsType: functionMetadataSchema._def.args.constructor.name,
+      argItems: functionMetadataSchema._def.args.items.map((item) => item.constructor.name),
+      argRest: functionMetadataSchema._def.args._def.rest?.constructor.name,
+      returns: functionMetadataSchema._def.returns.constructor.name,
+      parameters: functionMetadataSchema.parameters().items.map((item) => item.constructor.name),
+      returnType: functionMetadataSchema.returnType().constructor.name,
+    },
+    defaults: {
+      args: defaultFunctionMetadataSchema._def.args.items.length,
+      rest: defaultFunctionMetadataSchema._def.args._def.rest?.constructor.name,
+      returns: defaultFunctionMetadataSchema._def.returns.constructor.name,
+    },
+    argsOnly: {
+      args: argsOnlyFunctionMetadataSchema._def.args.items.map((item) => item.constructor.name),
+      returns: argsOnlyFunctionMetadataSchema._def.returns.constructor.name,
+    },
+    returnsOnly: {
+      args: returnsOnlyFunctionMetadataSchema._def.args.items.length,
+      returns: returnsOnlyFunctionMetadataSchema._def.returns.constructor.name,
+    },
+  },
 });
 
 const asyncSchema = z.string().refine(async (value) => value === "ok");
