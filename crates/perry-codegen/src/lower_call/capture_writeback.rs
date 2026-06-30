@@ -62,19 +62,18 @@ pub(crate) fn emit_class_capture_writeback(
         // cap_args_start + cap_idx is a LocalGet whose id is the
         // *current-scope* id — correct even when the class was inlined into a
         // different scope and local IDs were alpha-renamed.
-        let current_scope_id: Option<u32> =
-            new_args
-                .get(cap_args_start + cap_idx)
-                .and_then(|arg| {
-                    if let perry_hir::Expr::LocalGet(id) = arg {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                // Fallback to the numeric suffix from __perry_cap_<id> for
-                // call sites that don't supply new_args (empty slice).
-                .or_else(|| id_str.parse::<u32>().ok());
+        let current_scope_id: Option<u32> = new_args
+            .get(cap_args_start + cap_idx)
+            .and_then(|arg| {
+                if let perry_hir::Expr::LocalGet(id) = arg {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            // Fallback to the numeric suffix from __perry_cap_<id> for
+            // call sites that don't supply new_args (empty slice).
+            .or_else(|| id_str.parse::<u32>().ok());
         let Some(outer_id) = current_scope_id else {
             continue;
         };
