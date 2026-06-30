@@ -130,12 +130,40 @@ parseStatus.dirty();
 const parseStatusMerged = z.ParseStatus.mergeArray(parseStatus, [z.OK("a"), z.DIRTY("b")]);
 parseStatus.abort();
 const datetimeWithOffset = z.datetimeRegex({ offset: true, precision: 3 });
+const validStatus = z.OK("valid");
+const dirtyStatus = z.DIRTY("dirty");
+const abortedStatus = z.INVALID;
 print("packageUtilities", {
   isAsync: [z.isAsync(Promise.resolve(1)), z.isAsync(1)],
   parseStatus: {
     dirty: parseStatusMerged.status,
     merged: parseStatusMerged.value,
     aborted: parseStatus.value,
+  },
+  parsedTypes: [
+    z.getParsedType(null),
+    z.getParsedType([]),
+    z.getParsedType(new Map()),
+    z.getParsedType(1n),
+    z.getParsedType(Promise.resolve(1)),
+    z.getParsedType(NaN),
+  ],
+  statusHelpers: {
+    valid: [validStatus.status, z.isValid(validStatus), z.isDirty(validStatus), z.isAborted(validStatus)],
+    dirty: [dirtyStatus.status, z.isValid(dirtyStatus), z.isDirty(dirtyStatus), z.isAborted(dirtyStatus)],
+    aborted: [abortedStatus.status, z.isValid(abortedStatus), z.isDirty(abortedStatus), z.isAborted(abortedStatus)],
+    never: z.NEVER.status,
+    emptyPathLength: z.EMPTY_PATH.length,
+  },
+  util: {
+    arrayToEnum: z.util.arrayToEnum(["a", "b"]).b,
+    validEnumValues: z.util.getValidEnumValues({ A: "a", B: 1, 1: "B" }),
+    joinValues: z.util.joinValues(["a", 1, true]),
+    objectKeys: z.util.objectKeys({ b: 1, a: 2 }).join("|"),
+    objectValues: z.util.objectValues({ b: 1, a: 2 }),
+    find: z.util.find([1, 2, 3], (value) => value > 1),
+    isInteger: [z.util.isInteger(1), z.util.isInteger(1.5)],
+    jsonStringifyReplacer: JSON.stringify({ n: 1n }, z.util.jsonStringifyReplacer),
   },
   quoteless: z.quotelessJson({ a: "x", nested: { b: 1 }, arr: [true, null] }).split("\n").length,
   datetimeRegex: [

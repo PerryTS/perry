@@ -162,6 +162,24 @@ fn is_fs_dir_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
             })
 }
 
+fn chain_roots_at_namespace_or_import(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let mut current = unwrap_transparent_expr(expr);
+    loop {
+        match current {
+            ast::Expr::Ident(ident) => {
+                let name = ident.sym.as_ref();
+                return ctx.namespace_import_locals.contains(name)
+                    || (ctx.lookup_local(name).is_none()
+                        && ctx.lookup_imported_func(name).is_some());
+            }
+            ast::Expr::Member(member) => {
+                current = unwrap_transparent_expr(member.obj.as_ref());
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// Does this expression's method chain originate from a node:stream
 /// source — `Readable.from(...)` / `Readable.of(...)`, a local already tagged
 /// as a readable stream, `new Transform()`, or a chain of lazy iterator helpers
@@ -598,6 +616,7 @@ pub(super) fn try_array_only_methods(
                 let recv_is_class = recv_is_class
                     || chain_roots_at_stream(ctx, member_obj)
                     || chain_roots_at_iterator_from(member_obj)
+                    || chain_roots_at_namespace_or_import(ctx, member_obj)
                     || is_util_mime_params_receiver(ctx, member_obj);
                 // thisArg routing: the dense `Expr::Array<Method>` fast paths
                 // carry only the callback and silently drop a 2nd positional
