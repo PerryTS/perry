@@ -482,6 +482,11 @@ print("recursiveObjects", {
 
 const arrayElementIssue = z.array(z.string()).safeParse([1]);
 const tupleLengthIssue = z.tuple([z.string()]).safeParse(["a", "b"]);
+const boundedArray = z.array(z.string()).min(1).max(3).length(2);
+const tupleWithRest = z.tuple([z.string(), z.number()]).rest(z.boolean());
+const arrayMinMessage = z.array(z.string()).min(2, "need two").safeParse(["a"]);
+const arrayMaxMessage = z.array(z.string()).max(1, "too many").safeParse(["a", "b"]);
+const arrayLengthMessage = z.array(z.string()).length(2, "exactly two").safeParse(["a"]);
 print("arrays.tuples", {
   array: z.array(z.number()).min(2).max(3).parse([1, 2]),
   transformedArray: z.array(z.string().transform((value) => value.length)).parse(["aa", "bbb"]),
@@ -489,9 +494,22 @@ print("arrays.tuples", {
   nonempty: z.array(z.string()).nonempty().safeParse([]).success,
   elementDescription: z.array(z.string().describe("array item")).element.description,
   elementIssuePath: arrayElementIssue.success ? "ok" : arrayElementIssue.error.issues[0].path.join("."),
+  typeName: boundedArray._def.typeName,
+  bounds: [
+    boundedArray._def.minLength?.value,
+    boundedArray._def.maxLength?.value,
+    boundedArray._def.exactLength?.value,
+  ],
+  elementType: boundedArray.element.constructor.name,
+  minMessage: arrayMinMessage.success ? "ok" : arrayMinMessage.error.issues[0].message,
+  maxMessage: arrayMaxMessage.success ? "ok" : arrayMaxMessage.error.issues[0].message,
+  lengthMessage: arrayLengthMessage.success ? "ok" : arrayLengthMessage.error.issues[0].message,
   tuple: z.tuple([z.string(), z.number()]).parse(["a", 1]),
   tupleLengthIssue: tupleLengthIssue.success ? "ok" : tupleLengthIssue.error.issues[0].code,
   tupleRest: z.tuple([z.string()]).rest(z.number()).parse(["a", 1, 2]),
+  tupleItems: tupleWithRest.items.map((item) => item.constructor.name),
+  tupleRestType: tupleWithRest._def.rest?.constructor.name,
+  tupleTypeName: tupleWithRest._def.typeName,
 });
 
 const parsedMap = z.map(z.string(), z.number()).parse(new Map([["a", 1], ["b", 2]]));
