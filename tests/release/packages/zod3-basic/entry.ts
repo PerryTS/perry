@@ -933,6 +933,10 @@ const jsonLiteralSchema = z.union([z.string(), z.number(), z.boolean(), z.null()
 const jsonValueSchema: z.ZodType<any> = z.lazy(() =>
   z.union([jsonLiteralSchema, z.array(jsonValueSchema), z.record(jsonValueSchema)]),
 );
+const jsonStringSchema = z.string().transform((value) => JSON.parse(value)).pipe(jsonValueSchema);
+const mapSizeSchema = z.object({
+  box: z.instanceof(Map).refine((value) => value.size === 1, { path: ["size"], message: "size one" }),
+});
 const mergedStaticShape = z.objectUtil.mergeShapes(
   { a: z.string(), shared: z.string() },
   { b: z.number(), shared: z.number() },
@@ -1006,6 +1010,12 @@ print("staticFactories", {
 print("jsonLike", {
   object: jsonValueSchema.safeParse({ nested: [1, "two", null] }).success,
   rejectsFunction: jsonValueSchema.safeParse(() => 1).success,
+  rejectsSymbol: jsonValueSchema.safeParse(Symbol.for("x")).success,
+  rejectsBigint: jsonValueSchema.safeParse(1n).success,
+  badNested: issueMetadataFromResult(jsonValueSchema.safeParse({ ok: true, bad: () => 1 })),
+  fromString: jsonStringSchema.parse('{"a":[1,true,null]}'),
+  mapSize: mapSizeSchema.safeParse({ box: new Map([["a", 1]]) }).success,
+  mapSizeFail: issueMetadataFromResult(mapSizeSchema.safeParse({ box: new Map() })),
   parsed: jsonValueSchema.parse({ ok: true, items: [1, "two"] }),
 });
 
