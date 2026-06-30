@@ -546,10 +546,9 @@ pub fn synthesize_class_captures(
     // ALL user body stmts — user code may mutate the outer-local after
     // `super()` (e.g. `++called` in the TemporalHelpers sub-check pattern).
     // Inserting immediately after `super()` captured the pre-mutation value.
-    // Appending at the end ensures the stash records the final value, which
-    // `emit_class_capture_writeback` then propagates back to the outer slot.
-    // Note: constructors with early `return` are not handled here (the stash
-    // would not fire on the early-exit path); that is a separate concern.
+    // Insert stashes before each explicit `return` so they run on every exit
+    // path, then append at the end for the fall-through path.
+    insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
     for stmt in assignment_stmts {
         ctor.body.push(stmt);
     }
@@ -576,6 +575,73 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Recursively insert `stashes` immediately before every `Stmt::Return` in
+/// `body` so that cap-field stash assignments run on EVERY early-exit path,
+/// not just the fall-through.  Does not descend into nested function
+/// expressions (closures defined inside the constructor) — only direct
+/// control-flow of the constructor body itself.
+fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
+    let mut i = 0;
+    while i < body.len() {
+        // Check via shared ref first to decide what to do.
+        let is_return = matches!(body[i], Stmt::Return(_));
+        if is_return {
+            for (j, s) in stashes.iter().enumerate() {
+                body.insert(i + j, s.clone());
+            }
+            i += stashes.len() + 1;
+            continue;
+        }
+        // Recurse into nested control-flow via mutable ref.
+        match &mut body[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                insert_stashes_before_returns(then_branch, stashes);
+                if let Some(eb) = else_branch {
+                    insert_stashes_before_returns(eb, stashes);
+                }
+            }
+            Stmt::While { body: wb, .. } | Stmt::DoWhile { body: wb, .. } => {
+                insert_stashes_before_returns(wb, stashes);
+            }
+            Stmt::For { body: fb, .. } => {
+                insert_stashes_before_returns(fb, stashes);
+            }
+            Stmt::Labeled { body: lb, .. } => match lb.as_mut() {
+                Stmt::While { body: wb, .. }
+                | Stmt::DoWhile { body: wb, .. }
+                | Stmt::For { body: wb, .. } => {
+                    insert_stashes_before_returns(wb, stashes);
+                }
+                _ => {}
+            },
+            Stmt::Try {
+                body: tb,
+                catch,
+                finally,
+            } => {
+                insert_stashes_before_returns(tb, stashes);
+                if let Some(c) = catch {
+                    insert_stashes_before_returns(&mut c.body, stashes);
+                }
+                if let Some(f) = finally {
+                    insert_stashes_before_returns(f, stashes);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    insert_stashes_before_returns(&mut case.body, stashes);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
 
 /// Append `cap_args` (the `.1` ids) to every `new <class_name>(…)` site in

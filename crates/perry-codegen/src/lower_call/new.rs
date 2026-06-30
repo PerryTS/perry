@@ -1245,7 +1245,14 @@ fn lower_new_impl(
             // updates the outer local's alloca slot. Read the fields back here so
             // the enclosing scope sees the updated values (e.g. `++called` in a
             // subclass constructor is visible after `new SubClass(...)` returns).
-            emit_class_capture_writeback(ctx, class, &obj_handle, args);
+            // When `caps_absent_from_args` is true (member-callee `new ns.C()`
+            // path), the HIR `args` slice contains ONLY user args — the cap args
+            // were NOT appended. Passing `args` to `emit_class_capture_writeback`
+            // would let the position-based lookup misidentify a user `LocalGet` as
+            // a cap arg and write to the wrong outer slot. Fall back to suffix-based
+            // lookup (empty slice) in that case.
+            let writeback_args = if caps_absent_from_args { &[][..] } else { args };
+            emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()

@@ -190,13 +190,22 @@ console.log("add-month:", later.month);                        // 8
 
 #[test]
 fn temporal_subclass_capture_writeback_inner_class() {
-    // Regression for #5587: when a class is declared INSIDE a function and
-    // extends a Temporal type, the constructor mutates a captured outer local
-    // (`++called`) AFTER calling `super()`. Prior to the fix, the
-    // `this.__perry_cap_<id>` stash was inserted immediately after `super()`,
-    // recording the pre-mutation value 0; `emit_class_capture_writeback`
-    // then wrote 0 back to the outer slot, making `called` appear untouched.
-    // The fix moves the stash to the END of the constructor body.
+    // Regression for #5587 (Bug 1a + Bug 1b):
+    //
+    // Bug 1a — stash placement: the `this.__perry_cap_called = param` stash
+    // was inserted immediately after `super()`. When user code runs `++called`
+    // AFTER `super()` the stash recorded the pre-mutation value 0 and
+    // `emit_class_capture_writeback` wrote 0 back to the outer slot.
+    // Fix: append stash at END of ctor body (after all user stmts).
+    //
+    // Bug 1b — inlined-scope ID mismatch: when `check(...)` is called at
+    // module level, Perry inlines its body into module-init and alpha-renames
+    // locals (`called` id=2 → id=9). The old suffix-based writeback looked
+    // up `ctx.locals[2]` (not found) and silently skipped. Fix: position-
+    // based cap-arg lookup resolves the current-scope id from the `New` args.
+    //
+    // Two variants: post-super mutation (Bug 1a) and module-level inlining
+    // (Bug 1b, exercised by calling check() at module level below).
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
@@ -205,16 +214,17 @@ function check(construct: any, constructArgs: any[]) {
   let called = 0;
   class MySubclass extends construct {
     constructor() {
-      ++called;
       super(...constructArgs);
+      ++called;  // mutates AFTER super() — exercises Bug 1a stash placement
     }
   }
-  const instance = new MySubclass();
+  new MySubclass();
   return called;
 }
 
-console.log("duration called:", check(Temporal.Duration, [0, 0, 0, -4]));  // 1
-console.log("plain-date called:", check(Temporal.PlainDate, [2021, 7, 20]));  // 1
+// Called at module level → inlined into module-init (Bug 1b: alpha-renamed ids)
+console.log("duration called:", check(Temporal.Duration, [0, 0, 0, -4]));   // 1
+console.log("plain-date called:", check(Temporal.PlainDate, [2021, 7, 20])); // 1
 "#,
     );
     assert_eq!(
@@ -235,7 +245,9 @@ fn temporal_plain_date_no_ctor_subclass_cell_stashed() {
         dir.path(),
         r#"
 class AvoidGettersDate extends Temporal.PlainDate {
-  get year() { return -99; }
+  // Throw so that any call to this getter causes an observable failure —
+  // compare() must use internal slots and never invoke this accessor.
+  get year() { throw new Error("year accessor must not be called by compare()"); }
 }
 
 const a = new AvoidGettersDate(2000, 5, 2);
