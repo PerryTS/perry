@@ -47,7 +47,7 @@ pub(crate) use class_members::{
 pub(crate) use class_validation::{
     validate_class_element_early_errors, validate_legacy_decorator_surface,
 };
-pub(crate) use enum_decl::{compute_enum_members, lower_enum_decl};
+pub(crate) use enum_decl::{compute_enum_members, enum_runtime_let, lower_enum_decl};
 pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,

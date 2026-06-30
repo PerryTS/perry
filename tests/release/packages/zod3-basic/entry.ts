@@ -96,6 +96,35 @@ print("primitives", {
   never: z.never().safeParse("nope").success,
 });
 
+print("packageExports", {
+  parsed: {
+    string: z.getParsedType("x"),
+    nan: z.getParsedType(NaN),
+    map: z.getParsedType(new Map()),
+    promise: z.getParsedType(Promise.resolve(1)),
+  },
+  status: {
+    ok: z.OK(1),
+    dirty: z.DIRTY(2),
+    invalid: z.INVALID,
+    isValid: z.isValid(z.OK(1)),
+    isDirty: z.isDirty(z.DIRTY(2)),
+    isAborted: z.isAborted(z.INVALID),
+  },
+  parsedType: {
+    string: z.ZodParsedType.string,
+    nan: z.ZodParsedType.nan,
+    map: z.ZodParsedType.map,
+    promise: z.ZodParsedType.promise,
+  },
+  typeKind: {
+    object: z.ZodFirstPartyTypeKind.ZodObject,
+    pipeline: z.ZodFirstPartyTypeKind.ZodPipeline,
+    readonly: z.ZodFirstPartyTypeKind.ZodReadonly,
+  },
+  names: [z.ZodString.name, z.ZodNumber.name, z.ZodObject.name, z.ZodError.name],
+});
+
 print("coerce", {
   string: z.coerce.string().parse(42),
   number: z.coerce.number().parse("12.5"),

@@ -1320,6 +1320,7 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, true)?;
                     let enum_name = en.name.clone();
+                    module.init.push(crate::lower_decl::enum_runtime_let(ctx, &en));
                     module.enums.push(en);
                     module.exported_objects.push(enum_name.clone());
                     module.exports.push(Export::Named {
