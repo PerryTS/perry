@@ -449,6 +449,11 @@ print("objects", {
   shapeName: objectBase.shape.name.safeParse("a").success,
   pick: objectBase.pick({ id: true }).parse({ id: 1 }),
   omit: objectBase.omit({ active: true }).parse({ id: 1, name: "a" }),
+  spreadShape: z.object({ ...objectBase.shape, role: z.string() }).parse({
+    id: 1,
+    name: "a",
+    role: "user",
+  }),
   partial: objectBase.partial().parse({ id: 1 }),
   partialName: objectBase.partial({ name: true }).safeParse({ id: 1 }).success,
   deepPartial: nestedObject.deepPartial().parse({ nested: {} }),
@@ -458,6 +463,16 @@ print("objects", {
   defaultedOptionalEmpty: defaultedOptionalObject.parse({}),
   defaultedOptionalUndefined: defaultedOptionalObject.parse({ defaulted: undefined }),
   anyUnknownMissing: z.object({ a: z.any(), b: z.unknown() }).safeParse({}).success,
+  unknownKeys: [
+    objectBase._def.unknownKeys,
+    objectBase.passthrough()._def.unknownKeys,
+    objectBase.strict()._def.unknownKeys,
+    objectBase.strip()._def.unknownKeys,
+  ],
+  catchallType: z.object({ id: z.number() }).catchall(z.string())._def.catchall.constructor.name,
+  strictCreate: z.ZodObject.strictCreate({ id: z.number() }).safeParse({ id: 1, extra: true }).success,
+  strictCreateParse: z.ZodObject.strictCreate({ id: z.number() }).parse({ id: 1 }).id,
+  lazycreate: z.ZodObject.lazycreate(() => ({ name: z.string() })).parse({ name: "lazy" }).name,
 });
 
 print("recursiveObjects", {
