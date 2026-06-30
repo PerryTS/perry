@@ -297,7 +297,8 @@ mod native_package_selection_tests {
     #[test]
     fn vulkan_backend_appends_only_opengl32() {
         let mut tc = target_config();
-        tc.backends.push(backend_config(NativeBackend::Vulkan, true));
+        tc.backends
+            .push(backend_config(NativeBackend::Vulkan, true));
         assert_eq!(
             super::windows_wgpu_backend_syslibs(&tc),
             vec!["opengl32.lib"]
@@ -310,7 +311,8 @@ mod native_package_selection_tests {
     #[test]
     fn d3d12_backend_appends_syslibs_even_when_unavailable() {
         let mut tc = target_config();
-        tc.backends.push(backend_config(NativeBackend::D3d12, false));
+        tc.backends
+            .push(backend_config(NativeBackend::D3d12, false));
         assert_eq!(
             super::windows_wgpu_backend_syslibs(&tc),
             vec!["d3dcompiler.lib", "opengl32.lib"]

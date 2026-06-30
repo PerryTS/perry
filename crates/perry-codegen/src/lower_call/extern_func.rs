@@ -1643,21 +1643,37 @@ pub fn try_lower_extern_func_call(
                     match descriptor {
                         NativeAbiType::Pod(pod) => {
                             lower_manifest_pod_param(
-                                ctx, descriptor, pod, *idx, abi_slot_index,
-                                &Expr::Undefined, &mut lowered, &mut arg_types,
+                                ctx,
+                                descriptor,
+                                pod,
+                                *idx,
+                                abi_slot_index,
+                                &Expr::Undefined,
+                                &mut lowered,
+                                &mut arg_types,
                             )?;
                         }
                         NativeAbiType::PodAndCount(pod) => {
                             lower_manifest_pod_view_param(
-                                ctx, descriptor, pod, *idx, abi_slot_index,
-                                &Expr::Undefined, &mut lowered, &mut arg_types,
+                                ctx,
+                                descriptor,
+                                pod,
+                                *idx,
+                                abi_slot_index,
+                                &Expr::Undefined,
+                                &mut lowered,
+                                &mut arg_types,
                             )?;
                         }
                         NativeAbiType::BufferAndLen => {
                             lower_buffer_and_len_param(
-                                ctx, descriptor, *idx, abi_slot_index,
+                                ctx,
+                                descriptor,
+                                *idx,
+                                abi_slot_index,
                                 &double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                                &mut lowered, &mut arg_types,
+                                &mut lowered,
+                                &mut arg_types,
                             );
                         }
                         // Single-slot scalars / pointers / handles: emit a
@@ -1696,9 +1712,8 @@ pub fn try_lower_extern_func_call(
                         // JsValue / F64 / Void all occupy a NaN-boxed
                         // `double` slot; `undefined` is the natural empty.
                         NativeAbiType::JsValue | NativeAbiType::F64 | NativeAbiType::Void => {
-                            lowered.push(double_literal(f64::from_bits(
-                                crate::nanbox::TAG_UNDEFINED,
-                            )));
+                            lowered
+                                .push(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                             arg_types.push(DOUBLE);
                         }
                     }

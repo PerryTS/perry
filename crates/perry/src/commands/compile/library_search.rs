@@ -1597,7 +1597,10 @@ mod native_lib_artifact_tests {
     #[test]
     fn variant_set_translates_unix_static_lib_to_msvc_on_windows() {
         let variants = super::lib_name_variants("libperry_ext_webgpu.a", Some("windows"));
-        assert_eq!(variants.first().map(String::as_str), Some("libperry_ext_webgpu.a"));
+        assert_eq!(
+            variants.first().map(String::as_str),
+            Some("libperry_ext_webgpu.a")
+        );
         assert!(
             variants.iter().any(|v| v == "perry_ext_webgpu.lib"),
             "expected perry_ext_webgpu.lib in {:?}",
