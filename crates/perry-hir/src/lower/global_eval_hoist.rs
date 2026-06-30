@@ -195,11 +195,16 @@ fn synth_create_global_fn_binding(name: &str, ident: &str) -> Option<ast::Stmt> 
 /// caller's, not the global object. The assignment also targets `globalThis`
 /// explicitly so a same-named top-level function in the IIFE is never clobbered.
 fn synth_create_if_absent_stmt(name: &str) -> Option<ast::Stmt> {
+    // Use Object.defineProperty instead of a plain assignment so inherited
+    // prototype setters (e.g. from Object.prototype) cannot intercept the
+    // binding creation — matching CreateGlobalVarBinding step 5a which calls
+    // OrdinaryDefineOwnProperty directly on the global object.
     parse_single_stmt(&format!(
         "if (!({{}}).hasOwnProperty.call(globalThis, {name:?})) \
          {{ if (!Object.isExtensible(globalThis)) \
               {{ throw new TypeError(\"Cannot declare global var: {name}\"); }} \
-            globalThis[{name:?}] = void 0; }}"
+            void Object.defineProperty(globalThis, {name:?}, \
+              {{ value: void 0, writable: true, enumerable: true, configurable: false }}); }}"
     ))
 }
 
