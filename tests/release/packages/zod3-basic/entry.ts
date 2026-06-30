@@ -44,6 +44,15 @@ function issueMetadataFromResult(result: z.SafeParseReturnType<unknown, unknown>
   return result.success ? [] : issueMetadata(result.error);
 }
 
+async function issueMetadataFromThrown(call: () => Promise<unknown>) {
+  try {
+    await call();
+    return [];
+  } catch (error) {
+    return issueMetadata(error as z.ZodError);
+  }
+}
+
 const userSchema = z.object({
   id: z.number().int().positive(),
   name: z.string().min(2).transform((value) => value.trim().toUpperCase()),
@@ -582,6 +591,12 @@ print("asyncEffects", {
   superRefineMessage: asyncSuperRefineResult.success ? "ok" : asyncSuperRefineResult.error.issues[0].message,
   refineMessage: asyncRefineMessageResult.success ? "ok" : asyncRefineMessageResult.error.issues[0].message,
   preprocess: await asyncPreprocessSchema.parseAsync(" ok "),
+});
+print("asyncIssues", {
+  parseAsync: issueMetadataFromResult(await z.string().min(2).safeParseAsync("x")),
+  pipe: issueMetadataFromResult(await asyncPipeSchema.safeParseAsync("x")),
+  preprocess: issueMetadataFromResult(await asyncPreprocessSchema.safeParseAsync(" x ")),
+  promiseInner: await issueMetadataFromThrown(() => z.promise(z.number()).parse(Promise.resolve("bad"))),
 });
 
 const formatted = objectBase.safeParse({ id: "x", name: 1 });
