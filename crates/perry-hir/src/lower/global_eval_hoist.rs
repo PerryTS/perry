@@ -132,51 +132,74 @@ fn synth_inert_assign_stmt(sink: &str, name: &str, init: Box<ast::Expr>) -> Opti
 /// stores to `undefined` suffices — a later user statement overwrites it, and a
 /// declaration-only body correctly ends at `undefined`).
 ///
+/// Implements `CanDeclareGlobalFunction` (ECMA-262 §8.1.1.4.15):
 /// ```text
 /// { let __perry_d = Object.getOwnPropertyDescriptor(globalThis, "<name>");
-///   if (__perry_d === void 0 || __perry_d.configurable)
-///        void Object.defineProperty(globalThis, "<name>",
-///                              { value: <hidden>, writable: true, enumerable: true, configurable: true });
-///   else void Object.defineProperty(globalThis, "<name>", { value: <hidden> }); }
+///   if (__perry_d === void 0) {
+///     if (!Object.isExtensible(globalThis))
+///       throw new TypeError("Cannot declare global function: <name>");
+///     void Object.defineProperty(globalThis, "<name>",
+///                           { value: <hidden>, writable: true, enumerable: true, configurable: true });
+///   } else if (__perry_d.configurable) {
+///     void Object.defineProperty(globalThis, "<name>",
+///                           { value: <hidden>, writable: true, enumerable: true, configurable: true });
+///   } else if (!__perry_d.writable || !__perry_d.enumerable) {
+///     throw new TypeError("Cannot declare global function: <name>");
+///   } else {
+///     void Object.defineProperty(globalThis, "<name>", { value: <hidden> });
+///   }
+/// }
 /// ```
 ///
-/// An absent or configurable binding is (re)defined as a writable, enumerable,
-/// configurable data property; a non-configurable one keeps its attributes and
-/// only takes the new value — which throws a `TypeError` when it is non-writable
-/// and the value differs (CanDeclareGlobalFunction is false), exactly matching
-/// `eval("function NaN(){}")` (test262 `*/non-definable-global-{function,
-/// generator}`) and the configurable-update case (`*/var-env-func-init-global-
-/// update-{,non-}configurable`). Depends on `globalThis`/`Object`; the caller
-/// bails the whole rewrite if the body rebinds either name.
+/// - Absent property: allowed only when the global is extensible (step 3).
+/// - Configurable property: always allowed (step 4).
+/// - Non-configurable, writable+enumerable data property: update value (step 5
+///   returns true → CreateGlobalFunctionBinding value-only update).
+/// - Non-configurable, non-(writable+enumerable): `CanDeclareGlobalFunction`
+///   returns false → throw TypeError (step 6), matching `eval("function NaN(){}")`
+///   (test262 `*/non-definable-global-{function,generator}`).
+///
+/// Depends on `globalThis`/`Object`; the caller bails the whole rewrite if the
+/// body rebinds either name.
 fn synth_create_global_fn_binding(name: &str, ident: &str) -> Option<ast::Stmt> {
     parse_single_stmt(&format!(
         "{{ let __perry_d = Object.getOwnPropertyDescriptor(globalThis, {name:?}); \
-         if (__perry_d === void 0 || __perry_d.configurable) \
+         if (__perry_d === void 0) \
+         {{ if (!Object.isExtensible(globalThis)) \
+              {{ throw new TypeError(\"Cannot declare global function: {name}\"); }} \
+            void Object.defineProperty(globalThis, {name:?}, \
+               {{ value: {ident}, writable: true, enumerable: true, configurable: true }}); }} \
+         else if (__perry_d.configurable) \
          {{ void Object.defineProperty(globalThis, {name:?}, \
-            {{ value: {ident}, writable: true, enumerable: true, configurable: true }}); }} \
+              {{ value: {ident}, writable: true, enumerable: true, configurable: true }}); }} \
+         else if (!__perry_d.writable || !__perry_d.enumerable) \
+         {{ throw new TypeError(\"Cannot declare global function: {name}\"); }} \
          else {{ void Object.defineProperty(globalThis, {name:?}, {{ value: {ident} }}); }} }}"
     ))
 }
 
-/// `if (!({}).hasOwnProperty.call(globalThis, "<name>")) { globalThis["<name>"]
-/// = void 0; }` — the "create the global binding, initialized to `undefined`, if
-/// it does not already exist" step. Guarded so a pre-existing global binding is
-/// *not* reinitialized (Annex B.3.3.3: a configurable-false or already-present
-/// `f` keeps its value until the declaration is evaluated).
+/// `if (!({}).hasOwnProperty.call(globalThis, "<name>")) { ... }` — the "create
+/// the global `var` binding, initialized to `undefined`, if it does not already
+/// exist" step. Implements `CanDeclareGlobalVar` (ECMA-262 §8.1.1.4.14):
 ///
-/// `({}).hasOwnProperty` is used instead of the bare `Object.prototype.…` so the
-/// prelude — prepended into the same IIFE as the eval body — does not depend on
-/// the user-shadowable `Object` name. The receiver stays the bare `globalThis`
-/// global (not `this`): the completion IIFE is an arrow whose `this` is the
-/// caller's, which in Perry's lowering is the CJS module-exports stand-in at
-/// module top, not the global object. The assignment also targets `globalThis`
-/// explicitly (not a bare `name = …`) so a same-named top-level function living
-/// in the IIFE is never clobbered — only the global var-environment slot is
-/// pre-created.
+/// - Property already exists → true, no pre-init needed (caller skips).
+/// - Property absent and global is extensible → create via `globalThis["<name>"]
+///   = void 0`.
+/// - Property absent and global is **not** extensible → `CanDeclareGlobalVar`
+///   returns false → throw TypeError (test262 `*/non-definable-global-var`).
+///
+/// `({}).hasOwnProperty` avoids depending on the user-shadowable `Object` name;
+/// the `Object.isExtensible` extensibility check does use `Object`, which the
+/// caller guards against rebinding in the eval body. The receiver stays the bare
+/// `globalThis` (not `this`): the completion IIFE is an arrow whose `this` is the
+/// caller's, not the global object. The assignment also targets `globalThis`
+/// explicitly so a same-named top-level function in the IIFE is never clobbered.
 fn synth_create_if_absent_stmt(name: &str) -> Option<ast::Stmt> {
     parse_single_stmt(&format!(
         "if (!({{}}).hasOwnProperty.call(globalThis, {name:?})) \
-         {{ globalThis[{name:?}] = void 0; }}"
+         {{ if (!Object.isExtensible(globalThis)) \
+              {{ throw new TypeError(\"Cannot declare global var: {name}\"); }} \
+            globalThis[{name:?}] = void 0; }}"
     ))
 }
 
