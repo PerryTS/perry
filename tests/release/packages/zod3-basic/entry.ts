@@ -705,6 +705,11 @@ print("transform", csvSchema.parse("a, b, c"));
 print("refine", csvSchema.safeParse("single").success);
 
 const preprocessSchema = z.preprocess((value) => (typeof value === "string" ? value.trim() : value), z.string().min(2));
+const metadataPreprocessSchema = z.preprocess((value) => value, z.string());
+const metadataTransformSchema = z.string().transform((value) => value.length);
+const metadataRefineSchema = z.string().refine((value) => value.length > 1, "too short");
+const metadataPipelineSchema = z.string().transform((value) => value.length).pipe(z.number().min(1));
+const metadataPipelineFactorySchema = z.pipeline(z.string(), z.coerce.number());
 const matchingPasswords = z.object({ password: z.string(), confirm: z.string() }).refine((values) => values.password === values.confirm, {
   path: ["confirm"],
   message: "password mismatch",
@@ -754,6 +759,34 @@ print("effects", {
   fatalFlag: fatalRefineResult.success ? false : fatalRefineResult.error.issues[0].fatal === true,
   neverTransform: neverTransformResult.success ? "ok" : neverTransformResult.error.issues[0].message,
   neverStatus: z.NEVER.status,
+  metadata: {
+    preprocess: [
+      metadataPreprocessSchema._def.typeName,
+      metadataPreprocessSchema._def.effect.type,
+      metadataPreprocessSchema._def.schema.constructor.name,
+      metadataPreprocessSchema.innerType().constructor.name,
+      metadataPreprocessSchema.sourceType().constructor.name,
+    ],
+    transform: [
+      metadataTransformSchema._def.typeName,
+      metadataTransformSchema._def.effect.type,
+      metadataTransformSchema._def.schema.constructor.name,
+      metadataTransformSchema.innerType().constructor.name,
+      metadataTransformSchema.sourceType().constructor.name,
+    ],
+    refine: [
+      metadataRefineSchema._def.typeName,
+      metadataRefineSchema._def.effect.type,
+      metadataRefineSchema._def.schema.constructor.name,
+    ],
+    pipeline: [
+      metadataPipelineSchema._def.typeName,
+      metadataPipelineSchema._def.in.constructor.name,
+      metadataPipelineSchema._def.out.constructor.name,
+      metadataPipelineFactorySchema._def.in.constructor.name,
+      metadataPipelineFactorySchema._def.out.constructor.name,
+    ],
+  },
 });
 
 const customTokenResult = z.custom<string>((value) => typeof value === "string" && value.startsWith("tok_")).safeParse("tok_123");
