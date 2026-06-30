@@ -440,6 +440,27 @@ const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implem
 const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 const asyncValidatedFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async (value) => value.trim().length);
 const asyncInvalidReturnFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async () => "bad" as unknown as number);
+const functionNestedIssueCount = (issue: z.ZodIssue) => {
+  if (issue.code === "invalid_arguments") {
+    return issue.argumentsError.issues.length;
+  }
+  if (issue.code === "invalid_return_type") {
+    return issue.returnTypeError.issues.length;
+  }
+  return 0;
+};
+const functionIssueSummary = (call: () => unknown) => {
+  try {
+    call();
+    return [];
+  } catch (error) {
+    return (error as z.ZodError).issues.map((issue) => ({
+      code: issue.code,
+      path: issue.path.join("."),
+      nestedCount: functionNestedIssueCount(issue),
+    }));
+  }
+};
 const invalidAsyncReturn = await (async () => {
   try {
     await asyncInvalidReturnFn("x");
@@ -469,6 +490,8 @@ print("function", {
       return true;
     }
   })(),
+  argumentIssues: functionIssueSummary(() => (validatedFn as unknown as (value: number) => number)(1)),
+  returnIssues: functionIssueSummary(() => invalidReturnFn("x")),
   invalidAsyncReturn,
 });
 
