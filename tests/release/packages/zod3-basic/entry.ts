@@ -710,6 +710,13 @@ print("customSchemas", {
   message: customTokenFailure.success ? "ok" : customTokenFailure.error.issues[0].message,
 });
 
+const optionalMetadataSchema = z.string().optional();
+const nullableMetadataSchema = z.string().nullable();
+const defaultMetadataSchema = z.string().default("fallback");
+const catchMetadataSchema = z.number().catch(9);
+const promiseMetadataSchema = z.promise(z.number());
+const readonlyMetadataSchema = z.object({ id: z.number() }).readonly();
+const brandedMetadataSchema = z.string().brand<"FixtureId">();
 print("modifiers", {
   ostring: z.ostring().parse(undefined) === undefined,
   onumber: z.onumber().parse(undefined) === undefined,
@@ -745,6 +752,15 @@ print("modifiers", {
   schemaArray: z.string().array().parse(["a", "b"]).length,
   schemaOr: z.string().or(z.number()).parse(2),
   schemaAnd: z.object({ a: z.string() }).and(z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
+  metadata: {
+    optional: [optionalMetadataSchema._def.typeName, optionalMetadataSchema._def.innerType.constructor.name],
+    nullable: [nullableMetadataSchema._def.typeName, nullableMetadataSchema._def.innerType.constructor.name],
+    default: [defaultMetadataSchema._def.typeName, defaultMetadataSchema._def.defaultValue()],
+    catch: [catchMetadataSchema._def.typeName, catchMetadataSchema._def.catchValue({ error: null, input: "bad" })],
+    promise: [promiseMetadataSchema._def.typeName, promiseMetadataSchema._def.type.constructor.name],
+    readonly: [readonlyMetadataSchema._def.typeName, readonlyMetadataSchema._def.innerType.constructor.name],
+    branded: [brandedMetadataSchema._def.typeName, brandedMetadataSchema.unwrap().constructor.name],
+  },
 });
 
 type Tree = { name: string; children?: Tree[] };
