@@ -294,6 +294,8 @@ fn coerce_option_string(value: f64) -> Option<String> {
         Some("null".to_string())
     } else if js.is_any_string() {
         string_from_string_value(value)
+    } else if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        throw_type_error("Cannot convert a Symbol value to a string")
     } else {
         Some(value_to_string(value))
     }
@@ -1173,6 +1175,14 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
             // Date/time component options (ECMA-402 Table 7), read in order. Each
             // out-of-range value is a RangeError.
+            //
+            // `any_component` tracks the ECMA-402 §11.1.2 `needDefaults` flag.
+            // Only the fields listed in steps 38a/38b count:
+            //   date fields: weekday, year, month, day
+            //   time fields: dayPeriod, hour, minute, second, fractionalSecondDigits
+            // `era` and `timeZoneName` are read and stored but do NOT affect
+            // `needDefaults` — an era-only or timeZoneName-only DTF still gets
+            // year/month/day defaults applied (spec step 40).
             let mut any_component = false;
             any_component |= dt_component_option(
                 obj,
@@ -1181,8 +1191,8 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 &["narrow", "short", "long"],
                 KEY_WEEKDAY,
             );
-            any_component |=
-                dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
+            // era is read and stored but does NOT count toward needDefaults.
+            dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
             any_component |=
                 dt_component_option(obj, options, "year", &["2-digit", "numeric"], KEY_YEAR);
             any_component |= dt_component_option(
@@ -1214,7 +1224,8 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 set_internal_field(obj, KEY_FRACTIONAL, n);
                 any_component = true;
             }
-            any_component |= dt_component_option(
+            // timeZoneName is read and stored but does NOT count toward needDefaults.
+            dt_component_option(
                 obj,
                 options,
                 "timeZoneName",
