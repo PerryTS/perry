@@ -239,23 +239,41 @@ print("primitiveEdges", {
 });
 
 const colorEnum = z.enum(["red", "blue", "green"]);
+const literalReady = z.literal("ready");
+const nativeTextEnum = z.nativeEnum({ A: "a", B: "b" } as const);
+const enumRequiredResult = z
+  .enum(["red", "blue"], { required_error: "need color", invalid_type_error: "bad color" })
+  .safeParse(undefined);
+const enumInvalidTypeResult = z
+  .enum(["red", "blue"], { required_error: "need color", invalid_type_error: "bad color" })
+  .safeParse(1);
 print("literals.enums", {
-  literal: z.literal("ready").safeParse("ready").success,
+  literal: literalReady.safeParse("ready").success,
   literalBigint: z.literal(2n).safeParse(2n).success,
   literalBoolean: z.literal(true).safeParse(false).success,
   literalNull: z.literal(null).parse(null),
   literalFail: z.literal(3).safeParse(4).success,
+  literalValue: literalReady.value,
+  literalTypeName: literalReady._def.typeName,
   enum: colorEnum.parse("blue"),
   enumBlue: colorEnum.enum.blue,
   enumValues: colorEnum.Values.green,
   enumEnum: colorEnum.Enum.red,
   enumOptions: colorEnum.options.join("|"),
+  enumTypeName: colorEnum._def.typeName,
+  enumDefValues: colorEnum._def.values.join("|"),
   enumKeys: Object.keys(colorEnum.enum).sort(),
   enumExtract: colorEnum.extract(["red", "green"]).safeParse("blue").success,
   enumExtractOk: colorEnum.extract(["red", "green"]).parse("red"),
+  enumExtractOptions: colorEnum.extract(["red", "green"]).options.join("|"),
   enumExclude: colorEnum.exclude(["blue"]).parse("green"),
-  nativeEnum: z.nativeEnum({ A: "a", B: "b" } as const).parse("a"),
+  enumExcludeOptions: colorEnum.exclude(["blue"]).options.join("|"),
+  enumRequiredMessage: enumRequiredResult.success ? "ok" : enumRequiredResult.error.issues[0].message,
+  enumInvalidTypeMessage: enumInvalidTypeResult.success ? "ok" : enumInvalidTypeResult.error.issues[0].message,
+  nativeEnum: nativeTextEnum.parse("a"),
   nativeEnumNumber: z.nativeEnum({ A: 1, B: 2 } as const).parse(2),
+  nativeEnumTypeName: nativeTextEnum._def.typeName,
+  nativeEnumKeys: Object.keys(nativeTextEnum.enum).join("|"),
 });
 
 const stringSchema = z
