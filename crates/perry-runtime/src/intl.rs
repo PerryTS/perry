@@ -1176,56 +1176,81 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // Date/time component options (ECMA-402 Table 7), read in order. Each
             // out-of-range value is a RangeError.
             //
-            // `any_component` tracks the ECMA-402 §11.1.2 `needDefaults` flag.
-            // Only the fields listed in steps 38a/38b count:
-            //   date fields: weekday, year, month, day
-            //   time fields: dayPeriod, hour, minute, second, fractionalSecondDigits
-            // `era` and `timeZoneName` are read and stored but do NOT affect
-            // `needDefaults` — an era-only or timeZoneName-only DTF still gets
-            // year/month/day defaults applied (spec step 40).
+            // Two separate flags are tracked:
+            //
+            // • `any_component` — the ECMA-402 §11.1.2 `needDefaults` flag.
+            //   Only the fields listed in steps 38a/38b count:
+            //     date fields: weekday, year, month, day
+            //     time fields: dayPeriod, hour, minute, second, fractionalSecondDigits
+            //   `era` and `timeZoneName` are read and stored but do NOT affect
+            //   this flag — an era-only or timeZoneName-only DTF still gets
+            //   year/month/day defaults applied (spec step 40).
+            //
+            // • `has_explicit_component` — set by ALL of the above INCLUDING
+            //   `era` and `timeZoneName`.  Used for the dateStyle/timeStyle
+            //   conflict check (step 35.b: throw if style + any component option).
             let mut any_component = false;
-            any_component |= dt_component_option(
+            let mut has_explicit_component = false;
+            let has_weekday = dt_component_option(
                 obj,
                 options,
                 "weekday",
                 &["narrow", "short", "long"],
                 KEY_WEEKDAY,
             );
-            // era is read and stored but does NOT count toward needDefaults.
-            dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
-            any_component |=
+            any_component |= has_weekday;
+            has_explicit_component |= has_weekday;
+            // era counts toward the style-conflict check but NOT toward needDefaults.
+            has_explicit_component |=
+                dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
+            let has_year =
                 dt_component_option(obj, options, "year", &["2-digit", "numeric"], KEY_YEAR);
-            any_component |= dt_component_option(
+            any_component |= has_year;
+            has_explicit_component |= has_year;
+            let has_month = dt_component_option(
                 obj,
                 options,
                 "month",
                 &["2-digit", "numeric", "narrow", "short", "long"],
                 KEY_MONTH,
             );
-            any_component |=
+            any_component |= has_month;
+            has_explicit_component |= has_month;
+            let has_day =
                 dt_component_option(obj, options, "day", &["2-digit", "numeric"], KEY_DAY);
-            any_component |= dt_component_option(
+            any_component |= has_day;
+            has_explicit_component |= has_day;
+            let has_day_period = dt_component_option(
                 obj,
                 options,
                 "dayPeriod",
                 &["narrow", "short", "long"],
                 KEY_DAY_PERIOD,
             );
-            any_component |=
+            any_component |= has_day_period;
+            has_explicit_component |= has_day_period;
+            let has_hour =
                 dt_component_option(obj, options, "hour", &["2-digit", "numeric"], KEY_HOUR);
-            any_component |=
+            any_component |= has_hour;
+            has_explicit_component |= has_hour;
+            let has_minute =
                 dt_component_option(obj, options, "minute", &["2-digit", "numeric"], KEY_MINUTE);
-            any_component |=
+            any_component |= has_minute;
+            has_explicit_component |= has_minute;
+            let has_second =
                 dt_component_option(obj, options, "second", &["2-digit", "numeric"], KEY_SECOND);
+            any_component |= has_second;
+            has_explicit_component |= has_second;
             // fractionalSecondDigits is GetNumberOption(1, 3) — out of range or
             // non-numeric is a RangeError.
             if let Some(n) = get_number_option_coerced(options, "fractionalSecondDigits", 1.0, 3.0)
             {
                 set_internal_field(obj, KEY_FRACTIONAL, n);
                 any_component = true;
+                has_explicit_component = true;
             }
-            // timeZoneName is read and stored but does NOT count toward needDefaults.
-            dt_component_option(
+            // timeZoneName counts toward the style-conflict check but NOT toward needDefaults.
+            has_explicit_component |= dt_component_option(
                 obj,
                 options,
                 "timeZoneName",
@@ -1259,8 +1284,9 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 }
             }
             let has_style = date_style.is_some() || time_style.is_some();
-            // Combining a style with an explicit component is a TypeError.
-            if has_style && any_component {
+            // ECMA-402 §11.1.2 step 35.b: combining a style with any explicit
+            // component option (including era and timeZoneName) is a TypeError.
+            if has_style && has_explicit_component {
                 throw_type_error(
                     "Intl.DateTimeFormat: dateStyle/timeStyle cannot be used with explicit date-time component options",
                 );
