@@ -330,11 +330,11 @@ pub(super) unsafe fn dispatch_primitive(
 
         // Check for own properties that require the spec path:
         //  - own "then": the user replaced the method (spy / non-callable / accessor)
-        //  - own "constructor" (for "then" only): SpeciesConstructor must read it
+        //  - own "constructor": SpeciesConstructor must read it (then/catch/finally all
+        //    chain a new promise through the species constructor)
         let promise_addr = promise_handle.get_raw_mut_ptr::<crate::Promise>() as usize;
         let has_own_then = crate::promise::promise_has_own_property(promise_addr, "then");
-        let has_own_ctor =
-            method_name == "then" && crate::promise::promise_has_own_constructor(promise_addr);
+        let has_own_ctor = crate::promise::promise_has_own_constructor(promise_addr);
 
         if has_own_then || has_own_ctor {
             // Spec path: look up the prototype method and call it with

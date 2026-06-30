@@ -1775,11 +1775,25 @@ fn finally_wrapper_common(
             js_closure_set_capture_ptr(on_err, 0, next as i64);
             // Use Invoke(cleanup, "then", …) to respect any user-installed own
             // `then` property on the cleanup promise (observable-then-calls tests).
+            // Wrap in a try-frame: call_receiver_then can throw (e.g. non-callable
+            // `then`, or a getter that throws) after the earlier frame has ended.
             let on_ok_f = f64::from_bits(crate::value::JSValue::pointer(on_ok as *const u8).bits());
             let on_err_f =
                 f64::from_bits(crate::value::JSValue::pointer(on_err as *const u8).bits());
             let args = [on_ok_f, on_err_f];
+            let trap2 = crate::exception::js_try_push();
+            let jumped2 = unsafe { crate::ffi::setjmp::setjmp(trap2 as *mut std::os::raw::c_int) };
+            if jumped2 != 0 {
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::exception::js_try_end();
+                if !next.is_null() {
+                    js_promise_reject(next, exc);
+                }
+                return undef;
+            }
             call_receiver_then(cleanup, &args);
+            crate::exception::js_try_end();
             return undef;
         }
     }
