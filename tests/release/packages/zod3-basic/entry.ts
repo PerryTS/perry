@@ -631,6 +631,9 @@ print("collections", {
     .record(z.string().transform((value) => value.length))
     .parse({ a: "abcd" }),
   recordFail: z.record(z.number()).refine((scores) => Object.values(scores).every((score) => score >= 0)).safeParse({ a: 1, b: -1 }).success,
+  recordNumberKey: collectionIssueSummary(z.record(z.number(), z.string()).safeParse({ 1: "one" })),
+  recordNumericStringKey: z.record(z.string().regex(/^\d+$/), z.string()).parse({ 1: "one" }),
+  recordNumericStringFail: collectionIssueSummary(z.record(z.string().regex(/^\d+$/), z.string()).safeParse({ abc: "bad" })),
   map: Array.from(parsedMap.entries()),
   mapKeyFail: z.map(z.string().min(2), z.number()).safeParse(new Map([["a", 1]])).success,
   mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,
