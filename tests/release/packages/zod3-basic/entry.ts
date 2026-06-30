@@ -469,6 +469,10 @@ const lateNodeSchema: z.ZodType<any> = z.late.object(() => ({
   name: z.string(),
   children: z.array(lateNodeSchema).default([]),
 }));
+const jsonLiteralSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const jsonValueSchema: z.ZodType<any> = z.lazy(() =>
+  z.union([jsonLiteralSchema, z.array(jsonValueSchema), z.record(jsonValueSchema)]),
+);
 print("factories", {
   arrayFactory: z.array(z.string()).parse(["factory"]).join("|"),
   optionalFactory: z.optional(z.string()).parse(undefined) === undefined,
@@ -478,6 +482,12 @@ print("factories", {
   intersectionFactory: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })).parse({ a: "x", b: 2 }),
   lazyFactory: z.lazy(() => z.string()).parse("lazy"),
   lateObject: lateNodeSchema.parse({ name: "root", children: [{ name: "leaf" }] }),
+});
+
+print("jsonLike", {
+  object: jsonValueSchema.safeParse({ nested: [1, "two", null] }).success,
+  rejectsFunction: jsonValueSchema.safeParse(() => 1).success,
+  parsed: jsonValueSchema.parse({ ok: true, items: [1, "two"] }),
 });
 
 class Box {
