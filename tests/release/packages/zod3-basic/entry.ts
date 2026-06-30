@@ -348,6 +348,8 @@ print("composition", {
   strictObject: z.strictObject({ id: z.number() }).safeParse({ id: 1, extra: true }).success,
   schemaArray: z.string().array().parse(["a", "b"]),
   schemaOr: z.literal("a").or(z.literal("b")).parse("b"),
+  schemaOrIssue: issueMetadataFromResult(z.string().min(2).or(z.number().min(10)).safeParse(5)),
+  schemaAnd: z.object({ a: z.string() }).and(z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
   pipelineFactory: z.pipeline(z.string().transform((value) => value.length), z.number().min(2)).safeParse("abc").success,
 });
 
@@ -411,11 +413,14 @@ print("modifiers", {
   nullable: z.string().nullable().parse(null) === null,
   nullish: z.string().nullish().parse(undefined) === undefined,
   default: z.string().default("fallback").parse(undefined),
+  defaultFunction: z.string().default(() => "factory").parse(undefined),
+  defaultSkipsPresent: z.string().default(() => "factory").parse("present"),
   defaultTransform: z.string().transform((value) => value.length).default("tuna").parse(undefined),
   removeDefault: z.string().default("fallback").removeDefault().safeParse(undefined).success,
   catch: z.number().catch(9).parse("bad"),
   catchTransform: z.string().transform((value) => value.length).catch(9).parse(123),
   catchFunction: z.number().catch((ctx) => ctx.error.issues.length).parse("bad"),
+  catchContext: z.number().catch((ctx) => `${ctx.input}:${ctx.error.issues[0].code}`).parse("bad"),
   removeCatch: z.number().catch(9).removeCatch().safeParse("bad").success,
   brand: z.string().brand<"FixtureId">().parse("id-1"),
   described: z.string().describe("fixture string").description,
