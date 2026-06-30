@@ -133,6 +133,16 @@ print("coerce", {
   date: z.coerce.date().parse("2020-01-02T00:00:00.000Z").toISOString(),
 });
 
+print("primitiveEdges", {
+  boolean: z.boolean().parse(true),
+  booleanRejectsString: z.boolean().safeParse("true").success,
+  coerceBooleanString: z.coerce.boolean().parse("false"),
+  coerceNumberRejectsNaN: z.coerce.number().safeParse("not-a-number").success,
+  coerceBigintRejectsText: z.coerce.bigint().safeParse("not-a-bigint").success,
+  coerceDateEpoch: z.coerce.date().parse(0).toISOString(),
+  coerceDateRejectsInvalid: z.coerce.date().safeParse("not-a-date").success,
+});
+
 const colorEnum = z.enum(["red", "blue", "green"]);
 print("literals.enums", {
   literal: z.literal("ready").safeParse("ready").success,
@@ -278,6 +288,8 @@ print("bigints", {
   multiple: z.bigint().multipleOf(5n).safeParse(15n).success,
   positive: z.bigint().positive().safeParse(1n).success,
   nonpositive: z.bigint().nonpositive().safeParse(0n).success,
+  negative: z.bigint().negative().safeParse(-1n).success,
+  nonnegative: z.bigint().nonnegative().safeParse(0n).success,
 });
 
 const eventSchema = z.discriminatedUnion("type", [
@@ -514,6 +526,9 @@ print("modifiers", {
   readonlyTuple: Object.isFrozen(z.tuple([z.string()]).readonly().parse(["a"])),
   readonlyMap: Object.isFrozen(z.map(z.string(), z.number()).readonly().parse(new Map([["a", 1]]))),
   readonlySet: Object.isFrozen(z.set(z.string()).readonly().parse(new Set(["a"]))),
+  schemaArray: z.string().array().parse(["a", "b"]).length,
+  schemaOr: z.string().or(z.number()).parse(2),
+  schemaAnd: z.object({ a: z.string() }).and(z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
 });
 
 type Tree = { name: string; children?: Tree[] };
