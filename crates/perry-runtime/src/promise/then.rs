@@ -1159,24 +1159,18 @@ fn promise_prototype_receiver(method: &str) -> *mut Promise {
 /// correctly propagating overridden `then` properties on Promise instances.
 fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
     let then_fn = unsafe {
-        crate::value::js_dynamic_object_get_property(
-            receiver,
-            b"then".as_ptr() as *const i8,
-            4,
-        )
+        crate::value::js_dynamic_object_get_property(receiver, b"then".as_ptr() as *const i8, 4)
     };
     if !super::spec_combinators::is_callable_value(then_fn) {
         let msg = b"Promise method called on non-callable 'then'";
-        let msg_str =
-            crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = crate::error::js_typeerror_new(msg_str);
         let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
         crate::exception::js_throw(f64::from_bits(err_val));
     }
     let prev_this = crate::object::js_implicit_this_set(receiver);
-    let result = unsafe {
-        crate::closure::js_native_call_value(then_fn, args.as_ptr(), args.len())
-    };
+    let result =
+        unsafe { crate::closure::js_native_call_value(then_fn, args.as_ptr(), args.len()) };
     crate::object::js_implicit_this_set(prev_this);
     result
 }
@@ -1781,8 +1775,7 @@ fn finally_wrapper_common(
             js_closure_set_capture_ptr(on_err, 0, next as i64);
             // Use Invoke(cleanup, "then", …) to respect any user-installed own
             // `then` property on the cleanup promise (observable-then-calls tests).
-            let on_ok_f =
-                f64::from_bits(crate::value::JSValue::pointer(on_ok as *const u8).bits());
+            let on_ok_f = f64::from_bits(crate::value::JSValue::pointer(on_ok as *const u8).bits());
             let on_err_f =
                 f64::from_bits(crate::value::JSValue::pointer(on_err as *const u8).bits());
             let args = [on_ok_f, on_err_f];

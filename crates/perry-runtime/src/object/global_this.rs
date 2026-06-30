@@ -81,8 +81,8 @@ pub(crate) use ctor_thunks::{
     type_error_constructor_call_thunk, typed_array_constructor_call_thunk,
     uri_error_constructor_call_thunk, weak_map_constructor_call_thunk,
     weak_ref_constructor_call_thunk, weak_set_constructor_call_thunk,
-    webcrypto_get_random_values_thunk, webcrypto_illegal_constructor_thunk,
-    webcrypto_method_value, webcrypto_random_uuid_thunk, webcrypto_subtle_getter_thunk,
+    webcrypto_get_random_values_thunk, webcrypto_illegal_constructor_thunk, webcrypto_method_value,
+    webcrypto_random_uuid_thunk, webcrypto_subtle_getter_thunk,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
