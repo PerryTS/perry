@@ -1413,6 +1413,21 @@ print("customErrors", {
   perParseMap: perParseMapResult.success ? "ok" : perParseMapResult.error.issues[0].message,
 });
 
+const parseOptionsObjectResult = z.object({ item: z.string().min(2) }).safeParse({ item: "x" }, { path: ["root"] });
+const parseOptionsUnionResult = z.union([z.string(), z.number()]).safeParse(true, {
+  path: ["value"],
+  errorMap: (issue, ctx) => ({ message: `union:${issue.code}:${ctx.defaultError}` }),
+});
+const parseOptionsAsyncResult = await z.string().min(2).safeParseAsync("x", {
+  path: ["asyncRoot"],
+  errorMap: (issue) => ({ message: `async:${issue.code}` }),
+});
+print("parseOptions", {
+  object: issueMetadataFromResult(parseOptionsObjectResult),
+  union: issueMetadataFromResult(parseOptionsUnionResult),
+  async: issueMetadataFromResult(parseOptionsAsyncResult),
+});
+
 const summarySchema = z.array(userSchema.pick({ id: true, role: true })).min(1);
 print("array", summarySchema.parse([{ id: 1, role: "admin" }]));
 
