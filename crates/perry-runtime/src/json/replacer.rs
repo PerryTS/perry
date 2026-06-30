@@ -157,6 +157,13 @@ unsafe fn dispatch_pointer_with_replacer(
     indent: &str,
     depth: usize,
 ) {
+    // ECMA-262 §25.5.2.2 step 4: unwrap boxed primitive wrappers after the
+    // replacer has been applied. `new Boolean(true)` → "true", etc. Must come
+    // before the GC-type dispatch so the empty-keys fallback doesn't emit "{}".
+    if let Some(prim) = crate::builtins::boxed_primitive_json_value(replaced) {
+        write_replaced_scalar(buf, prim);
+        return;
+    }
     // Buffer / Uint8Array have no GcHeader — detect before gc_obj_type so the
     // tag read doesn't deref unrelated memory (issue #639 pattern). This
     // dispatch serves both compact (indent == "") and pretty replacer walks,
@@ -1157,6 +1164,11 @@ pub unsafe extern "C" fn js_json_stringify_full(
         return TAG_UNDEFINED as i64;
     }
 
+    // JSON.stringify(symbol) returns undefined per spec (ECMA-262 §25.5.2.2 step 5)
+    if crate::symbol::js_is_symbol(value) != 0 {
+        return TAG_UNDEFINED as i64;
+    }
+
     // Issue #179 Phase 4: lazy-stringify fast path for unmutated
     // lazy arrays — only when no replacer / no indent (matches the
     // output `JSON.stringify(value)` produces; replacer/indent
@@ -1208,7 +1220,9 @@ pub unsafe extern "C" fn js_json_stringify_full(
         indent_str = String::new();
     } else if spacer_tag == STRING_TAG {
         let sp_ptr = (spacer_bits & POINTER_MASK) as *const StringHeader;
-        indent_str = str_from_header(sp_ptr).unwrap_or("").to_string();
+        // ECMA-262 §25.5.2.1 step 6b: truncate string spacer to 10 characters.
+        let full = str_from_header(sp_ptr).unwrap_or("");
+        indent_str = full.chars().take(10).collect();
     } else if spacer_tag == crate::value::SHORT_STRING_TAG {
         // v0.5.213 SSO: spacer passed as inline short string
         // (e.g. `JSON.stringify(obj, null, "  ")` where "  " is 2
@@ -1217,6 +1231,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let jsval = JSValue::from_bits(spacer_bits);
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut scratch);
+        // Short strings are at most SHORT_STRING_MAX_LEN (5) bytes — already ≤ 10 chars.
         indent_str = std::str::from_utf8(&scratch[..n]).unwrap_or("").to_string();
     } else if spacer_bits == TAG_TRUE {
         indent_str = String::new();

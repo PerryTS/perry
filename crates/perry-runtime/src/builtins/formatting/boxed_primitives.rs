@@ -272,6 +272,17 @@ pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
+    // ECMA-262 §22.1.1.1 step 2b: `new String(symbol)` → ToString(symbol) → TypeError.
+    // The no-`new` form `String(symbol)` is handled before this function is reached
+    // (returns SymbolDescriptiveString); `new` form must throw.
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        let msg = crate::string::js_string_from_bytes(
+            b"Cannot convert a Symbol value to a string".as_ptr(),
+            41,
+        );
+        let err = crate::error::js_typeerror_new(msg);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    }
     let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_STRING, 0);
     // `new String()` (no args) is spec'd to box "", not "undefined".
     let ptr = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {

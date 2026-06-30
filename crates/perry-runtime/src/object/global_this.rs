@@ -7272,17 +7272,26 @@ fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut Object
         }
         "String" => {
             // #4713: generic-`this` char-access methods + `Symbol.iterator`, and
-            // (this change) every other coercing method (slice/indexOf/split/
-            // replace/…) get real reflective thunks (RequireObjectCoercible +
-            // ToString) installed by `install_string_proto_methods` so
-            // `String.prototype.slice.call(receiver, …)` works on a boxed/object
-            // receiver. Only `toString` (and `valueOf`, via OBJECT_PROTO_METHODS)
-            // stay no-op-backed: they are brand-checked (must throw on a
-            // non-String `this`), not ToString-coercing, so a generic coercing
-            // thunk would be wrong.
+            // every other coercing method (slice/indexOf/split/replace/…) get
+            // real reflective thunks (RequireObjectCoercible + ToString) installed
+            // by `install_string_proto_methods`. `toString`/`valueOf` are brand-
+            // checked (thisStringValue — must throw on a non-String `this`), so
+            // they get dedicated thunks instead of the generic coercing or noop ones.
             string_proto_thunks::install_string_proto_methods("String", proto_obj);
-            install_noop_proto_methods(proto_obj, &[("toString", 0)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            // Overwrite the noop `toString`/`valueOf` with brand-checked thunks.
+            install_proto_method(
+                proto_obj,
+                "toString",
+                primitive_proto_thunks::string_proto_to_string_thunk as *const u8,
+                0,
+            );
+            install_proto_method(
+                proto_obj,
+                "valueOf",
+                primitive_proto_thunks::string_proto_value_of_thunk as *const u8,
+                0,
+            );
         }
         "Number" => {
             install_noop_proto_methods(

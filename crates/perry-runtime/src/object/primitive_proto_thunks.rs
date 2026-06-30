@@ -8,6 +8,7 @@
 use super::*;
 
 const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
 const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
 const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
 const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
@@ -118,6 +119,8 @@ pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str
         ("Symbol", "valueOf") => (symbol_proto_value_of_thunk as *const u8, 0),
         ("BigInt", "toString") => (bigint_proto_to_string_thunk as *const u8, 1),
         ("BigInt", "valueOf") => (bigint_proto_value_of_thunk as *const u8, 0),
+        ("String", "toString") => (string_proto_to_string_thunk as *const u8, 0),
+        ("String", "valueOf") => (string_proto_value_of_thunk as *const u8, 0),
         _ => return None,
     };
     Some(primitive_proto_method_closure_value(
@@ -230,6 +233,27 @@ fn bigint_receiver_or_throw(method: &str) -> f64 {
     throw_incompatible_receiver("BigInt.prototype", method)
 }
 
+/// Returns the NaN-boxed string value for String.prototype.toString/valueOf.
+/// Accepts: string primitives, `new String(...)` wrappers, and `String.prototype` itself.
+/// Throws TypeError for everything else (ECMA-262 §22.1.3.3 `thisStringValue`).
+fn string_receiver_or_throw(method: &str) -> f64 {
+    let receiver = receiver_value();
+    let jv = crate::value::JSValue::from_bits(receiver.to_bits());
+    if jv.is_string() || jv.is_short_string() {
+        return receiver;
+    }
+    if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_STRING) {
+        return payload;
+    }
+    // ECMA-262 §22.1.3: `String.prototype` is itself a String object whose
+    // [[StringData]] is "". Invoking toString/valueOf on it must return "".
+    if receiver.to_bits() == super::global_this::builtin_prototype_value("String").to_bits() {
+        let empty = crate::string::js_string_from_bytes(std::ptr::null(), 0);
+        return string_value(empty);
+    }
+    throw_incompatible_receiver("String.prototype", method)
+}
+
 fn string_value(ptr: *mut crate::string::StringHeader) -> f64 {
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }
@@ -336,4 +360,16 @@ pub(super) extern "C" fn bigint_proto_to_string_thunk(
         bigint_receiver_or_throw("toString"),
         radix,
     ))
+}
+
+pub(super) extern "C" fn string_proto_value_of_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    string_receiver_or_throw("valueOf")
+}
+
+pub(super) extern "C" fn string_proto_to_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    string_receiver_or_throw("toString")
 }
