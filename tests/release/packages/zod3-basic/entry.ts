@@ -395,11 +395,18 @@ const neverTransformSchema = z
 const matchingPasswordsResult = matchingPasswords.safeParse({ password: "a", confirm: "b" });
 const fatalRefineResult = fatalRefineSchema.safeParse("x");
 const neverTransformResult = neverTransformSchema.safeParse("x");
+const refinementAliasResult = z
+  .string()
+  .refinement((value) => value === "ok", { code: z.ZodIssueCode.custom, message: "bad refinement" })
+  .safeParse("no");
 print("effects", {
   preprocess: preprocessSchema.parse(" ok "),
   pipe: z.string().transform((value) => value.length).pipe(z.number().min(2)).safeParse("abc").success,
   superRefine: superRefineSchema.safeParse([1, 1]).success,
   custom: z.custom<string>((value) => value === "token").safeParse("token").success,
+  refinementAlias: refinementAliasResult.success ? "ok" : refinementAliasResult.error.issues[0].message,
+  innerType: z.string().transform((value) => value.length).innerType().parse("inner"),
+  sourceType: z.string().transform((value) => value.length).sourceType().parse("source"),
   refinePath: matchingPasswordsResult.success ? "ok" : matchingPasswordsResult.error.issues[0].path.join("."),
   refineMessage: matchingPasswordsResult.success ? "ok" : matchingPasswordsResult.error.issues[0].message,
   fatalCalls,
@@ -486,7 +493,9 @@ print("instances.dates", {
 });
 
 const validatedFn = z.function().args(z.string()).returns(z.number()).implement((value) => value.trim().length);
+const strictValidatedFn = z.function().args(z.string()).returns(z.number()).strictImplement((value) => value.trim().length);
 const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
+const strictInvalidReturnFn = z.function().args(z.string()).returns(z.number()).strictImplement(() => "bad" as unknown as number);
 const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 const asyncValidatedFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async (value) => value.trim().length);
 const asyncInvalidReturnFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async () => "bad" as unknown as number);
@@ -521,6 +530,7 @@ const invalidAsyncReturn = await (async () => {
 })();
 print("function", {
   valid: validatedFn(" tuna "),
+  strictValid: strictValidatedFn(" trout "),
   asyncValid: await asyncValidatedFn(" salmon "),
   parameters: functionSchema.parameters().items.length,
   returnType: functionSchema.returnType().safeParse(true).success,
@@ -542,6 +552,7 @@ print("function", {
   })(),
   argumentIssues: functionIssueSummary(() => (validatedFn as unknown as (value: number) => number)(1)),
   returnIssues: functionIssueSummary(() => invalidReturnFn("x")),
+  strictReturnIssues: functionIssueSummary(() => strictInvalidReturnFn("x")),
   invalidAsyncReturn,
 });
 
