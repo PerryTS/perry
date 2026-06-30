@@ -1082,6 +1082,7 @@ const transformIssueSchema = z.string().transform((value, ctx) => {
   ctx.addIssue({ code: z.ZodIssueCode.custom, message: "warn" });
   return value.length;
 });
+const asyncPromiseMetadataSchema = z.promise(z.number());
 const promisedNumber = await z.promise(z.number()).parse(Promise.resolve(5));
 const methodPromisedNumber = await z.number().promise().parse(Promise.resolve(3));
 const asyncParsed = await asyncSchema.parseAsync("ok");
@@ -1122,6 +1123,26 @@ print("asyncEffects", {
   superRefineMessage: asyncSuperRefineResult.success ? "ok" : asyncSuperRefineResult.error.issues[0].message,
   refineMessage: asyncRefineMessageResult.success ? "ok" : asyncRefineMessageResult.error.issues[0].message,
   preprocess: await asyncPreprocessSchema.parseAsync(" ok "),
+  metadata: {
+    refine: [asyncSchema._def.typeName, asyncSchema._def.effect.type, asyncSchema._def.schema.constructor.name],
+    transform: [
+      asyncTransformSchema._def.typeName,
+      asyncTransformSchema._def.effect.type,
+      asyncTransformSchema._def.schema.constructor.name,
+    ],
+    pipe: [asyncPipeSchema._def.typeName, asyncPipeSchema._def.in.constructor.name, asyncPipeSchema._def.out.constructor.name],
+    superRefine: [
+      asyncSuperRefineSchema._def.typeName,
+      asyncSuperRefineSchema._def.effect.type,
+      asyncSuperRefineSchema._def.schema.constructor.name,
+    ],
+    preprocess: [
+      asyncPreprocessSchema._def.typeName,
+      asyncPreprocessSchema._def.effect.type,
+      asyncPreprocessSchema._def.schema.constructor.name,
+    ],
+    promise: [asyncPromiseMetadataSchema._def.typeName, asyncPromiseMetadataSchema._def.type.constructor.name],
+  },
 });
 print("asyncIssues", {
   parseAsync: issueMetadataFromResult(await z.string().min(2).safeParseAsync("x")),
