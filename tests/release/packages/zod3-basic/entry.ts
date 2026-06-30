@@ -837,6 +837,19 @@ const catchMetadataSchema = z.number().catch(9);
 const promiseMetadataSchema = z.promise(z.number());
 const readonlyMetadataSchema = z.object({ id: z.number() }).readonly();
 const brandedMetadataSchema = z.string().brand<"FixtureId">();
+const readonlyObjectValue = z.object({ id: z.number() }).readonly().parse({ id: 1 });
+const readonlyArrayValue = z.array(z.string()).readonly().parse(["a"]);
+const readonlyTupleValue = z.tuple([z.string()]).readonly().parse(["a"]);
+const readonlyMapValue = z.map(z.string(), z.number()).readonly().parse(new Map([["a", 1]]));
+const readonlySetValue = z.set(z.string()).readonly().parse(new Set(["a"]));
+const tryErrorName = (fn: () => void) => {
+  try {
+    fn();
+    return "ok";
+  } catch (error) {
+    return error instanceof Error ? error.constructor.name : String(error);
+  }
+};
 print("modifiers", {
   ostring: z.ostring().parse(undefined) === undefined,
   onumber: z.onumber().parse(undefined) === undefined,
@@ -869,6 +882,31 @@ print("modifiers", {
   readonlyTuple: Object.isFrozen(z.tuple([z.string()]).readonly().parse(["a"])),
   readonlyMap: Object.isFrozen(z.map(z.string(), z.number()).readonly().parse(new Map([["a", 1]]))),
   readonlySet: Object.isFrozen(z.set(z.string()).readonly().parse(new Set(["a"]))),
+  readonlyMutations: {
+    object: [Reflect.set(readonlyObjectValue, "id", 2), readonlyObjectValue.id],
+    array: [
+      Reflect.set(readonlyArrayValue, "0", "b"),
+      tryErrorName(() => readonlyArrayValue.push("b")),
+      readonlyArrayValue[0],
+      readonlyArrayValue.length,
+    ],
+    tuple: [
+      Reflect.set(readonlyTupleValue, "0", "b"),
+      tryErrorName(() => readonlyTupleValue.push("b")),
+      readonlyTupleValue[0],
+      readonlyTupleValue.length,
+    ],
+    map: [
+      tryErrorName(() => readonlyMapValue.set("b", 2)),
+      readonlyMapValue.size,
+      readonlyMapValue.get("b"),
+    ],
+    set: [
+      tryErrorName(() => readonlySetValue.add("b")),
+      readonlySetValue.size,
+      readonlySetValue.has("b"),
+    ],
+  },
   schemaArray: z.string().array().parse(["a", "b"]).length,
   schemaOr: z.string().or(z.number()).parse(2),
   schemaAnd: z.object({ a: z.string() }).and(z.object({ b: z.number() })).parse({ a: "x", b: 1 }),
