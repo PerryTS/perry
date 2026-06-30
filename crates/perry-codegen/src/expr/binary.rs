@@ -216,11 +216,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // fptosi, producing the wrong result. `is_integer_valued_expr`
             // only returns true when we can prove the value is a whole
             // number (integer literals, integer loop counters, or nested
-            // integer arithmetic). For everything else we fall through
-            // to the `frem` path.
+            // integer arithmetic). A zero RHS falls through to `frem`
+            // because srem(x,0) is UB in LLVM (on ARM the CPU silently
+            // gives 0, but JS requires NaN for any x % 0). For everything
+            // else we fall through to the `frem` path.
+            let right_is_known_zero = matches!(**right, Expr::Integer(0))
+                || matches!(**right, Expr::Number(v) if v == 0.0);
             if matches!(op, BinaryOp::Mod)
                 && crate::type_analysis::is_integer_valued_expr(ctx, left)
                 && crate::type_analysis::is_integer_valued_expr(ctx, right)
+                && !right_is_known_zero
             {
                 let l_raw = lower_expr(ctx, left)?;
                 let r_raw = lower_expr(ctx, right)?;
@@ -228,7 +233,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let li = blk.fptosi(DOUBLE, &l_raw, I64);
                 let ri = blk.fptosi(DOUBLE, &r_raw, I64);
                 let m = blk.srem(I64, &li, &ri);
-                return Ok(blk.sitofp(I64, &m, DOUBLE));
+                // IEEE 754: when the integer remainder is 0 and the
+                // dividend was negative, the result must be -0.0.
+                // srem gives 0i64 → sitofp always produces +0.0,
+                // so correct: if m==0 && l<0 → fneg(0.0) = -0.0.
+                let result_f = blk.sitofp(I64, &m, DOUBLE);
+                let m_is_zero = blk.icmp_eq(I64, &m, "0");
+                let l_neg = blk.fcmp("olt", &l_raw, "0.0");
+                let need_neg = blk.and(I1, &m_is_zero, &l_neg);
+                let neg_result = blk.fneg(&result_f);
+                return Ok(blk.select(I1, &need_neg, DOUBLE, &neg_result, &result_f));
             }
 
             let (l_raw, l_fallback_coerced) = lower_arithmetic_operand(ctx, left)?;
