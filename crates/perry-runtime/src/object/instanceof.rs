@@ -25,6 +25,12 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         return true;
     }
+    // INT32-tagged class references (top 16 bits = 0x7FFE) are callable
+    // constructors emitted by codegen. `is_pointer()` only checks 0x7FFD,
+    // so they would fall through to `return false` without this guard.
+    if (value.to_bits() >> 48) == 0x7FFE {
+        return true;
+    }
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return false;

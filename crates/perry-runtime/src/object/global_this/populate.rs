@@ -627,6 +627,51 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             super::super::PropertyAttrs::new(false, false, false),
         );
     }
+    // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
+    // same function object as `Array.prototype.toString`. Alias it now that
+    // both the Array constructor and the TypedArray intrinsic are set up.
+    alias_typed_array_proto_to_string(singleton);
+}
+
+/// Install `%TypedArray%.prototype.toString` as the same closure object as
+/// `Array.prototype.toString` (ECMA-262 §23.2.3.33).
+fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
+    let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if ta_proto_addr == 0 {
+        return;
+    }
+    let ta_proto = ta_proto_addr as *mut ObjectHeader;
+    // Read Array constructor from globalThis, then Array.prototype.toString.
+    let arr_key = crate::string::js_string_from_bytes(b"Array".as_ptr(), 5);
+    let arr_ctor = js_object_get_field_by_name(singleton, arr_key);
+    if (arr_ctor.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let arr_ctor_ptr = (arr_ctor.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if arr_ctor_ptr.is_null() {
+        return;
+    }
+    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let arr_proto = js_object_get_field_by_name(arr_ctor_ptr, proto_key);
+    if (arr_proto.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let arr_proto_ptr = (arr_proto.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if arr_proto_ptr.is_null() {
+        return;
+    }
+    let ts_key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let to_string_fn = js_object_get_field_by_name(arr_proto_ptr, ts_key);
+    if to_string_fn.bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let ts_key2 = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    js_object_set_field_by_name(ta_proto, ts_key2, f64::from_bits(to_string_fn.bits()));
+    super::super::set_builtin_property_attrs(
+        ta_proto as usize,
+        "toString".to_string(),
+        super::super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Re-point a `Number.<name>` static at the global function of the same name so

@@ -67,7 +67,7 @@ pub(crate) use builtin_thunks::{
     global_this_string_thunk, global_this_structured_clone_thunk, global_this_unescape_thunk,
     math_atan2_thunk, math_clz32_thunk, math_f16round_thunk, math_hypot_thunk, math_imul_thunk,
     math_max_thunk, math_min_thunk, math_pow_thunk, math_random_thunk, math_round_thunk,
-    math_sign_thunk,
+    math_sign_thunk, proxy_revocable_thunk,
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
 pub(crate) use ctor_thunks::{

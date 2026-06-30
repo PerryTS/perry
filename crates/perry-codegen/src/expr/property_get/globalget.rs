@@ -57,6 +57,12 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
     ) {
         return Ok(lower_global_builtin_static_value(ctx, "Promise", property));
     }
+    // `Proxy.revocable` read as a VALUE (not in a call) — the receiver is
+    // collapsed to GlobalGet(0) so we route by property name. Resolves the
+    // closure installed by `install_builtin_constructor_statics("Proxy", …)`.
+    if property == "revocable" {
+        return Ok(lower_global_builtin_static_value(ctx, "Proxy", property));
+    }
     // #2904: V8/Node static Error members read as values
     // (`typeof Error.isError`, `Error.stackTraceLimit`, …). The
     // HIR collapses every builtin global receiver to
