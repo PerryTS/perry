@@ -521,6 +521,15 @@ const postSchema: z.ZodType<any> = z.object({
     return authorSchema;
   },
 });
+const recursiveEventSchema: z.ZodType<any> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("leaf"), value: z.string() }),
+  z.object({
+    kind: z.literal("branch"),
+    get children() {
+      return z.array(recursiveEventSchema);
+    },
+  }),
+]);
 print("objects", {
   strip: objectBase.parse({ id: 1, name: "a", extra: true } as unknown),
   explicitStrip: objectBase.strip().parse({ id: 1, name: "a", extra: true } as unknown),
@@ -578,7 +587,19 @@ print("objects", {
 
 print("recursiveObjects", {
   category: categorySchema.parse({ name: "root", subcategories: [{ name: "leaf", subcategories: [] }] }),
+  categoryIssue: issueMetadataFromResult(categorySchema.safeParse({ name: "root", subcategories: [{ name: 1 }] })),
   mutual: postSchema.parse({ title: "post", author: { email: "a@example.com", posts: [] } }).author.email,
+  mutualNested: postSchema.parse({
+    title: "post",
+    author: {
+      email: "a@example.com",
+      posts: [{ title: "nested", author: { email: "b@example.com", posts: [] } }],
+    },
+  }).author.posts[0].author.email,
+  discriminatedRecursive: recursiveEventSchema.parse({ kind: "branch", children: [{ kind: "leaf", value: "x" }] }),
+  discriminatedRecursiveIssue: issueMetadataFromResult(
+    recursiveEventSchema.safeParse({ kind: "branch", children: [{ kind: "leaf", value: 1 }] }),
+  ),
 });
 
 const arrayElementIssue = z.array(z.string()).safeParse([1]);
