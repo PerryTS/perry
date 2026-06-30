@@ -537,21 +537,21 @@ pub fn synthesize_class_captures(
     // ctor may read a captured outer before calling `super()`, and that read
     // must already see the recovered value. Only the `this.__perry_cap_* =
     // param` field STASHES must wait until after `super()` (no `this` exists
-    // before super). A non-derived ctor has no `super`, so both groups land at
-    // entry (assignments right after the rebinds).
-    let rebind_count = rebind_stmts.len();
+    // before super) AND after all user stmts (see comment below).
     for (i, stmt) in rebind_stmts.into_iter().enumerate() {
         ctor.body.insert(i, stmt);
     }
-    // `super_pos` is recomputed AFTER inserting the rebinds (they shifted the
-    // body), so the assignments land just past the (now-relocated) `super()`.
-    let super_pos = ctor
-        .body
-        .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
-    let assignment_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
-    for (i, stmt) in assignment_stmts.into_iter().enumerate() {
-        ctor.body.insert(assignment_insert_at + i, stmt);
+    // The field STASHES (`this.__perry_cap_* = param`) must come AFTER
+    // `super()` (no `this` exists before super in derived classes) AND after
+    // ALL user body stmts — user code may mutate the outer-local after
+    // `super()` (e.g. `++called` in the TemporalHelpers sub-check pattern).
+    // Inserting immediately after `super()` captured the pre-mutation value.
+    // Appending at the end ensures the stash records the final value, which
+    // `emit_class_capture_writeback` then propagates back to the outer slot.
+    // Note: constructors with early `return` are not handled here (the stash
+    // would not fire on the early-exit path); that is a separate concern.
+    for stmt in assignment_stmts {
+        ctor.body.push(stmt);
     }
     *constructor = Some(ctor);
 

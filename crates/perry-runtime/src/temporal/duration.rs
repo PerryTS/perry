@@ -22,6 +22,26 @@ pub(crate) fn wrap(d: Duration) -> f64 {
     alloc_temporal_cell(TemporalValue::Duration(d))
 }
 
+/// Round each Duration field to its nearest float64-representable integer.
+/// The ECMAScript spec coerces Duration fields through ℝ(𝔽(·)) after arithmetic
+/// (add, subtract, round) so the stored value never carries sub-float64 precision
+/// that JS Numbers cannot represent. temporal_rs works in i128, so without this
+/// step `toString()` and subsequent arithmetic would diverge from the spec.
+fn f64_round_duration(d: Duration) -> Duration {
+    ok_or_throw(Duration::new(
+        (d.years() as f64) as i64,
+        (d.months() as f64) as i64,
+        (d.weeks() as f64) as i64,
+        (d.days() as f64) as i64,
+        (d.hours() as f64) as i64,
+        (d.minutes() as f64) as i64,
+        (d.seconds() as f64) as i64,
+        (d.milliseconds() as f64) as i64,
+        (d.microseconds() as f64) as i128,
+        (d.nanoseconds() as f64) as i128,
+    ))
+}
+
 /// `new Temporal.Duration(years?, months?, …, nanoseconds?)` — every argument
 /// is an optional integer defaulting to 0.
 pub fn construct(args: &[f64]) -> f64 {
@@ -193,8 +213,12 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
     match name {
         "negated" => wrap(d.negated()),
         "abs" => wrap(d.abs()),
-        "add" => wrap(ok_or_throw(d.add(&coerce_duration(raw_arg(args, 0))))),
-        "subtract" => wrap(ok_or_throw(d.subtract(&coerce_duration(raw_arg(args, 0))))),
+        "add" => wrap(f64_round_duration(ok_or_throw(
+            d.add(&coerce_duration(raw_arg(args, 0))),
+        ))),
+        "subtract" => wrap(f64_round_duration(ok_or_throw(
+            d.subtract(&coerce_duration(raw_arg(args, 0))),
+        ))),
         "with" => with(d, raw_arg(args, 0)),
         // `toString` honors a `{ fractionalSecondDigits, smallestUnit,
         // roundingMode }` options bag; `toJSON`/`toLocaleString` always use the
@@ -208,7 +232,7 @@ pub fn call(recv: f64, d: &Duration, name: &str, args: &[f64]) -> f64 {
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "round" => {
             let (opts, rel) = super::options::duration_round_options(raw_arg(args, 0));
-            wrap(ok_or_throw(d.round(opts, rel)))
+            wrap(f64_round_duration(ok_or_throw(d.round(opts, rel))))
         }
         "total" => {
             let (unit, rel) = super::options::total_options(raw_arg(args, 0));

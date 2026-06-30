@@ -187,3 +187,97 @@ console.log("add-month:", later.month);                        // 8
          add-month: 8\n"
     );
 }
+
+#[test]
+fn temporal_subclass_capture_writeback_inner_class() {
+    // Regression for #5587: when a class is declared INSIDE a function and
+    // extends a Temporal type, the constructor mutates a captured outer local
+    // (`++called`) AFTER calling `super()`. Prior to the fix, the
+    // `this.__perry_cap_<id>` stash was inserted immediately after `super()`,
+    // recording the pre-mutation value 0; `emit_class_capture_writeback`
+    // then wrote 0 back to the outer slot, making `called` appear untouched.
+    // The fix moves the stash to the END of the constructor body.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+function check(construct: any, constructArgs: any[]) {
+  let called = 0;
+  class MySubclass extends construct {
+    constructor() {
+      ++called;
+      super(...constructArgs);
+    }
+  }
+  const instance = new MySubclass();
+  return called;
+}
+
+console.log("duration called:", check(Temporal.Duration, [0, 0, 0, -4]));  // 1
+console.log("plain-date called:", check(Temporal.PlainDate, [2021, 7, 20]));  // 1
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "duration called: 1\n\
+         plain-date called: 1\n"
+    );
+}
+
+#[test]
+fn temporal_plain_date_no_ctor_subclass_cell_stashed() {
+    // Regression for #5587: a subclass with NO explicit constructor that
+    // overrides getters must still have the Temporal cell stashed so that
+    // `compare()` / `instanceof` / inherited methods use internal slots, not
+    // the (potentially throwing) getter overrides.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+class AvoidGettersDate extends Temporal.PlainDate {
+  get year() { return -99; }
+}
+
+const a = new AvoidGettersDate(2000, 5, 2);
+const b = new Temporal.PlainDate(2006, 3, 25);
+console.log("instanceof:", a instanceof Temporal.PlainDate);  // true
+// compare() must use internal slots, NOT the overridden .year getter
+const cmp = Temporal.PlainDate.compare(a, b);
+console.log("compare:", cmp);  // -1 (2000 < 2006)
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "instanceof: true\n\
+         compare: -1\n"
+    );
+}
+
+#[test]
+fn duration_add_f64_representable_precision() {
+    // Regression for #5587 / test262 float64-representable-integer:
+    // After `add()`, `subtract()`, and `round()`, Duration fields must be
+    // clamped to their nearest float64-representable value — they must not
+    // carry sub-float64 precision that JS Numbers can't express.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+// 9007199254740991 + 9007199254740990 = 18014398509481981 (not f64-exact)
+// ℝ(𝔽(18014398509481981)) = 18014398509481980
+const d = new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, Number.MAX_SAFE_INTEGER, 0);
+const result = d.add({ microseconds: Number.MAX_SAFE_INTEGER - 1 });
+
+console.log("microseconds:", result.microseconds);  // 18014398509481980
+console.log("toString:", result.toString());        // PT18014398509.48198S
+// subsequent add of 1 µs must still compare equal (internal value = 18014398509481980)
+console.log("compare:", Temporal.Duration.compare(result.add({ microseconds: 1 }), result));  // 0
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "microseconds: 18014398509481980\n\
+         toString: PT18014398509.48198S\n\
+         compare: 0\n"
+    );
+}

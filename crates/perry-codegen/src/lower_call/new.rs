@@ -1245,7 +1245,7 @@ fn lower_new_impl(
             // updates the outer local's alloca slot. Read the fields back here so
             // the enclosing scope sees the updated values (e.g. `++called` in a
             // subclass constructor is visible after `new SubClass(...)` returns).
-            emit_class_capture_writeback(ctx, class, &obj_handle);
+            emit_class_capture_writeback(ctx, class, &obj_handle, args);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1878,10 +1878,11 @@ fn lower_new_impl(
                     ));
                     (ptr_reg, lowered_args.len().to_string())
                 };
-                let this_box = match ctx.this_stack.last().cloned() {
-                    Some(slot) => ctx.block().load(DOUBLE, &slot),
-                    None => undef_lit.clone(),
-                };
+                // Bug #5587: in the no-own-ctor path, `this_stack` was never
+                // pushed for this `new` call, so `last()` would return the
+                // outer function's `this` (or undef at module scope). Use
+                // `obj_box` — the freshly-allocated object — directly.
+                let this_box = obj_box.clone();
                 let _ = ctx.block().call(
                     DOUBLE,
                     "js_fetch_or_value_super",
