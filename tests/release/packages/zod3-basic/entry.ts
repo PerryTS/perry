@@ -1237,6 +1237,30 @@ print("errorMethods", {
     : mappedFormat.error.format((issue) => `${issue.code}:${issue.message}`).id?._errors,
 });
 
+const formattingResult = z
+  .object({
+    user: z.object({
+      name: z.string(),
+      tags: z.array(z.string().min(2)).min(2),
+    }),
+  })
+  .strict()
+  .safeParse({ user: { name: 1, tags: ["x"] }, extra: true });
+if (!formattingResult.success) {
+  const formattedError = formattingResult.error.format();
+  print("errorFormatting", {
+    issueCodes: formattingResult.error.issues.map((issue) => issue.code),
+    formatKeys: Object.keys(formattedError.user ?? {}).sort(),
+    formatRoot: formattedError._errors,
+    formatName: formattedError.user?.name?._errors,
+    formatTags: formattedError.user?.tags?._errors,
+    formatTag0: formattedError.user?.tags?.[0]?._errors,
+    flatten: formattingResult.error.flatten(),
+    flattenMapped: formattingResult.error.flatten((issue) => `${issue.path.join(".")}:${issue.code}`),
+    formErrors: formattingResult.error.formErrors,
+  });
+}
+
 const customMessageString = z.string({
   required_error: "required string",
   invalid_type_error: "not a string",
