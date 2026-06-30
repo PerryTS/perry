@@ -242,6 +242,7 @@ print("union", {
 
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
 const nestedObject = z.object({ nested: z.object({ label: z.string() }) });
+const defaultedOptionalObject = z.object({ defaulted: z.string().default("tuna").optional() });
 const categorySchema: z.ZodType<any> = z.object({
   name: z.string(),
   get subcategories() {
@@ -284,6 +285,9 @@ print("objects", {
   required: objectBase.required().safeParse({ id: 1, name: "a" }).success,
   requiredActive: objectBase.required({ active: true }).safeParse({ id: 1, name: "a" }).success,
   nestedRequired: nestedObject.required().safeParse({ nested: { label: "x" } }).success,
+  defaultedOptionalEmpty: defaultedOptionalObject.parse({}),
+  defaultedOptionalUndefined: defaultedOptionalObject.parse({ defaulted: undefined }),
+  anyUnknownMissing: z.object({ a: z.any(), b: z.unknown() }).safeParse({}).success,
 });
 
 print("recursiveObjects", {
