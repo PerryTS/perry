@@ -54,6 +54,15 @@ async function issueMetadataFromThrown(call: () => Promise<unknown>) {
   }
 }
 
+function thrownSummary(call: () => unknown) {
+  try {
+    call();
+    return "ok";
+  } catch (error) {
+    return error instanceof Error ? `${error.constructor.name}:${error.message.split("\n")[0]}` : String(error);
+  }
+}
+
 const userSchema = z.object({
   id: z.number().int().positive(),
   name: z.string().min(2).transform((value) => value.trim().toUpperCase()),
@@ -1202,6 +1211,12 @@ print("asyncEffects", {
   superRefineMessage: asyncSuperRefineResult.success ? "ok" : asyncSuperRefineResult.error.issues[0].message,
   refineMessage: asyncRefineMessageResult.success ? "ok" : asyncRefineMessageResult.error.issues[0].message,
   preprocess: await asyncPreprocessSchema.parseAsync(" ok "),
+  syncThrows: {
+    transformParse: thrownSummary(() => asyncTransformSchema.parse("x")),
+    transformSafeParse: thrownSummary(() => asyncTransformSchema.safeParse("x")),
+    refineParse: thrownSummary(() => asyncSchema.parse("bad")),
+    refineSafeParse: thrownSummary(() => asyncSchema.safeParse("bad")),
+  },
   metadata: {
     refine: [asyncSchema._def.typeName, asyncSchema._def.effect.type, asyncSchema._def.schema.constructor.name],
     transform: [
