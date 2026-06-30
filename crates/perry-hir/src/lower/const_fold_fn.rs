@@ -756,7 +756,7 @@ pub(crate) fn try_indirect_eval_general(
     // environment, never any enclosing module/function bindings. A completion-
     // tracking IIFE captures the *enclosing* scope, so it only matches global
     // eval semantics where the enclosing scope already IS the global scope:
-    // module top level (`scope_depth == 0`, no enclosing class / `with` / ESM)
+    // module top level (`scope_depth == 0`, no `with` / ESM)
     // under global-script mode, where module-top `var`s/functions and `this`
     // are the global bindings (#5608/#5609). There, fold the body to the shared
     // completion-value IIFE so `(0,eval)('x = 1')` mutates the global `x` and
@@ -1614,9 +1614,16 @@ fn try_const_fold_eval(
 /// place the Annex B.3.3.3 global var-scoped hoisting ([`apply_global_eval_hoist`])
 /// applies? (Mirrors the `module_top_this`/`module_top_global` guards.)
 fn eval_is_module_top_global(ctx: &LoweringContext) -> bool {
+    // `current_class` may be set when we are inside a class field initializer
+    // that is at module top level (`scope_depth == 0`). That context does not
+    // create a new variable environment — the enclosing scope is still the
+    // global scope in global-script mode. Class methods do enter their own
+    // scope (scope_depth >= 1), so they are excluded by the scope_depth check.
+    // Declaration-free bodies (checked by the caller) have no bindings to
+    // misplace, so the IIFE captures only global reads/writes — correct for
+    // global indirect eval semantics (#5592).
     super::lower_expr::global_script_this_enabled()
         && ctx.scope_depth == 0
-        && ctx.current_class.is_none()
         && ctx.with_env_stack.is_empty()
         && !ctx.is_external_module
 }
