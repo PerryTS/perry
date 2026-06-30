@@ -538,6 +538,14 @@ const transformedMap = z
 const transformedSet = z
   .set(z.string().transform((value) => value.length))
   .parse(new Set(["aa", "bbb"]));
+const recordMetadataSchema = z.record(z.string(), z.number());
+const mapMetadataSchema = z.map(z.string(), z.number());
+const setMinMetadataSchema = z.set(z.string()).min(1);
+const setMaxMetadataSchema = z.set(z.string()).max(3);
+const setSizeMetadataSchema = z.set(z.string()).size(2);
+const setMinMessage = z.set(z.string()).min(2, "need two").safeParse(new Set(["a"]));
+const setMaxMessage = z.set(z.string()).max(1, "too many").safeParse(new Set(["a", "b"]));
+const setSizeMessage = z.set(z.string()).size(2, "exactly two").safeParse(new Set(["a"]));
 const collectionIssueSummary = (result: z.SafeParseReturnType<unknown, unknown>) =>
   result.success ? [] : result.error.issues.map((issue) => ({ code: issue.code, path: issue.path.join(".") }));
 print("collections", {
@@ -559,6 +567,32 @@ print("collections", {
   setMax: z.set(z.string()).max(2).safeParse(new Set(["a", "b", "c"])).success,
   setSize: z.set(z.string()).size(2).safeParse(new Set(["a", "b"])).success,
   transformedSet: Array.from(transformedSet.values()),
+  recordMeta: {
+    typeName: recordMetadataSchema._def.typeName,
+    key: recordMetadataSchema.keySchema.constructor.name,
+    value: recordMetadataSchema.valueSchema.constructor.name,
+    element: recordMetadataSchema.element.constructor.name,
+  },
+  mapMeta: {
+    typeName: mapMetadataSchema._def.typeName,
+    key: mapMetadataSchema.keySchema.constructor.name,
+    value: mapMetadataSchema.valueSchema.constructor.name,
+  },
+  setMeta: {
+    typeName: setSizeMetadataSchema._def.typeName,
+    value: setSizeMetadataSchema._def.valueType.constructor.name,
+    min: setMinMetadataSchema._def.minSize?.value,
+    max: setMaxMetadataSchema._def.maxSize?.value,
+    size: [
+      setSizeMetadataSchema._def.minSize?.value,
+      setSizeMetadataSchema._def.maxSize?.value,
+    ],
+  },
+  setMessages: [
+    setMinMessage.success ? "ok" : setMinMessage.error.issues[0].message,
+    setMaxMessage.success ? "ok" : setMaxMessage.error.issues[0].message,
+    setSizeMessage.success ? "ok" : setSizeMessage.error.issues[0].message,
+  ],
   recordIssues: collectionIssueSummary(z.record(z.number()).safeParse({ ok: 1, bad: "x" })),
   mapKeyIssues: collectionIssueSummary(z.map(z.string().min(2), z.number()).safeParse(new Map([["a", 1]]))),
   mapValueIssues: collectionIssueSummary(z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]]))),
