@@ -382,6 +382,16 @@ struct ZlibStreamState {
     pending_bytes_written: usize,
     /// `.pipe(dest)` destinations as NaN-boxed bits; 'data'/'end' forward here.
     pipes: Vec<u64>,
+    /// Decompressed/compressed output produced BEFORE any consumer (`'data'`
+    /// listener or pipe) attached, held until one does — Node's paused-Readable
+    /// buffering. Without this, output drained to no listener was dropped and a
+    /// consumer that attaches later (gaxios/node-fetch attach `on('data')` only
+    /// after `await`ing the fetch) hung waiting on bytes that were already lost.
+    output_buffer: Vec<u8>,
+    /// `'end'` reached but deferred because no consumer had attached yet; the
+    /// stream is kept alive (not removed) so a late consumer can drain
+    /// `output_buffer` and then receive `'end'`.
+    end_buffered: bool,
 }
 
 enum ZlibEvent {
@@ -464,6 +474,8 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
             bytes_written: 0,
             pending_bytes_written: 0,
             pipes: Vec::new(),
+            output_buffer: Vec::new(),
+            end_buffered: false,
         },
     );
     id
@@ -762,12 +774,55 @@ fn stream_on(handle: i64, event: String, cb: i64) {
         .entry(event)
         .or_default()
         .push(cb);
+    flush_buffered(handle);
 }
 
 fn stream_pipe(handle: i64, dest_bits: u64) {
     if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
         s.pipes.push(dest_bits);
     }
+    flush_buffered(handle);
+}
+
+/// Once a consumer (a `'data'` listener or a `.pipe(dest)`) attaches, re-queue
+/// any output buffered before it arrived, followed by the deferred `'end'`, so a
+/// late consumer still receives the full body. Re-queuing (rather than
+/// delivering inline) is essential: `consumeBody` attaches `on('data')` then
+/// `on('end')` synchronously, so the events must be delivered by a later pump
+/// tick when BOTH listeners are present. No-op when there is no buffered output
+/// / deferred end, or no data consumer yet.
+fn flush_buffered(handle: i64) {
+    let mut g = statics().lock().unwrap();
+    let has_data_consumer = g
+        .listeners
+        .get(&handle)
+        .and_then(|m| m.get("data"))
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || g.streams
+            .get(&handle)
+            .map(|s| !s.pipes.is_empty())
+            .unwrap_or(false);
+    if !has_data_consumer {
+        return;
+    }
+    let Some(s) = g.streams.get_mut(&handle) else {
+        return;
+    };
+    if s.output_buffer.is_empty() && !s.end_buffered {
+        return;
+    }
+    let buf = std::mem::take(&mut s.output_buffer);
+    let ended = s.end_buffered;
+    s.end_buffered = false;
+    if !buf.is_empty() {
+        g.pending.push(ZlibEvent::Data(handle, buf));
+    }
+    if ended {
+        g.pending.push(ZlibEvent::End(handle));
+    }
+    drop(g);
+    notify_main_thread();
 }
 
 // ── dispatch (called from perry-stdlib's external-zlib-pump arm) ───────────────
@@ -947,22 +1002,46 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
             ZlibEvent::Data(id, bytes) => {
                 publish_bytes_written(id);
                 let cbs = listeners_for(id, "data");
-                if !cbs.is_empty() {
-                    if let Some(buf_f64) = make_buffer_f64(&bytes) {
-                        for cb in cbs {
-                            if cb != 0 {
-                                let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
-                                    .call1(buf_f64);
+                let dests = pipes_for(id);
+                if cbs.is_empty() && dests.is_empty() {
+                    // No consumer attached yet — buffer instead of dropping, so a
+                    // `.on('data')`/`.pipe()` that attaches later (after `await`)
+                    // still receives the body. Flushed by `flush_buffered`.
+                    if let Some(s) = statics().lock().unwrap().streams.get_mut(&id) {
+                        s.output_buffer.extend_from_slice(&bytes);
+                    }
+                } else {
+                    if !cbs.is_empty() {
+                        if let Some(buf_f64) = make_buffer_f64(&bytes) {
+                            for cb in cbs {
+                                if cb != 0 {
+                                    let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
+                                        .call1(buf_f64);
+                                }
                             }
                         }
                     }
-                }
-                for dest in pipes_for(id) {
-                    forward_write(dest, &bytes);
+                    for dest in dests {
+                        forward_write(dest, &bytes);
+                    }
                 }
             }
             ZlibEvent::End(id) => {
                 publish_bytes_written(id);
+                // Defer `'end'` (keep the stream + its buffer alive) when no
+                // consumer has attached yet — otherwise removing the stream here
+                // would strand a `.on('data')`/`.on('end')` that attaches later
+                // (gaxios attaches them only after `await`ing the fetch), hanging
+                // the body-consume. `flush_buffered` re-queues End once a
+                // consumer attaches and the buffer has drained.
+                let has_consumer =
+                    !listeners_for(id, "data").is_empty() || !pipes_for(id).is_empty();
+                if !has_consumer {
+                    if let Some(s) = statics().lock().unwrap().streams.get_mut(&id) {
+                        s.end_buffered = true;
+                        continue;
+                    }
+                }
                 for cb in listeners_for(id, "end") {
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
