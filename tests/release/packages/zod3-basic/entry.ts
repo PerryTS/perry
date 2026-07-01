@@ -487,6 +487,11 @@ const multiValueDiscriminatedSchema = z.discriminatedUnion("kind", [
 ]);
 const multiValueInvalidKind = multiValueDiscriminatedSchema.safeParse({ kind: "image", body: "x" });
 const multiValueInvalidBranch = multiValueDiscriminatedSchema.safeParse({ kind: "text", body: 1 });
+const inheritedDiscriminatedInput = Object.create({ type: "count", value: 3 });
+inheritedDiscriminatedInput.extra = "own";
+const inheritedDiscriminatedParsed = eventSchema.parse(inheritedDiscriminatedInput);
+const inheritedDiscriminatedInvalidInput = Object.create({ type: "count", value: "bad" });
+inheritedDiscriminatedInvalidInput.extra = "own";
 const objectUnionSchema = z.union([
   z.object({ kind: z.literal("a"), value: z.string() }),
   z.object({ kind: z.literal("b"), count: z.number() }),
@@ -504,6 +509,10 @@ print("discriminatedUnion.options", {
   discriminator: eventSchema.discriminator,
   optionKeys: Array.from(eventSchema.optionsMap.keys()).join("|"),
   typeName: eventSchema._def.typeName,
+  inherited: inheritedDiscriminatedParsed,
+  inheritedOwnType: Object.prototype.hasOwnProperty.call(inheritedDiscriminatedParsed, "type"),
+  inheritedOwnValue: Object.prototype.hasOwnProperty.call(inheritedDiscriminatedParsed, "value"),
+  inheritedInvalid: issueMetadataFromResult(eventSchema.safeParse(inheritedDiscriminatedInvalidInput)),
   multiValue: [
     multiValueDiscriminatedSchema.parse({ kind: "text", body: "hello" }),
     multiValueDiscriminatedSchema.parse({ kind: "markdown", body: "**hello**" }),
