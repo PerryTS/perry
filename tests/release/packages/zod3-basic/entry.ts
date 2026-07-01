@@ -131,6 +131,12 @@ print("packageExports", {
     pipeline: z.ZodFirstPartyTypeKind.ZodPipeline,
     readonly: z.ZodFirstPartyTypeKind.ZodReadonly,
   },
+  aliases: {
+    schema: z.Schema === z.ZodType,
+    schemaInstance: z.string() instanceof z.Schema,
+    brand: typeof z.BRAND,
+    brandDescription: z.BRAND.description,
+  },
   names: [z.ZodString.name, z.ZodNumber.name, z.ZodObject.name, z.ZodError.name],
 });
 
