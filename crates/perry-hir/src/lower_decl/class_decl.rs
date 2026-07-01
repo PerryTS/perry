@@ -1047,7 +1047,13 @@ pub fn lower_class_decl(
                 let scope_mark = ctx.enter_scope();
                 let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
                 ctx.in_nonarrow_fn = true;
-                let body = lower_block_stmt(ctx, &block.body)?;
+                // A static block is its own var-scope (OrdinaryFunctionCreate
+                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
+                // only lowers nested statements without hoisting `var`s to this
+                // boundary, so a `var` declared in one block leaked into the
+                // next block/module scope instead of staying local (test262
+                // static-init-scope-var-close.js).
+                let body = lower_fn_body_block_stmt(ctx, &block.body)?;
                 ctx.exit_scope(scope_mark);
                 ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
@@ -1819,7 +1825,13 @@ pub fn lower_class_from_ast(
                 let scope_mark = ctx.enter_scope();
                 let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
                 ctx.in_nonarrow_fn = true;
-                let body = lower_block_stmt(ctx, &block.body)?;
+                // A static block is its own var-scope (OrdinaryFunctionCreate
+                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
+                // only lowers nested statements without hoisting `var`s to this
+                // boundary, so a `var` declared in one block leaked into the
+                // next block/module scope instead of staying local (test262
+                // static-init-scope-var-close.js).
+                let body = lower_fn_body_block_stmt(ctx, &block.body)?;
                 ctx.exit_scope(scope_mark);
                 ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 

@@ -756,48 +756,16 @@ pub(crate) fn lower_stmt(
                                     // statements — so `C.x` read immediately after the
                                     // binding saw the uninitialized (0.0) slot, and a
                                     // static method's `this.#priv` read undefined.
-                                    let static_field_inits: Vec<Stmt> = lowered_class
-                                        .static_fields
-                                        .iter()
-                                        .filter_map(|sf| {
-                                            sf.init.as_ref().map(|init| {
-                                                // `this` in a static initializer is
-                                                // the class constructor — see the
-                                                // matching substitution in the
-                                                // `Decl::Class` arm.
-                                                let mut init_value = init.clone();
-                                                crate::analysis::substitute_lexical_this_in_expr(
-                                                    &mut init_value,
-                                                    &Expr::ClassRef(bind_name.clone()),
-                                                );
-                                                if let Some(key) = sf.key_expr.as_ref() {
-                                                    Stmt::Expr(Expr::ClassStaticSymbolSet {
-                                                        class_name: bind_name.clone(),
-                                                        key: Box::new(key.clone()),
-                                                        value: Box::new(init_value),
-                                                    })
-                                                } else {
-                                                    Stmt::Expr(Expr::StaticFieldSet {
-                                                        class_name: bind_name.clone(),
-                                                        field_name: sf.name.clone(),
-                                                        value: Box::new(init_value),
-                                                    })
-                                                }
-                                            })
-                                        })
-                                        .collect();
-                                    let static_block_calls: Vec<Stmt> = lowered_class
-                                        .static_methods
-                                        .iter()
-                                        .filter(|m| m.name.starts_with("__perry_static_init_"))
-                                        .map(|m| {
-                                            Stmt::Expr(Expr::StaticMethodCall {
-                                                class_name: bind_name.clone(),
-                                                method_name: m.name.clone(),
-                                                args: Vec::new(),
-                                            })
-                                        })
-                                        .collect();
+                                    // Interleaved in source order (see
+                                    // `build_interleaved_static_init_stmts`) rather
+                                    // than all fields then all blocks.
+                                    let static_init_stmts =
+                                        crate::lower_decl::build_interleaved_static_init_stmts(
+                                            &class_expr.class.body,
+                                            &bind_name,
+                                            &lowered_class.static_fields,
+                                            &lowered_class.static_methods,
+                                        );
                                     push_class_dedup(module, lowered_class);
                                     if let Some(reg) = parent_register {
                                         module.init.push(reg);
@@ -805,10 +773,7 @@ pub(crate) fn lower_stmt(
                                     for reg in computed_member_registrations {
                                         module.init.push(Stmt::Expr(reg));
                                     }
-                                    for s in static_field_inits {
-                                        module.init.push(s);
-                                    }
-                                    for s in static_block_calls {
+                                    for s in static_init_stmts {
                                         module.init.push(s);
                                     }
                                     // Register the alias so `new X()` → `new X()`
@@ -1113,66 +1078,32 @@ pub(crate) fn lower_stmt(
                                 member,
                             )));
                     }
-                    // Inject static-field-init statements at the source
-                    // position of the class declaration. Per ES spec, a
-                    // class declaration's static initializers run when the
-                    // declaration evaluates — i.e., here in source order,
-                    // not at the top of module init. This matters when a
-                    // static field's initializer references a top-level
-                    // const declared earlier in the module: the upfront
-                    // `init_static_fields` pass at codegen.rs:3449 runs
-                    // before any user `Let` bindings, so it captures
-                    // unbound (undefined) values. The inline statements
-                    // re-run with the correct values once we reach this
-                    // point in source order.
-                    for sf in &class.static_fields {
-                        if let Some(init) = &sf.init {
-                            // Per ClassDefinitionEvaluation the initializer
-                            // runs with `this` bound to the class constructor;
-                            // these stmts evaluate in module-init context
-                            // (empty this_stack), so substitute lexical `this`
-                            // — including inside arrows — with the class ref.
-                            let mut init_value = init.clone();
-                            crate::analysis::substitute_lexical_this_in_expr(
-                                &mut init_value,
-                                &Expr::ClassRef(class.name.clone()),
-                            );
-                            if let Some(key) = sf.key_expr.as_ref() {
-                                module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
-                                    class_name: class.name.clone(),
-                                    key: Box::new(key.clone()),
-                                    value: Box::new(init_value),
-                                }));
-                            } else {
-                                module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                                    class_name: class.name.clone(),
-                                    field_name: sf.name.clone(),
-                                    value: Box::new(init_value),
-                                }));
-                            }
-                        }
-                    }
-                    // Static blocks — `class { static { ... } }`. Per ES
-                    // spec, these run as part of class evaluation in
-                    // source order, right AFTER the class's static-field
-                    // initializers. HIR lifts each block to a synthetic
-                    // static method `__perry_static_init_N`; emit an
-                    // inline `StaticMethodCall` here at the class-decl
-                    // position so each block fires at the right point.
-                    // The codegen-side fallback in `init_static_fields_late`
-                    // is kept for class expressions that bypass this
-                    // declaration path; it skips blocks already invoked
-                    // via this inline call. Closes the `test_gap_class_advanced`
-                    // "static block initialized" diff (#2278).
-                    for sm in &class.static_methods {
-                        if sm.name.starts_with("__perry_static_init_") {
-                            module.init.push(Stmt::Expr(Expr::StaticMethodCall {
-                                class_name: class.name.clone(),
-                                method_name: sm.name.clone(),
-                                args: Vec::new(),
-                            }));
-                        }
-                    }
+                    // Inject static-field-init and static-block-call
+                    // statements at the source position of the class
+                    // declaration, INTERLEAVED in source order (see
+                    // `build_interleaved_static_init_stmts`) — per
+                    // ClassDefinitionEvaluation, static fields and static
+                    // blocks are a single ordered evaluation pass, not all
+                    // fields followed by all blocks. This matters both for
+                    // observable ordering (test262 static-init-sequence.js)
+                    // and for a top-level const referenced by a later
+                    // field's initializer: the upfront `init_static_fields`
+                    // pass at codegen.rs:3449 runs before any user `Let`
+                    // bindings, so it captures unbound (undefined) values —
+                    // these inline statements re-run with the correct values
+                    // once we reach this point in source order. The
+                    // codegen-side fallback in `init_static_fields_late` is
+                    // kept for class expressions that bypass this
+                    // declaration path; it skips blocks already invoked via
+                    // this inline call.
+                    module.init.extend(
+                        crate::lower_decl::build_interleaved_static_init_stmts(
+                            &class_decl.class.body,
+                            &class.name,
+                            &class.static_fields,
+                            &class.static_methods,
+                        ),
+                    );
                     append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                     push_class_dedup(module, class);
                 }
