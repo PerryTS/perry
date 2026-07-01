@@ -283,6 +283,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    if let Some(obj) = crate::url::object_from_f64(value) {
+        if crate::url::url_class::is_url_object_shape(obj) {
+            let str_ptr = crate::string::js_string_from_bytes(b"[object URL]".as_ptr(), 12);
+            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+        }
+    }
     if let Some(tag) = crate::builtins::boxed_primitive_to_string_tag(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();

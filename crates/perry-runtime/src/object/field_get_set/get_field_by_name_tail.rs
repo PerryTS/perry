@@ -1339,9 +1339,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 if class_id != 0 {
                     let receiver =
                         f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    if let Some(v) = super::super::class_registry::resolve_proto_chain_field_with_receiver(
-                        class_id, key, receiver,
-                    ) {
+                    if let Some(v) =
+                        super::super::class_registry::resolve_proto_chain_field_with_receiver(
+                            class_id, key, receiver,
+                        )
+                    {
                         return v;
                     }
                 }
@@ -1353,6 +1355,10 @@ pub(crate) fn get_field_by_name_object_tail(
                 if class_id != 0 && is_class_id_registered(class_id) {
                     let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
                     return JSValue::from_bits(bits);
+                }
+                if crate::url::url_class::is_url_object_shape(obj as *mut crate::ObjectHeader) {
+                    let v = js_get_global_this_builtin_value(b"URL".as_ptr(), 3);
+                    return JSValue::from_bits(v.to_bits());
                 }
                 // class_id == 0 fallback: plain ObjectHeader allocated
                 // without an HIR shape (Object.create(null) hybrids, raw

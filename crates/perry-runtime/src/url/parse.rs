@@ -409,6 +409,10 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     // Allocate object with URL_FIELD_COUNT fields
     // Using class_id 0 for now (generic object)
     let obj = js_object_alloc(0, URL_FIELD_COUNT);
+    let proto = crate::object::builtin_prototype_value("URL");
+    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+        crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
+    }
 
     // Create the keys array with property names (order must match field indices)
     let mut keys = js_array_alloc(URL_FIELD_COUNT);

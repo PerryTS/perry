@@ -480,6 +480,7 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "Promise" => CLASS_ID_PROMISE,
         "Blob" => 0xFFFF0026,
         "File" => 0xFFFF002E,
+        "URL" => 0xFFFF002F,
         "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
         "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
         "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
@@ -1132,6 +1133,16 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_PROMISE {
         return if crate::promise::js_value_is_promise(value) != 0 {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    const CLASS_ID_URL: u32 = 0xFFFF002F;
+    if class_id == CLASS_ID_URL {
+        return if crate::url::object_from_f64(value)
+            .is_some_and(crate::url::url_class::is_url_object_shape)
+        {
             true_val
         } else {
             false_val
