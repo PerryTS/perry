@@ -1768,6 +1768,17 @@ pub enum Expr {
     BoxedPrimitiveNew {
         kind: BoxedPrimitiveKind,
         arg: Box<Expr>,
+        // Whether an argument was syntactically given (`new String(x)`) vs.
+        // omitted (`new String()`). `arg` alone can't disambiguate an omitted
+        // argument from a present one that evaluates to `undefined` at
+        // runtime (e.g. `new String(x)` where `x` holds `undefined`) — both
+        // would otherwise collapse to the same NaN-boxed `undefined` value at
+        // the `js_boxed_*_new` runtime boundary. Only `BoxedPrimitiveKind::
+        // String` currently reads this (see `js_boxed_string_new`); Number/
+        // Boolean disambiguate implicitly because their present-arg coercion
+        // (`NumberCoerce`/`BooleanCoerce`) always produces a non-`undefined`
+        // primitive.
+        arg_present: bool,
     },
 
     // Date operations

@@ -90,7 +90,7 @@ pub extern "C" fn js_object_coerce(value: f64) -> f64 {
         return crate::builtins::js_boxed_boolean_new(value);
     }
     if jsval.is_any_string() {
-        return crate::builtins::js_boxed_string_new(value);
+        return crate::builtins::js_boxed_string_new(value, 1);
     }
     crate::builtins::js_boxed_number_new(value)
 }

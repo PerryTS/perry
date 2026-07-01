@@ -214,14 +214,38 @@ pub(crate) fn lower_buffer_index_get_i32(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::BoxedPrimitiveNew { kind, arg } => {
+        Expr::BoxedPrimitiveNew {
+            kind,
+            arg,
+            arg_present,
+        } => {
             let v = lower_expr(ctx, arg)?;
-            let runtime = match kind {
-                perry_hir::BoxedPrimitiveKind::Number => "js_boxed_number_new",
-                perry_hir::BoxedPrimitiveKind::String => "js_boxed_string_new",
-                perry_hir::BoxedPrimitiveKind::Boolean => "js_boxed_boolean_new",
-            };
-            Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &v)]))
+            match kind {
+                perry_hir::BoxedPrimitiveKind::Number => {
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_boxed_number_new", &[(DOUBLE, &v)]))
+                }
+                perry_hir::BoxedPrimitiveKind::Boolean => {
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_boxed_boolean_new", &[(DOUBLE, &v)]))
+                }
+                // `has_arg` is an explicit compile-time flag, not an
+                // `undefined`-value sentinel: a present argument that
+                // evaluates to `undefined` at runtime (`new String(x)` where
+                // `x` holds `undefined`) must still box to `"undefined"`, not
+                // the no-arg `""` default — see the `arg_present` doc comment
+                // on `Expr::BoxedPrimitiveNew`.
+                perry_hir::BoxedPrimitiveKind::String => {
+                    let has_arg = if *arg_present { "1" } else { "0" };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_boxed_string_new",
+                        &[(DOUBLE, &v), (I32, has_arg)],
+                    ))
+                }
+            }
         }
         Expr::DateNew(args) => match args.len() {
             0 => Ok(ctx.block().call(DOUBLE, "js_date_new", &[])),

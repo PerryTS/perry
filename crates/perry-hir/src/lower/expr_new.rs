@@ -729,31 +729,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // ToNumber(x), `new String(x)` → ToString(x). This matters for
                 // an explicit `undefined`: `new Number(undefined)` is NaN and
                 // `new String(undefined)` is "undefined" — distinct from the
-                // *no-arg* forms `new Number()`/`new String()` which box +0/""
-                // (handled by the undefined sentinel in `js_boxed_*_new`).
-                // Without this, both collapse to `Expr::Undefined` and the
-                // runtime can't tell them apart.
+                // *no-arg* forms `new Number()`/`new String()` which box +0/"".
+                // `Number`/`Boolean` disambiguate for free: `NumberCoerce`/
+                // `BooleanCoerce` always produce a non-`undefined` primitive
+                // (NaN / `false`) for a present `undefined` argument. `String`
+                // cannot use the same trick — `Expr::StringCoerce`
+                // (`js_string_coerce`) is the *lenient* ToString used by the
+                // `String(x)` call form, which renders a Symbol as its
+                // descriptive string ("Symbol(desc)") instead of throwing
+                // (ECMA-262 §22.1.1 step 2b requires the `new String(sym)`
+                // TypeError, test262 `symbol-wrapping.js`) — so the argument is
+                // passed raw and `js_boxed_string_new` applies `ToString` +
+                // the Symbol rejection itself, gated on the explicit
+                // `arg_present` flag below rather than an `undefined` sentinel
+                // (a present-but-`undefined`-valued argument must still box to
+                // `"undefined"`, not the no-arg `""` default).
+                let arg_present = !args.is_empty();
                 let arg = match args.drain(..).next() {
                     Some(inner) => match kind {
                         crate::BoxedPrimitiveKind::Number => Expr::NumberCoerce(Box::new(inner)),
-                        // Only an explicit `undefined` argument needs a pre-pass
-                        // coercion here — to distinguish it from the true no-arg
-                        // sentinel below ("undefined" vs. the boxed-empty-string
-                        // default). Any other present value is passed raw so
-                        // `js_boxed_string_new` applies `ToString` itself,
-                        // including rejecting a Symbol argument with a
-                        // `TypeError` (ECMA-262 §22.1.1 step 2b, test262
-                        // `symbol-wrapping.js`) — the lenient `Expr::StringCoerce`
-                        // (`js_string_coerce`) instead renders a Symbol as its
-                        // descriptive string, which would defeat that check by
-                        // stringifying the Symbol away before it ever runs.
-                        crate::BoxedPrimitiveKind::String => {
-                            if matches!(inner, Expr::Undefined) {
-                                Expr::StringCoerce(Box::new(inner))
-                            } else {
-                                inner
-                            }
-                        }
+                        crate::BoxedPrimitiveKind::String => inner,
                         crate::BoxedPrimitiveKind::Boolean => Expr::BooleanCoerce(Box::new(inner)),
                     },
                     None => Expr::Undefined,
@@ -761,6 +756,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return Ok(Expr::BoxedPrimitiveNew {
                     kind,
                     arg: Box::new(arg),
+                    arg_present,
                 });
             }
             if ctx.proxy_locals.contains(&class_name) {

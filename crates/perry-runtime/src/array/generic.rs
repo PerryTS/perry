@@ -90,7 +90,7 @@ pub(super) fn to_object(recv: f64) -> f64 {
     // object, so `obj instanceof String` is true. (test262
     // Array.prototype.{every,some,reduce,reduceRight,...}/15.4.4.*-1-7.)
     if is_string_value(b) {
-        return crate::builtins::js_boxed_string_new(recv);
+        return crate::builtins::js_boxed_string_new(recv, 1);
     }
     if b == TAG_TRUE || b == crate::value::TAG_FALSE {
         return crate::builtins::js_boxed_boolean_new(recv);

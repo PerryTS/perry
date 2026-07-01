@@ -289,11 +289,18 @@ pub extern "C" fn js_boxed_number_new(value: f64) -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
+/// `has_arg` is an explicit compile-time flag (codegen passes 0/1 based on
+/// whether `new String(...)` was given an argument), NOT an inference from
+/// `value.is_undefined()` — a *present* argument that evaluates to
+/// `undefined` at runtime (`new String(x)` where `x` holds `undefined`) must
+/// still box to `"undefined"`, distinct from the no-arg `""` default. Both
+/// would otherwise collapse to the same NaN-boxed `undefined` bits and be
+/// indistinguishable here.
 #[no_mangle]
-pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
+pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
     let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_STRING, 0);
     // `new String()` (no args) is spec'd to box "", not "undefined".
-    let ptr = if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+    let ptr = if has_arg == 0 {
         crate::string::js_string_from_bytes(std::ptr::null(), 0)
     } else {
         // ECMA-262 §22.1.1 step 2b: ToString(value) — throws TypeError for Symbol.
