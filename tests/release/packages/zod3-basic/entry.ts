@@ -554,6 +554,23 @@ const inheritedObjectParsed = z.object({ own: z.number(), inherited: z.string() 
 const inheritedPassthroughInput = Object.create({ inheritedExtra: "from-proto" });
 inheritedPassthroughInput.id = 1;
 const inheritedPassthroughParsed = z.object({ id: z.number() }).passthrough().parse(inheritedPassthroughInput);
+let getterOwnReads = 0;
+let getterInheritedReads = 0;
+const getterInput = Object.create({
+  get inherited() {
+    getterInheritedReads += 1;
+    return "from-getter";
+  },
+});
+Object.defineProperty(getterInput, "id", {
+  enumerable: true,
+  get() {
+    getterOwnReads += 1;
+    return 7;
+  },
+});
+const getterObjectParsed = z.object({ id: z.number(), inherited: z.string() }).parse(getterInput);
+const getterPassthroughParsed = z.object({ id: z.number() }).passthrough().parse(getterInput);
 const partialObjectSchema = objectBase.partial();
 const partialNameObjectSchema = objectBase.partial({ name: true });
 const requiredObjectSchema = objectBase.required();
@@ -619,6 +636,10 @@ print("objects", {
   inheritedPassthrough: inheritedPassthroughParsed,
   inheritedPassthroughOwn: Object.prototype.hasOwnProperty.call(inheritedPassthroughParsed, "inheritedExtra"),
   inheritedStrict: z.object({ id: z.number() }).strict().safeParse(inheritedPassthroughInput).success,
+  getterInput: getterObjectParsed,
+  getterPassthrough: getterPassthroughParsed,
+  getterReads: [getterOwnReads, getterInheritedReads],
+  getterOutputOwnInherited: Object.prototype.hasOwnProperty.call(getterObjectParsed, "inherited"),
   partial: partialObjectSchema.parse({ id: 1 }),
   partialName: partialNameObjectSchema.safeParse({ id: 1 }).success,
   deepPartial: deepPartialObjectSchema.parse({ nested: {} }),
