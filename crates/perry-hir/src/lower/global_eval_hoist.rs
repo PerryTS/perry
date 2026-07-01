@@ -198,13 +198,19 @@ fn synth_create_if_absent_stmt(name: &str) -> Option<ast::Stmt> {
     // Use Object.defineProperty instead of a plain assignment so inherited
     // prototype setters (e.g. from Object.prototype) cannot intercept the
     // binding creation — matching CreateGlobalVarBinding step 5a which calls
-    // OrdinaryDefineOwnProperty directly on the global object.
+    // OrdinaryDefineOwnProperty directly on the global object. This module
+    // only rewrites *eval* bodies (Annex B.3.3.3 EvalDeclarationInstantiation),
+    // which always calls CreateGlobalVarBinding(vn, /* D = */ true) — unlike a
+    // top-level Script's own GlobalDeclarationInstantiation, which passes
+    // D = false. So the created binding must be configurable: true (test262
+    // `language/eval-code/*/var-env-var-init-global-new`, `annexB/language/
+    // eval-code/*/global-*-eval-global-init`).
     parse_single_stmt(&format!(
         "if (!({{}}).hasOwnProperty.call(globalThis, {name:?})) \
          {{ if (!Object.isExtensible(globalThis)) \
               {{ throw new TypeError(\"Cannot declare global var: {name}\"); }} \
             void Object.defineProperty(globalThis, {name:?}, \
-              {{ value: void 0, writable: true, enumerable: true, configurable: false }}); }}"
+              {{ value: void 0, writable: true, enumerable: true, configurable: true }}); }}"
     ))
 }
 
