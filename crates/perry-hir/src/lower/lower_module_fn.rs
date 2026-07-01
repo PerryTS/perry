@@ -416,6 +416,13 @@ pub fn lower_module_full(
     // Skip 'declare function' statements (functions with no body) - they are external FFI
     // BUT: also skip overload signatures if an implementation exists
     let reassigned_function_candidates = collect_assigned_function_binding_candidates(ast_module);
+    // #5833: same whole-module "assigned via simple identifier target" scan,
+    // stashed on `ctx` so `stmt.rs`'s top-level `Decl::Class` arm can gate its
+    // opt-in local-slot seeding (see `reassigned_top_level_identifiers`'s doc
+    // comment). `collect_assigned_function_binding_candidates` is name-generic
+    // despite its name — it just collects assignment targets — so this reuses
+    // the exact same scan rather than duplicating it.
+    ctx.reassigned_top_level_identifiers = reassigned_function_candidates.clone();
     for item in &ast_module.body {
         // Extract function declaration from both regular statements and export declarations
         let fn_decl = match item {
@@ -637,6 +644,51 @@ pub fn lower_module_full(
         }
     }
 
+    // #5833: GlobalDeclarationInstantiation step 5c — a top-level `let`/
+    // `const`/`class` declaration whose name collides with a "restricted
+    // global property" (HasRestrictedGlobalProperty) is an early SyntaxError,
+    // thrown before any statement runs. Only `undefined`, `NaN`, and
+    // `Infinity` are non-configurable value properties of a pristine global
+    // object (ECMA-262 §19.1.1-19.1.3), so this is a purely static check
+    // against the entry module's own top-level lexical names — it doesn't
+    // need to model the general (dynamically extensible) case. Scoped to the
+    // ENTRY module compiled as a Script: an ES module (import/export syntax
+    // present) binds in its own Module Environment Record instead, never
+    // touching the global object, and a non-entry module never reaches
+    // GlobalDeclarationInstantiation regardless of its own syntax (only the
+    // directly-compiled entry file's top-level runs as a Script — see
+    // `is_esm_entry` in `perry-codegen/src/codegen/entry.rs`). Test262
+    // `language/global-code/decl-lex-restricted-global.js`.
+    if ctx.is_entry_module
+        && !ast_module
+            .body
+            .iter()
+            .any(|item| matches!(item, ast::ModuleItem::ModuleDecl(_)))
+    {
+        const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];
+        let restricted_scan_stmts: Vec<ast::Stmt> = ast_module
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                ast::ModuleItem::Stmt(stmt) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut top_level_lexical_names = std::collections::HashSet::new();
+        crate::lower_decl::collect_lexical_decl_names(
+            &restricted_scan_stmts,
+            &mut top_level_lexical_names,
+        );
+        for name in RESTRICTED_GLOBAL_NAMES {
+            if top_level_lexical_names.contains(name) {
+                anyhow::bail!(
+                    "SyntaxError: identifier '{name}' has already been declared \
+                     (restricted global property)"
+                );
+            }
+        }
+    }
+
     // Annex B B.3.3 (#5297): in sloppy (non-strict) global code, a block-nested
     // `function f(){}` also creates a global `var f` (undefined until the
     // declaration runs). Mirror the function-body pre-pass: register one hoisted
@@ -840,7 +892,11 @@ pub fn lower_module_full(
     // codegen reflection of top-level `function` declarations onto the global
     // object (see `Module::references_global_this`). The module source is
     // installed for the duration of this lower (collect_modules.rs).
-    module.references_global_this = crate::ir::current_module_source_mentions_global_this();
+    // #5833: OR in `ctx.saw_global_this_expr` — a top-level `this` read in
+    // global-script mode is the same global-object reference as the literal
+    // `globalThis` token, but the substring scan above can't see it.
+    module.references_global_this =
+        crate::ir::current_module_source_mentions_global_this() || ctx.saw_global_this_expr;
 
     if !ctx.sloppy_implicit_globals.is_empty() {
         let mut implicit_globals: Vec<Stmt> = ctx

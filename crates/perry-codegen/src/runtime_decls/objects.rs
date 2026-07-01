@@ -74,6 +74,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         VOID,
         &[I64, I64, DOUBLE],
     );
+    module.declare_function(
+        "js_object_set_field_by_name_nonconfigurable",
+        VOID,
+        &[I64, I64, DOUBLE],
+    );
     // #5127: apply ES2022 `cause` from a `super(message, options)` forward to
     // a user Error-subclass instance (a generic object). (this_handle, options)
     module.declare_function("js_error_apply_cause_to_object", VOID, &[I64, DOUBLE]);

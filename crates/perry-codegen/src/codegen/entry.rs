@@ -216,8 +216,14 @@ fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
         let closure_box = crate::expr::nanbox_pointer_inline(blk, &closure_handle);
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_raw = crate::expr::unbox_to_i64(blk, &key_box);
+        // #5833: GlobalDeclarationInstantiation's `CreateGlobalFunctionBinding`
+        // runs with `D = false` for a Script (only sloppy-eval's Annex B.3.3.3
+        // path uses `D = true`), so the reflected property must be
+        // non-configurable — a plain `js_object_set_field_by_name` created it
+        // configurable, failing `verifyProperty(this, name, {configurable:
+        // false})` (test262 `language/global-code/decl-func.js`).
         blk.call_void(
-            "js_object_set_field_by_name",
+            "js_object_set_field_by_name_nonconfigurable",
             &[(I64, &obj_raw), (I64, &key_raw), (DOUBLE, &closure_box)],
         );
     }

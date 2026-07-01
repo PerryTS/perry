@@ -1089,7 +1089,45 @@ pub(crate) fn lower_stmt(
                     }
                 }
                 ast::Decl::Class(class_decl) => {
+                    let binding_name = class_decl.ident.sym.to_string();
                     let class = lower_class_decl(ctx, class_decl, false)?;
+                    // #5833: give the class NAME a real mutable lexical
+                    // binding slot, matching GlobalDeclarationInstantiation's
+                    // "a class declaration creates a MUTABLE binding" step
+                    // (unlike `const`) — test262 `language/global-code/
+                    // decl-lex.js`. Without a local slot, every bare read of
+                    // the name fell through to `ctx.lookup_class` and
+                    // re-derived `Expr::ClassRef` from the class registry,
+                    // and every assignment hit the `lookup_class`/`lookup_func`
+                    // "evaluate RHS, don't shadow the binding" special case in
+                    // `expr_assign.rs` (added for Drizzle's `sql || (sql =
+                    // {})` idiom, #420) — so `Foo = 5; console.log(Foo)`
+                    // silently dropped the store and printed the frozen
+                    // class-id value instead of `5`.
+                    //
+                    // Gated on `reassigned_top_level_identifiers`: `lookup_local`
+                    // is checked before both of those class-registry fallbacks,
+                    // so seeding a local unconditionally would ALSO redirect
+                    // every plain read of the name (not just reassignments) to
+                    // `Expr::LocalGet` — breaking call sites that pattern-match
+                    // `Expr::ClassRef` after lowering a bare class-name
+                    // identifier, e.g. `export default Widget;` (#665). Only
+                    // classes actually reassigned somewhere in the module get a
+                    // local; the overwhelmingly common never-reassigned case is
+                    // untouched.
+                    if ctx.reassigned_top_level_identifiers.contains(&binding_name) {
+                        let class_local_id = match ctx.lookup_local(&binding_name) {
+                            Some(id) => id,
+                            None => ctx.define_local(binding_name.clone(), Type::Any),
+                        };
+                        module.init.push(Stmt::Let {
+                            id: class_local_id,
+                            name: binding_name,
+                            ty: Type::Any,
+                            mutable: true,
+                            init: Some(Expr::ClassRef(class.name.clone())),
+                        });
+                    }
                     // Issue #711: emit dynamic parent-class registration
                     // at the source-order position of the class declaration
                     // BEFORE the static-field-init stmts. Static field
