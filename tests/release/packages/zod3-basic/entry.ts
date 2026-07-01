@@ -487,12 +487,14 @@ const multiValueDiscriminatedSchema = z.discriminatedUnion("kind", [
 ]);
 const multiValueInvalidKind = multiValueDiscriminatedSchema.safeParse({ kind: "image", body: "x" });
 const multiValueInvalidBranch = multiValueDiscriminatedSchema.safeParse({ kind: "text", body: 1 });
-const unionBranchFailure = z
-  .union([
-    z.object({ kind: z.literal("a"), value: z.string() }),
-    z.object({ kind: z.literal("b"), count: z.number() }),
-  ])
-  .safeParse({ kind: "a", value: 1 });
+const objectUnionSchema = z.union([
+  z.object({ kind: z.literal("a"), value: z.string() }),
+  z.object({ kind: z.literal("b"), count: z.number() }),
+]);
+const unionBranchFailure = objectUnionSchema.safeParse({ kind: "a", value: 1 });
+const inheritedUnionInput = Object.create({ kind: "b", count: 2 });
+inheritedUnionInput.extra = "own";
+const inheritedUnionParsed = objectUnionSchema.parse(inheritedUnionInput);
 print("discriminatedUnion", [
   eventSchema.parse({ type: "text", value: "hello" }),
   eventSchema.parse({ type: "count", value: 3 }),
@@ -522,6 +524,9 @@ print("union", {
     : unionBranchFailure.error.issues[0].unionErrors.map((error) =>
         error.issues.map((issue) => `${issue.path.join(".")}:${issue.code}`),
       ),
+  inheritedObject: inheritedUnionParsed,
+  inheritedObjectOwnKind: Object.prototype.hasOwnProperty.call(inheritedUnionParsed, "kind"),
+  inheritedObjectOwnCount: Object.prototype.hasOwnProperty.call(inheritedUnionParsed, "count"),
 });
 
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
@@ -852,6 +857,9 @@ print("cloneSemantics", {
 });
 
 const intersectionObjectSchema = z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() }));
+const inheritedIntersectionInput = Object.create({ b: 2 });
+inheritedIntersectionInput.a = "x";
+const inheritedIntersectionParsed = intersectionObjectSchema.parse(inheritedIntersectionInput);
 const nestedIntersectionSchema = z.intersection(
   z.object({ nested: z.object({ a: z.string() }), shared: z.literal("same") }),
   z.object({ nested: z.object({ b: z.number() }), shared: z.literal("same") }),
@@ -870,6 +878,8 @@ const arrayIntersectionConflictSchema = z.intersection(
 );
 print("composition", {
   intersection: intersectionObjectSchema.parse({ a: "x", b: 1 }),
+  inheritedIntersection: inheritedIntersectionParsed,
+  inheritedIntersectionOwnB: Object.prototype.hasOwnProperty.call(inheritedIntersectionParsed, "b"),
   nestedIntersection: nestedIntersectionSchema.parse({ nested: { a: "x", b: 1 }, shared: "same" }),
   conflictingIntersection: issueMetadataFromResult(conflictingIntersectionSchema.safeParse("x")),
   arrayIntersectionConflict: issueMetadataFromResult(arrayIntersectionConflictSchema.safeParse("x")),
