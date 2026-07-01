@@ -755,6 +755,11 @@ inheritedRecordInput.own = 1;
 const inheritedRecordParsed = z.record(z.number()).parse(inheritedRecordInput);
 const inheritedRecordInvalidInput = Object.create({ inherited: 2, badInherited: "x" });
 inheritedRecordInvalidInput.own = 1;
+const recordHiddenSymbol = Symbol("record-hidden");
+const recordHiddenInput: Record<string | symbol, unknown> = { own: 1 };
+Object.defineProperty(recordHiddenInput, "hidden", { value: 2, enumerable: false });
+recordHiddenInput[recordHiddenSymbol] = 3;
+const recordHiddenParsed = z.record(z.number()).parse(recordHiddenInput);
 const recordMetadataSchema = z.record(z.string(), z.number());
 const mapMetadataSchema = z.map(z.string(), z.number());
 const setMinMetadataSchema = z.set(z.string()).min(1);
@@ -780,6 +785,9 @@ print("collections", {
   inheritedRecord: inheritedRecordParsed,
   inheritedRecordOwn: Object.prototype.hasOwnProperty.call(inheritedRecordParsed, "inherited"),
   inheritedRecordIssue: collectionIssueSummary(z.record(z.number()).safeParse(inheritedRecordInvalidInput)),
+  hiddenSymbolRecord: recordHiddenParsed,
+  hiddenSymbolRecordHasHidden: Object.prototype.hasOwnProperty.call(recordHiddenParsed, "hidden"),
+  hiddenSymbolRecordSymbols: Object.getOwnPropertySymbols(recordHiddenParsed).length,
   map: Array.from(parsedMap.entries()),
   mapKeyFail: z.map(z.string().min(2), z.number()).safeParse(new Map([["a", 1]])).success,
   mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,
