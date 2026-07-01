@@ -1,4 +1,5 @@
-import { z } from "zod";
+import zDefault, { z } from "zod";
+import * as zNamespace from "zod";
 import { z as z3 } from "zod/v3";
 
 function print(label: string, value: unknown): void {
@@ -136,6 +137,10 @@ print("packageExports", {
     schemaInstance: z.string() instanceof z.Schema,
     brand: typeof z.BRAND,
     brandDescription: z.BRAND.description,
+    defaultEqualsNamed: zDefault === z,
+    namespaceHasZ: zNamespace.z === z,
+    namespaceDefaultEqualsNamed: zNamespace.default === z,
+    namespaceString: zNamespace.string().parse("namespace"),
   },
   names: [z.ZodString.name, z.ZodNumber.name, z.ZodObject.name, z.ZodError.name],
 });
