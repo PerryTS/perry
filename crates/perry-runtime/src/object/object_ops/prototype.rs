@@ -417,6 +417,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return proto;
                     }
                 }
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let synth_proto =
+                        super::super::class_registry::class_prototype_object((*obj).class_id);
+                    if !synth_proto.is_null() {
+                        return f64::from_bits(
+                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                        );
+                    }
+                }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
                 }
@@ -449,27 +458,6 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         )
                     {
                         return proto;
-                    }
-                    // #3986: `Object.create(proto)` and `new F()` (a plain
-                    // function ctor, whose instances carry a synthetic
-                    // function-prototype class id) record the actual
-                    // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
-                    // keyed by that synthetic class id. Return the exact stored
-                    // pointer so `Object.getPrototypeOf(o) === proto` holds by
-                    // identity (test262 built-ins/Object/create/15.2.3.5-*,
-                    // S9.9 ToObject identity). Declared ES classes use the
-                    // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
-                    // above, so this does not perturb the
-                    // `getPrototypeOf(instance) === instance` model their
-                    // `.constructor` resolution relies on. Without this the
-                    // synthetic-class instance fell through to the
-                    // `return obj_value` self-prototype fallback below.
-                    let synth_proto =
-                        super::super::class_registry::class_prototype_object((*obj).class_id);
-                    if !synth_proto.is_null() {
-                        return f64::from_bits(
-                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
-                        );
                     }
                 }
                 // A native-module namespace object (`require("path")` etc.,
@@ -550,6 +538,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 }
                 return function_prototype_or_null();
             }
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                let synth_proto =
+                    super::super::class_registry::class_prototype_object((*obj).class_id);
+                if !synth_proto.is_null() {
+                    return f64::from_bits(
+                        crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                    );
+                }
+            }
             if let Some(proto) = constructor_dynamic_prototype(obj) {
                 return proto;
             }
@@ -574,27 +571,6 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     )
                 {
                     return proto;
-                }
-                // #3986: `Object.create(proto)` and `new F()` (a plain
-                // function ctor, whose instances carry a synthetic
-                // function-prototype class id) record the actual
-                // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
-                // keyed by that synthetic class id. Return the exact stored
-                // pointer so `Object.getPrototypeOf(o) === proto` holds by
-                // identity (test262 built-ins/Object/create/15.2.3.5-*,
-                // S9.9 ToObject identity). Declared ES classes use the
-                // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
-                // above, so this does not perturb the
-                // `getPrototypeOf(instance) === instance` model their
-                // `.constructor` resolution relies on. Without this the
-                // synthetic-class instance fell through to the
-                // `return obj_value` self-prototype fallback below.
-                let synth_proto =
-                    super::super::class_registry::class_prototype_object((*obj).class_id);
-                if !synth_proto.is_null() {
-                    return f64::from_bits(
-                        crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
-                    );
                 }
                 // A native-module namespace object (`require("path")` etc.,
                 // class_id NATIVE_MODULE_CLASS_ID, the `__module__`-tagged

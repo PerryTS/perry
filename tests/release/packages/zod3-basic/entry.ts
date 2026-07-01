@@ -750,6 +750,11 @@ cloneSetParsedValue.id = 2;
 const cloneDateInput = new Date("2020-01-02T00:00:00.000Z");
 const cloneDateParsed = z.date().parse(cloneDateInput);
 cloneDateParsed.setUTCFullYear(2021);
+const inheritedRecordInput = Object.create({ inherited: 2 });
+inheritedRecordInput.own = 1;
+const inheritedRecordParsed = z.record(z.number()).parse(inheritedRecordInput);
+const inheritedRecordInvalidInput = Object.create({ inherited: 2, badInherited: "x" });
+inheritedRecordInvalidInput.own = 1;
 const recordMetadataSchema = z.record(z.string(), z.number());
 const mapMetadataSchema = z.map(z.string(), z.number());
 const setMinMetadataSchema = z.set(z.string()).min(1);
@@ -772,6 +777,9 @@ print("collections", {
   recordNumberKey: collectionIssueSummary(z.record(z.number(), z.string()).safeParse({ 1: "one" })),
   recordNumericStringKey: z.record(z.string().regex(/^\d+$/), z.string()).parse({ 1: "one" }),
   recordNumericStringFail: collectionIssueSummary(z.record(z.string().regex(/^\d+$/), z.string()).safeParse({ abc: "bad" })),
+  inheritedRecord: inheritedRecordParsed,
+  inheritedRecordOwn: Object.prototype.hasOwnProperty.call(inheritedRecordParsed, "inherited"),
+  inheritedRecordIssue: collectionIssueSummary(z.record(z.number()).safeParse(inheritedRecordInvalidInput)),
   map: Array.from(parsedMap.entries()),
   mapKeyFail: z.map(z.string().min(2), z.number()).safeParse(new Map([["a", 1]])).success,
   mapFail: z.map(z.string(), z.number()).safeParse(new Map([["bad", "x"]])).success,

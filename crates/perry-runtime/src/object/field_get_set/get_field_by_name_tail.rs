@@ -1336,6 +1336,15 @@ pub(crate) fn get_field_by_name_object_tail(
                     let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
                     return JSValue::from_bits(v.to_bits());
                 }
+                if class_id != 0 {
+                    let receiver =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    if let Some(v) = super::super::class_registry::resolve_proto_chain_field_with_receiver(
+                        class_id, key, receiver,
+                    ) {
+                        return v;
+                    }
+                }
                 if let Some(func_value) =
                     super::super::class_registry::function_value_for_class_id(class_id)
                 {
