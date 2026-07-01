@@ -1270,6 +1270,19 @@ const argsOnlyFunctionMetadataSchema = z.function().args(z.string());
 const returnsOnlyFunctionMetadataSchema = z.function().returns(z.number());
 const asyncValidatedFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async (value) => value.trim().length);
 const asyncInvalidReturnFn = z.function().args(z.string()).returns(z.promise(z.number())).implement(async () => "bad" as unknown as number);
+const functionCloneInput = { nested: { id: 1 } };
+let functionCloneSeenArg: { nested: { id: number } } | undefined;
+const functionCloneValidatedFn = z
+  .function()
+  .args(z.object({ nested: z.object({ id: z.number() }) }))
+  .returns(z.object({ nested: z.object({ id: z.number() }) }))
+  .implement((value) => {
+    functionCloneSeenArg = value;
+    value.nested.id = 2;
+    return value;
+  });
+const functionCloneReturned = functionCloneValidatedFn(functionCloneInput);
+functionCloneReturned.nested.id = 3;
 const functionNestedIssueCount = (issue: z.ZodIssue) => {
   if (issue.code === "invalid_arguments") {
     return issue.argumentsError.issues.length;
@@ -1317,6 +1330,14 @@ print("function", {
   restValid: restValidatedFn("ab", 1, 2, 3),
   restInvalid: functionArgumentIssuePaths(() => (restValidatedFn as unknown as (...values: unknown[]) => number)("ab", 1, "x")),
   asyncValid: await asyncValidatedFn(" salmon "),
+  cloneSemantics: {
+    argIdentity: functionCloneSeenArg !== functionCloneInput,
+    nestedArgIdentity: functionCloneSeenArg?.nested !== functionCloneInput.nested,
+    source: functionCloneInput,
+    returnIdentity: functionCloneReturned !== functionCloneSeenArg,
+    nestedReturnIdentity: functionCloneReturned.nested !== functionCloneSeenArg?.nested,
+    returned: functionCloneReturned,
+  },
   parameters: functionSchema.parameters().items.length,
   returnType: functionSchema.returnType().safeParse(true).success,
   invalidArgs: (() => {
