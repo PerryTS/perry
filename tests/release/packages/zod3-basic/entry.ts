@@ -299,6 +299,9 @@ print("primitiveMetadata", {
 const colorEnum = z.enum(["red", "blue", "green"]);
 const literalReady = z.literal("ready");
 const nativeTextEnum = z.nativeEnum({ A: "a", B: "b" } as const);
+const nativeMixedEnumObject = { Text: "text", Zero: 0, One: 1, 0: "Zero", 1: "One" } as const;
+const nativeMixedEnum = z.nativeEnum(nativeMixedEnumObject);
+const nativeMixedReverseResult = nativeMixedEnum.safeParse("Zero");
 const enumRequiredResult = z
   .enum(["red", "blue"], { required_error: "need color", invalid_type_error: "bad color" })
   .safeParse(undefined);
@@ -330,8 +333,11 @@ print("literals.enums", {
   enumInvalidTypeMessage: enumInvalidTypeResult.success ? "ok" : enumInvalidTypeResult.error.issues[0].message,
   nativeEnum: nativeTextEnum.parse("a"),
   nativeEnumNumber: z.nativeEnum({ A: 1, B: 2 } as const).parse(2),
+  nativeEnumMixed: [nativeMixedEnum.parse("text"), nativeMixedEnum.parse(0), nativeMixedEnum.parse(1)],
+  nativeEnumReverseRejected: issueMetadataFromResult(nativeMixedReverseResult),
   nativeEnumTypeName: nativeTextEnum._def.typeName,
   nativeEnumKeys: Object.keys(nativeTextEnum.enum).join("|"),
+  nativeEnumMixedKeys: Object.keys(nativeMixedEnum.enum).join("|"),
 });
 
 const stringSchema = z
