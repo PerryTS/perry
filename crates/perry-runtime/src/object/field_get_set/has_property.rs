@@ -462,10 +462,26 @@ unsafe fn ordinary_has_property(
             break;
         }
         last_valid = cur;
-        // Own data / overflow key present (value-agnostic: `delete` removes the
-        // key, so a present key — even one holding `undefined` — is an own
-        // property).
-        if super::super::own_key_present(cur as *mut ObjectHeader, key) {
+        // A prototype hop can land on a real Array (`Foo.prototype = [1,2,3]`,
+        // test262 reduce/reduceRight `subclassed array` cases): its layout is
+        // `ArrayHeader { length, capacity }` + inline elements, NOT the
+        // `ObjectHeader.keys_array` shape `own_key_present` expects, so reading
+        // `(*cur).keys_array` off an array node finds garbage (or nothing) and
+        // every indexed/`"length"` lookup wrongly reports absent. Detect the
+        // GC type and route to the array-aware own-key check instead.
+        let cur_is_array = crate::value::addr_class::try_read_gc_header(cur as usize)
+            .is_some_and(|hdr| hdr.obj_type == crate::gc::GC_TYPE_ARRAY);
+        if cur_is_array {
+            if super::super::has_own_helpers::array_own_key_present(
+                cur as *const crate::array::ArrayHeader,
+                key,
+            ) {
+                return true;
+            }
+        } else if super::super::own_key_present(cur as *mut ObjectHeader, key) {
+            // Own data / overflow key present (value-agnostic: `delete`
+            // removes the key, so a present key — even one holding
+            // `undefined` — is an own property).
             return true;
         }
         // Own accessor property (also mirrored into `keys_array`, but check the
