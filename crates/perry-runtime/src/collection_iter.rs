@@ -107,12 +107,21 @@ pub(crate) fn is_iterable(value: f64) -> bool {
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
         return true;
     }
-    let raw = js_nanbox_get_pointer(value);
+    let raw = if jsv.is_pointer() {
+        js_nanbox_get_pointer(value)
+    } else if value.to_bits() >> 48 == 0 && value.to_bits() > 0x10000 {
+        value.to_bits() as i64
+    } else {
+        0
+    };
     if raw == 0 {
         return false;
     }
     let addr = raw as usize;
     if crate::map::is_registered_map(addr) || crate::set::is_registered_set(addr) {
+        return true;
+    }
+    if crate::object::map_set_subclass::subclass_backing_for_default_iteration(value).is_some() {
         return true;
     }
     // A built-in iterator object — an array/map/set/string/buffer/iterator-

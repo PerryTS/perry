@@ -10,7 +10,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE, I32, I64};
 
 use super::helpers::scoped_static_method_name;
 use super::opts::CrossModuleCtx;
@@ -36,6 +36,25 @@ fn node_stream_parent_kind(
         if depth > 32 {
             break;
         }
+    }
+    None
+}
+
+fn map_set_default_super_kind<'a>(
+    classes: &HashMap<String, &'a perry_hir::Class>,
+    mut parent: Option<&'a str>,
+) -> Option<i32> {
+    while let Some(name) = parent {
+        match name {
+            "Map" => return Some(0),
+            "Set" => return Some(1),
+            _ => {}
+        }
+        let class = classes.get(name).copied()?;
+        if class.constructor.is_some() {
+            return None;
+        }
+        parent = class.extends_name.as_deref();
     }
     None
 }
@@ -488,6 +507,31 @@ pub(super) fn compile_method(
                     .unwrap_or_else(|| undef_lit.clone());
                 ctx.block()
                     .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
+            }
+            if let Some(kind) = map_set_default_super_kind(classes, class.extends_name.as_deref()) {
+                let undef_lit =
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let iterable = method
+                    .params
+                    .first()
+                    .and_then(|param| ctx.locals.get(&param.id).cloned())
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| undef_lit.clone());
+                let this_box = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| undef_lit.clone());
+                ctx.block().call(
+                    DOUBLE,
+                    "js_map_set_subclass_init",
+                    &[
+                        (DOUBLE, &this_box),
+                        (I32, &kind.to_string()),
+                        (DOUBLE, &iterable),
+                    ],
+                );
             }
 
             // Wall 51: a no-own-ctor class with a DYNAMIC / cross-module parent

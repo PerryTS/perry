@@ -799,9 +799,15 @@ const cloneInput = { nested: { label: "x" }, tags: ["a"] };
 const cloneParsed = z.object({ nested: z.object({ label: z.string() }), tags: z.array(z.string()) }).parse(cloneInput);
 cloneParsed.nested.label = "changed";
 cloneParsed.tags.push("b");
+class FixtureMap extends Map<string, { count: number }> {}
+class FixtureSet extends Set<{ id: number }> {}
 const cloneMapInput = new Map([["a", { count: 1 }]]);
 const cloneMapParsed = z.map(z.string(), z.object({ count: z.number() })).parse(cloneMapInput);
 cloneMapParsed.get("a")!.count = 2;
+const subclassMapInput = new FixtureMap([["a", { count: 1 }]]);
+const subclassMapParsed = z.map(z.string(), z.object({ count: z.number() })).parse(subclassMapInput);
+const subclassMapParsedValue = subclassMapParsed.get("a")!;
+subclassMapParsedValue.count = 2;
 const cloneMapKeyValueKey = { id: 1 };
 const cloneMapKeyValueValue = { count: 1 };
 const cloneMapKeyValueInput = new Map([[cloneMapKeyValueKey, cloneMapKeyValueValue]]);
@@ -817,6 +823,11 @@ const cloneSetInput = new Set([cloneSetValue]);
 const cloneSetParsed = z.set(z.object({ id: z.number() })).parse(cloneSetInput);
 const cloneSetParsedValue = Array.from(cloneSetParsed)[0];
 cloneSetParsedValue.id = 2;
+const subclassSetValue = { id: 1 };
+const subclassSetInput = new FixtureSet([subclassSetValue]);
+const subclassSetParsed = z.set(z.object({ id: z.number() })).parse(subclassSetInput);
+const subclassSetParsedValue = Array.from(subclassSetParsed)[0];
+subclassSetParsedValue.id = 2;
 const cloneDateInput = new Date("2020-01-02T00:00:00.000Z");
 const cloneDateParsed = z.date().parse(cloneDateInput);
 cloneDateParsed.setUTCFullYear(2021);
@@ -910,6 +921,11 @@ print("cloneSemantics", {
   mapIdentity: cloneMapParsed !== cloneMapInput,
   mapValueIdentity: cloneMapParsed.get("a") !== cloneMapInput.get("a"),
   mapSource: Array.from(cloneMapInput.entries()),
+  subclassMapIsMap: subclassMapParsed instanceof Map,
+  subclassMapIsSubclass: subclassMapParsed instanceof FixtureMap,
+  subclassMapValueIdentity: subclassMapParsedValue !== subclassMapInput.get("a"),
+  subclassMapSource: Array.from(subclassMapInput.entries()),
+  subclassMapParsed: Array.from(subclassMapParsed.entries()),
   mapObjectKeyIdentity: cloneMapKeyValueParsedKey !== cloneMapKeyValueKey,
   mapObjectValueIdentity: cloneMapKeyValueParsedValue !== cloneMapKeyValueValue,
   mapObjectSource: Array.from(cloneMapKeyValueInput.entries()),
@@ -917,6 +933,11 @@ print("cloneSemantics", {
   setIdentity: cloneSetParsed !== cloneSetInput,
   setValueIdentity: cloneSetParsedValue !== cloneSetValue,
   setSource: Array.from(cloneSetInput.values()),
+  subclassSetIsSet: subclassSetParsed instanceof Set,
+  subclassSetIsSubclass: subclassSetParsed instanceof FixtureSet,
+  subclassSetValueIdentity: subclassSetParsedValue !== subclassSetValue,
+  subclassSetSource: Array.from(subclassSetInput.values()),
+  subclassSetParsed: Array.from(subclassSetParsed.values()),
   dateIdentity: cloneDateParsed !== cloneDateInput,
   dateSource: cloneDateInput,
   dateParsed: cloneDateParsed,

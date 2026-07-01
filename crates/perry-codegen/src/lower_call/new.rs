@@ -77,6 +77,25 @@ fn inline_constructor_param_values(
     inline_constructor_param_values_with_class(ctx, params, lowered_args, None)
 }
 
+fn map_set_default_super_kind<'a>(
+    classes: &std::collections::HashMap<String, &'a perry_hir::Class>,
+    mut parent: Option<&'a str>,
+) -> Option<i32> {
+    while let Some(name) = parent {
+        match name {
+            "Map" => return Some(0),
+            "Set" => return Some(1),
+            _ => {}
+        }
+        let class = classes.get(name)?;
+        if class.constructor.is_some() {
+            return None;
+        }
+        parent = class.extends_name.as_deref();
+    }
+    None
+}
+
 /// Where a synthesized `__perry_cap_<id>` param's value comes from when the
 /// `new` site did not supply it as an appended arg.
 #[derive(Clone, Copy)]
@@ -1374,6 +1393,11 @@ fn lower_new_impl(
     } else {
         None
     };
+    let map_set_parent_kind = if !has_own_ctor && !has_imported_ctor {
+        map_set_default_super_kind(ctx.classes, class.extends_name.as_deref())
+    } else {
+        None
+    };
     let inherited_ctor_class: Option<String> = if !has_own_ctor && has_extends {
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
@@ -1900,6 +1924,30 @@ fn lower_new_impl(
                         (DOUBLE, &this_box),
                         (PTR, &args_ptr),
                         (I64, &args_len),
+                    ],
+                );
+            }
+        }
+        if !found_inherited_ctor {
+            if let Some(kind) = map_set_parent_kind {
+                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let iterable = lowered_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| undef_lit.clone());
+                let this_box = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| undef_lit.clone());
+                ctx.block().call(
+                    DOUBLE,
+                    "js_map_set_subclass_init",
+                    &[
+                        (DOUBLE, &this_box),
+                        (I32, &kind.to_string()),
+                        (DOUBLE, &iterable),
                     ],
                 );
             }
