@@ -1302,6 +1302,21 @@ pub(crate) fn get_field_by_name_object_tail(
                     return v;
                 }
                 let class_id = (*obj).class_id;
+                // #5834: WeakMap/WeakSet instances carry a reserved class_id
+                // (not a registered declared-class one), so none of the
+                // arms below resolve them and `(new WeakMap()).constructor`
+                // fell through to `undefined`.
+                if class_id == crate::weakref::CLASS_ID_WEAKMAP
+                    || class_id == crate::weakref::CLASS_ID_WEAKSET
+                {
+                    let name: &[u8] = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
+                        b"WeakMap"
+                    } else {
+                        b"WeakSet"
+                    };
+                    let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                    return JSValue::from_bits(v.to_bits());
+                }
                 if class_id != 0 && class_has_own_method(class_id, "constructor") {
                     let value = class_prototype_method_value_for_name(class_id, "constructor");
                     return JSValue::from_bits(value.to_bits());

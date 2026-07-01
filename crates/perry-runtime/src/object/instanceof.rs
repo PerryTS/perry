@@ -374,6 +374,12 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
     match name {
         "Map" => 0xFFFF0022,
         "Set" => 0xFFFF0023,
+        // #5834: kept in sync with the reserved ids in
+        // perry-codegen/src/expr/instance_misc1.rs so a dynamic
+        // `x instanceof ctorVar` (ctorVar holding WeakMap/WeakSet) resolves
+        // through the same runtime probe as the compile-time-literal form.
+        "WeakMap" => 0xFFFF002C,
+        "WeakSet" => 0xFFFF002D,
         "RegExp" => 0xFFFF0021,
         "ArrayBuffer" => 0xFFFF0025,
         "Array" => 0xFFFF0024,
@@ -1029,6 +1035,33 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
         }
         return false_val;
+    }
+    // #5834: `x instanceof WeakMap`/`WeakSet` for a REAL instance. These
+    // reserved ids (kept in sync with perry-codegen/src/expr/instance_misc1.rs)
+    // are distinct from the runtime `CLASS_ID_WEAKMAP`/`CLASS_ID_WEAKSET`
+    // stamped on actual instances (weakref.rs) — the subclass-chain walk above
+    // only matches a `class S extends WeakMap {}` instance (whose chain reaches
+    // this reserved id), so a genuine `new WeakMap()` still needs its own probe
+    // here, same shape as Map/Set above.
+    const CLASS_ID_WEAKMAP_RESERVED: u32 = 0xFFFF002C;
+    const CLASS_ID_WEAKSET_RESERVED: u32 = 0xFFFF002D;
+    if class_id == CLASS_ID_WEAKMAP_RESERVED {
+        return if crate::weakref::weak_class_id_from_receiver(value)
+            == Some(crate::weakref::CLASS_ID_WEAKMAP)
+        {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_WEAKSET_RESERVED {
+        return if crate::weakref::weak_class_id_from_receiver(value)
+            == Some(crate::weakref::CLASS_ID_WEAKSET)
+        {
+            true_val
+        } else {
+            false_val
+        };
     }
     if class_id == CLASS_ID_REGEXP {
         if jsval.is_pointer() {

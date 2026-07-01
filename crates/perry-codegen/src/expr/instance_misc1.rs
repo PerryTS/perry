@@ -392,11 +392,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,
-                // WeakMap / WeakSet / DataView — no runtime probe for real
-                // instances yet (those return false independently), but the
-                // reserved ids let a `class S extends WeakMap {}` subclass
-                // instance match via the class-chain walk in
-                // perry-runtime/src/object/instanceof.rs. Refs
+                // WeakMap / WeakSet: real instances match via a runtime probe
+                // (CLASS_ID_WEAKMAP/CLASS_ID_WEAKSET in weakref.rs, #5834) —
+                // see the matching arm in perry-runtime/src/object/instanceof.rs.
+                // DataView has no such probe yet (returns false independently),
+                // but this reserved id still lets a `class S extends DataView {}`
+                // subclass instance match via the class-chain walk. Refs
                 // class/subclass-builtins/subclass-{WeakMap,WeakSet,DataView}.
                 "DataView" => 0xFFFF002Bu32,
                 "WeakMap" => 0xFFFF002Cu32,
