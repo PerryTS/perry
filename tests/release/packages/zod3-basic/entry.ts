@@ -715,6 +715,9 @@ const cloneSetInput = new Set([cloneSetValue]);
 const cloneSetParsed = z.set(z.object({ id: z.number() })).parse(cloneSetInput);
 const cloneSetParsedValue = Array.from(cloneSetParsed)[0];
 cloneSetParsedValue.id = 2;
+const cloneDateInput = new Date("2020-01-02T00:00:00.000Z");
+const cloneDateParsed = z.date().parse(cloneDateInput);
+cloneDateParsed.setUTCFullYear(2021);
 const recordMetadataSchema = z.record(z.string(), z.number());
 const mapMetadataSchema = z.map(z.string(), z.number());
 const setMinMetadataSchema = z.set(z.string()).min(1);
@@ -795,6 +798,9 @@ print("cloneSemantics", {
   setIdentity: cloneSetParsed !== cloneSetInput,
   setValueIdentity: cloneSetParsedValue !== cloneSetValue,
   setSource: Array.from(cloneSetInput.values()),
+  dateIdentity: cloneDateParsed !== cloneDateInput,
+  dateSource: cloneDateInput,
+  dateParsed: cloneDateParsed,
 });
 
 const intersectionObjectSchema = z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() }));
