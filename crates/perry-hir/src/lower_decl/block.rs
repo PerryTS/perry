@@ -1351,8 +1351,54 @@ fn collect_refs_in_closure_bodies_expr(expr: &Expr, out: &mut std::collections::
 /// NOT recurse into nested blocks (those are block-scoped — their lets
 /// aren't hoisted to function-entry).
 pub fn collect_top_level_let_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
-    if let Stmt::Let { id, .. } = stmt {
-        out.insert(*id);
+    match stmt {
+        Stmt::Let { id, .. } => {
+            out.insert(*id);
+        }
+        // Array-destructuring bindings (`let [a, b] = it`) lower to the iterator
+        // protocol wrapped in a `Try` (see
+        // `destructuring::pattern_binding::lower_array_pattern_binding`), so the
+        // leaf `let`s live INSIDE the try body / its `if`s, not at the top level.
+        // Recurse into those so a hoisted FnDecl that captures a destructured var
+        // still gets its box preallocated at function entry. Without this, the
+        // hoisted closure captures the not-yet-assigned, unboxed slot and reads
+        // `undefined` — e.g. `const [K,_] = useState(0)` captured by a hoisted
+        // handler. Loops are intentionally NOT recursed: a per-iteration `let`
+        // needs a fresh box, not a single entry-prealloc.
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_top_level_let_ids_stmt(s, out);
+            }
+            if let Some(c) = catch {
+                for s in &c.body {
+                    collect_top_level_let_ids_stmt(s, out);
+                }
+            }
+            if let Some(f) = finally {
+                for s in f {
+                    collect_top_level_let_ids_stmt(s, out);
+                }
+            }
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            for s in then_branch {
+                collect_top_level_let_ids_stmt(s, out);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    collect_top_level_let_ids_stmt(s, out);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
