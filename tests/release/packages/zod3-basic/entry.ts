@@ -537,6 +537,9 @@ const maskedRequiredObject = maskedPartialObject.required({ requiredName: true }
 const inheritedObjectInput = Object.create({ inherited: "from-proto" });
 inheritedObjectInput.own = 1;
 const inheritedObjectParsed = z.object({ own: z.number(), inherited: z.string() }).parse(inheritedObjectInput);
+const inheritedPassthroughInput = Object.create({ inheritedExtra: "from-proto" });
+inheritedPassthroughInput.id = 1;
+const inheritedPassthroughParsed = z.object({ id: z.number() }).passthrough().parse(inheritedPassthroughInput);
 const partialObjectSchema = objectBase.partial();
 const partialNameObjectSchema = objectBase.partial({ name: true });
 const requiredObjectSchema = objectBase.required();
@@ -599,6 +602,9 @@ print("objects", {
   inheritedOwnOutput: Object.prototype.hasOwnProperty.call(inheritedObjectParsed, "inherited"),
   inheritedOwnInput: Object.prototype.hasOwnProperty.call(inheritedObjectInput, "inherited"),
   inheritedOutputPrototype: Object.getPrototypeOf(inheritedObjectParsed) === Object.prototype,
+  inheritedPassthrough: inheritedPassthroughParsed,
+  inheritedPassthroughOwn: Object.prototype.hasOwnProperty.call(inheritedPassthroughParsed, "inheritedExtra"),
+  inheritedStrict: z.object({ id: z.number() }).strict().safeParse(inheritedPassthroughInput).success,
   partial: partialObjectSchema.parse({ id: 1 }),
   partialName: partialNameObjectSchema.safeParse({ id: 1 }).success,
   deepPartial: deepPartialObjectSchema.parse({ nested: {} }),
