@@ -923,6 +923,13 @@ const readonlyArrayValue = z.array(z.string()).readonly().parse(["a"]);
 const readonlyTupleValue = z.tuple([z.string()]).readonly().parse(["a"]);
 const readonlyMapValue = z.map(z.string(), z.number()).readonly().parse(new Map([["a", 1]]));
 const readonlySetValue = z.set(z.string()).readonly().parse(new Set(["a"]));
+let defaultFactoryCalls = 0;
+let catchFactoryCalls = 0;
+const countedDefaultSchema = z.string().default(() => `fallback-${++defaultFactoryCalls}`);
+const countedCatchSchema = z.number().catch((ctx) => {
+  catchFactoryCalls += 1;
+  return ctx.error.issues.length + catchFactoryCalls;
+});
 const tryErrorName = (fn: () => void) => {
   try {
     fn();
@@ -941,11 +948,22 @@ print("modifiers", {
   default: z.string().default("fallback").parse(undefined),
   defaultFunction: z.string().default(() => "factory").parse(undefined),
   defaultSkipsPresent: z.string().default(() => "factory").parse("present"),
+  defaultFactorySequence: [
+    countedDefaultSchema.parse(undefined),
+    countedDefaultSchema.parse(undefined),
+    countedDefaultSchema.parse("present"),
+    defaultFactoryCalls,
+  ],
   defaultTransform: z.string().transform((value) => value.length).default("tuna").parse(undefined),
   removeDefault: z.string().default("fallback").removeDefault().safeParse(undefined).success,
   catch: z.number().catch(9).parse("bad"),
   catchTransform: z.string().transform((value) => value.length).catch(9).parse(123),
   catchFunction: z.number().catch((ctx) => ctx.error.issues.length).parse("bad"),
+  catchFactorySequence: [
+    countedCatchSchema.parse("bad"),
+    countedCatchSchema.parse(3),
+    catchFactoryCalls,
+  ],
   catchContext: z.number().catch((ctx) => `${ctx.input}:${ctx.error.issues[0].code}`).parse("bad"),
   removeCatch: z.number().catch(9).removeCatch().safeParse("bad").success,
   brand: z.string().brand<"FixtureId">().parse("id-1"),
