@@ -1428,6 +1428,9 @@ const createdError = z.ZodError.create([
   { code: z.ZodIssueCode.custom, path: ["create"], message: "created issue" },
 ]);
 const mappedFormat = objectBase.safeParse({ id: "x", name: 1 });
+const unionFormatted = z
+  .union([z.object({ a: z.string() }), z.object({ b: z.number() })])
+  .safeParse({ a: 1, b: "x" });
 print("errorMethods", {
   manualCount: manualError.issues.length,
   manualEmpty: manualError.isEmpty,
@@ -1440,6 +1443,12 @@ print("errorMethods", {
   mappedFormat: mappedFormat.success
     ? null
     : mappedFormat.error.format((issue) => `${issue.code}:${issue.message}`).id?._errors,
+  unionFormat: unionFormatted.success
+    ? null
+    : unionFormatted.error.format((issue) => `${issue.path.join(".")}:${issue.code}`),
+  unionFlatten: unionFormatted.success
+    ? null
+    : unionFormatted.error.flatten((issue) => `${issue.path.join(".")}:${issue.code}`),
 });
 
 const formattingResult = z
