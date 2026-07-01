@@ -809,6 +809,17 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
         });
     }
     let bits = match prop {
+        "constructor" => {
+            let ctor_name = if blob.file_name.is_some() {
+                "File"
+            } else {
+                "Blob"
+            };
+            return Some(perry_runtime::object::js_get_global_this_builtin_value(
+                ctor_name.as_ptr(),
+                ctor_name.len(),
+            ));
+        }
         "size" => return Some(blob.body.len() as f64),
         "type" => {
             let p =

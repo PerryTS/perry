@@ -627,6 +627,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if let Some(desc) = super::arguments_object_descriptor(obj, key_str) {
             return desc;
         }
+        if let Some(ref name) = key_rust {
+            if super::is_inherited_object_proto_shim_on_builtin_prototype(obj, name) {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+        }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -1159,6 +1164,12 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                     crate::array::js_array_push(result, JSValue::string_ptr(lk));
                     let named = crate::array::array_named_property_names(ap, false);
                     for name in &named {
+                        if super::is_inherited_object_proto_shim_on_builtin_prototype(
+                            ap as *const ObjectHeader,
+                            name,
+                        ) {
+                            continue;
+                        }
                         let k =
                             crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                         crate::array::js_array_push(result, JSValue::string_ptr(k));
@@ -1169,6 +1180,10 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                         for name in super::accessor_descriptor_keys_for_obj(ap as usize) {
                             if super::canonical_array_index(&name).is_some()
                                 || named.contains(&name)
+                                || super::is_inherited_object_proto_shim_on_builtin_prototype(
+                                    ap as *const ObjectHeader,
+                                    &name,
+                                )
                             {
                                 continue;
                             }
@@ -1285,6 +1300,13 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, pos(i));
+            if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                if let Ok(name) = std::str::from_utf8(b) {
+                    if super::is_inherited_object_proto_shim_on_builtin_prototype(obj, name) {
+                        continue;
+                    }
+                }
+            }
             if hide_private {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
                     if b.first() == Some(&b'#')

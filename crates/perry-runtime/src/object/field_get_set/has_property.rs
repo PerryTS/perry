@@ -41,6 +41,22 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
             && crate::value::addr_class::is_handle_band(addr)
         {
+            if key_val.is_any_string() {
+                unsafe {
+                    if let Some(dispatch) = super::super::class_registry::handle_property_dispatch()
+                    {
+                        let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                            as *const crate::StringHeader;
+                        let name_ptr =
+                            (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key_ptr).byte_len as usize;
+                        let result = dispatch(addr as i64, name_ptr, name_len);
+                        if result.to_bits() != crate::value::TAG_UNDEFINED {
+                            return nanbox_true;
+                        }
+                    }
+                }
+            }
             return nanbox_false;
         }
     }
