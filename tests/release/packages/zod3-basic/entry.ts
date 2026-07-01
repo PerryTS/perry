@@ -1,6 +1,7 @@
 import zDefault, { z } from "zod";
 import * as zNamespace from "zod";
-import { z as z3 } from "zod/v3";
+import z3Default, { z as z3 } from "zod/v3";
+import * as z3Namespace from "zod/v3";
 
 function print(label: string, value: unknown): void {
   console.log(`${label}=${JSON.stringify(value)}`);
@@ -1558,6 +1559,10 @@ const z3SubpathBad = z3.object({ id: z3.number() }).safeParse({ id: "bad" });
 print("packageSubpaths", {
   v3Default: z3SubpathResult.name,
   v3Issue: z3SubpathBad.success ? "ok" : z3SubpathBad.error.issues[0].code,
+  v3DefaultEqualsNamed: z3Default === z3,
+  v3NamespaceHasZ: z3Namespace.z === z3,
+  v3NamespaceDefaultEqualsNamed: z3Namespace.default === z3,
+  v3NamespaceParse: z3Namespace.string().parse("v3 namespace"),
 });
 
 const originalErrorMap = z.getErrorMap();

@@ -48,5 +48,5 @@ customErrors={"required":"required string","invalidType":"not a string","min":"t
 parseOptions={"object":[{"code":"too_small","path":"root.item","minimum":2,"inclusive":true,"exact":false,"type":"string"}],"union":[{"code":"invalid_union","path":"value"}],"async":[{"code":"too_small","path":"asyncRoot","minimum":2,"inclusive":true,"exact":false,"type":"string"}]}
 array=[{"id":1,"role":"admin"}]
 standard={"vendor":"zod","version":1,"ok":{"id":1,"name":"a"},"badIssues":2,"legacyOk":{"id":1,"name":"a"},"legacyBadIssues":["id:invalid_type","name:invalid_type"],"legacyAsyncOk":"ok","legacyAsyncBad":"Invalid input"}
-packageSubpaths={"v3Default":"subpath","v3Issue":"invalid_type"}
+packageSubpaths={"v3Default":"subpath","v3Issue":"invalid_type","v3DefaultEqualsNamed":true,"v3NamespaceHasZ":true,"v3NamespaceDefaultEqualsNamed":true,"v3NamespaceParse":"v3 namespace"}
 errorMap={"mapped":"global:invalid_type:Expected string, received number","schema":"schema invalid","local":"local:invalid_type:global:invalid_type:Expected string, received number","restored":true}
