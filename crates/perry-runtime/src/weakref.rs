@@ -149,6 +149,27 @@ fn is_valid_weak_target(value: f64) -> bool {
         return true;
     }
 
+    // #1545: a Web Stream handle (ReadableStream/WritableStream/...) does
+    // NOT travel as a POINTER_TAG value — it is a raw, un-NaN-boxed finite
+    // f64 holding the stream id in the `[0x100000, 0x200000)` band. It still
+    // denotes a real stream object, which CanBeHeldWeakly (ES2023): React's
+    // SSR `renderToReadableStream` path keys an internal WeakMap by the
+    // stream. Without this it threw "Invalid value used as weak map key" and
+    // 500'd the Next.js dynamic-SSR routes. The stdlib `stream_handle_probe`
+    // confirms a *live registered* stream, so a genuine plain number that
+    // merely happens to land in this band (and is not a stream) still
+    // throws, matching Node.
+    if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
+        let id = value as usize;
+        if crate::value::addr_class::is_stream_id_band(id) {
+            if let Some(probe) = crate::object::stream_handle_probe() {
+                if unsafe { probe(id) } {
+                    return true;
+                }
+            }
+        }
+    }
+
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return false;
@@ -1341,6 +1362,20 @@ mod tests {
             got.to_bits(),
             v.to_bits(),
             "symbol-keyed WeakMap entry must round-trip"
+        );
+
+        // #5437: a plain number is NOT weak-holdable, even one that lands in the
+        // Web Stream id band `[0x100000, 0x200000)`. Only a LIVE registered
+        // stream (confirmed by the stdlib `stream_handle_probe`, which is unset
+        // in a runtime-only test) is accepted — so a genuine numeric key still
+        // throws, matching Node. Guards against blanket-accepting the band.
+        assert!(
+            !is_valid_weak_target(5.0),
+            "plain number must not be weak-holdable"
+        );
+        assert!(
+            !is_valid_weak_target(0x10_0002u64 as f64),
+            "stream-band number with no live stream must not be weak-holdable"
         );
     }
 
