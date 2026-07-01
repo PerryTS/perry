@@ -1,3 +1,11 @@
+## v0.5.1212 — fix(runtime): #5839 — PlainYearMonth/PlainMonthDay toLocaleString reject ISO calendar
+
+Part of the #5839 Temporal test262 worklist (56 failing built-ins/Temporal + intl402/Temporal cases). Picked the `toLocaleString/calendar-mismatch.js` "even when instance has the ISO calendar" cluster as a coherent, self-contained fix.
+
+`Temporal.PlainYearMonth.prototype.toLocaleString` and `Temporal.PlainMonthDay.prototype.toLocaleString` shared the same calendar-mismatch check as `PlainDate`/`PlainDateTime`/`ZonedDateTime` (`assert_locale_string_calendar` in `crates/perry-runtime/src/temporal/options.rs`), which permits the instance calendar to be either `"iso8601"` or the locale's resolved calendar (`"gregory"`, Perry's default). Per ecma402 `HandleDateTimeTemporalYearMonth`/`HandleDateTimeTemporalMonthDay` (sup-intl.html #1132, #1157), year-month and month-day values do **not** get that ISO carve-out — unlike the other three types, an ISO-calendar `PlainYearMonth`/`PlainMonthDay` must always throw a `RangeError` against the locale-default calendar. Added `assert_locale_string_calendar_no_iso_carveout` (rejects everything but `"gregory"`) and switched `plain_year_month.rs`/`plain_month_day.rs` to call it instead.
+
+Fixes `intl402/Temporal/{PlainYearMonth,PlainMonthDay}/prototype/toLocaleString/calendar-mismatch.js`. The remaining 54 cases in the #5839 worklist are unrelated root causes (Duration rounding `ceil` behavior in the vendored `temporal_rs` crate, and full `dateStyle`/`timeStyle`/`hourCycle`/locale-calendar option threading through Temporal's `toLocaleString`, a materially larger change) — left as follow-ups.
+
 ## v0.5.1211 — fix(intl): #5840 — Intl.DateTimeFormat dayPeriod-only formatting (6 test262 cases)
 
 Fixes the `dayPeriod`-only subcluster of the #5840 DateTimeFormat worklist: `new Intl.DateTimeFormat('en', {dayPeriod: 'long'})` (with no other date/time component options) silently fell back to the default `M/D/YYYY` date string in both `format` and `formatToParts`, because `dtf_primary_mask` (`crates/perry-runtime/src/intl/date_collator.rs`) never counted `dayPeriod` toward its "has a time-dimension field" bit, and neither `format_components` nor `build_parts_from_components` had any dayPeriod rendering path at all — `dayPeriod` was only ever emitted as a byproduct of the AM/PM 12-hour clock.
