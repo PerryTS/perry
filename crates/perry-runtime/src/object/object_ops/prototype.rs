@@ -384,6 +384,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     }
                     return function_prototype_or_null();
                 }
+                if let Some(proto_bits) =
+                    super::super::prototype_chain::object_static_prototype(raw_addr as usize)
+                {
+                    return f64::from_bits(proto_bits);
+                }
                 // Fast [[Prototype]] for a DECLARED-class instance: resolve
                 // directly from the class id instead of the generic
                 // `constructor_dynamic_prototype` probe, which reads the

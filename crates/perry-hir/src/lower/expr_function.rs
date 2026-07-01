@@ -1063,7 +1063,12 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     .entry(cname.clone())
                     .and_modify(|d| *d = (*d).min(fn_body_scope_depth))
                     .or_insert(fn_body_scope_depth);
-                ctx.forward_class_names.insert(cname);
+                ctx.forward_class_names.insert(cname.clone());
+                if class_decl.class.super_class.is_some()
+                    && ctx.lookup_local_in_current_scope(&cname).is_none()
+                {
+                    ctx.define_local(cname, Type::Any);
+                }
             }
         }
     }

@@ -311,6 +311,45 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }));
                     }
                 }
+                let bind_fresh_class_value = class.extends_expr.is_some();
+                if bind_fresh_class_value {
+                    let captured_args: Vec<Expr> = ctx
+                        .lookup_class_captures(&class.name)
+                        .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
+                        .unwrap_or_default();
+                    let mut named_statics = Vec::new();
+                    let mut symbol_statics = Vec::new();
+                    for sf in &class.static_fields {
+                        if let Some(init) = &sf.init {
+                            if let Some(key) = &sf.key_expr {
+                                symbol_statics.push((key.clone(), init.clone()));
+                            } else {
+                                named_statics.push((sf.name.clone(), init.clone()));
+                            }
+                        }
+                    }
+                    if let Some(parent_expr) = &class.extends_expr {
+                        named_statics.push((
+                            "__perry_parent_value".to_string(),
+                            parent_expr.as_ref().clone(),
+                        ));
+                    }
+                    let class_local = ctx
+                        .lookup_local_in_current_scope(&class_name)
+                        .unwrap_or_else(|| ctx.define_local(class_name.clone(), Type::Any));
+                    result.push(Stmt::Let {
+                        id: class_local,
+                        name: class_name.clone(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassExprFresh {
+                            template: class.name.clone(),
+                            named_statics,
+                            symbol_statics,
+                            captured_args,
+                        }),
+                        mutable: false,
+                    });
+                }
                 // Static field initializers + static blocks for a
                 // function-nested class. The module-level path
                 // (`lower/stmt.rs`) emits these into `module.init`; here they
@@ -321,25 +360,27 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // classes initialized. Mirrors the top-level emission order
                 // (fields then blocks, per ClassDefinitionEvaluation), with
                 // lexical `this` in field initializers bound to the class ref.
-                for sf in &class.static_fields {
-                    if let Some(init) = &sf.init {
-                        let mut init_value = init.clone();
-                        crate::analysis::substitute_lexical_this_in_expr(
-                            &mut init_value,
-                            &Expr::ClassRef(class.name.clone()),
-                        );
-                        if let Some(key) = sf.key_expr.as_ref() {
-                            result.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
-                                class_name: class.name.clone(),
-                                key: Box::new(key.clone()),
-                                value: Box::new(init_value),
-                            }));
-                        } else {
-                            result.push(Stmt::Expr(Expr::StaticFieldSet {
-                                class_name: class.name.clone(),
-                                field_name: sf.name.clone(),
-                                value: Box::new(init_value),
-                            }));
+                if !bind_fresh_class_value {
+                    for sf in &class.static_fields {
+                        if let Some(init) = &sf.init {
+                            let mut init_value = init.clone();
+                            crate::analysis::substitute_lexical_this_in_expr(
+                                &mut init_value,
+                                &Expr::ClassRef(class.name.clone()),
+                            );
+                            if let Some(key) = sf.key_expr.as_ref() {
+                                result.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
+                                    class_name: class.name.clone(),
+                                    key: Box::new(key.clone()),
+                                    value: Box::new(init_value),
+                                }));
+                            } else {
+                                result.push(Stmt::Expr(Expr::StaticFieldSet {
+                                    class_name: class.name.clone(),
+                                    field_name: sf.name.clone(),
+                                    value: Box::new(init_value),
+                                }));
+                            }
                         }
                     }
                 }
@@ -371,7 +412,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // `local_class_aliases`) so the in-scope read resolves to the
                 // class. Gated on a pre-existing outer binding so working
                 // packages (no collision) are byte-for-byte unaffected.
-                if ctx.lookup_local(&class_name).is_some() {
+                if !bind_fresh_class_value && ctx.lookup_local(&class_name).is_some() {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
                     result.push(Stmt::Let {
                         id: class_local,

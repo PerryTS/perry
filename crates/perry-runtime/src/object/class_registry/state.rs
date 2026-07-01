@@ -507,17 +507,19 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
     }
 
-    let parent_proto_bits = get_parent_class_id(class_id)
-        .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
-        .and_then(|parent_id| {
-            builtin_prototype_value_for_class_id(parent_id)
-                .or_else(|| {
-                    let parent_proto = class_decl_prototype_value(parent_id);
-                    ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
-                })
-                .map(f64::to_bits)
-        })
-        .or_else(global_object_prototype_bits);
+    let parent_proto_bits = dynamic_parent_prototype_bits(class_id).or_else(|| {
+        get_parent_class_id(class_id)
+            .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+            .and_then(|parent_id| {
+                builtin_prototype_value_for_class_id(parent_id)
+                    .or_else(|| {
+                        let parent_proto = class_decl_prototype_value(parent_id);
+                        ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
+                    })
+                    .map(f64::to_bits)
+            })
+            .or_else(global_object_prototype_bits)
+    });
     if let Some(bits) = parent_proto_bits {
         super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
     }
@@ -530,17 +532,19 @@ pub(crate) fn refresh_class_decl_prototype_parent(class_id: u32) {
     if proto.is_null() {
         return;
     }
-    let parent_proto_bits = get_parent_class_id(class_id)
-        .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
-        .and_then(|parent_id| {
-            builtin_prototype_value_for_class_id(parent_id)
-                .or_else(|| {
-                    let parent_proto = class_decl_prototype_value(parent_id);
-                    ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
-                })
-                .map(f64::to_bits)
-        })
-        .or_else(global_object_prototype_bits);
+    let parent_proto_bits = dynamic_parent_prototype_bits(class_id).or_else(|| {
+        get_parent_class_id(class_id)
+            .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+            .and_then(|parent_id| {
+                builtin_prototype_value_for_class_id(parent_id)
+                    .or_else(|| {
+                        let parent_proto = class_decl_prototype_value(parent_id);
+                        ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
+                    })
+                    .map(f64::to_bits)
+            })
+            .or_else(global_object_prototype_bits)
+    });
     if let Some(bits) = parent_proto_bits {
         super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
     }
@@ -552,6 +556,33 @@ pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Op
     }
     let proto = class_decl_prototype_value(class_id);
     ((proto.to_bits() >> 48) == 0x7FFD).then_some(proto)
+}
+
+fn dynamic_parent_prototype_bits(class_id: u32) -> Option<u64> {
+    let parent = js_get_dynamic_parent_value(class_id);
+    if let Some(parent_cid) = class_ref_id(parent) {
+        if parent_cid == 0 || parent_cid == class_id {
+            return None;
+        }
+        let parent_proto = class_decl_prototype_value(parent_cid);
+        return ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto.to_bits());
+    }
+
+    let value = JSValue::from_bits(parent.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let ptr = value.as_pointer::<ObjectHeader>();
+    if ptr.is_null() {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
+    let proto = js_object_get_field_by_name_f64(ptr, key);
+    if unsafe { value_is_object_like(proto) } {
+        Some(proto.to_bits())
+    } else {
+        None
+    }
 }
 
 pub(crate) fn global_object_prototype_bits() -> Option<u64> {
