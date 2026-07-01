@@ -223,6 +223,16 @@ pub unsafe extern "C" fn js_new_function_construct(
     if crate::builtins::boxed_primitive_payload(func_value).is_some() {
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
+    // `new (new RegExp())` — a RegExp instance has no [[Construct]] internal
+    // method (Test262 `S15.10.7_A2_T2`). Without this it fell through to the
+    // empty-object construction fallback and silently produced `{}` instead
+    // of throwing.
+    {
+        let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+        if jv.is_pointer() && crate::regex::is_registered_regex(jv.as_pointer::<u8>() as usize) {
+            super::super::object_ops::throw_object_type_error(b"is not a constructor");
+        }
+    }
     // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
