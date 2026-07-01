@@ -1464,6 +1464,11 @@ print("asyncIssues", {
 const promiseSchema = z.promise(z.number());
 const promiseSafeResult = promiseSchema.safeParse(Promise.resolve(8));
 const promiseObjectValue = await z.promise(z.object({ id: z.number() })).parse(Promise.resolve({ id: 1 }));
+const promiseCloneInput = { nested: { id: 1 } };
+const promiseCloneParsed = await z
+  .promise(z.object({ nested: z.object({ id: z.number() }) }))
+  .parse(Promise.resolve(promiseCloneInput));
+promiseCloneParsed.nested.id = 2;
 print("promiseSchemas", {
   safeParse: promiseSafeResult.success,
   safeValue: promiseSafeResult.success ? await promiseSafeResult.data : null,
@@ -1472,6 +1477,10 @@ print("promiseSchemas", {
   nonPromise: issueMetadataFromResult(promiseSchema.safeParse(1)),
   inner: await issueMetadataFromThrown(() => promiseSchema.parse(Promise.resolve("x"))),
   object: promiseObjectValue,
+  cloneIdentity: promiseCloneParsed !== promiseCloneInput,
+  cloneNestedIdentity: promiseCloneParsed.nested !== promiseCloneInput.nested,
+  cloneSource: promiseCloneInput,
+  cloneParsed: promiseCloneParsed,
   methodType: z.number().promise()._def.type.constructor.name,
 });
 
