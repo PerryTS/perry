@@ -93,7 +93,9 @@ pub extern "C" fn js_regexp_compile_value(
             pattern_str
         ));
     }
-    if has_out_of_order_double_dash_class_range(pattern_str) {
+    // `--` is the real ClassSetExpression subtraction operator under the `v`
+    // flag (UTS #51) — see the matching comment in `js_regexp_new`.
+    if !flags_str.contains('v') && has_out_of_order_double_dash_class_range(pattern_str) {
         throw_regexp_syntax_error(&format!(
             "Invalid regular expression: /{}/: invalid pattern",
             pattern_str
