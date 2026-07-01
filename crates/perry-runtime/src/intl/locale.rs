@@ -650,6 +650,7 @@ fn transform_instance(obj: *const ObjectHeader, transform: fn(&mut ParsedLocale)
 }
 
 extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    super::require_new_target("Locale");
     let tag_value = super::rest_arg(rest, 0);
     let options_value = super::rest_arg(rest, 1);
     let tag_js = JSValue::from_bits(tag_value.to_bits());
@@ -682,7 +683,7 @@ extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader, rest: f64)
     }
     apply_options(&mut parsed, options);
 
-    let proto = crate::closure::closure_get_dynamic_prop(closure as usize, "prototype");
+    let proto = super::constructor_target_prototype(closure);
     make_locale_instance(proto.to_bits(), &parsed)
 }
 
