@@ -1101,6 +1101,7 @@ const validatedFn = z.function().args(z.string()).returns(z.number()).implement(
 const strictValidatedFn = z.function().args(z.string()).returns(z.number()).strictImplement((value) => value.trim().length);
 const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
 const strictInvalidReturnFn = z.function().args(z.string()).returns(z.number()).strictImplement(() => "bad" as unknown as number);
+const validatedAliasFn = z.function().args(z.string()).returns(z.number()).validate((value) => value.trim().length);
 const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 const functionMetadataSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 const defaultFunctionMetadataSchema = z.function();
@@ -1140,6 +1141,7 @@ const invalidAsyncReturn = await (async () => {
 print("function", {
   valid: validatedFn(" tuna "),
   strictValid: strictValidatedFn(" trout "),
+  validateAlias: validatedAliasFn(" bass "),
   asyncValid: await asyncValidatedFn(" salmon "),
   parameters: functionSchema.parameters().items.length,
   returnType: functionSchema.returnType().safeParse(true).success,
