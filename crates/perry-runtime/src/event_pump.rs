@@ -525,6 +525,14 @@ pub extern "C" fn js_wait_for_event() {
                 std::thread::sleep(SPIN_THROTTLE_SLEEP);
             }
         }
+        // A due timer pins the budget at 0, but native work (a fetch's reqwest
+        // `send`, sibling fetches, net/ws round-trips) still only advances inside
+        // the wait-driver tick. A hot timer loop would otherwise take this branch
+        // every iteration and starve that work — the same starvation the
+        // notified/microtask path above guards against. Give it the same brief
+        // driven turn. No-op (atomic loads) when no driver is registered or
+        // nothing native is in flight. #1114: this path does NOT reset the streak.
+        invoke_wait_driver_fast();
         return;
     }
     // Unified single-thread async model: when perry-stdlib has installed a
