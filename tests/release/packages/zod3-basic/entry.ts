@@ -1461,11 +1461,19 @@ print("array", summarySchema.parse([{ id: 1, role: "admin" }]));
 
 const standardOk = objectBase["~standard"].validate({ id: 1, name: "a" });
 const standardBad = objectBase["~standard"].validate({ id: "x", name: 1 });
+const legacyStandardOk = (objectBase as any)["~validate"]({ id: 1, name: "a" });
+const legacyStandardBad = (objectBase as any)["~validate"]({ id: "x", name: 1 });
+const legacyAsyncStandardOk = await (z.string().refine(async (value) => value === "ok") as any)["~validate"]("ok");
+const legacyAsyncStandardBad = await (z.string().refine(async (value) => value === "ok") as any)["~validate"]("bad");
 print("standard", {
   vendor: objectBase["~standard"].vendor,
   version: objectBase["~standard"].version,
   ok: "value" in standardOk ? standardOk.value : null,
   badIssues: "issues" in standardBad ? standardBad.issues?.length : 0,
+  legacyOk: "value" in legacyStandardOk ? legacyStandardOk.value : null,
+  legacyBadIssues: "issues" in legacyStandardBad ? legacyStandardBad.issues?.map((issue: z.ZodIssue) => `${issue.path.join(".")}:${issue.code}`) : [],
+  legacyAsyncOk: "value" in legacyAsyncStandardOk ? legacyAsyncStandardOk.value : null,
+  legacyAsyncBad: "issues" in legacyAsyncStandardBad ? legacyAsyncStandardBad.issues?.[0].message : null,
 });
 
 const z3SubpathResult = z3.object({ id: z3.number(), name: z3.string().default("subpath") }).parse({ id: 1 });
