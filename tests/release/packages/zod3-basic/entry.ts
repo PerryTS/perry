@@ -469,6 +469,12 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), value: z.string() }),
   z.object({ type: z.literal("count"), value: z.number().int() }),
 ]);
+const multiValueDiscriminatedSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.enum(["text", "markdown"]), body: z.string() }),
+  z.object({ kind: z.literal("count"), value: z.number() }),
+]);
+const multiValueInvalidKind = multiValueDiscriminatedSchema.safeParse({ kind: "image", body: "x" });
+const multiValueInvalidBranch = multiValueDiscriminatedSchema.safeParse({ kind: "text", body: 1 });
 const unionBranchFailure = z
   .union([
     z.object({ kind: z.literal("a"), value: z.string() }),
@@ -484,6 +490,13 @@ print("discriminatedUnion.options", {
   discriminator: eventSchema.discriminator,
   optionKeys: Array.from(eventSchema.optionsMap.keys()).join("|"),
   typeName: eventSchema._def.typeName,
+  multiValue: [
+    multiValueDiscriminatedSchema.parse({ kind: "text", body: "hello" }),
+    multiValueDiscriminatedSchema.parse({ kind: "markdown", body: "**hello**" }),
+  ],
+  multiValueOptionKeys: Array.from(multiValueDiscriminatedSchema.optionsMap.keys()).join("|"),
+  multiValueInvalidKind: issueMetadataFromResult(multiValueInvalidKind),
+  multiValueInvalidBranch: issueMetadataFromResult(multiValueInvalidBranch),
 });
 
 const primitiveSchema = z.union([z.string().regex(/^id-/), z.number().int()]);
