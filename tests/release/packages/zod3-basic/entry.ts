@@ -972,7 +972,12 @@ print("modifiers", {
     catch: [catchMetadataSchema._def.typeName, catchMetadataSchema._def.catchValue({ error: null, input: "bad" })],
     promise: [promiseMetadataSchema._def.typeName, promiseMetadataSchema._def.type.constructor.name],
     readonly: [readonlyMetadataSchema._def.typeName, readonlyMetadataSchema._def.innerType.constructor.name],
-    branded: [brandedMetadataSchema._def.typeName, brandedMetadataSchema.unwrap().constructor.name],
+    branded: [
+      brandedMetadataSchema._def.typeName,
+      brandedMetadataSchema.unwrap().constructor.name,
+      brandedMetadataSchema instanceof z.ZodBranded,
+      z.ZodBranded.name,
+    ],
   },
 });
 
