@@ -513,6 +513,19 @@ unsafe fn ordinary_has_property(
             }
         }
     }
+    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
+    let proto = super::super::js_object_get_prototype_of(receiver);
+    let proto_bits = proto.to_bits();
+    if proto_bits != crate::value::TAG_NULL
+        && proto_bits != crate::value::TAG_UNDEFINED
+        && proto_bits != receiver.to_bits()
+    {
+        let key_value = crate::value::js_nanbox_string(key as i64);
+        if crate::value::js_is_truthy(super::super::js_object_has_property(proto, key_value)) != 0 {
+            return true;
+        }
+    }
+
     // Inherited `Object.prototype` properties (`toString`, `hasOwnProperty`, …,
     // plus any user-assigned `Object.prototype` members).
     ordinary_object_prototype_property_value(last_valid, key).is_some()

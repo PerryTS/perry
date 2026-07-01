@@ -534,6 +534,9 @@ const maskedObjectBase = z.object({
 });
 const maskedPartialObject = maskedObjectBase.partial({ requiredName: true });
 const maskedRequiredObject = maskedPartialObject.required({ requiredName: true });
+const inheritedObjectInput = Object.create({ inherited: "from-proto" });
+inheritedObjectInput.own = 1;
+const inheritedObjectParsed = z.object({ own: z.number(), inherited: z.string() }).parse(inheritedObjectInput);
 const partialObjectSchema = objectBase.partial();
 const partialNameObjectSchema = objectBase.partial({ name: true });
 const requiredObjectSchema = objectBase.required();
@@ -591,6 +594,11 @@ print("objects", {
     name: "a",
     role: "user",
   }),
+  inheritedInput: inheritedObjectInput,
+  inheritedOutput: inheritedObjectParsed,
+  inheritedOwnOutput: Object.prototype.hasOwnProperty.call(inheritedObjectParsed, "inherited"),
+  inheritedOwnInput: Object.prototype.hasOwnProperty.call(inheritedObjectInput, "inherited"),
+  inheritedOutputPrototype: Object.getPrototypeOf(inheritedObjectParsed) === Object.prototype,
   partial: partialObjectSchema.parse({ id: 1 }),
   partialName: partialNameObjectSchema.safeParse({ id: 1 }).success,
   deepPartial: deepPartialObjectSchema.parse({ nested: {} }),
