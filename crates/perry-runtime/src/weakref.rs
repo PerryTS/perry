@@ -789,12 +789,15 @@ pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 /// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
 /// #1757/#1758). `js_native_call_method` calls this for any heap object;
 /// it returns `Some(result)` only when `obj` carries the reserved
-/// WeakMap/WeakSet `class_id` and `method_name` is one of their methods,
-/// and `None` otherwise so the caller falls through to its normal
+/// WeakMap/WeakSet `class_id` and `method_name` is one of *that class's own*
+/// methods, and `None` otherwise so the caller falls through to its normal
 /// dispatch. `receiver` is the NaN-boxed f64 the `js_weak*` helpers expect.
 ///
-/// Unknown methods on a known WeakMap/WeakSet resolve to `undefined`,
-/// mirroring the Map/Set registry arms in the dynamic dispatcher.
+/// A method that isn't one of the receiver's own (e.g. `"add"` on a WeakMap,
+/// or any name outside `set`/`add`/`get`/`has`/`delete`) falls through to
+/// `None` so the ordinary property lookup resolves it — correctly missing
+/// and raising `TypeError: ... is not a function` on a call, rather than
+/// this function silently answering `undefined`.
 ///
 /// # Safety
 /// `obj` must be a valid, readable `ObjectHeader` pointer (the caller has
@@ -817,18 +820,25 @@ pub unsafe fn try_weak_method_dispatch(
     };
     // #5834: dispatch regardless of arg count, padding missing positions with
     // `undefined` — mirrors calling the real thunks reflectively. Arity-gating
-    // these arms let `s.add()` (zero args) fall through to the `_ => undefined`
-    // no-op, skipping `js_weakset_add`'s CanBeHeldWeakly check entirely (it
-    // must throw `TypeError` since `undefined` cannot be held weakly).
+    // these arms let `s.add()` (zero args) fall through to a no-op, skipping
+    // `js_weakset_add`'s CanBeHeldWeakly check entirely (it must throw
+    // `TypeError` since `undefined` cannot be held weakly).
+    //
+    // Also gate each method by the receiver's actual class: `"set"`/`"get"`
+    // only exist on WeakMap, `"add"` only on WeakSet (`"has"`/`"delete"` are
+    // shared). Without this a WeakMap receiver could reach `js_weakset_add`
+    // for a `.add(...)` call (and vice versa) instead of falling through to
+    // the ordinary property lookup, which correctly resolves the missing
+    // method to `undefined` and throws `TypeError: ... is not a function`.
     let undef = f64::from_bits(TAG_UNDEFINED);
     let arg = |i: usize| args.get(i).copied().unwrap_or(undef);
-    let result = match method_name {
-        "set" => js_weakmap_set(receiver, arg(0), arg(1)),
-        "add" => js_weakset_add(receiver, arg(0)),
-        "get" => js_weakmap_get(receiver, arg(0)),
-        "has" => js_weakmap_has(receiver, arg(0)),
-        "delete" => js_weakmap_delete(receiver, arg(0)),
-        _ => undef,
+    let result = match (method_name, class_id) {
+        ("set", CLASS_ID_WEAKMAP) => js_weakmap_set(receiver, arg(0), arg(1)),
+        ("add", CLASS_ID_WEAKSET) => js_weakset_add(receiver, arg(0)),
+        ("get", CLASS_ID_WEAKMAP) => js_weakmap_get(receiver, arg(0)),
+        ("has", _) => js_weakmap_has(receiver, arg(0)),
+        ("delete", _) => js_weakmap_delete(receiver, arg(0)),
+        _ => return None,
     };
     Some(result)
 }
