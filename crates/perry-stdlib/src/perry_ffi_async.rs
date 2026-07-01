@@ -316,3 +316,16 @@ pub unsafe extern "C" fn perry_ffi_spawn_async(ctx: *mut c_void) {
     let future: BoxFuture = *unsafe { Box::from_raw(ctx as *mut BoxFuture) };
     async_bridge::runtime().spawn(future);
 }
+
+/// `perry_ffi_run_pending(budget_ms)` — drive the shared current-thread runtime
+/// for one bounded tick (see `perry-ffi::run_pending`). A synchronous native API
+/// that blocks the main thread waiting for data a spawned task delivers (e.g.
+/// `js_ws_wait_for_message`) calls this in its poll loop so the delivering task
+/// actually runs; in the unified single-thread model the runtime only advances
+/// while the main thread drives it. Safe on the main thread between ticks; must
+/// not be called from inside a spawned runtime task.
+#[no_mangle]
+pub extern "C" fn perry_ffi_run_pending(budget_ms: u64) {
+    async_bridge::ensure_pump_registered();
+    async_bridge::drive_pending(budget_ms);
+}

@@ -523,7 +523,11 @@ pub unsafe extern "C" fn js_ws_wait_for_message(handle: i64, timeout_ms: f64) ->
         if start.elapsed() >= timeout {
             return std::ptr::null_mut();
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Unified single-thread model: the WS reader task only advances while the
+        // main thread drives the runtime, so drive one bounded tick here (which
+        // runs the reader and delivers messages) instead of `std::thread::sleep`,
+        // which would block this thread and never let a message arrive.
+        perry_ffi::run_pending(10);
     }
 }
 
