@@ -745,10 +745,14 @@ pub struct LoweringContext {
     /// finishes (test262 `language/global-code/decl-func.js`,
     /// `language/global-code/decl-var.js`).
     pub(crate) saw_global_this_expr: bool,
-    /// #5833: names assigned anywhere in the module via a simple identifier
-    /// target (`name = ...`/`name++` etc. — see
-    /// `collect_assigned_function_binding_candidates`). Consulted when
-    /// lowering a top-level `class` declaration: a class name is normally
+    /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
+    /// expression statement — see
+    /// `collect_direct_top_level_reassigned_identifiers`, which deliberately
+    /// does NOT reuse the deeper, name-only (no scope tracking)
+    /// `collect_assigned_function_binding_candidates` scan: that would
+    /// false-positive on a same-named binding shadowed in a nested block.
+    /// Consulted when lowering a top-level `class` declaration: a class name
+    /// is normally
     /// resolved purely through the class registry (`ctx.lookup_class` /
     /// `Expr::ClassRef`), with no backing local variable, so every read
     /// re-derives the same class-id value and every write is a silent no-op
