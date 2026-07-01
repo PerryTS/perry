@@ -1136,7 +1136,16 @@ print("modifiers", {
 
 type Tree = { name: string; children?: Tree[] };
 const treeSchema: z.ZodType<Tree> = z.lazy(() => z.object({ name: z.string(), children: z.array(treeSchema).optional() }));
-print("lazy", treeSchema.parse({ name: "root", children: [{ name: "leaf" }] }));
+const lazyTreeInput: Tree = { name: "root", children: [{ name: "leaf" }] };
+const lazyTreeParsed = treeSchema.parse(lazyTreeInput);
+lazyTreeParsed.children![0].name = "changed";
+print("lazy", {
+  parsed: treeSchema.parse({ name: "root", children: [{ name: "leaf" }] }),
+  cloneIdentity: lazyTreeParsed !== lazyTreeInput,
+  childCloneIdentity: lazyTreeParsed.children![0] !== lazyTreeInput.children![0],
+  source: lazyTreeInput,
+  mutated: lazyTreeParsed,
+});
 
 const lateNodeSchema: z.ZodType<any> = z.late.object(() => ({
   name: z.string(),
