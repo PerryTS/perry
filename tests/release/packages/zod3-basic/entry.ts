@@ -737,6 +737,24 @@ const tupleWithRest = z.tuple([z.string(), z.number()]).rest(z.boolean());
 const arrayMinMessage = z.array(z.string()).min(2, "need two").safeParse(["a"]);
 const arrayMaxMessage = z.array(z.string()).max(1, "too many").safeParse(["a", "b"]);
 const arrayLengthMessage = z.array(z.string()).length(2, "exactly two").safeParse(["a"]);
+const sparseArrayInput = ["a", , "c"] as (string | undefined)[];
+const sparseOptionalArrayParsed = z.array(z.string().optional()).parse(sparseArrayInput);
+const sparseRequiredArrayResult = z.array(z.string()).safeParse(sparseArrayInput);
+const inheritedArrayInput = ["a", , "c"] as string[];
+let inheritedArrayParsed: string[] = [];
+let inheritedTupleParsed: [string, string, string] | [] = [];
+Object.defineProperty(Array.prototype, "1", {
+  configurable: true,
+  enumerable: true,
+  writable: true,
+  value: "proto",
+});
+try {
+  inheritedArrayParsed = z.array(z.string()).parse(inheritedArrayInput);
+  inheritedTupleParsed = z.tuple([z.string(), z.string(), z.string()]).parse(inheritedArrayInput);
+} finally {
+  delete (Array.prototype as unknown as Record<string, unknown>)["1"];
+}
 print("arrays.tuples", {
   array: z.array(z.number()).min(2).max(3).parse([1, 2]),
   transformedArray: z.array(z.string().transform((value) => value.length)).parse(["aa", "bbb"]),
@@ -754,6 +772,13 @@ print("arrays.tuples", {
   minMessage: arrayMinMessage.success ? "ok" : arrayMinMessage.error.issues[0].message,
   maxMessage: arrayMaxMessage.success ? "ok" : arrayMaxMessage.error.issues[0].message,
   lengthMessage: arrayLengthMessage.success ? "ok" : arrayLengthMessage.error.issues[0].message,
+  sparseOptional: sparseOptionalArrayParsed,
+  sparseOptionalOwn1: Object.prototype.hasOwnProperty.call(sparseOptionalArrayParsed, "1"),
+  sparseRequiredIssue: issueMetadataFromResult(sparseRequiredArrayResult),
+  inheritedIndexArray: inheritedArrayParsed,
+  inheritedIndexArrayOwn1: Object.prototype.hasOwnProperty.call(inheritedArrayParsed, "1"),
+  inheritedIndexTuple: inheritedTupleParsed,
+  inheritedIndexTupleOwn1: Object.prototype.hasOwnProperty.call(inheritedTupleParsed, "1"),
   tuple: z.tuple([z.string(), z.number()]).parse(["a", 1]),
   tupleLengthIssue: tupleLengthIssue.success ? "ok" : tupleLengthIssue.error.issues[0].code,
   tupleRest: z.tuple([z.string()]).rest(z.number()).parse(["a", 1, 2]),
