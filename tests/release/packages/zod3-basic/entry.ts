@@ -554,6 +554,11 @@ const inheritedObjectParsed = z.object({ own: z.number(), inherited: z.string() 
 const inheritedPassthroughInput = Object.create({ inheritedExtra: "from-proto" });
 inheritedPassthroughInput.id = 1;
 const inheritedPassthroughParsed = z.object({ id: z.number() }).passthrough().parse(inheritedPassthroughInput);
+const nullProtoInput = Object.create(null) as Record<string, unknown>;
+nullProtoInput.id = 1;
+nullProtoInput.extra = "x";
+const nullProtoPassthroughParsed = z.object({ id: z.number() }).passthrough().parse(nullProtoInput);
+const nullProtoStrippedParsed = z.object({ id: z.number() }).parse(nullProtoInput);
 let getterOwnReads = 0;
 let getterInheritedReads = 0;
 const getterInput = Object.create({
@@ -636,6 +641,11 @@ print("objects", {
   inheritedPassthrough: inheritedPassthroughParsed,
   inheritedPassthroughOwn: Object.prototype.hasOwnProperty.call(inheritedPassthroughParsed, "inheritedExtra"),
   inheritedStrict: z.object({ id: z.number() }).strict().safeParse(inheritedPassthroughInput).success,
+  nullProto: nullProtoPassthroughParsed,
+  nullProtoStripped: nullProtoStrippedParsed,
+  nullProtoInputPrototype: Object.getPrototypeOf(nullProtoInput) === null,
+  nullProtoOutputPrototype: Object.getPrototypeOf(nullProtoPassthroughParsed) === Object.prototype,
+  nullProtoStrict: z.object({ id: z.number() }).strict().safeParse(nullProtoInput).success,
   getterInput: getterObjectParsed,
   getterPassthrough: getterPassthroughParsed,
   getterReads: [getterOwnReads, getterInheritedReads],
@@ -820,6 +830,7 @@ print("collections", {
   inheritedRecord: inheritedRecordParsed,
   inheritedRecordOwn: Object.prototype.hasOwnProperty.call(inheritedRecordParsed, "inherited"),
   inheritedRecordIssue: collectionIssueSummary(z.record(z.number()).safeParse(inheritedRecordInvalidInput)),
+  nullProtoRecord: z.record(z.union([z.number(), z.string()])).parse(nullProtoInput),
   hiddenSymbolRecord: recordHiddenParsed,
   hiddenSymbolRecordHasHidden: Object.prototype.hasOwnProperty.call(recordHiddenParsed, "hidden"),
   hiddenSymbolRecordSymbols: Object.getOwnPropertySymbols(recordHiddenParsed).length,
