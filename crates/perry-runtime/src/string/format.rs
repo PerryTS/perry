@@ -135,11 +135,16 @@ pub(crate) fn js_format_f64(value: f64) -> String {
         // matches Node's output).
         let abs = value.abs();
         if !(1e-6..1e21).contains(&abs) {
-            fix_exponent_format(&format!("{:e}", value))
+            format_short_exponential(value)
         } else {
             format!("{}", value)
         }
     }
+}
+
+fn format_short_exponential(value: f64) -> String {
+    let mut buf = ryu::Buffer::new();
+    fix_exponent_format(buf.format(value))
 }
 
 /// GC root scanner for the small-integer string cache.
@@ -589,9 +594,24 @@ fn format_number_for_js(value: f64) -> String {
         // ECMAScript NumberToString — see js_number_to_string for rationale.
         let abs = value.abs();
         if !(1e-6..1e21).contains(&abs) {
-            fix_exponent_format(&format!("{:e}", value))
+            format_short_exponential(value)
         } else {
             format!("{}", value)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::js_format_f64;
+
+    #[test]
+    fn formats_large_numbers_with_short_js_exponent() {
+        assert_eq!(
+            js_format_f64(3.4028234663852886e38),
+            "3.4028234663852886e+38"
+        );
+        assert_eq!(js_format_f64(1e21), "1e+21");
+        assert_eq!(js_format_f64(1e-7), "1e-7");
     }
 }

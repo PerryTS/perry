@@ -640,13 +640,7 @@ pub(super) unsafe fn dispatch_common(
                         } else {
                             payload
                         };
-                        let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
-                            (n as i64).to_string()
-                        } else {
-                            n.to_string()
-                        };
-                        let str_ptr =
-                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        let str_ptr = crate::string::js_number_to_string(n);
                         return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                     }
                     Some("Boolean") => {
@@ -697,12 +691,7 @@ pub(super) unsafe fn dispatch_common(
                         crate::value::js_jsvalue_to_string_radix(object, radix_arg.unwrap());
                     return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                 }
-                let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
-                    (n as i64).to_string()
-                } else {
-                    n.to_string()
-                };
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                let str_ptr = crate::string::js_number_to_string(n);
                 return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
             } else if jsval.is_bool() {
                 let s = if jsval.as_bool() { "true" } else { "false" };
