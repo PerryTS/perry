@@ -10,9 +10,9 @@
 //!   property (`undefined`/`NaN`/`Infinity`) is an early SyntaxError for the
 //!   entry module compiled as a Script.
 
+use perry_diagnostics::SourceCache;
 use perry_hir::{lower_module, lower_module_with_class_id_types_seed_and_entry, Expr, Stmt};
 use perry_parser::parse_typescript_with_cache;
-use perry_diagnostics::SourceCache;
 
 fn lower_src(src: &str) -> anyhow::Result<perry_hir::Module> {
     let mut cache = SourceCache::new();
@@ -110,8 +110,7 @@ fn entry_script_rejects_lexical_undefined_binding() {
 fn entry_script_rejects_nan_and_infinity_lexical_bindings_too() {
     for name in ["NaN", "Infinity"] {
         let src = format!("const {name} = 1;");
-        let err = lower_entry_src(&src)
-            .expect_err("this const declaration must be rejected");
+        let err = lower_entry_src(&src).expect_err("this const declaration must be rejected");
         assert!(
             err.to_string().contains("SyntaxError"),
             "expected a SyntaxError for `{name}`, got: {err}"
