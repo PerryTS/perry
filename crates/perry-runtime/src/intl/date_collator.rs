@@ -1341,6 +1341,7 @@ pub(crate) fn temporal_locale_string(
     let hour_cycle = get_opt("hourCycle");
     let weekday_opt = get_opt("weekday");
     let era_opt = get_opt("era");
+    let day_period_opt = get_opt("dayPeriod");
     let tz_name_opt = get_opt("timeZoneName");
     let tz_opt = get_opt("timeZone");
 
@@ -1353,6 +1354,7 @@ pub(crate) fn temporal_locale_string(
         || second_opt.is_some()
         || weekday_opt.is_some()
         || era_opt.is_some()
+        || day_period_opt.is_some()
         || tz_name_opt.is_some();
 
     // ---- validate option conflicts ----
@@ -1514,7 +1516,7 @@ pub(crate) fn temporal_locale_string(
             eff_sec,
             weekday_opt.as_deref(),
             era_opt.as_deref(),
-            None,
+            day_period_opt.as_deref(),
             use_24h,
         ),
     };
