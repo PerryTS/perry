@@ -973,6 +973,11 @@ const promiseMetadataSchema = z.promise(z.number());
 const readonlyMetadataSchema = z.object({ id: z.number() }).readonly();
 const brandedMetadataSchema = z.string().brand<"FixtureId">();
 const readonlyObjectValue = z.object({ id: z.number() }).readonly().parse({ id: 1 });
+const readonlyNestedInput = { nested: { id: 1 }, tags: ["a"] };
+const readonlyNestedValue = z
+  .object({ nested: z.object({ id: z.number() }), tags: z.array(z.string()) })
+  .readonly()
+  .parse(readonlyNestedInput);
 const readonlyArrayValue = z.array(z.string()).readonly().parse(["a"]);
 const readonlyTupleValue = z.tuple([z.string()]).readonly().parse(["a"]);
 const readonlyMapValue = z.map(z.string(), z.number()).readonly().parse(new Map([["a", 1]]));
@@ -1037,6 +1042,18 @@ print("modifiers", {
   readonlySet: Object.isFrozen(z.set(z.string()).readonly().parse(new Set(["a"]))),
   readonlyMutations: {
     object: [Reflect.set(readonlyObjectValue, "id", 2), readonlyObjectValue.id],
+    nestedObject: [
+      Object.isFrozen(readonlyNestedValue),
+      Object.isFrozen(readonlyNestedValue.nested),
+      Object.isFrozen(readonlyNestedValue.tags),
+      Reflect.set(readonlyNestedValue, "extra", true),
+      Reflect.set(readonlyNestedValue.nested, "id", 2),
+      tryErrorName(() => readonlyNestedValue.tags.push("b")),
+      readonlyNestedValue,
+      readonlyNestedInput,
+      readonlyNestedValue.nested !== readonlyNestedInput.nested,
+      readonlyNestedValue.tags !== readonlyNestedInput.tags,
+    ],
     array: [
       Reflect.set(readonlyArrayValue, "0", "b"),
       tryErrorName(() => readonlyArrayValue.push("b")),
