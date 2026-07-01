@@ -344,7 +344,7 @@ pub(crate) fn string_from_code_unit(unit: u16) -> *mut StringHeader {
 /// `true` if a lone surrogate was appended (so the caller knows to use the
 /// WTF-8 string-construction path that sets `HAS_LONE_SURROGATES`).
 #[inline]
-fn push_code_unit_wtf8(out: &mut Vec<u8>, unit: u16) -> bool {
+pub(super) fn push_code_unit_wtf8(out: &mut Vec<u8>, unit: u16) -> bool {
     if unit < 0x80 {
         out.push(unit as u8);
         false

@@ -74,6 +74,25 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
         // (`String(Object.create(null))` throws; Test262 ToPropertyKey on a
         // null-proto computed key).
         MethodOutcome::Absent => {
+            // A boxed primitive wrapper (`new Number/String/Boolean/BigInt(x)`,
+            // or a reflective `Object(x)`) stores its `[[PrimitiveData]]` in a
+            // side table (`BOXED_PRIMITIVE_PAYLOADS`), not as a regular own
+            // field — so `call_method_for_primitive`'s `js_object_get_field_by_name`
+            // lookup for `toString` misses even though `Number.prototype.toString`
+            // /etc. are real installed methods, and this arm would otherwise
+            // treat the wrapper like a plain object and render `"[object
+            // Object]"`. The "default"/number-hint ToPrimitive path
+            // (`OrdinaryToPrimitiveOutcome`) already special-cases this via the
+            // same `boxed_primitive_payload` lookup; mirror it here for the
+            // string hint so `String(new Boolean(true))`, a reflective
+            // `Number.prototype.indexOf = String.prototype.indexOf` receiver
+            // coercion, etc. render the wrapped value instead of the object
+            // default (test262 indexOf/lastIndexOf/replace/concat
+            // generic-receiver cases).
+            if let Some((_class_id, payload)) = crate::builtins::boxed_primitive_payload(value) {
+                let s = js_jsvalue_to_string(payload);
+                return Some(crate::value::js_nanbox_string(s as i64));
+            }
             if !value_is_null_proto_object(value) {
                 return None;
             }
@@ -125,15 +144,40 @@ fn throw_cannot_convert_to_primitive() -> ! {
 
 /// Function objects are closure headers, not `ObjectHeader`s, so the ordinary
 /// object helper cannot see the default `%Function.prototype%` chain. Resolve
-/// the function `toString` method explicitly so monkeypatching
+/// the function `toString`/`valueOf` methods explicitly so monkeypatching
 /// `Function.prototype.toString` affects `String(fn)` and template coercion.
+/// Faithful to `OrdinaryToPrimitive(fn, "string")`: try `toString` first: a
+/// primitive result wins; a non-primitive result falls through to `valueOf`
+/// (ECMA-262 §7.1.1.1) instead of giving up and rendering the function's own
+/// source text — test262 `S15.5.2.1_A1_T11` overrides `toString` to return a
+/// non-primitive and expects the `valueOf` result to be used.
 unsafe fn function_to_string_via_prototype(value: f64) -> Option<*mut crate::string::StringHeader> {
-    let primitive = function_to_string_method_result(value)?;
-    if is_primitive_value(primitive) {
-        Some(js_jsvalue_to_string(primitive))
-    } else {
-        None
+    let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
+    if depth >= 200 {
+        return None;
     }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth + 1));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let mut result = None;
+    if let FunctionMethodOutcome::Value(ret) =
+        call_function_method(&scope, &value_handle, b"toString")
+    {
+        if is_primitive_value(ret) {
+            result = Some(js_jsvalue_to_string(ret));
+        }
+    }
+    if result.is_none() {
+        if let FunctionMethodOutcome::Value(ret) =
+            call_function_method(&scope, &value_handle, b"valueOf")
+        {
+            if is_primitive_value(ret) {
+                result = Some(js_jsvalue_to_string(ret));
+            }
+        }
+    }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth));
+    result
 }
 
 /// Same lookup as `function_to_string_via_prototype`, but returns the raw
@@ -353,6 +397,57 @@ pub extern "C" fn js_value_to_str_ptr_for_ffi(value: f64) -> i64 {
 /// callable closure, invoke it with `this = obj` (no args). Returns whether
 /// the result was a primitive, a non-primitive, or whether the method was
 /// absent / non-callable.
+/// `Array.prototype.toString` override check for `String(arr)` / `` `${arr}` ``
+/// / `"" + arr` (test262 `S15.5.1.1_A1_T8`). Arrays are `GC_TYPE_ARRAY`, not
+/// `ObjectHeader`s, so unlike ordinary objects their `toString` can't be
+/// looked up as an "own/inherited field" on the array value itself — the
+/// hardcoded `Array.prototype.join(",")` fallback normally used for arrays
+/// must instead be skipped when `Array.prototype.toString` has been
+/// reassigned away from its installed default (a noop thunk kept only for
+/// `typeof`/`.name` introspection, see `populate_builtin_prototype_methods`).
+/// Returns `Some(primitive)` when a real user override produced a primitive
+/// result; `None` means "still the default (or a non-primitive result) — fall
+/// back to `join`".
+unsafe fn array_prototype_to_string_override(value: f64) -> Option<f64> {
+    let proto = crate::object::builtin_prototype_value("Array");
+    let proto_bits = proto.to_bits();
+    if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let proto_ptr = (proto_bits & POINTER_MASK) as *mut crate::object::ObjectHeader;
+    if proto_ptr.is_null() {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let method = crate::object::js_object_get_field_by_name(proto_ptr, key);
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return None;
+    }
+    let closure = method_ptr as *const crate::closure::ClosureHeader;
+    if (*closure).func_ptr == crate::object::global_this_builtin_noop_thunk as *const u8 {
+        return None;
+    }
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, value);
+    let prev_this = crate::object::js_implicit_this_set(value);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    let ret_jsv = JSValue::from_bits(ret.to_bits());
+    let is_primitive = ret_jsv.is_any_string()
+        || ret_jsv.is_number()
+        || ret_jsv.is_int32()
+        || ret_jsv.is_bool()
+        || ret_jsv.is_null()
+        || ret_jsv.is_undefined()
+        || ret_jsv.is_bigint()
+        || crate::symbol::js_is_symbol(ret) != 0;
+    is_primitive.then_some(ret)
+}
+
 unsafe fn call_method_for_primitive(
     scope: &crate::gc::RuntimeHandleScope,
     value_handle: &crate::gc::RuntimeHandle<'_>,
@@ -728,6 +823,11 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             unsafe {
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                    // A reassigned `Array.prototype.toString` must run instead
+                    // of the hardcoded join (test262 S15.5.1.1_A1_T8).
+                    if let Some(primitive) = array_prototype_to_string_override(value) {
+                        return js_jsvalue_to_string(primitive);
+                    }
                     // Use js_array_join with a "," separator to match Array.prototype.toString.
                     let sep = crate::string::js_string_from_bytes(b",".as_ptr(), 1);
                     return crate::array::js_array_join(

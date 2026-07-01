@@ -736,7 +736,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let arg = match args.drain(..).next() {
                     Some(inner) => match kind {
                         crate::BoxedPrimitiveKind::Number => Expr::NumberCoerce(Box::new(inner)),
-                        crate::BoxedPrimitiveKind::String => Expr::StringCoerce(Box::new(inner)),
+                        // Only an explicit `undefined` argument needs a pre-pass
+                        // coercion here — to distinguish it from the true no-arg
+                        // sentinel below ("undefined" vs. the boxed-empty-string
+                        // default). Any other present value is passed raw so
+                        // `js_boxed_string_new` applies `ToString` itself,
+                        // including rejecting a Symbol argument with a
+                        // `TypeError` (ECMA-262 §22.1.1 step 2b, test262
+                        // `symbol-wrapping.js`) — the lenient `Expr::StringCoerce`
+                        // (`js_string_coerce`) instead renders a Symbol as its
+                        // descriptive string, which would defeat that check by
+                        // stringifying the Symbol away before it ever runs.
+                        crate::BoxedPrimitiveKind::String => {
+                            if matches!(inner, Expr::Undefined) {
+                                Expr::StringCoerce(Box::new(inner))
+                            } else {
+                                inner
+                            }
+                        }
                         crate::BoxedPrimitiveKind::Boolean => Expr::BooleanCoerce(Box::new(inner)),
                     },
                     None => Expr::Undefined,
