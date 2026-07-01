@@ -700,6 +700,16 @@ cloneParsed.tags.push("b");
 const cloneMapInput = new Map([["a", { count: 1 }]]);
 const cloneMapParsed = z.map(z.string(), z.object({ count: z.number() })).parse(cloneMapInput);
 cloneMapParsed.get("a")!.count = 2;
+const cloneMapKeyValueKey = { id: 1 };
+const cloneMapKeyValueValue = { count: 1 };
+const cloneMapKeyValueInput = new Map([[cloneMapKeyValueKey, cloneMapKeyValueValue]]);
+const cloneMapKeyValueParsed = z
+  .map(z.object({ id: z.number() }), z.object({ count: z.number() }))
+  .parse(cloneMapKeyValueInput);
+const cloneMapKeyValueParsedKey = Array.from(cloneMapKeyValueParsed.keys())[0];
+const cloneMapKeyValueParsedValue = cloneMapKeyValueParsed.get(cloneMapKeyValueParsedKey)!;
+cloneMapKeyValueParsedKey.id = 2;
+cloneMapKeyValueParsedValue.count = 2;
 const cloneSetValue = { id: 1 };
 const cloneSetInput = new Set([cloneSetValue]);
 const cloneSetParsed = z.set(z.object({ id: z.number() })).parse(cloneSetInput);
@@ -778,6 +788,10 @@ print("cloneSemantics", {
   mapIdentity: cloneMapParsed !== cloneMapInput,
   mapValueIdentity: cloneMapParsed.get("a") !== cloneMapInput.get("a"),
   mapSource: Array.from(cloneMapInput.entries()),
+  mapObjectKeyIdentity: cloneMapKeyValueParsedKey !== cloneMapKeyValueKey,
+  mapObjectValueIdentity: cloneMapKeyValueParsedValue !== cloneMapKeyValueValue,
+  mapObjectSource: Array.from(cloneMapKeyValueInput.entries()),
+  mapObjectParsed: Array.from(cloneMapKeyValueParsed.entries()),
   setIdentity: cloneSetParsed !== cloneSetInput,
   setValueIdentity: cloneSetParsedValue !== cloneSetValue,
   setSource: Array.from(cloneSetInput.values()),
