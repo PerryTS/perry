@@ -1176,6 +1176,9 @@ const strictValidatedFn = z.function().args(z.string()).returns(z.number()).stri
 const invalidReturnFn = z.function().args(z.string()).returns(z.number()).implement(() => "bad" as unknown as number);
 const strictInvalidReturnFn = z.function().args(z.string()).returns(z.number()).strictImplement(() => "bad" as unknown as number);
 const validatedAliasFn = z.function().args(z.string()).returns(z.number()).validate((value) => value.trim().length);
+const restValidatedFn = z
+  .function(z.tuple([z.string()]).rest(z.number()), z.number())
+  .implement((label, ...values) => label.length + values.reduce((total, value) => total + value, 0));
 const functionSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 const functionMetadataSchema = z.function().args(z.string(), z.number()).returns(z.boolean());
 const defaultFunctionMetadataSchema = z.function();
@@ -1204,6 +1207,17 @@ const functionIssueSummary = (call: () => unknown) => {
     }));
   }
 };
+const functionArgumentIssuePaths = (call: () => unknown) => {
+  try {
+    call();
+    return [];
+  } catch (error) {
+    const issue = (error as z.ZodError).issues[0];
+    return issue.code === "invalid_arguments"
+      ? issue.argumentsError.issues.map((nestedIssue) => `${nestedIssue.path.join(".")}:${nestedIssue.code}`)
+      : [];
+  }
+};
 const invalidAsyncReturn = await (async () => {
   try {
     await asyncInvalidReturnFn("x");
@@ -1216,6 +1230,8 @@ print("function", {
   valid: validatedFn(" tuna "),
   strictValid: strictValidatedFn(" trout "),
   validateAlias: validatedAliasFn(" bass "),
+  restValid: restValidatedFn("ab", 1, 2, 3),
+  restInvalid: functionArgumentIssuePaths(() => (restValidatedFn as unknown as (...values: unknown[]) => number)("ab", 1, "x")),
   asyncValid: await asyncValidatedFn(" salmon "),
   parameters: functionSchema.parameters().items.length,
   returnType: functionSchema.returnType().safeParse(true).success,
