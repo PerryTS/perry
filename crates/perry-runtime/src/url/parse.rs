@@ -14,7 +14,7 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
     // future code path that fails to assign before use.
     let mut host: String;
     let hostname: String;
-    let pathname: String;
+    let mut pathname: String;
     let mut port = String::new();
     let mut search = String::new();
     let mut hash = String::new();
@@ -171,6 +171,24 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
         if !default_port.is_empty() && port == default_port {
             port.clear();
             host = hostname.clone();
+        }
+    }
+
+    #[cfg(feature = "url-engine")]
+    if matches!(
+        protocol.as_str(),
+        "http:" | "https:" | "ws:" | "wss:" | "ftp:"
+    ) {
+        if let Ok(parsed) = url::Url::parse(url_str) {
+            pathname = parsed.path().to_string();
+            search = parsed
+                .query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default();
+            hash = parsed
+                .fragment()
+                .map(|fragment| format!("#{fragment}"))
+                .unwrap_or_default();
         }
     }
 
