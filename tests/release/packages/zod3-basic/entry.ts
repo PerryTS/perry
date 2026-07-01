@@ -527,6 +527,13 @@ print("union", {
 const objectBase = z.object({ id: z.number(), name: z.string(), active: z.boolean().optional() });
 const nestedObject = z.object({ nested: z.object({ label: z.string() }) });
 const defaultedOptionalObject = z.object({ defaulted: z.string().default("tuna").optional() });
+const maskedObjectBase = z.object({
+  requiredName: z.string(),
+  optionalAge: z.number().optional(),
+  nested: z.object({ label: z.string() }),
+});
+const maskedPartialObject = maskedObjectBase.partial({ requiredName: true });
+const maskedRequiredObject = maskedPartialObject.required({ requiredName: true });
 const partialObjectSchema = objectBase.partial();
 const partialNameObjectSchema = objectBase.partial({ name: true });
 const requiredObjectSchema = objectBase.required();
@@ -590,6 +597,17 @@ print("objects", {
   required: requiredObjectSchema.safeParse({ id: 1, name: "a" }).success,
   requiredActive: requiredActiveObjectSchema.safeParse({ id: 1, name: "a" }).success,
   nestedRequired: nestedObject.required().safeParse({ nested: { label: "x" } }).success,
+  partialRequiredMask: {
+    baseMissingName: maskedObjectBase.safeParse({ nested: { label: "x" } }).success,
+    partialMissingName: maskedPartialObject.safeParse({ nested: { label: "x" } }).success,
+    partialMissingNested: maskedPartialObject.safeParse({}).success,
+    requiredMissingName: maskedRequiredObject.safeParse({ nested: { label: "x" } }).success,
+    requiredMissingOptionalAge: maskedRequiredObject.safeParse({ requiredName: "x", nested: { label: "x" } }).success,
+    base: objectShapeTypes(maskedObjectBase),
+    partial: objectShapeTypes(maskedPartialObject),
+    required: objectShapeTypes(maskedRequiredObject),
+    partialNameInner: maskedPartialObject.shape.requiredName._def.innerType.constructor.name,
+  },
   defaultedOptionalEmpty: defaultedOptionalObject.parse({}),
   defaultedOptionalUndefined: defaultedOptionalObject.parse({ defaulted: undefined }),
   anyUnknownMissing: z.object({ a: z.any(), b: z.unknown() }).safeParse({}).success,
