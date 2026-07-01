@@ -784,12 +784,27 @@ print("cloneSemantics", {
 });
 
 const intersectionObjectSchema = z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() }));
+const nestedIntersectionSchema = z.intersection(
+  z.object({ nested: z.object({ a: z.string() }), shared: z.literal("same") }),
+  z.object({ nested: z.object({ b: z.number() }), shared: z.literal("same") }),
+);
 const transformedIntersectionSchema = z.intersection(
   z.string().transform(() => ({ a: 1 })),
   z.string().transform(() => ({ b: 2 })),
 );
+const conflictingIntersectionSchema = z.intersection(
+  z.string().transform(() => ({ shared: { value: 1 } })),
+  z.string().transform(() => ({ shared: { value: 2 } })),
+);
+const arrayIntersectionConflictSchema = z.intersection(
+  z.string().transform(() => [1, 2]),
+  z.string().transform(() => [1, 3]),
+);
 print("composition", {
   intersection: intersectionObjectSchema.parse({ a: "x", b: 1 }),
+  nestedIntersection: nestedIntersectionSchema.parse({ nested: { a: "x", b: 1 }, shared: "same" }),
+  conflictingIntersection: issueMetadataFromResult(conflictingIntersectionSchema.safeParse("x")),
+  arrayIntersectionConflict: issueMetadataFromResult(arrayIntersectionConflictSchema.safeParse("x")),
   intersectionTypeName: intersectionObjectSchema._def.typeName,
   intersectionSides: [
     intersectionObjectSchema._def.left.constructor.name,
