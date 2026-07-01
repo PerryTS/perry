@@ -585,6 +585,26 @@ print("objects", {
   },
 });
 
+const mergeLeftPassthrough = z.object({ a: z.string() }).passthrough();
+const mergeRightStrict = z.object({ b: z.number() }).strict();
+const mergeRightPassthrough = z.object({ b: z.number() }).passthrough();
+const mergeLeftCatchall = z.object({ a: z.string() }).catchall(z.string());
+const mergeRightCatchall = z.object({ b: z.number() }).catchall(z.number());
+const mergedStrict = mergeLeftPassthrough.merge(mergeRightStrict);
+const mergedPassthrough = mergeRightStrict.merge(mergeLeftPassthrough);
+const mergedCatchall = mergeLeftCatchall.merge(mergeRightCatchall);
+print("objectMergeSemantics", {
+  extendOverwrite: z.object({ id: z.string() }).extend({ id: z.number() }).parse({ id: 1 }).id,
+  strictWinsUnknownKeys: mergedStrict._def.unknownKeys,
+  strictRejectsExtra: mergedStrict.safeParse({ a: "x", b: 1, extra: true }).success,
+  passthroughWinsUnknownKeys: mergedPassthrough._def.unknownKeys,
+  passthroughAllowsExtra: mergedPassthrough.safeParse({ a: "x", b: 1, extra: true }).success,
+  catchallWinsType: mergedCatchall._def.catchall.constructor.name,
+  catchallAcceptsNumber: mergedCatchall.safeParse({ a: "x", b: 1, extra: 2 }).success,
+  catchallRejectsString: mergedCatchall.safeParse({ a: "x", b: 1, extra: "x" }).success,
+  mergedShapeKeys: Object.keys(mergedCatchall.shape).join("|"),
+});
+
 print("recursiveObjects", {
   category: categorySchema.parse({ name: "root", subcategories: [{ name: "leaf", subcategories: [] }] }),
   categoryIssue: issueMetadataFromResult(categorySchema.safeParse({ name: "root", subcategories: [{ name: 1 }] })),
