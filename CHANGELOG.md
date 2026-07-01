@@ -1,3 +1,12 @@
+## v0.5.1211 — fix(intl): #5840 — Intl.DateTimeFormat dayPeriod-only formatting (6 test262 cases)
+
+Fixes the `dayPeriod`-only subcluster of the #5840 DateTimeFormat worklist: `new Intl.DateTimeFormat('en', {dayPeriod: 'long'})` (with no other date/time component options) silently fell back to the default `M/D/YYYY` date string in both `format` and `formatToParts`, because `dtf_primary_mask` (`crates/perry-runtime/src/intl/date_collator.rs`) never counted `dayPeriod` toward its "has a time-dimension field" bit, and neither `format_components` nor `build_parts_from_components` had any dayPeriod rendering path at all — `dayPeriod` was only ever emitted as a byproduct of the AM/PM 12-hour clock.
+
+- Added `day_period_string(hour, style)`: `en` CLDR day-period boundaries at hour granularity (`0-11` morning, `12` noon, `13-17` afternoon, `18-20` evening, `21-23` night; `narrow` abbreviates only "noon" → "n", matching real ICU `en` data — verified empirically against `node`).
+- `dtf_primary_mask` now sets `BIT_TIME` when `dayPeriod` is set, so a dayPeriod-only DTF is no longer misclassified as "no primary fields" and forced through the Temporal-default fallback path.
+- `format_components`/`build_parts_from_components` both thread a new `day_period_opt` parameter through: dayPeriod-only renders just the period text (one part in `formatToParts`); dayPeriod combined with a numeric `hour` renders `"<hour> <period>"` (`[hour, literal " ", dayPeriod]` in `formatToParts`), replacing the default AM/PM suffix. Behavior is unchanged when `day_period_opt` is `None`.
+- Fixes: `prototype/format/dayPeriod-{long,narrow,short}-en.js`, `prototype/formatToParts/dayPeriod-{long,narrow,short}-en.js`. Verified via `scripts/test262_subset.py --dir intl402/DateTimeFormat` (run under `TZ=UTC` — Perry's DTF hardcodes a `UTC` default timeZone while `Date`'s local-component constructor honors the real host offset, so a non-UTC dev box shows an unrelated pre-existing hour-shift on `new Date(y,m,d,h,...)`-based cases; CI runs UTC) with zero regressions (45 remaining failures, exactly the other 45 of the original 51-case worklist).
+
 ## v0.5.1210 — fix(hir+codegen+runtime): #5833 — global-code declaration-instantiation cluster (4 test262 cases)
 
 Closes 4 of the 6 `language/global-code` + `language/identifier-resolution` cases from the #5833 worklist (the remaining `decl-var.js`/`S10.4.1_A1_T1.js` need a live-synced `var` → `globalThis` reflection, a materially larger change — left as a follow-up rather than folded into this PR).

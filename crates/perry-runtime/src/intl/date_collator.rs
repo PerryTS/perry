@@ -418,6 +418,7 @@ fn format_parts_with_dtf_obj(
             let second_opt = get_string_field(obj, KEY_SECOND);
             let weekday_opt = get_string_field(obj, KEY_WEEKDAY);
             let era_opt = get_string_field(obj, KEY_ERA);
+            let day_period_opt = get_string_field(obj, KEY_DAY_PERIOD);
             build_parts_from_components(
                 year,
                 month,
@@ -435,6 +436,7 @@ fn format_parts_with_dtf_obj(
                 second_opt.as_deref(),
                 weekday_opt.as_deref(),
                 era_opt.as_deref(),
+                day_period_opt.as_deref(),
                 use_24h,
             )
         }
@@ -459,11 +461,15 @@ fn build_parts_from_components(
     second_opt: Option<&str>,
     weekday_opt: Option<&str>,
     era_opt: Option<&str>,
+    day_period_opt: Option<&str>,
     use_24h: bool,
 ) -> Vec<(&'static str, String)> {
     let mut parts: Vec<(&'static str, String)> = Vec::new();
     let has_date = year_opt.is_some() || month_opt.is_some() || day_opt.is_some();
-    let has_time = hour_opt.is_some() || minute_opt.is_some() || second_opt.is_some();
+    let has_time = hour_opt.is_some()
+        || minute_opt.is_some()
+        || second_opt.is_some()
+        || day_period_opt.is_some();
 
     // Weekday prepended before date parts.
     if let Some(wk_s) = weekday_opt {
@@ -562,6 +568,12 @@ fn build_parts_from_components(
                 parts.push(("literal", ":".to_string()));
                 parts.push(("second", format!("{:02}", second)));
             }
+            if let Some(dp_s) = day_period_opt {
+                if hour_opt.is_some() || inc_mins {
+                    parts.push(("literal", " ".to_string()));
+                }
+                parts.push(("dayPeriod", day_period_string(hour, dp_s).to_string()));
+            }
         } else {
             let (h, ampm) = if hour == 0 {
                 (12u32, "AM")
@@ -590,7 +602,12 @@ fn build_parts_from_components(
                 parts.push(("literal", ":".to_string()));
                 parts.push(("second", format!("{:02}", second)));
             }
-            if hour_opt.is_some() || inc_mins {
+            if let Some(dp_s) = day_period_opt {
+                if hour_opt.is_some() || inc_mins {
+                    parts.push(("literal", " ".to_string()));
+                }
+                parts.push(("dayPeriod", day_period_string(hour, dp_s).to_string()));
+            } else if hour_opt.is_some() || inc_mins {
                 parts.push(("literal", " ".to_string()));
                 parts.push(("dayPeriod", ampm.to_string()));
             }
@@ -722,6 +739,7 @@ fn dtf_primary_mask(obj: *const ObjectHeader) -> u8 {
     if get_string_field(obj, KEY_HOUR).is_some()
         || get_string_field(obj, KEY_MINUTE).is_some()
         || get_string_field(obj, KEY_SECOND).is_some()
+        || get_string_field(obj, KEY_DAY_PERIOD).is_some()
         || get_number_field(obj, KEY_FRACTIONAL).is_some()
     {
         mask |= BIT_TIME;
@@ -816,6 +834,26 @@ fn weekday_name(secs: i64, style: &str) -> String {
         "short" => WEEKDAY_ABBR[wi].to_string(),
         "narrow" => WEEKDAY_NARROW[wi].to_string(),
         _ => WEEKDAY_ABBR[wi].to_string(),
+    }
+}
+
+/// `en` CLDR day-period boundaries (hour-granularity): morning covers
+/// midnight through 11:00, noon is the 12:00 hour exactly, afternoon 13:00
+/// through 17:00, evening 18:00 through 20:00, night 21:00 through 23:00.
+/// `narrow` abbreviates only "noon" to "n" — the other four periods use the
+/// same word in all three widths for `en`.
+fn day_period_string(hour: u32, style: &str) -> &'static str {
+    let wide = match hour {
+        12 => "noon",
+        13..=17 => "in the afternoon",
+        18..=20 => "in the evening",
+        21..=23 => "at night",
+        _ => "in the morning",
+    };
+    if style == "narrow" && wide == "noon" {
+        "n"
+    } else {
+        wide
     }
 }
 
@@ -946,10 +984,14 @@ fn format_components(
     second_opt: Option<&str>,
     weekday_opt: Option<&str>,
     era_opt: Option<&str>,
+    day_period_opt: Option<&str>,
     use_24h: bool,
 ) -> String {
     let has_date = year_opt.is_some() || month_opt.is_some() || day_opt.is_some();
-    let has_time = hour_opt.is_some() || minute_opt.is_some() || second_opt.is_some();
+    let has_time = hour_opt.is_some()
+        || minute_opt.is_some()
+        || second_opt.is_some()
+        || day_period_opt.is_some();
 
     let date_part = if has_date {
         let has_m = month_opt.is_some();
@@ -1006,11 +1048,26 @@ fn format_components(
         let inc_mins = minute_opt.is_some() || inc_secs;
         Some(if use_24h {
             if inc_secs {
-                format!("{:02}:{:02}:{:02}", hour, minute, second)
+                let base = format!("{:02}:{:02}:{:02}", hour, minute, second);
+                match day_period_opt {
+                    Some(s) => format!("{} {}", base, day_period_string(hour, s)),
+                    None => base,
+                }
             } else if inc_mins {
-                format!("{:02}:{:02}", hour, minute)
+                let base = format!("{:02}:{:02}", hour, minute);
+                match day_period_opt {
+                    Some(s) => format!("{} {}", base, day_period_string(hour, s)),
+                    None => base,
+                }
+            } else if hour_opt.is_some() {
+                let base = format!("{:02}", hour);
+                match day_period_opt {
+                    Some(s) => format!("{} {}", base, day_period_string(hour, s)),
+                    None => base,
+                }
             } else {
-                format!("{:02}", hour)
+                // dayPeriod-only (no hour/minute/second requested).
+                day_period_string(hour, day_period_opt.unwrap_or("long")).to_string()
             }
         } else {
             let (h, ampm) = if hour == 0 {
@@ -1022,12 +1079,18 @@ fn format_components(
             } else {
                 (hour - 12, "PM")
             };
+            let suffix = day_period_opt
+                .map(|s| day_period_string(hour, s))
+                .unwrap_or(ampm);
             if inc_secs {
-                format!("{}:{:02}:{:02} {}", h, minute, second, ampm)
+                format!("{}:{:02}:{:02} {}", h, minute, second, suffix)
             } else if inc_mins {
-                format!("{}:{:02} {}", h, minute, ampm)
+                format!("{}:{:02} {}", h, minute, suffix)
+            } else if hour_opt.is_some() {
+                format!("{} {}", h, suffix)
             } else {
-                format!("{} {}", h, ampm)
+                // dayPeriod-only (no hour/minute/second requested).
+                suffix.to_string()
             }
         })
     } else {
@@ -1196,6 +1259,7 @@ fn format_ms_with_dtf_obj(
                 };
             let weekday_opt = get_string_field(obj, KEY_WEEKDAY);
             let era_opt = get_string_field(obj, KEY_ERA);
+            let day_period_opt = get_string_field(obj, KEY_DAY_PERIOD);
             format_components(
                 year,
                 month,
@@ -1212,6 +1276,7 @@ fn format_ms_with_dtf_obj(
                 second_opt.as_deref(),
                 weekday_opt.as_deref(),
                 era_opt.as_deref(),
+                day_period_opt.as_deref(),
                 use_24h,
             )
         }
@@ -1449,6 +1514,7 @@ pub(crate) fn temporal_locale_string(
             eff_sec,
             weekday_opt.as_deref(),
             era_opt.as_deref(),
+            None,
             use_24h,
         ),
     };
