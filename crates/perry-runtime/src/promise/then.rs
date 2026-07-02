@@ -1051,32 +1051,48 @@ pub extern "C" fn js_promise_finally(
     // so the microtask runner does NOT attempt to resolve `next` after calling
     // the wrapper — each wrapper handles `next` settlement itself via the
     // extra-tick passthrough pattern.
+    //
+    // ALREADY-SETTLED promises must NOT go through the slot stores: the
+    // handler slots are single-valued, and a queued `Task::Promise` re-reads
+    // them at drain time. Attaching `.finally()` to a settled promise that
+    // already queued another reaction (`p.catch(cb); p.finally(end)`) — or
+    // attaching several `.finally()`s to one settled promise (Turbopack's
+    // `loadChunkAsync` returns a shared pre-fulfilled `loadedChunk` constant,
+    // and Next's CacheSignal does `chunkPromise.finally(endRead)` per load) —
+    // overwrote the slot, so WHICHEVER wrapper was stored last ran once per
+    // queued task: one callback fired twice (or N times) while the others
+    // never ran. Next.js's cache-read count went negative, `cacheReady()`
+    // never resolved, the prerender was never aborted, and the dynamic-SSR
+    // routes hung forever (#5437). Dispatch each settled attach as a
+    // `Task::Inline` carrying ITS OWN wrapper instead; the slots stay
+    // untouched.
     unsafe {
-        store_promise_closure_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).on_fulfilled),
-            fulfill_wrap,
-        );
-        store_promise_closure_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).on_rejected),
-            reject_wrap,
-        );
-        // Wrappers own next; runner must not touch it.
-        store_promise_next_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).next),
-            ptr::null_mut(),
-        );
-        set_promise_callback_context(promise);
-
-        // If the promise is already settled, push its task now.
         match (*promise).state {
+            PromiseState::Pending => {
+                store_promise_closure_slot(
+                    promise,
+                    std::ptr::addr_of_mut!((*promise).on_fulfilled),
+                    fulfill_wrap,
+                );
+                store_promise_closure_slot(
+                    promise,
+                    std::ptr::addr_of_mut!((*promise).on_rejected),
+                    reject_wrap,
+                );
+                // Wrappers own next; runner must not touch it.
+                store_promise_next_slot(
+                    promise,
+                    std::ptr::addr_of_mut!((*promise).next),
+                    ptr::null_mut(),
+                );
+                set_promise_callback_context(promise);
+            }
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::Promise(
-                        promise,
+                    q.borrow_mut().push_back(Task::Inline(
+                        fulfill_wrap,
                         (*promise).value,
+                        ptr::null_mut(),
                         true,
                         context_for_promise(promise),
                     ));
@@ -1084,15 +1100,15 @@ pub extern "C" fn js_promise_finally(
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::Promise(
-                        promise,
+                    q.borrow_mut().push_back(Task::Inline(
+                        reject_wrap,
                         (*promise).reason,
+                        ptr::null_mut(),
                         false,
                         context_for_promise(promise),
                     ));
                 });
             }
-            PromiseState::Pending => {}
         }
     }
 
