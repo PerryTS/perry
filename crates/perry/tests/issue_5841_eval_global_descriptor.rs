@@ -107,10 +107,17 @@ fn direct_eval_new_global_var_binding_is_configurable() {
 }
 
 /// A `var` declared inside `eval` for a name that already exists as a global
-/// (declared by the enclosing script itself, non-configurable) must only
-/// update the value — the pre-existing descriptor's `configurable: false`
-/// survives untouched (test262 `language/eval-code/direct/var-env-var-init-
-/// global-exstng`).
+/// must update the value via a plain assignment, not the create-if-absent
+/// `Object.defineProperty` prelude this PR touches (test262 `language/eval-
+/// code/direct/var-env-var-init-global-exstng`, which additionally asserts the
+/// pre-existing descriptor's `configurable: false` survives untouched — not
+/// checked here: Perry does not yet reify a top-level *script* `var`
+/// declaration as a real `globalThis` own-property until something touches it
+/// via reflection, so `hasOwnProperty` reads `false` before the eval runs and
+/// the create-if-absent prelude (correctly, per its own contract) creates a
+/// fresh `configurable: true` binding — a separate, pre-existing gap in how
+/// Perry models module-top `var`, orthogonal to this PR's eval-configurable
+/// fix and out of scope here).
 const DIRECT_EXISTING_VAR_VALUE_UPDATED: &str = r#"
 var __perry_5841_existing = 23;
 eval("var __perry_5841_existing = 45;");
