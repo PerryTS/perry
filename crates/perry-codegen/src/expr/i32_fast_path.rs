@@ -923,12 +923,12 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
                 if is_known_finite(ctx, e) {
                     Some(ctx.block().toint32_fast(&lowered.value))
                 } else {
-                    Some(ctx.block().toint32(&lowered.value))
+                    Some(ctx.block().toint32_wrap(&lowered.value))
                 }
             }
             NativeRep::F32 => {
                 let widened = ctx.block().fpext(F32, &lowered.value, DOUBLE);
-                Some(ctx.block().toint32(&widened))
+                Some(ctx.block().toint32_wrap(&widened))
             }
             _ => None,
         };

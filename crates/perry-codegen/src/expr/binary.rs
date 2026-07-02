@@ -472,12 +472,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let li = if l_safe {
                         blk.toint32_fast(&l)
                     } else {
-                        blk.toint32(&l)
+                        blk.toint32_wrap(&l)
                     };
                     let ri = if r_safe {
                         blk.toint32_fast(&r)
                     } else {
-                        blk.toint32(&r)
+                        blk.toint32_wrap(&r)
                     };
                     let v = match op {
                         BinaryOp::BitAnd => blk.and(I32, &li, &ri),
@@ -503,12 +503,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let li = if l_safe {
                         blk.toint32_fast(&l)
                     } else {
-                        blk.toint32(&l)
+                        blk.toint32_wrap(&l)
                     };
                     let ri = if r_safe {
                         blk.toint32_fast(&r)
                     } else {
-                        blk.toint32(&r)
+                        blk.toint32_wrap(&r)
                     };
                     let v = blk.lshr(I32, &li, &ri);
                     blk.uitofp(I32, &v, DOUBLE)

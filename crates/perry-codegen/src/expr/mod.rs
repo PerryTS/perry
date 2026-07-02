@@ -1830,12 +1830,12 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
             if is_known_finite(ctx, expr) {
                 ctx.block().toint32_fast(&lowered.value)
             } else {
-                ctx.block().toint32(&lowered.value)
+                ctx.block().toint32_wrap(&lowered.value)
             }
         }
         NativeRep::F32 => {
             let widened = ctx.block().fpext(F32, &lowered.value, DOUBLE);
-            ctx.block().toint32(&widened)
+            ctx.block().toint32_wrap(&widened)
         }
         _ => return Ok(None),
     };
