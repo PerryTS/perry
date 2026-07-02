@@ -66,6 +66,52 @@ pub(crate) fn is_primitive_proto_method(key: &[u8]) -> bool {
     )
 }
 
+/// Static-name lowering should traffic in interned property ids instead of
+/// raw name bytes. The first representation is the interned heap string
+/// pointer already emitted by the StringPool; the wrapper preserves the
+/// existing by-name semantics while giving codegen a by-id ABI to target.
+#[no_mangle]
+pub extern "C" fn js_object_get_field_by_property_id_f64(
+    obj: *const ObjectHeader,
+    property_id: i64,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(key_ref) = crate::string::perry_string_ref_from_dispatch_id(property_id, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let key = if key_ref.heap.is_null() {
+        crate::string::js_string_from_bytes(key_ref.ptr, key_ref.len as u32)
+            as *const crate::StringHeader
+    } else {
+        key_ref.heap
+    };
+    js_object_get_field_by_name_f64(obj, key)
+}
+
+/// By-id sibling of `js_object_set_field_by_name`. See
+/// `js_object_get_field_by_property_id_f64` for why the initial id
+/// representation is the interned StringHeader pointer.
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_property_id(
+    obj: *mut ObjectHeader,
+    property_id: i64,
+    value: f64,
+) {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(key_ref) = crate::string::perry_string_ref_from_dispatch_id(property_id, &mut scratch)
+    else {
+        return;
+    };
+    let key = if key_ref.heap.is_null() {
+        crate::string::js_string_from_bytes(key_ref.ptr, key_ref.len as u32)
+            as *const crate::StringHeader
+    } else {
+        key_ref.heap
+    };
+    js_object_set_field_by_name(obj, key, value);
+}
+
 pub(crate) fn is_array_method_value_name(key: &[u8]) -> bool {
     matches!(
         key,

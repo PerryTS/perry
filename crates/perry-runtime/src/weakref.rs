@@ -789,12 +789,15 @@ pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 /// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
 /// #1757/#1758). `js_native_call_method` calls this for any heap object;
 /// it returns `Some(result)` only when `obj` carries the reserved
-/// WeakMap/WeakSet `class_id` and `method_name` is one of their methods,
-/// and `None` otherwise so the caller falls through to its normal
+/// WeakMap/WeakSet `class_id` and `method_name` is one of *that class's own*
+/// methods, and `None` otherwise so the caller falls through to its normal
 /// dispatch. `receiver` is the NaN-boxed f64 the `js_weak*` helpers expect.
 ///
-/// Unknown methods on a known WeakMap/WeakSet resolve to `undefined`,
-/// mirroring the Map/Set registry arms in the dynamic dispatcher.
+/// A method that isn't one of the receiver's own (e.g. `"add"` on a WeakMap,
+/// or any name outside `set`/`add`/`get`/`has`/`delete`) falls through to
+/// `None` so the ordinary property lookup resolves it — correctly missing
+/// and raising `TypeError: ... is not a function` on a call, rather than
+/// this function silently answering `undefined`.
 ///
 /// # Safety
 /// `obj` must be a valid, readable `ObjectHeader` pointer (the caller has
@@ -815,13 +818,27 @@ pub unsafe fn try_weak_method_dispatch(
     } else {
         &[]
     };
-    let result = match method_name {
-        "set" if args.len() >= 2 => js_weakmap_set(receiver, args[0], args[1]),
-        "add" if !args.is_empty() => js_weakset_add(receiver, args[0]),
-        "get" if !args.is_empty() => js_weakmap_get(receiver, args[0]),
-        "has" if !args.is_empty() => js_weakmap_has(receiver, args[0]),
-        "delete" if !args.is_empty() => js_weakmap_delete(receiver, args[0]),
-        _ => f64::from_bits(TAG_UNDEFINED),
+    // #5834: dispatch regardless of arg count, padding missing positions with
+    // `undefined` — mirrors calling the real thunks reflectively. Arity-gating
+    // these arms let `s.add()` (zero args) fall through to a no-op, skipping
+    // `js_weakset_add`'s CanBeHeldWeakly check entirely (it must throw
+    // `TypeError` since `undefined` cannot be held weakly).
+    //
+    // Also gate each method by the receiver's actual class: `"set"`/`"get"`
+    // only exist on WeakMap, `"add"` only on WeakSet (`"has"`/`"delete"` are
+    // shared). Without this a WeakMap receiver could reach `js_weakset_add`
+    // for a `.add(...)` call (and vice versa) instead of falling through to
+    // the ordinary property lookup, which correctly resolves the missing
+    // method to `undefined` and throws `TypeError: ... is not a function`.
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let arg = |i: usize| args.get(i).copied().unwrap_or(undef);
+    let result = match (method_name, class_id) {
+        ("set", CLASS_ID_WEAKMAP) => js_weakmap_set(receiver, arg(0), arg(1)),
+        ("add", CLASS_ID_WEAKSET) => js_weakset_add(receiver, arg(0)),
+        ("get", CLASS_ID_WEAKMAP) => js_weakmap_get(receiver, arg(0)),
+        ("has", _) => js_weakmap_has(receiver, arg(0)),
+        ("delete", _) => js_weakmap_delete(receiver, arg(0)),
+        _ => return None,
     };
     Some(result)
 }
@@ -875,34 +892,97 @@ pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
     obj
 }
 
+/// `WeakMap ( [ iterable ] )`'s `AddEntriesFromIterable` step. `map` is the
+/// already-allocated (empty) WeakMap from `js_weakmap_new`; this only
+/// populates it. #5834: only fetches/validates the `set` adder when
+/// `iterable` is present (spec steps 6-7 — null/undefined return BEFORE
+/// `Get(map, "set")`, so a poisoned `WeakMap.prototype.set` getter must not
+/// fire for `new WeakMap()` / `new WeakMap(null)`), then drives the iterable
+/// with lazy per-item stepping (`iterator_next_value`) so an abrupt
+/// `Get`/adder-call closes the iterator (`IteratorClose`) before rethrowing.
+/// Mirrors `js_map_from_iterable` (`map.rs`).
 #[no_mangle]
 pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
-    use crate::collection_iter::{classify_init, InitIter};
+    use crate::collection_iter::{constructor_iter, ConstructorIter};
 
-    // #2772: consume ANY iterable (Map/Set/custom), throw on non-iterables,
-    // require each yielded value to be an entry object, and require each key
-    // to be an object (`js_weakmap_set` validates the key).
-    let arr_ptr = match classify_init(iterable) {
-        InitIter::Empty => return map,
-        InitIter::Values(p) => p as *const ArrayHeader,
-    };
-    if arr_ptr.is_null() {
+    if crate::collection_iter::is_null_or_undefined(iterable) {
         return map;
     }
-    unsafe {
-        let len = js_array_length(arr_ptr) as usize;
-        for i in 0..len {
-            let entry = js_array_get_f64(arr_ptr, i as u32);
-            if !crate::collection_iter::is_entry_object(entry) {
-                crate::collection_iter::throw_not_entry_object(entry);
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_nanbox_f64(map);
+    let iterable_handle = scope.root_nanbox_f64(iterable);
+
+    let adder = crate::collection_iter::require_callable(
+        crate::collection_iter::builtin_prototype_adder(
+            "WeakMap",
+            "set",
+            map_handle.get_nanbox_f64(),
+        ),
+        "WeakMap.prototype.set",
+    );
+    let adder = crate::collection_iter::normalize_callable_value(adder);
+    let adder_handle = scope.root_nanbox_f64(adder);
+
+    fn add_entry(
+        map_handle: crate::gc::RuntimeHandle<'_>,
+        adder_handle: crate::gc::RuntimeHandle<'_>,
+        entry: f64,
+        iter_to_close: Option<f64>,
+    ) {
+        if !crate::collection_iter::is_entry_object(entry) {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
             }
-            let entry_bits = entry.to_bits() as i64;
+            crate::collection_iter::throw_not_entry_object(entry);
+        }
+        let entry_bits = entry.to_bits() as i64;
+        let result = crate::collection_iter::call_capturing_throw(|| {
             let key = crate::object::js_object_get_index_polymorphic(entry_bits, 0.0);
             let val = crate::object::js_object_get_index_polymorphic(entry_bits, 1.0);
-            js_weakmap_set(map, key, val);
+            let adder = adder_handle.get_nanbox_f64();
+            let map = map_handle.get_nanbox_f64();
+            crate::collection_iter::call_with_this_capturing_throw(adder, map, &[key, val])
+                .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+        });
+        if let Err(exc) = result {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
+            crate::exception::js_throw(exc);
         }
     }
-    map
+
+    match constructor_iter(iterable_handle.get_nanbox_f64()) {
+        ConstructorIter::Empty => {}
+        ConstructorIter::Array(arr_value) => {
+            let arr_handle = scope.root_nanbox_f64(arr_value);
+            let arr_ptr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64()) as *mut ArrayHeader;
+            if !arr_ptr.is_null() {
+                let len = unsafe { js_array_length(arr_ptr) as usize };
+                for i in 0..len {
+                    let entry = unsafe {
+                        let arr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                            as *const ArrayHeader;
+                        js_array_get_f64(arr, i as u32)
+                    };
+                    add_entry(map_handle, adder_handle, entry, None);
+                }
+            }
+        }
+        ConstructorIter::Iterator(iter) => {
+            let iter_handle = scope.root_nanbox_f64(iter);
+            loop {
+                let iter = iter_handle.get_nanbox_f64();
+                let Some(entry) = crate::collection_iter::iterator_next_value(iter) else {
+                    break;
+                };
+                add_entry(map_handle, adder_handle, entry, Some(iter));
+            }
+        }
+    }
+
+    map_handle.get_nanbox_f64()
 }
 
 /// Throw `TypeError: Invalid value used as weak map key` (WeakMap key must be
@@ -1100,26 +1180,77 @@ pub extern "C" fn js_weakset_new() -> *mut ObjectHeader {
     obj
 }
 
+/// `WeakSet ( [ iterable ] )`'s iterable-consumption loop. `set` is the
+/// already-allocated (empty) WeakSet from `js_weakset_new`; this only
+/// populates it. See [`js_weakmap_init_iterable`] for the shared rationale
+/// (adder fetched only when `iterable` is present; lazy per-item stepping
+/// with `IteratorClose` on an abrupt `add` call). Mirrors `js_set_from_iterable`
+/// (`set.rs`).
 #[no_mangle]
 pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
-    use crate::collection_iter::{classify_init, InitIter};
+    use crate::collection_iter::{constructor_iter, ConstructorIter};
 
-    // #2772: consume ANY iterable (Map/Set/custom), throw on non-iterables,
-    // and require each value to be an object (`js_weakset_add` validates).
-    let arr_ptr = match classify_init(iterable) {
-        InitIter::Empty => return set,
-        InitIter::Values(p) => p as *const ArrayHeader,
-    };
-    if arr_ptr.is_null() {
+    if crate::collection_iter::is_null_or_undefined(iterable) {
         return set;
     }
-    unsafe {
-        let len = js_array_length(arr_ptr) as usize;
-        for i in 0..len {
-            js_weakset_add(set, js_array_get_f64(arr_ptr, i as u32));
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let set_handle = scope.root_nanbox_f64(set);
+    let iterable_handle = scope.root_nanbox_f64(iterable);
+
+    let adder = crate::collection_iter::require_callable(
+        crate::collection_iter::builtin_prototype_adder(
+            "WeakSet",
+            "add",
+            set_handle.get_nanbox_f64(),
+        ),
+        "WeakSet.prototype.add",
+    );
+    let adder = crate::collection_iter::normalize_callable_value(adder);
+    let adder_handle = scope.root_nanbox_f64(adder);
+
+    let add_value = |element: f64, iter_to_close: Option<f64>| {
+        let adder = adder_handle.get_nanbox_f64();
+        let set = set_handle.get_nanbox_f64();
+        let result = crate::collection_iter::call_with_this_capturing_throw(adder, set, &[element]);
+        if let Err(exc) = result {
+            if let Some(iter) = iter_to_close {
+                crate::collection_iter::iterator_close(iter);
+            }
+            crate::exception::js_throw(exc);
+        }
+    };
+
+    match constructor_iter(iterable_handle.get_nanbox_f64()) {
+        ConstructorIter::Empty => {}
+        ConstructorIter::Array(arr_value) => {
+            let arr_handle = scope.root_nanbox_f64(arr_value);
+            let arr_ptr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64()) as *mut ArrayHeader;
+            if !arr_ptr.is_null() {
+                let len = unsafe { js_array_length(arr_ptr) as usize };
+                for i in 0..len {
+                    let element = unsafe {
+                        let arr = js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
+                            as *const ArrayHeader;
+                        js_array_get_f64(arr, i as u32)
+                    };
+                    add_value(element, None);
+                }
+            }
+        }
+        ConstructorIter::Iterator(iter) => {
+            let iter_handle = scope.root_nanbox_f64(iter);
+            loop {
+                let iter = iter_handle.get_nanbox_f64();
+                let Some(element) = crate::collection_iter::iterator_next_value(iter) else {
+                    break;
+                };
+                add_value(element, Some(iter));
+            }
         }
     }
-    set
+
+    set_handle.get_nanbox_f64()
 }
 
 #[no_mangle]

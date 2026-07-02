@@ -70,7 +70,17 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_get_unboxed_f64_field", DOUBLE, &[I64, I32]);
     module.declare_function("js_object_set_field_by_name", VOID, &[I64, I64, DOUBLE]);
     module.declare_function(
+        "js_object_set_field_by_property_id",
+        VOID,
+        &[I64, I64, DOUBLE],
+    );
+    module.declare_function(
         "js_object_set_field_by_name_nonenum",
+        VOID,
+        &[I64, I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_object_set_field_by_name_nonconfigurable",
         VOID,
         &[I64, I64, DOUBLE],
     );
@@ -159,9 +169,19 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &[I64, DOUBLE, PTR, I64, PTR, I64],
     );
     module.declare_function(
+        "js_typed_feedback_native_call_method_by_id",
+        DOUBLE,
+        &[I64, DOUBLE, I64, PTR, I64],
+    );
+    module.declare_function(
         "js_typed_feedback_native_call_method_apply",
         DOUBLE,
         &[I64, DOUBLE, PTR, I64, I64],
+    );
+    module.declare_function(
+        "js_typed_feedback_native_call_method_apply_by_id",
+        DOUBLE,
+        &[I64, DOUBLE, I64, I64],
     );
     module.declare_function(
         "js_typed_feedback_method_direct_call_guard",
@@ -196,6 +216,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("js_object_get_index_polymorphic", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_object_get_field_by_name_f64", DOUBLE, &[I64, I64]);
+    module.declare_function(
+        "js_object_get_field_by_property_id_f64",
+        DOUBLE,
+        &[I64, I64],
+    );
     // Issue #649: PropertyGet on `NativeModuleRef("fs"/"os"/"crypto"/...)`
     // routes through this — codegen passes (module_name, property_name)
     // and the runtime returns the constant value (or a sub-namespace
@@ -280,12 +305,22 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_plain_array_index_get_guard",
         I32,
-        &[I64, DOUBLE, DOUBLE, I32, I32],
+        &[I64, DOUBLE, I32, I32],
     );
     module.declare_function(
         "js_typed_feedback_numeric_array_index_get_guard",
         I32,
-        &[I64, DOUBLE, DOUBLE, I32, I32],
+        &[I64, DOUBLE, I32, I32],
+    );
+    module.declare_function(
+        "js_typed_feedback_packed_f64_array_loop_guard",
+        I32,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
+        "js_typed_feedback_packed_u32_array_loop_guard",
+        I32,
+        &[I64, DOUBLE],
     );
     module.declare_function(
         "js_typed_feedback_array_index_get_fallback_boxed",

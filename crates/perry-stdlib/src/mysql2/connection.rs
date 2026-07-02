@@ -154,7 +154,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
             // First try as a regular connection
             if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
                 if let Some(conn) = wrapper.connection.as_mut() {
-                    let mut query = sqlx::query(&sql);
+                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                     for param in &param_values {
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
             // Then try as a pool connection
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
-                    let mut query = sqlx::query(&sql);
+                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                     for param in &param_values {
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
@@ -285,7 +285,7 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
             // Try as a regular connection first
             if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
                 if let Some(conn) = wrapper.connection.as_mut() {
-                    let mut query = sqlx::query(&sql);
+                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                     for param in &param_values {
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
@@ -345,7 +345,7 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
             // Try as a pool connection
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
-                    let mut query = sqlx::query(&sql);
+                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                     for param in &param_values {
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),

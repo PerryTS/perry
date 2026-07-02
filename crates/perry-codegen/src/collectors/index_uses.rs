@@ -499,7 +499,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         // Closure bodies are intentionally NOT walked: a captured local can't
         // use the i32 slot anyway (boxed captures route through
         // `js_box_get`/`js_box_set` and non-boxed ones through
-        // `js_closure_get_capture_f64`), so marking them as index-used would
+        // `js_closure_get_capture_bits`), so marking them as index-used would
         // have no effect at the Let-site emission gate.
         Expr::Closure { .. } => {}
         // Everything else: conservatively skipped. Missing a variant means we

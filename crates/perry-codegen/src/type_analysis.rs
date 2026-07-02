@@ -58,6 +58,7 @@ pub(crate) use refine::{
 };
 pub(crate) use strings::{
     is_definitely_string_expr, is_map_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    map_static_type_args, set_static_type_args,
 };
 
 #[cfg(test)]

@@ -353,7 +353,16 @@ pub(super) fn emit_string_pool(
         };
         let handle = blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
-        crate::expr::emit_root_nanbox_store_on_block(blk, &nanboxed, &handle_ref);
+        // Plain store, no remembered-set write barrier: the handle slot is
+        // registered as a permanent global root on the very next line (always
+        // scanned by every GC, minor and major), so a remembered-set entry is
+        // redundant. No allocation runs between the store and the registration,
+        // so the fresh string can't be collected in the gap. This is one-time
+        // module init; emitting `js_write_barrier_root_nanbox` here added one
+        // barrier per interned string for no GC benefit (and tripped the
+        // native-region-proof `write_barriers_static` budget — the barriers
+        // landed in `__perry_init_strings_*`, never the hot path).
+        blk.store(DOUBLE, &nanboxed, &handle_ref);
         let addr_i64 = blk.ptrtoint(&handle_ref, I64);
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }

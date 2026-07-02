@@ -111,9 +111,6 @@ pub(crate) fn locate_native_lib_artifact(
 /// cargo lib name (refs issue #792).
 fn lib_name_variants(lib_name: &str, target: Option<&str>) -> Vec<String> {
     let mut out = vec![lib_name.to_string()];
-    if std::path::Path::new(lib_name).extension().is_some() {
-        return out;
-    }
     let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
         || (target.is_none() && cfg!(target_os = "windows"));
     let is_macos = matches!(
@@ -128,6 +125,25 @@ fn lib_name_variants(lib_name: &str, target: Option<&str>) -> Vec<String> {
             | Some("visionos-simulator")
             | Some("macos")
     ) || (target.is_none() && cfg!(target_os = "macos"));
+
+    if std::path::Path::new(lib_name).extension().is_some() {
+        // A wrapper may hard-code the Unix static-lib filename (e.g.
+        // `libperry_ext_webgpu.a`) in its manifest `lib` field even when
+        // targeting Windows, where cargo actually emits
+        // `perry_ext_webgpu.lib` (MSVC drops the `lib` prefix and uses
+        // the `.lib` extension). When the declared name carries the `.a`
+        // extension but we're building for Windows, also probe the
+        // MSVC-translated names so the artifact resolves without forcing
+        // the wrapper to special-case the filename per platform. Refs #5812.
+        if is_windows && std::path::Path::new(lib_name).extension() == Some("a".as_ref()) {
+            let stem = lib_name.strip_suffix(".a").unwrap_or(lib_name);
+            out.push(format!("{}.lib", stem));
+            if let Some(stripped) = stem.strip_prefix("lib") {
+                out.push(format!("{}.lib", stripped));
+            }
+        }
+        return out;
+    }
 
     // MSVC staticlib has no `lib` prefix — the cargo crate name *is* the
     // filename stem. Try the literal name first (covers crates legitimately
@@ -1570,6 +1586,51 @@ mod native_lib_artifact_tests {
             "expected libfoo.lib in {:?}",
             variants
         );
+    }
+
+    /// Refs #5812 — a wrapper that hard-codes the Unix static-lib
+    /// filename (`libperry_ext_webgpu.a`) in its manifest must still
+    /// resolve when targeting Windows, where cargo emits
+    /// `perry_ext_webgpu.lib` (MSVC drops the `lib` prefix and the
+    /// extension is `.lib`). The literal `.a` name is still tried first
+    /// so Unix builds keep working unchanged.
+    #[test]
+    fn variant_set_translates_unix_static_lib_to_msvc_on_windows() {
+        let variants = super::lib_name_variants("libperry_ext_webgpu.a", Some("windows"));
+        assert_eq!(
+            variants.first().map(String::as_str),
+            Some("libperry_ext_webgpu.a")
+        );
+        assert!(
+            variants.iter().any(|v| v == "perry_ext_webgpu.lib"),
+            "expected perry_ext_webgpu.lib in {:?}",
+            variants
+        );
+    }
+
+    /// The `.a` → `.lib` translation is Windows-only; a Unix target must
+    /// not start probing for `.lib` files.
+    #[test]
+    fn variant_set_does_not_translate_static_lib_on_unix() {
+        let variants = super::lib_name_variants("libperry_ext_webgpu.a", Some("linux"));
+        assert_eq!(variants, vec!["libperry_ext_webgpu.a".to_string()]);
+    }
+
+    /// End-to-end: a manifest declaring `libperry_ext_webgpu.a` resolves
+    /// the on-disk `perry_ext_webgpu.lib` that cargo actually produced on
+    /// Windows. Refs #5812.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn locates_msvc_artifact_from_unix_manifest_name() {
+        let tmp = tempfile::tempdir().expect("create tmpdir");
+        let target_dir = tmp.path().join("target");
+        let release_dir = target_dir.join("release");
+        fs::create_dir_all(&release_dir).expect("mkdir release");
+        let lib_path = release_dir.join("perry_ext_webgpu.lib");
+        fs::write(&lib_path, b"fake archive").expect("write lib");
+
+        let found = locate_native_lib_artifact(&target_dir, None, "libperry_ext_webgpu.a");
+        assert_eq!(found.as_deref(), Some(lib_path.as_path()));
     }
 
     #[test]

@@ -378,7 +378,9 @@ pub unsafe fn dispatch_node_sqlite_limits_property(
     let limits = get_handle::<NodeSqliteLimitsHandle>(handle)?;
     let (_, limit) = node_sqlite_limit(property_name)?;
     Some(with_open_node_connection(limits.db_handle, |conn| {
-        JSValue::int32(conn.limit(limit))
+        // rusqlite 0.37: Connection::limit is now fallible. The category was
+        // already validated by node_sqlite_limit above, so it won't error here.
+        JSValue::int32(conn.limit(limit).unwrap_or(0))
     }))
     .map(|value| f64::from_bits(value.bits()))
 }

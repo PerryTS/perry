@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1208
+**Current Version:** 0.5.1215
 
 
 ## TypeScript Parity Status
@@ -46,6 +46,12 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 235 tests). Compared
 PRs from outside contributors should **not** touch `[workspace.package] version` in `Cargo.toml`, the `**Current Version:**` line in `CLAUDE.md`, or `CHANGELOG.md`. The maintainer bumps the version and writes the changelog entry at merge time — usually by rebasing the PR branch and amending. This avoids the patch-version collisions that happen when Perry's `main` ships several commits while a PR is in review (each on-main commit bumps the version; a PR that bumped to the same patch on day 1 is already behind by merge day). Contributors just write code; let the maintainer fold in the metadata last.
 
 ## Build Commands
+
+### Which profile to use
+
+- **Local dev / testing (default choice)**: `cargo check -p perry` for fastest feedback, then `cargo build --profile perry-dev -p perry` (opt-level=1, codegen-units=16, incremental, no LTO — minutes instead of ~30). Use this for iterating on the compiler, running gap/parity tests, and reproducing bugs. Only fall back to `--release` if a bug is optimization-sensitive.
+- **Shipping / official artifacts**: `--profile dist` (mirrors `release`: thin LTO, codegen-units=1, opt-level=3, strip). Slow by design — LLVM codegen runs single-threaded per crate at codegen-units=1, and the giant crates (perry-runtime ~340k lines, perry-codegen, perry-hir) serialize the build regardless of core count. Don't use it for iteration.
+- **Local release-ish build when you need release perf**: override the compile-time killer, keep the optimization: `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release` (2–4× faster, ~1–3% runtime cost).
 
 ```bash
 cargo build --release                          # Build all crates

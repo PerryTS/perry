@@ -51,7 +51,7 @@ pub use properties::{
 
 // Symbol-keyed property reads.
 pub use get::js_object_get_symbol_property;
-pub(crate) use get::own_symbol_property;
+pub(crate) use get::{inherited_symbol_property, own_symbol_property};
 
 // Iterator protocol, getOwnPropertySymbols, ToPrimitive.
 pub use iterator::{

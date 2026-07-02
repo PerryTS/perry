@@ -313,16 +313,12 @@ pub(super) fn try_url_date_weakref_instance(
                         return Ok(Ok(Expr::DateToLocaleTimeString(Box::new(date_expr))));
                     }
                     "toLocaleString" => {
-                        // When args (locale / options) are present and the
-                        // receiver is not statically a Date, skip the
-                        // DateToLocaleString fold so the arguments are
-                        // preserved on the generic method-call path.  Temporal
-                        // types need this: their dispatch layer already accepts
-                        // locale and options arguments correctly, but the fold
-                        // was silently dropping them (see #5580).  Zero-arg
-                        // calls and statically-Date receivers still use the
-                        // fast path to preserve existing Date behaviour.
-                        if args.is_empty() || recv_class == Some("Date") {
+                        // Only fold zero-arg calls to the fast DateToLocaleString
+                        // path.  Calls with locale/options must fall through so
+                        // arguments are preserved — both Temporal types and Date
+                        // itself now handle locale/options on the generic path
+                        // (Date via the `date_to_locale_string_opts` thunk, #5800).
+                        if args.is_empty() {
                             let date_expr = lower_expr(ctx, &member.obj)?;
                             return Ok(Ok(Expr::DateToLocaleString(Box::new(date_expr))));
                         }

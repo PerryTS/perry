@@ -1700,6 +1700,18 @@ pub(crate) fn build_and_run_link(
                 }
             }
 
+            // Issue #5812 item 2 — auto-append the Windows system libs that
+            // wgpu's graphics backends reference but cargo's `#[link]` attrs
+            // on the wgpu crate don't cover (d3dcompiler / opengl32). Without
+            // them a Windows app linking a wgpu-backed native ext failed with
+            // LNK2019 unresolved externals (the reporter patched the link
+            // line by hand). See `windows_wgpu_backend_syslibs`.
+            if is_windows {
+                for syslib in super::windows_wgpu_backend_syslibs(target_config) {
+                    cmd.arg(syslib);
+                }
+            }
+
             // Compile manifest-declared Swift sources to object files and
             // append them to the link line. Used by `--features watchos-swift-app`
             // so a native lib can ship its own `@main struct App: App`.

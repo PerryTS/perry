@@ -12,19 +12,22 @@ use crate::native_value::buffer::{AliasState, BoundsState, BufferAccessMode};
 use crate::native_value::materialize::MaterializationReason;
 use crate::native_value::pod::recompute_layout_from_fields;
 use crate::native_value::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I128, I32, I64, I8, PTR};
 
 pub(crate) fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
     Some(match rep {
         NativeRep::JsValue | NativeRep::F64 => DOUBLE,
+        NativeRep::I1 => I1,
         NativeRep::F32 => F32,
         NativeRep::JsValueBits
+        | NativeRep::StringRef
         | NativeRep::I64
         | NativeRep::U64
         | NativeRep::USize
         | NativeRep::HandleId
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => I64,
+        NativeRep::SmallBigInt => I128,
         NativeRep::I32 | NativeRep::U32 => I32,
         NativeRep::BufferLen => I32,
         NativeRep::U8 => I8,
@@ -181,10 +184,30 @@ pub(crate) fn valid_native_abi_transition(
     record_rep: &NativeRep,
 ) -> bool {
     if to == NativeRep::JsValueBits.name() {
-        return matches!(record_rep, NativeRep::JsValueBits)
-            && from == NativeRep::JsValue.name()
-            && matches!(op, NativeAbiTransitionOp::JsValueToBits)
-            && !lossy;
+        if !matches!(record_rep, NativeRep::JsValueBits) {
+            return false;
+        }
+        return match op {
+            NativeAbiTransitionOp::None => from == "f64" && !lossy,
+            NativeAbiTransitionOp::JsValueToBits => from == "js_value" && !lossy,
+            NativeAbiTransitionOp::BitsToJsValue => false,
+            NativeAbiTransitionOp::SignedIntToFloat => {
+                matches!(from, "i32" | "i64") && lossy == (from == "i64")
+            }
+            NativeAbiTransitionOp::UnsignedIntToFloat => {
+                matches!(
+                    from,
+                    "u8" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
+                ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
+            }
+            NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
+            NativeAbiTransitionOp::PointerBox | NativeAbiTransitionOp::NativeHandleBox => {
+                from == "native_handle" && !lossy
+            }
+            NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
+            NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+            NativeAbiTransitionOp::BigIntBox => from == "small_bigint" && !lossy,
+        };
     }
     if to != NativeRep::JsValue.name() {
         return false;
@@ -206,8 +229,12 @@ pub(crate) fn valid_native_abi_transition(
             ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
-        NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
+        NativeAbiTransitionOp::PointerBox => {
+            matches!(from, "native_handle" | "string_ref") && !lossy
+        }
         NativeAbiTransitionOp::NativeHandleBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
+        NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+        NativeAbiTransitionOp::BigIntBox => from == "small_bigint" && !lossy,
     }
 }

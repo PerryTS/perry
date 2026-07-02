@@ -55,8 +55,105 @@ fn raw_f64_layout_fact(state: &str, reason: Option<MaterializationReason>) -> Na
         kind: "raw_f64_layout".to_string(),
         local_id: None,
         state: state.to_string(),
+        detail: state.to_string(),
         reason,
     }
+}
+
+fn type_fact(state: &str, detail: &str, reason: Option<MaterializationReason>) -> NativeFactUse {
+    NativeFactUse {
+        fact_id: format!("test.type_fact.{state}.{detail}"),
+        kind: "type_fact".to_string(),
+        local_id: Some(1),
+        state: state.to_string(),
+        detail: detail.to_string(),
+        reason,
+    }
+}
+
+#[test]
+fn verifier_accepts_structured_consumed_and_rejected_facts() {
+    let mut r = record();
+    r.consumed_facts
+        .push(type_fact("consumed", "packed_i32", None));
+    r.rejected_facts.push(type_fact(
+        "rejected",
+        "unknown_call_escape",
+        Some(MaterializationReason::UnknownCallEscape),
+    ));
+
+    assert!(verify_native_rep_records(&[r]).is_ok());
+}
+
+#[test]
+fn verifier_rejects_malformed_fact_uses() {
+    let mut r = record();
+    r.consumed_facts.push(NativeFactUse {
+        fact_id: String::new(),
+        kind: "type_fact".to_string(),
+        local_id: Some(1),
+        state: "consumed".to_string(),
+        detail: "packed_i32".to_string(),
+        reason: None,
+    });
+    r.rejected_facts.push(NativeFactUse {
+        fact_id: "test.type_fact.rejected".to_string(),
+        kind: "type_fact".to_string(),
+        local_id: Some(1),
+        state: "guard_failed".to_string(),
+        detail: String::new(),
+        reason: None,
+    });
+
+    let err = verify_native_rep_records(&[r]).expect_err("malformed facts should fail");
+    let text = err.to_string();
+    assert!(text.contains("empty fact_id"));
+    assert!(text.contains("lacks reason/detail"));
+}
+
+fn packed_f64_loop_store_record() -> NativeRepRecord {
+    let mut r = record();
+    r.expr_kind = "PackedF64LoopStore".to_string();
+    r.consumer = "packed_f64_loop_store".to_string();
+    r.native_rep = NativeRep::F64;
+    r.native_rep_name = "f64".to_string();
+    r.llvm_ty = DOUBLE;
+    r.access_mode = Some(BufferAccessMode::CheckedNative);
+    r.bounds_state = Some(BoundsState::Guarded {
+        guard_id: "packed_f64_array_loop_guard".to_string(),
+    });
+    r.consumed_facts.push(raw_f64_layout_fact("consumed", None));
+    r
+}
+
+#[test]
+fn verifier_accepts_packed_f64_loop_store_with_runtime_safety_notes() {
+    let mut r = packed_f64_loop_store_record();
+    r.notes = vec![
+        "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard".to_string(),
+        "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64".to_string(),
+        "array_reloaded_after_rhs=1".to_string(),
+        "array_reloaded_after_store_guard=1".to_string(),
+        "array_reloaded_after_canonicalization=1".to_string(),
+        "index_range=nonnegative_i32".to_string(),
+        "length_range=guarded_i32".to_string(),
+    ];
+    assert!(verify_native_rep_records(&[r]).is_ok());
+}
+
+#[test]
+fn verifier_rejects_packed_f64_loop_store_without_canonicalization_notes() {
+    let mut r = packed_f64_loop_store_record();
+    r.notes = vec![
+        "index_range=nonnegative_i32".to_string(),
+        "length_range=guarded_i32".to_string(),
+    ];
+    let err = verify_native_rep_records(&[r]).expect_err("missing packed store notes");
+    assert!(
+        err.to_string()
+            .contains("packed-f64 loop store missing raw_f64_canonicalized"),
+        "{err}"
+    );
 }
 
 fn pod_layout() -> crate::native_value::PodLayoutManifest {
@@ -830,21 +927,32 @@ fn accepts_region_local_js_value_bits() {
 
 #[test]
 fn accepts_js_value_bits_materialization_transitions() {
-    let mut to_bits = record();
-    to_bits.semantic = SemanticKind::JsValue;
-    to_bits.native_rep = NativeRep::JsValueBits;
-    to_bits.native_rep_name = "js_value_bits".to_string();
-    to_bits.llvm_ty = I64;
-    to_bits.llvm_value = "%bits".to_string();
-    to_bits.native_value_state = NativeValueState::Materialized;
-    to_bits.materialization_reason = Some(MaterializationReason::FunctionAbi);
-    to_bits.native_abi_transition = Some(NativeAbiTransitionRecord {
-        from_native_rep: "js_value".to_string(),
-        to_native_rep: "js_value_bits".to_string(),
-        op: NativeAbiTransitionOp::JsValueToBits,
-        reason: MaterializationReason::FunctionAbi,
-        lossy: false,
-    });
+    fn bits_transition(from: &str, op: NativeAbiTransitionOp, lossy: bool) -> NativeRepRecord {
+        let mut to_bits = record();
+        to_bits.semantic = SemanticKind::JsValue;
+        to_bits.native_rep = NativeRep::JsValueBits;
+        to_bits.native_rep_name = "js_value_bits".to_string();
+        to_bits.llvm_ty = I64;
+        to_bits.llvm_value = "%bits".to_string();
+        to_bits.native_value_state = NativeValueState::Materialized;
+        to_bits.materialization_reason = Some(MaterializationReason::FunctionAbi);
+        to_bits.native_abi_transition = Some(NativeAbiTransitionRecord {
+            from_native_rep: from.to_string(),
+            to_native_rep: "js_value_bits".to_string(),
+            op,
+            reason: MaterializationReason::FunctionAbi,
+            lossy,
+        });
+        to_bits
+    }
+
+    let to_bits = bits_transition("js_value", NativeAbiTransitionOp::JsValueToBits, false);
+    let f64_to_bits = bits_transition("f64", NativeAbiTransitionOp::None, false);
+    let i1_to_bits = bits_transition("i1", NativeAbiTransitionOp::BoolToJsValue, false);
+    let i32_to_bits = bits_transition("i32", NativeAbiTransitionOp::SignedIntToFloat, false);
+    let i64_to_bits = bits_transition("i64", NativeAbiTransitionOp::SignedIntToFloat, true);
+    let native_handle_to_bits =
+        bits_transition("native_handle", NativeAbiTransitionOp::PointerBox, false);
 
     let mut to_js_value = record();
     to_js_value.semantic = SemanticKind::JsValue;
@@ -862,7 +970,16 @@ fn accepts_js_value_bits_materialization_transitions() {
         lossy: false,
     });
 
-    assert!(verify_native_rep_records(&[to_bits, to_js_value]).is_ok());
+    assert!(verify_native_rep_records(&[
+        to_bits,
+        f64_to_bits,
+        i1_to_bits,
+        i32_to_bits,
+        i64_to_bits,
+        native_handle_to_bits,
+        to_js_value,
+    ])
+    .is_ok());
 }
 
 #[test]

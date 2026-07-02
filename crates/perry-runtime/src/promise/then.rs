@@ -1153,16 +1153,26 @@ fn promise_prototype_receiver(method: &str) -> *mut Promise {
     throw_promise_prototype_incompatible_receiver(method, receiver)
 }
 
+/// ECMA-262 Invoke(receiver, "then", args): read the `then` property and call it.
+/// Unlike `js_native_call_method`, this reads the own/inherited `then` property
+/// first (invoking accessor getters) and throws TypeError if it is not callable —
+/// correctly propagating overridden `then` properties on Promise instances.
 fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
-    unsafe {
-        crate::object::js_native_call_method(
-            receiver,
-            b"then".as_ptr() as *const i8,
-            b"then".len(),
-            args.as_ptr(),
-            args.len(),
-        )
+    let then_fn = unsafe {
+        crate::value::js_dynamic_object_get_property(receiver, b"then".as_ptr() as *const i8, 4)
+    };
+    if !super::spec_combinators::is_callable_value(then_fn) {
+        let msg = b"Promise method called on non-callable 'then'";
+        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_str);
+        let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+        crate::exception::js_throw(f64::from_bits(err_val));
     }
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let result =
+        unsafe { crate::closure::js_native_call_value(then_fn, args.as_ptr(), args.len()) };
+    crate::object::js_implicit_this_set(prev_this);
+    result
 }
 
 fn throw_promise_finally_non_object() -> ! {
@@ -1188,13 +1198,41 @@ fn is_promise_species_object(value: f64) -> bool {
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::is_handle_band(raw) {
-        return false;
+        // Proxies are encoded as handle-band values but are valid objects.
+        return crate::proxy::js_proxy_is_proxy(value) != 0;
     }
     !crate::symbol::is_registered_symbol(raw)
 }
 
 fn get_intrinsic_promise() -> f64 {
     crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len())
+}
+
+/// Return the `Promise.prototype[name]` closure (then/catch/finally), or `None`.
+/// Used by the dynamic dispatch path to route spec-path calls when a promise has
+/// own properties that modify observable behavior.
+pub(crate) fn promise_proto_method(name: &str) -> Option<f64> {
+    unsafe { js_promise_bound_method(std::ptr::null_mut(), name) }
+}
+
+/// True iff the given promise has an own "constructor" expando property.
+/// Used by primitive_methods.rs to decide whether SpeciesConstructor must run.
+pub(crate) fn promise_has_own_constructor(promise_addr: usize) -> bool {
+    crate::object::exotic_expando::exotic_has_own_property(
+        crate::object::exotic_expando::ExoticKind::Promise,
+        promise_addr,
+        "constructor",
+    )
+}
+
+/// True iff the given promise has an own property with the given name.
+/// Used by primitive_methods.rs to decide whether to bypass the fast path.
+pub(crate) fn promise_has_own_property(promise_addr: usize, name: &str) -> bool {
+    crate::object::exotic_expando::exotic_has_own_property(
+        crate::object::exotic_expando::ExoticKind::Promise,
+        promise_addr,
+        name,
+    )
 }
 
 // SpeciesConstructor(promiseReceiver, %Promise%) per ECMA-262 §7.3.25.
@@ -1598,24 +1636,37 @@ extern "C" fn promise_finally_bound(
     box_promise_ptr(js_promise_finally(p, arg_to_closure(on_finally)))
 }
 
-/// Return a NaN-boxed bound function for a promise's `then`/`catch`/`finally`
-/// value-read, or `None` for any other property. The returned closure captures
-/// the promise (slot 0) so the GC keeps it alive and updates the pointer on
-/// move, exactly like the existing forward wrappers above.
-pub unsafe fn js_promise_bound_method(promise: *mut Promise, property: &str) -> Option<f64> {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_arity};
-    let (thunk, arity): (*const u8, u32) = match property {
-        "then" => (promise_then_bound as *const u8, 2),
-        "catch" => (promise_catch_bound as *const u8, 1),
-        "finally" => (promise_finally_bound as *const u8, 1),
-        _ => return None,
-    };
-    js_register_closure_arity(thunk, arity);
-    let closure = js_closure_alloc(thunk, 1);
-    js_closure_set_capture_ptr(closure, 0, promise as i64);
-    Some(f64::from_bits(
-        crate::value::JSValue::pointer(closure as *const u8).bits(),
-    ))
+/// Return the `Promise.prototype[property]` closure for a promise's
+/// `then`/`catch`/`finally` value-read, or `None` for any other property.
+/// Returns the shared prototype method so `p.then === Promise.prototype.then`
+/// (spec-required identity) and `.call(receiver)` properly receives the caller's
+/// `this` via IMPLICIT_THIS rather than a captured pointer.
+pub unsafe fn js_promise_bound_method(_promise: *mut Promise, property: &str) -> Option<f64> {
+    if !matches!(property, "then" | "catch" | "finally") {
+        return None;
+    }
+    let ctor = get_intrinsic_promise();
+    let ctor_bits = ctor.to_bits();
+    if (ctor_bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return None;
+    }
+    let proto_val = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    if proto_val.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    let method = crate::value::js_dynamic_object_get_property(
+        proto_val,
+        property.as_ptr() as *const i8,
+        property.len(),
+    );
+    if method.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    Some(method)
 }
 
 /// Fulfilled-path wrapper for `.finally()`.
@@ -1722,7 +1773,27 @@ fn finally_wrapper_common(
             // On cleanup rejection: reject `next` with the cleanup reason.
             let on_err = js_closure_alloc(finally_cleanup_reject as *const u8, 1);
             js_closure_set_capture_ptr(on_err, 0, next as i64);
-            js_promise_then(inner, on_ok, on_err);
+            // Use Invoke(cleanup, "then", …) to respect any user-installed own
+            // `then` property on the cleanup promise (observable-then-calls tests).
+            // Wrap in a try-frame: call_receiver_then can throw (e.g. non-callable
+            // `then`, or a getter that throws) after the earlier frame has ended.
+            let on_ok_f = f64::from_bits(crate::value::JSValue::pointer(on_ok as *const u8).bits());
+            let on_err_f =
+                f64::from_bits(crate::value::JSValue::pointer(on_err as *const u8).bits());
+            let args = [on_ok_f, on_err_f];
+            let trap2 = crate::exception::js_try_push();
+            let jumped2 = unsafe { crate::ffi::setjmp::setjmp(trap2 as *mut std::os::raw::c_int) };
+            if jumped2 != 0 {
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::exception::js_try_end();
+                if !next.is_null() {
+                    js_promise_reject(next, exc);
+                }
+                return undef;
+            }
+            call_receiver_then(cleanup, &args);
+            crate::exception::js_try_end();
             return undef;
         }
     }

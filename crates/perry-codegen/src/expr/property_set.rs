@@ -22,7 +22,8 @@ use crate::lower_string_method::{
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+    BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
+    NativeRep, SemanticKind,
 };
 #[allow(unused_imports)]
 use crate::type_analysis::{
@@ -42,7 +43,7 @@ use super::{
     expr_is_known_non_pointer_shadow_value, expr_produces_non_pointer_bits_by_construction,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32, lower_expr_native,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
@@ -83,12 +84,36 @@ fn lower_runtime_property_set_by_name(
     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
     let key_box = blk.load(DOUBLE, &key_handle_global);
     let key_bits = blk.bitcast_double_to_i64(&key_box);
-    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    let property_id = blk.and(I64, &key_bits, POINTER_MASK_I64);
     blk.call_void(
-        "js_object_set_field_by_name",
-        &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+        "js_object_set_field_by_property_id",
+        &[(I64, &obj_bits), (I64, &property_id), (DOUBLE, &val_double)],
     );
     Ok(val_double)
+}
+
+fn lower_value_for_dynamic_property_set(
+    ctx: &mut FnCtx<'_>,
+    value: &Expr,
+    consumer: &str,
+    boxed_at: &str,
+) -> Result<(String, String)> {
+    let lowered = lower_expr_native(ctx, value, ExpectedNativeRep::JsValueBits)?;
+    let value_bits = lowered.value.clone();
+    let value_double = ctx.block().bitcast_i64_to_double(&value_bits);
+    ctx.record_lowered_value(
+        "PropertySet",
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![format!("boxed_at={boxed_at}")],
+    );
+    Ok((value_double, value_bits))
 }
 
 pub(crate) fn emit_nullish_write_guard(
@@ -591,8 +616,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 vec![
                                     format!("class={}", class_name),
+                                    format!("class_id={}", expected_class_id_str),
                                     format!("field={}", property),
                                     format!("field_index={}", field_idx_str),
+                                    "receiver_proof=declared_named_receiver_guarded_exact_class"
+                                        .to_string(),
+                                    "field_layout=raw_f64_slot_array".to_string(),
+                                    "pointer_bitmap=non_pointer".to_string(),
+                                ],
+                            );
+                            ctx.record_lowered_value_with_access_mode(
+                                "WriteBarrierElided",
+                                None,
+                                "write_barrier.elided_raw_f64_class_field",
+                                &stored,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                vec![
+                                    "reason=raw_f64_class_field_pointer_free".to_string(),
+                                    format!("class={}", class_name),
+                                    format!("class_id={}", expected_class_id_str),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                    "receiver_proof=declared_named_receiver_guarded_exact_class"
+                                        .to_string(),
+                                    "field_layout=raw_f64_slot_array".to_string(),
+                                    "pointer_bitmap=non_pointer".to_string(),
                                 ],
                             );
                         }
@@ -667,7 +720,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
             let obj_box = lower_expr(ctx, object)?;
-            let val_double = lower_expr(ctx, value)?;
+            let (val_double, _val_bits) = lower_value_for_dynamic_property_set(
+                ctx,
+                value,
+                "property_set.dynamic_value_bits",
+                "dynamic_property_set_helper_edge",
+            )?;
             // Intern the field name in the StringPool (same one the
             // matching getter uses, so they share the global string).
             let key_idx = ctx.strings.intern(property);

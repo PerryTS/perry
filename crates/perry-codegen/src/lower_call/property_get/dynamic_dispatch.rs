@@ -457,8 +457,12 @@ pub(crate) fn try_lower_instance_method_call(
             ctx.current_block = default_idx;
             let key_idx = ctx.strings.intern(property);
             let entry = ctx.strings.entry(key_idx);
-            let bytes_global = format!("@{}", entry.bytes_global);
-            let name_len_str = entry.byte_len.to_string();
+            let key_handle_global = format!("@{}", entry.handle_global);
+            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let method_id = ctx
+                .block()
+                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
             let (fb_args_ptr, fb_args_len) = if static_user_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {
@@ -503,11 +507,10 @@ pub(crate) fn try_lower_instance_method_call(
             crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
             let v_def = ctx.block().call(
                 DOUBLE,
-                "js_native_call_method",
+                "js_native_call_method_by_id",
                 &[
                     (DOUBLE, &recv_box),
-                    (crate::types::PTR, &bytes_global),
-                    (I64, &name_len_str),
+                    (I64, &method_id),
                     (crate::types::PTR, &fb_args_ptr),
                     (I64, &fb_args_len),
                 ],
@@ -730,7 +733,131 @@ pub(crate) fn try_lower_instance_method_call(
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             if !method_has_rest {
-                let shape_only_guard = !class_chain_has_field_named(ctx, &class_name, property);
+                let typed_method_key = (class_name.clone(), property.to_string());
+                let typed_formal_count = ctx
+                    .method_param_counts
+                    .get(&typed_method_key)
+                    .copied()
+                    .unwrap_or(max_explicit_arity);
+                let typed_receiver_info = ctx.classes.get(&class_name).and_then(|class| {
+                    let class = *class;
+                    class
+                        .methods
+                        .iter()
+                        .find(|method| method.name.as_str() == property)
+                        .and_then(|method| {
+                            crate::codegen::typed_f64_receiver_method_info(class, method)
+                        })
+                });
+                let typed_receiver_direct_name = if typed_receiver_info.is_some()
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && args.len() == typed_formal_count
+                    && args
+                        .iter()
+                        .all(|arg| crate::type_analysis::is_numeric_expr(ctx, arg))
+                {
+                    Some(crate::codegen::typed_f64_receiver_method_name(&fallback_fn))
+                } else {
+                    None
+                };
+                let shape_only_guard = typed_receiver_direct_name.is_none()
+                    && !class_chain_has_field_named(ctx, &class_name, property);
+                let typed_direct_name = if ctx.typed_f64_methods.contains(&typed_method_key)
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
+                    Some(crate::codegen::typed_f64_method_name(&fallback_fn))
+                } else {
+                    None
+                };
+                let typed_i32_direct_name = if ctx.typed_i32_methods.contains(&typed_method_key)
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
+                    Some(crate::codegen::typed_i32_method_name(&fallback_fn))
+                } else {
+                    None
+                };
+                let typed_i1_direct_name = if ctx.typed_i1_methods.contains(&typed_method_key)
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
+                    Some(crate::codegen::typed_i1_method_name(&fallback_fn))
+                } else {
+                    None
+                };
+                let typed_string_direct_name = if ctx
+                    .typed_string_methods
+                    .contains(&typed_method_key)
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
+                    Some(crate::codegen::typed_string_method_name(&fallback_fn))
+                } else {
+                    None
+                };
+                let typed_direct = typed_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
+                let typed_receiver_direct = match (
+                    typed_receiver_direct_name.as_ref(),
+                    typed_receiver_info.as_ref(),
+                ) {
+                    (Some(name), Some(info)) => Some((name.as_str(), typed_formal_count, info)),
+                    _ => None,
+                };
+                let typed_i32_direct = typed_i32_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
+                let typed_i1_direct = typed_i1_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
+                let typed_string_direct = typed_string_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
@@ -739,6 +866,11 @@ pub(crate) fn try_lower_instance_method_call(
                     &fallback_fn,
                     &arg_slices,
                     &fallback_user_args,
+                    typed_direct,
+                    typed_receiver_direct,
+                    typed_i32_direct,
+                    typed_i1_direct,
+                    typed_string_direct,
                     shape_only_guard,
                 ) {
                     return Ok(Some(guarded));

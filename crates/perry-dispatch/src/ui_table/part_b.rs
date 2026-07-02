@@ -768,6 +768,19 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::F64, ArgKind::F64],
         ret: ReturnKind::Void,
     },
+    // Menu-bar / background apps: set the macOS activation policy
+    // ("regular" | "accessory" | "background"). Like `appSetTimer` the
+    // native ABI is `(app_handle, value)`, but the user-facing form is the
+    // 1-arg `appSetActivationPolicy(policy)`; `lower_perry_ui_table_call`
+    // prepends a synthetic 0 app-handle. On macOS "accessory" also
+    // suppresses the auto-presented launch window (menu-bar-only apps open
+    // windows on demand). FFI helpers ignore `_app_handle` on every backend.
+    MethodRow {
+        method: "appSetActivationPolicy",
+        runtime: "perry_ui_app_set_activation_policy",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
     // ---- (#391: removed the 1-arg `scrollviewSetOffset(scrollView, y)`
     // legacy alias here — the 2-arg `(x, y)` form is now declared
     // alongside `scrollviewGetOffset` / `scrollviewScrollTo` above and

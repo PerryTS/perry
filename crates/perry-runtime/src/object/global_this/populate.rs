@@ -110,6 +110,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "WeakMap" => weak_map_constructor_call_thunk as *const u8,
             "WeakSet" => weak_set_constructor_call_thunk as *const u8,
             "WeakRef" => weak_ref_constructor_call_thunk as *const u8,
+            "Promise" => promise_constructor_call_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -601,6 +602,77 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
         js_object_set_field_by_name(singleton, nkey, nval);
     }
+    // ECMA-262 19.1/19.2/19.3: NaN, Infinity, and undefined are own data
+    // properties of the global object with {writable:false, enumerable:false,
+    // configurable:false}.  Install them so that
+    // `Object.getOwnPropertyDescriptor(globalThis, "NaN")` returns a real
+    // descriptor (test262 15.2.3.3-4-178/179/180) and
+    // `Object.getOwnPropertyNames(globalThis)` includes them (15.2.3.4-4-1).
+    {
+        let non_writable = super::super::PropertyAttrs::new(false, false, false);
+        for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(singleton, key, value);
+            super::super::set_builtin_property_attrs(
+                singleton as usize,
+                name.to_string(),
+                non_writable,
+            );
+        }
+        let undef_key = crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9);
+        let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
+        js_object_set_field_by_name(singleton, undef_key, undef_val);
+        super::super::set_builtin_property_attrs(
+            singleton as usize,
+            "undefined".to_string(),
+            super::super::PropertyAttrs::new(false, false, false),
+        );
+    }
+    // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
+    // same function object as `Array.prototype.toString`. Alias it now that
+    // both the Array constructor and the TypedArray intrinsic are set up.
+    alias_typed_array_proto_to_string(singleton);
+}
+
+/// Install `%TypedArray%.prototype.toString` as the same closure object as
+/// `Array.prototype.toString` (ECMA-262 §23.2.3.33).
+fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
+    let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if ta_proto_addr == 0 {
+        return;
+    }
+    let ta_proto = ta_proto_addr as *mut ObjectHeader;
+    // Read Array constructor from globalThis, then Array.prototype.toString.
+    let arr_key = crate::string::js_string_from_bytes(b"Array".as_ptr(), 5);
+    let arr_ctor = js_object_get_field_by_name(singleton, arr_key);
+    if (arr_ctor.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let arr_ctor_ptr = (arr_ctor.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if arr_ctor_ptr.is_null() {
+        return;
+    }
+    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let arr_proto = js_object_get_field_by_name(arr_ctor_ptr, proto_key);
+    if (arr_proto.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let arr_proto_ptr = (arr_proto.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if arr_proto_ptr.is_null() {
+        return;
+    }
+    let ts_key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let to_string_fn = js_object_get_field_by_name(arr_proto_ptr, ts_key);
+    if to_string_fn.bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let ts_key2 = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    js_object_set_field_by_name(ta_proto, ts_key2, f64::from_bits(to_string_fn.bits()));
+    super::super::set_builtin_property_attrs(
+        ta_proto as usize,
+        "toString".to_string(),
+        super::super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Re-point a `Number.<name>` static at the global function of the same name so

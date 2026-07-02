@@ -42,6 +42,27 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+pub(crate) fn set_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
+    match e {
+        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+            Some(HirType::Generic { base, type_args }) if base == "Set" => {
+                Some(type_args.as_slice())
+            }
+            _ => None,
+        },
+        Expr::PropertyGet { object, property } => {
+            let cls_name = receiver_class_name(ctx, object)?;
+            let cls = ctx.classes.get(&cls_name)?;
+            let field = cls.fields.iter().find(|f| f.name == *property)?;
+            match &field.ty {
+                HirType::Generic { base, type_args } if base == "Set" => Some(type_args.as_slice()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Issue #650: detect URLSearchParams receivers for `sp.size` property
 /// access. URLSearchParams is allocated as a generic ObjectHeader; the
 /// type system tracks it as `HirType::Named("URLSearchParams")`. Used by
@@ -101,6 +122,27 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+pub(crate) fn map_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
+    match e {
+        Expr::LocalGet(id) => match ctx.local_types.get(id) {
+            Some(HirType::Generic { base, type_args }) if base == "Map" => {
+                Some(type_args.as_slice())
+            }
+            _ => None,
+        },
+        Expr::PropertyGet { object, property } => {
+            let cls_name = receiver_class_name(ctx, object)?;
+            let cls = ctx.classes.get(&cls_name)?;
+            let field = cls.fields.iter().find(|f| f.name == *property)?;
+            match &field.ty {
+                HirType::Generic { base, type_args } if base == "Map" => Some(type_args.as_slice()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Stricter variant of `is_string_expr` that requires the type to be
 /// definitely `String` — unions are NOT treated as strings. Used in the
 /// string-concat fast path where dispatching through the string-only
@@ -115,9 +157,10 @@ pub(crate) fn is_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::String(_) | Expr::WtfString(_) => true,
-        Expr::LocalGet(id) => {
-            matches!(ctx.local_types.get(id), Some(HirType::String))
-        }
+        Expr::LocalGet(id) => matches!(
+            ctx.local_types.get(id),
+            Some(HirType::String | HirType::StringLiteral(_))
+        ),
         Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
         Expr::PathWin32 {
             method: perry_hir::PathWin32Method::ToNamespacedPath,

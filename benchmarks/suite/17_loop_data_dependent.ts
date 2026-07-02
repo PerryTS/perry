@@ -6,7 +6,7 @@
 // probe, not a runtime perf comparison), this benchmark forces the
 // compiler to actually execute work.
 //
-// Kernel: sum = sum * x[i % N] + x[(i*7) % N]
+// Kernel: sum = sum * x[i & 63] + x[(i*7) & 63]
 //   - Sequential dependency on `sum` (the multiplicative carry).
 //     LLVM cannot reorder this under reassoc because reassoc applies
 //     to identical operands; here each iteration's multiplicand is a
@@ -45,7 +45,7 @@ for (let i = 0; i < N; i++) {
 const start = Date.now();
 let sum = 1.0;
 for (let i = 0; i < ITERATIONS; i++) {
-    sum = sum * x[i % N] + x[(i * 7) % N];
+    sum = sum * x[i & 63] + x[(i * 7) & 63];
 }
 const elapsed = Date.now() - start;
 

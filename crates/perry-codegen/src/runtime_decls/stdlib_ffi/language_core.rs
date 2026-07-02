@@ -277,7 +277,13 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // in a thread-local cell that the async-step driver consumes
     // immediately.
     module.declare_function("js_iter_result_set", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_iter_result_set_f64", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_iter_result_set_i32", DOUBLE, &[I32, I32]);
+    module.declare_function("js_iter_result_set_i1", DOUBLE, &[I32, I32]);
     module.declare_function("js_iter_result_get_value", DOUBLE, &[]);
+    module.declare_function("js_iter_result_get_value_f64", DOUBLE, &[]);
+    module.declare_function("js_iter_result_get_value_i32", I32, &[]);
+    module.declare_function("js_iter_result_get_value_i1", I32, &[]);
     module.declare_function("js_iter_result_get_done", DOUBLE, &[]);
     // Optimized async-step chain: replaces
     // `Promise.resolve(value).then(then_v_arrow, then_e_arrow)` in
@@ -352,6 +358,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // Lets `typeof obj.method === "function"` and `let f = obj.method; f(args)`
     // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.
     module.declare_function("js_class_method_bind", DOUBLE, &[DOUBLE, I64, I64]);
+    module.declare_function("js_class_method_bind_by_id", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_class_prototype_method_value", DOUBLE, &[DOUBLE, DOUBLE]);
     // #519: read the implicit `this` thread-local set by
     // `js_native_call_method`'s field-scan dispatch when invoking a

@@ -17,6 +17,13 @@ from .common import (
 from .spec import WORKLOADS
 
 
+TRACE_RUNTIME_BUDGET_FIELDS = {
+    "allocations_traced",
+    "gc_collections_traced",
+    "write_barriers_traced",
+}
+
+
 def target_supports_fma(target: str, clang_args: list[str]) -> bool:
     normalized_target = target.lower()
     normalized_args = " ".join(clang_args).lower()
@@ -97,6 +104,33 @@ def runtime_budget_results(
         return []
     budgets = workloads.get(workload, {}).get("runtime_budgets", {})
     results = []
+    trace_budget_fields = sorted(set(budgets).intersection(TRACE_RUNTIME_BUDGET_FIELDS))
+    if trace_budget_fields and runtime_summary.get("gc_trace_enabled") is not True:
+        results.append(
+            {
+                "field": "gc_trace_enabled",
+                "actual": 0,
+                "maximum": 1,
+                "passed": False,
+                "detail": (
+                    "PERRY_GC_TRACE was disabled; trace-backed runtime budgets "
+                    f"require GC trace data for {trace_budget_fields}"
+                ),
+            }
+        )
+    if trace_budget_fields and runtime_summary.get("gc_trace_unavailable") is True:
+        results.append(
+            {
+                "field": "gc_trace_unavailable",
+                "actual": 1,
+                "maximum": 0,
+                "passed": False,
+                "detail": (
+                    "PERRY_GC_TRACE was requested, but the linked runtime "
+                    "reported diagnostics feature disabled"
+                ),
+            }
+        )
     for field, maximum in sorted(budgets.items()):
         actual = int(runtime_summary.get(field, 0) or 0)
         results.append(
@@ -150,17 +184,20 @@ def named_region_contract_results(
             if not counters.get("labels"):
                 continue
         if region_spec.get("no_runtime_calls"):
+            region_allowed_runtime_calls = set(
+                region_spec.get("allowed_runtime_calls", allowed_runtime_calls)
+            )
             calls = counters.get("runtime_calls", {})
             unexpected_calls = {
                 name: count
                 for name, count in calls.items()
-                if name not in allowed_runtime_calls
+                if name not in region_allowed_runtime_calls
             }
             add(
                 f"named_region_{name}_no_runtime_calls",
                 not unexpected_calls,
                 f"{name} runtime_calls={json.dumps(calls, sort_keys=True)}"
-                + f"; allowed={json.dumps(sorted(allowed_runtime_calls))}",
+                + f"; allowed={json.dumps(sorted(region_allowed_runtime_calls))}",
             )
         if region_spec.get("no_conversions"):
             conversions = {
@@ -328,6 +365,23 @@ def _records_for_region(
     return [record for record in records if record.get("block_label") in labels]
 
 
+def _records_for_native_region(
+    records: list[dict[str, Any]],
+    named_regions: dict[str, Any],
+    workload_info: dict[str, Any],
+    region: str,
+) -> list[dict[str, Any]]:
+    region_id = None
+    for region_spec in workload_info.get("named_regions", []) or []:
+        if region_spec.get("name") == region:
+            value = region_spec.get("native_region_id")
+            region_id = str(value) if value else None
+            break
+    if region_id:
+        return [r for r in records if r.get("region_id") == region_id]
+    return _records_for_region(records, named_regions, region)
+
+
 def _matches_state(actual: Any, expected: Any, *, state_kind: str) -> bool:
     if expected is None:
         return True
@@ -467,6 +521,7 @@ def generic_native_rep_contract_results(
     records: list[dict[str, Any]],
     native_rep_artifact_count: int,
     workloads: dict[str, Any] = WORKLOADS,
+    named_regions: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     workload_info = workloads.get(workload, {})
     check_spec = workload_info.get("native_rep_checks") or {}
@@ -503,10 +558,22 @@ def generic_native_rep_contract_results(
     checked_unknown_bounds = [
         r for r in records if _is_checked_native_unknown_bounds(r)
     ]
+    materialization_records = records
+    materialization_regions = [
+        str(region) for region in check_spec.get("materialization_regions", []) or []
+    ]
+    if materialization_regions:
+        named_region_map = named_regions or {}
+        materialization_records = []
+        for region in materialization_regions:
+            materialization_records.extend(
+                _records_for_native_region(records, named_region_map, workload_info, region)
+            )
+
     allowed_reasons = {str(r) for r in check_spec.get("allow_materialization_reasons", [])}
     unexpected_materializations = [
         r
-        for r in records
+        for r in materialization_records
         if r.get("materialization_reason")
         and _field_name(r.get("materialization_reason")) not in allowed_reasons
     ]
@@ -556,6 +623,8 @@ def generic_native_rep_contract_results(
         not unexpected_materializations,
         "allowed="
         + json.dumps(sorted(allowed_reasons))
+        + " scoped_regions="
+        + json.dumps(materialization_regions)
         + " unexpected="
         + json.dumps(unexpected_materializations[:5], sort_keys=True),
     )
@@ -591,7 +660,7 @@ def native_rep_contract_results(
     workloads: dict[str, Any] = WORKLOADS,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = generic_native_rep_contract_results(
-        workload, records, native_rep_artifact_count, workloads
+        workload, records, native_rep_artifact_count, workloads, named_regions
     )
 
     def add(name: str, passed: bool, detail: str) -> None:
@@ -605,10 +674,7 @@ def native_rep_contract_results(
         return None
 
     def records_for_native_region(region: str) -> list[dict[str, Any]]:
-        region_id = expected_region_id(region)
-        if region_id:
-            return [r for r in records if r.get("region_id") == region_id]
-        return _records_for_region(records, named_regions, region)
+        return _records_for_native_region(records, named_regions, workloads.get(workload, {}), region)
 
     unsafe_inbounds = [
         r
@@ -1251,13 +1317,14 @@ def verify_artifacts(
             )
 
     for budget in runtime_budget_results(workload, runtime_summary, workloads):
+        detail = budget.get("detail") or (
+            f"{budget['field']} actual={budget['actual']} "
+            f"maximum={budget['maximum']}"
+        )
         add(
             f"runtime_budget_{budget['field']}",
             bool(budget["passed"]),
-            (
-                f"{budget['field']} actual={budget['actual']} "
-                f"maximum={budget['maximum']}"
-            ),
+            detail,
         )
 
     for result in named_region_contract_results(workload, named_regions, workloads):

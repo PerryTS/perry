@@ -220,6 +220,53 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
     out
 }
 
+/// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
+/// expression statement (module scope, not nested in any block/if/loop/
+/// function). Deliberately narrower than
+/// [`collect_assigned_function_binding_candidates`] — that scan is name-only
+/// (no scope tracking), so reusing it for the class-reassignment gate below
+/// would false-positive on a same-named binding shadowed in a nested block
+/// (`class Foo {}; { let Foo; Foo = 1; }` would wrongly mark the top-level
+/// `Foo` reassigned) and silently miss a reassignment inside a nested
+/// function body (which the deep scan doesn't walk into either). Scoping to
+/// only the shapes a genuine top-level class-binding reassignment can take
+/// avoids the false positive entirely; the false negative (reassigning a
+/// top-level class from inside a block or a nested function) simply falls
+/// back to the pre-existing behavior (the assignment is silently dropped,
+/// same as before this fix) rather than being newly and only partially
+/// correct.
+fn collect_direct_top_level_reassigned_identifiers(ast_module: &ast::Module) -> HashSet<String> {
+    fn target_name(target: &ast::AssignTarget) -> Option<&str> {
+        match target {
+            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+                Some(ident.id.sym.as_ref())
+            }
+            _ => None,
+        }
+    }
+
+    let mut out = HashSet::new();
+    for item in &ast_module.body {
+        let ast::ModuleItem::Stmt(ast::Stmt::Expr(expr_stmt)) = item else {
+            continue;
+        };
+        match expr_stmt.expr.as_ref() {
+            ast::Expr::Assign(assign) => {
+                if let Some(name) = target_name(&assign.left) {
+                    out.insert(name.to_string());
+                }
+            }
+            ast::Expr::Update(update) => {
+                if let ast::Expr::Ident(ident) = update.arg.as_ref() {
+                    out.insert(ident.sym.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 pub fn lower_module(
     ast_module: &ast::Module,
     name: &str,
@@ -416,6 +463,12 @@ pub fn lower_module_full(
     // Skip 'declare function' statements (functions with no body) - they are external FFI
     // BUT: also skip overload signatures if an implementation exists
     let reassigned_function_candidates = collect_assigned_function_binding_candidates(ast_module);
+    // #5833: a narrower, binding-aware-enough scan stashed on `ctx` so
+    // `stmt.rs`'s top-level `Decl::Class` arm can gate its opt-in local-slot
+    // seeding (see both `reassigned_top_level_identifiers`'s doc comment and
+    // `collect_direct_top_level_reassigned_identifiers`'s).
+    ctx.reassigned_top_level_identifiers =
+        collect_direct_top_level_reassigned_identifiers(ast_module);
     for item in &ast_module.body {
         // Extract function declaration from both regular statements and export declarations
         let fn_decl = match item {
@@ -840,7 +893,58 @@ pub fn lower_module_full(
     // codegen reflection of top-level `function` declarations onto the global
     // object (see `Module::references_global_this`). The module source is
     // installed for the duration of this lower (collect_modules.rs).
-    module.references_global_this = crate::ir::current_module_source_mentions_global_this();
+    // #5833: OR in `ctx.saw_global_this_expr` — a top-level `this` read in
+    // global-script mode is the same global-object reference as the literal
+    // `globalThis` token, but the substring scan above can't see it.
+    module.references_global_this =
+        crate::ir::current_module_source_mentions_global_this() || ctx.saw_global_this_expr;
+
+    // #5833: GlobalDeclarationInstantiation step 5c — a top-level `let`/
+    // `const`/`class` declaration whose name collides with a "restricted
+    // global property" (HasRestrictedGlobalProperty) is an early SyntaxError,
+    // thrown before any statement runs. Only `undefined`, `NaN`, and
+    // `Infinity` are non-configurable value properties of a pristine global
+    // object (ECMA-262 §19.1.1-19.1.3), so this is a purely static check
+    // against the entry module's own top-level lexical names — it doesn't
+    // need to model the general (dynamically extensible) case. Scoped to the
+    // ENTRY module compiled as a Script: an ES module (import/export syntax,
+    // OR top-level `await` — matching `is_esm_entry` in
+    // `perry-codegen/src/codegen/entry.rs` exactly) binds in its own Module
+    // Environment Record instead, never touching the global object, and a
+    // non-entry module never reaches GlobalDeclarationInstantiation
+    // regardless of its own syntax. Runs here (after the main lowering pass,
+    // not the earlier pre-pass) so `module.imports`/`module.exports` are
+    // populated and `detect_top_level_await` — which needs the already-
+    // lowered `module.init` HIR to tell a real top-level `await` from one
+    // nested in a closure's own async scope — has something to scan. Test262
+    // `language/global-code/decl-lex-restricted-global.js`.
+    crate::dynamic_import::detect_top_level_await(&mut module);
+    let is_esm_entry =
+        !module.imports.is_empty() || !module.exports.is_empty() || module.has_top_level_await;
+    if ctx.is_entry_module && !is_esm_entry {
+        const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];
+        let restricted_scan_stmts: Vec<ast::Stmt> = ast_module
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                ast::ModuleItem::Stmt(stmt) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut top_level_lexical_names = std::collections::HashSet::new();
+        crate::lower_decl::collect_lexical_decl_names(
+            &restricted_scan_stmts,
+            &mut top_level_lexical_names,
+        );
+        for name in RESTRICTED_GLOBAL_NAMES {
+            if top_level_lexical_names.contains(name) {
+                anyhow::bail!(
+                    "SyntaxError: identifier '{name}' has already been declared \
+                     (restricted global property)"
+                );
+            }
+        }
+    }
 
     if !ctx.sloppy_implicit_globals.is_empty() {
         let mut implicit_globals: Vec<Stmt> = ctx

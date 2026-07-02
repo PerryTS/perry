@@ -48,11 +48,16 @@ pub(crate) fn bind_inline_constructor_params(
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for (param, arg_val) in params.iter().zip(values.iter()) {
-        let slot = ctx.func.alloca_entry(DOUBLE);
-        if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
-            let box_ptr = ctx.block().call(I64, "js_box_alloc", &[(DOUBLE, arg_val)]);
-            let boxed = ctx.block().bitcast_i64_to_double(&box_ptr);
-            ctx.block().store(DOUBLE, &boxed, &slot);
+        let boxed_param = ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none();
+        let slot = ctx
+            .func
+            .alloca_entry(if boxed_param { I64 } else { DOUBLE });
+        if boxed_param {
+            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
+            let box_ptr = ctx
+                .block()
+                .call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
+            ctx.block().store(I64, &box_ptr, &slot);
         } else {
             ctx.block().store(DOUBLE, arg_val, &slot);
         }
@@ -267,6 +272,14 @@ fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
         );
     }
     nanbox_pointer_inline(ctx.block(), &current)
+}
+
+fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<String> {
+    let prev_discard = ctx.discard_expr_value;
+    ctx.discard_expr_value = false;
+    let lowered = lower_expr(ctx, arg);
+    ctx.discard_expr_value = prev_discard;
+    lowered
 }
 
 /// Marshal the lowered `new`-site args into the value list a cross-module
@@ -548,6 +561,8 @@ fn emit_typed_shape_layout_init(ctx: &mut FnCtx<'_>, class_name: &str, obj_handl
     );
 }
 
+pub(crate) use super::capture_writeback::emit_class_capture_writeback;
+
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
 /// Strategy: allocate an anonymous object via `js_object_alloc(0, N)`
@@ -721,7 +736,7 @@ fn lower_new_impl(
                 )?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    lowered_args.push(lower_constructor_arg(ctx, a)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -742,7 +757,7 @@ fn lower_new_impl(
             if class_name == "Function" {
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    lowered_args.push(lower_constructor_arg(ctx, a)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -772,7 +787,7 @@ fn lower_new_impl(
     // Lower the args first (constructor params).
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
-        lowered_args.push(lower_expr(ctx, a)?);
+        lowered_args.push(lower_constructor_arg(ctx, a)?);
     }
 
     // Compute total field count including inherited parent fields.
@@ -950,7 +965,12 @@ fn lower_new_impl(
         } else {
             // Compile-time layout constants.
             const GC_HEADER_SIZE: u64 = 8;
-            const OBJECT_HEADER_SIZE: u64 = 24;
+            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit but
+            // 20 on ILP32 (4-byte `keys_array` pointer). Derive from the target
+            // triple so the inline alloc size and field-region base match the
+            // target-compiled runtime (no-op on 64-bit; see `target_layout`).
+            let object_header_size: u64 =
+                crate::target_layout::object_header_size_bytes(ctx.target_triple);
             const FIELD_SLOT_SIZE: u64 = 8;
             const MIN_FIELD_SLOTS: u64 = 8;
             const GC_TYPE_OBJECT: u64 = 2;
@@ -963,8 +983,14 @@ fn lower_new_impl(
             const OBJECT_TYPE_REGULAR: u64 = 1;
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-            let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
-            let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
+            let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
+            // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
+            // bump allocator's offset invariant (below) requires every
+            // allocation to be a multiple of 8; on ILP32 `object_header_size`
+            // is 20, so an unpadded total is 4-skewed (e.g. 92) and would
+            // misalign the next bump. No-op on 64-bit (8 + 24 + 8·n is already
+            // 8-aligned → 96 for ≤8 fields).
+            let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
             let total_size_str = total_size.to_string();
 
             // Lazy: allocate the per-function arena-state slot on the
@@ -1102,7 +1128,7 @@ fn lower_new_impl(
             // crashed with "Cannot read properties of undefined". Slots start at
             // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
             for i in 0..alloc_field_count {
-                let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
+                let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
                 // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
                 blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
@@ -1185,7 +1211,7 @@ fn lower_new_impl(
     // function that captures `t` (the `const t = this` alias). When `new F`
     // inside that arrow is inlined, the inlined ctor's `const t = this` reuses
     // the same LocalId — which is a capture in this closure — so reads/writes
-    // of `t` resolve through `js_closure_get_capture_f64` and land on the
+    // of `t` resolve through `js_closure_get_capture_bits` and land on the
     // CAPTURED outer instance instead of the freshly-allocated one (the new
     // instance gets no fields → wall 44 `BaseContext.setValue` → "Cannot read
     // properties of undefined"). The standalone symbol takes `this` as an
@@ -1271,6 +1297,20 @@ fn lower_new_impl(
             // The inline-ctor path does this at its tail (below); this
             // standalone-symbol path returns here, so it must do it too.
             emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
+            // Write-back: propagate constructor mutations to outer captured locals.
+            // The standalone constructor symbol receives captured values by value
+            // and stores mutations to `this.__perry_cap_*` fields, but never
+            // updates the outer local's alloca slot. Read the fields back here so
+            // the enclosing scope sees the updated values (e.g. `++called` in a
+            // subclass constructor is visible after `new SubClass(...)` returns).
+            // When `caps_absent_from_args` is true (member-callee `new ns.C()`
+            // path), the HIR `args` slice contains ONLY user args — the cap args
+            // were NOT appended. Passing `args` to `emit_class_capture_writeback`
+            // would let the position-based lookup misidentify a user `LocalGet` as
+            // a cap arg and write to the wrong outer slot. Fall back to suffix-based
+            // lookup (empty slice) in that case.
+            let writeback_args = if caps_absent_from_args { &[][..] } else { args };
+            emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1912,10 +1952,11 @@ fn lower_new_impl(
                     ));
                     (ptr_reg, lowered_args.len().to_string())
                 };
-                let this_box = match ctx.this_stack.last().cloned() {
-                    Some(slot) => ctx.block().load(DOUBLE, &slot),
-                    None => undef_lit.clone(),
-                };
+                // Bug #5587: in the no-own-ctor path, `this_stack` was never
+                // pushed for this `new` call, so `last()` would return the
+                // outer function's `this` (or undef at module scope). Use
+                // `obj_box` — the freshly-allocated object — directly.
+                let this_box = obj_box.clone();
                 let _ = ctx.block().call(
                     DOUBLE,
                     "js_fetch_or_value_super",

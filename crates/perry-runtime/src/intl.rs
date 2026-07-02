@@ -17,6 +17,8 @@ use crate::StringHeader;
 #[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
+mod ctor_guard;
+use ctor_guard::{constructor_target_prototype, require_new_target};
 mod display_names;
 mod duration_format;
 mod locale;
@@ -36,12 +38,13 @@ pub(crate) use date_collator::{
     compare_strings, date_range_parts_from_ms, date_short_utc_from_ms,
     date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
     date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
-    date_time_format_bound_to_parts_thunk, date_time_format_format_thunk,
-    date_time_format_format_value, date_time_format_range_parts_value,
-    date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
-    date_time_format_range_value, date_time_format_resolved_options_object,
-    date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk, date_time_range_clip,
-    range_parts_to_js_array, swedish_collation_key, temporal_locale_string, TemporalLocaleCtx,
+    date_time_format_bound_to_parts_thunk, date_time_format_format_getter_thunk,
+    date_time_format_format_thunk, date_time_format_format_value,
+    date_time_format_range_parts_value, date_time_format_range_thunk,
+    date_time_format_range_to_parts_thunk, date_time_format_range_value,
+    date_time_format_resolved_options_object, date_time_format_resolved_options_thunk,
+    date_time_format_to_parts_thunk, date_time_range_clip, range_parts_to_js_array,
+    swedish_collation_key, temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, collect_string_list,
@@ -152,11 +155,12 @@ const KEY_NF_ROUNDING_INCREMENT: &str = "__intlNfRoundingIncrement";
 const KEY_NF_ROUNDING_MODE: &str = "__intlNfRoundingMode";
 const KEY_NF_ROUNDING_PRIORITY: &str = "__intlNfRoundingPriority";
 const KEY_NF_TRAILING_ZERO: &str = "__intlNfTrailingZero";
-// Hidden [[BoundFormat]] slot. The bound format function is also installed as an
+// Hidden [[BoundFormat]] slots. The bound format function is also installed as an
 // own `format` property for the native dispatch fast path, but the prototype
 // `format` getter reads it from here so user mutation/deletion of the public
 // property can't corrupt what the accessor returns.
 const KEY_NF_BOUND_FORMAT: &str = "__intlNfBoundFormat";
+const KEY_DTF_BOUND_FORMAT: &str = "__intlDtfBoundFormat";
 const KEY_COL_USAGE: &str = "__intlColUsage";
 const KEY_COL_SENSITIVITY: &str = "__intlColSensitivity";
 const KEY_COL_IGNORE_PUNCT: &str = "__intlColIgnorePunct";
@@ -292,6 +296,8 @@ fn coerce_option_string(value: f64) -> Option<String> {
         Some("null".to_string())
     } else if js.is_any_string() {
         string_from_string_value(value)
+    } else if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+        throw_type_error("Cannot convert a Symbol value to a string")
     } else {
         Some(value_to_string(value))
     }
@@ -1171,48 +1177,82 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
             // Date/time component options (ECMA-402 Table 7), read in order. Each
             // out-of-range value is a RangeError.
+            //
+            // Two separate flags are tracked:
+            //
+            // • `any_component` — the ECMA-402 §11.1.2 `needDefaults` flag.
+            //   Only the fields listed in steps 38a/38b count:
+            //     date fields: weekday, year, month, day
+            //     time fields: dayPeriod, hour, minute, second, fractionalSecondDigits
+            //   `era` and `timeZoneName` are read and stored but do NOT affect
+            //   this flag — an era-only or timeZoneName-only DTF still gets
+            //   year/month/day defaults applied (spec step 40).
+            //
+            // • `has_explicit_component` — set by ALL of the above INCLUDING
+            //   `era` and `timeZoneName`.  Used for the dateStyle/timeStyle
+            //   conflict check (step 35.b: throw if style + any component option).
             let mut any_component = false;
-            any_component |= dt_component_option(
+            let mut has_explicit_component = false;
+            let has_weekday = dt_component_option(
                 obj,
                 options,
                 "weekday",
                 &["narrow", "short", "long"],
                 KEY_WEEKDAY,
             );
-            any_component |=
+            any_component |= has_weekday;
+            has_explicit_component |= has_weekday;
+            // era counts toward the style-conflict check but NOT toward needDefaults.
+            has_explicit_component |=
                 dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
-            any_component |=
+            let has_year =
                 dt_component_option(obj, options, "year", &["2-digit", "numeric"], KEY_YEAR);
-            any_component |= dt_component_option(
+            any_component |= has_year;
+            has_explicit_component |= has_year;
+            let has_month = dt_component_option(
                 obj,
                 options,
                 "month",
                 &["2-digit", "numeric", "narrow", "short", "long"],
                 KEY_MONTH,
             );
-            any_component |=
+            any_component |= has_month;
+            has_explicit_component |= has_month;
+            let has_day =
                 dt_component_option(obj, options, "day", &["2-digit", "numeric"], KEY_DAY);
-            any_component |= dt_component_option(
+            any_component |= has_day;
+            has_explicit_component |= has_day;
+            let has_day_period = dt_component_option(
                 obj,
                 options,
                 "dayPeriod",
                 &["narrow", "short", "long"],
                 KEY_DAY_PERIOD,
             );
-            any_component |=
+            any_component |= has_day_period;
+            has_explicit_component |= has_day_period;
+            let has_hour =
                 dt_component_option(obj, options, "hour", &["2-digit", "numeric"], KEY_HOUR);
-            any_component |=
+            any_component |= has_hour;
+            has_explicit_component |= has_hour;
+            let has_minute =
                 dt_component_option(obj, options, "minute", &["2-digit", "numeric"], KEY_MINUTE);
-            any_component |=
+            any_component |= has_minute;
+            has_explicit_component |= has_minute;
+            let has_second =
                 dt_component_option(obj, options, "second", &["2-digit", "numeric"], KEY_SECOND);
+            any_component |= has_second;
+            has_explicit_component |= has_second;
             // fractionalSecondDigits is GetNumberOption(1, 3) — out of range or
             // non-numeric is a RangeError.
             if let Some(n) = get_number_option_coerced(options, "fractionalSecondDigits", 1.0, 3.0)
             {
                 set_internal_field(obj, KEY_FRACTIONAL, n);
                 any_component = true;
+                has_explicit_component = true;
             }
-            any_component |= dt_component_option(
+            // timeZoneName counts toward the style-conflict check but NOT toward needDefaults.
+            has_explicit_component |= dt_component_option(
                 obj,
                 options,
                 "timeZoneName",
@@ -1246,8 +1286,9 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 }
             }
             let has_style = date_style.is_some() || time_style.is_some();
-            // Combining a style with an explicit component is a TypeError.
-            if has_style && any_component {
+            // ECMA-402 §11.1.2 step 35.b: combining a style with any explicit
+            // component option (including era and timeZoneName) is a TypeError.
+            if has_style && has_explicit_component {
                 throw_type_error(
                     "Intl.DateTimeFormat: dateStyle/timeStyle cannot be used with explicit date-time component options",
                 );
@@ -1267,12 +1308,20 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 set_internal_field(obj, KEY_DAY, string_value("numeric"));
                 set_internal_field(obj, KEY_DT_IS_DEFAULT, bool_value(true));
             }
-            install_bound_instance_function(
+            let format_fn = install_bound_instance_function(
                 obj,
                 "format",
                 date_time_format_bound_format_thunk as *const u8,
                 1,
             );
+            if !format_fn.is_null() {
+                crate::object::set_bound_native_closure_name(format_fn, "");
+                set_internal_field(
+                    obj,
+                    KEY_DTF_BOUND_FORMAT,
+                    js_nanbox_pointer(format_fn as i64),
+                );
+            }
             install_bound_instance_function(
                 obj,
                 "formatToParts",
@@ -1553,7 +1602,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
         _ => {}
     }
 
-    let proto = crate::closure::closure_get_dynamic_prop(closure as usize, "prototype");
+    let proto = constructor_target_prototype(closure);
     if JSValue::from_bits(proto.to_bits()).is_pointer() {
         crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
     }
@@ -1607,6 +1656,7 @@ extern "C" fn collator_constructor_thunk(closure: *const ClosureHeader, rest: f6
 }
 
 extern "C" fn segmenter_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    require_new_target("Segmenter");
     make_instance(
         closure,
         KIND_SEGMENTER,
@@ -1616,6 +1666,7 @@ extern "C" fn segmenter_constructor_thunk(closure: *const ClosureHeader, rest: f
 }
 
 extern "C" fn list_format_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    require_new_target("ListFormat");
     make_instance(
         closure,
         KIND_LIST_FORMAT,
@@ -1628,6 +1679,7 @@ extern "C" fn relative_time_format_constructor_thunk(
     closure: *const ClosureHeader,
     rest: f64,
 ) -> f64 {
+    require_new_target("RelativeTimeFormat");
     make_instance(
         closure,
         KIND_RELATIVE_TIME,
@@ -1637,6 +1689,7 @@ extern "C" fn relative_time_format_constructor_thunk(
 }
 
 extern "C" fn plural_rules_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    require_new_target("PluralRules");
     make_instance(
         closure,
         KIND_PLURAL_RULES,
@@ -1796,7 +1849,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         date_time_format_constructor_thunk as *const u8,
         0,
         &[
-            ("format", date_time_format_format_thunk as *const u8, 1),
+            // `format` is an accessor (getter) per ECMA-402 §11.4.3 — see below.
             (
                 "formatToParts",
                 date_time_format_to_parts_thunk as *const u8,
@@ -1814,7 +1867,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
-        &[],
+        &[("format", date_time_format_format_getter_thunk as *const u8)],
     );
     install_constructor(
         ns_obj,

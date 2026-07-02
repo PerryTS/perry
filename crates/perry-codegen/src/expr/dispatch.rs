@@ -32,6 +32,16 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 /// here is a dispatch table; each module's `lower(ctx, expr)` contains the
 /// original arm bodies verbatim.
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Some(lowered) = lower_expr_value(ctx, expr)? {
+        if ctx.discard_expr_value {
+            return Ok(materialize_js_value_without_record(ctx, lowered));
+        }
+        return Ok(materialize_js_value(
+            ctx,
+            lowered,
+            MaterializationReason::RuntimeApi,
+        ));
+    }
     match expr {
         Expr::Integer(..)
         | Expr::Number(..)

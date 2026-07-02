@@ -255,10 +255,49 @@ pub fn temporal_value_ref<'a>(value: f64) -> Option<&'a TemporalValue> {
     unsafe { Some(&*(*(addr as *const TemporalCell)).value) }
 }
 
+/// Like [`temporal_value_ref`] but also resolves `class X extends Temporal.<Type>`
+/// subclass instances by reading the stashed `__perry_temporal_cell__` field.
+/// Use this in `ToTemporalXxx` coercions so `compare`/`from`/`until`/`since`
+/// use internal slots instead of property getters. (#5587)
+#[cfg(feature = "temporal")]
+#[inline]
+#[allow(clippy::needless_lifetimes)]
+pub fn temporal_value_ref_or_subclass<'a>(value: f64) -> Option<&'a TemporalValue> {
+    temporal_value_ref(value).or_else(|| {
+        let bits = value.to_bits();
+        if !crate::value::JSValue::from_bits(bits).is_pointer() {
+            return None;
+        }
+        let addr = (bits & NANBOX_PTR_MASK) as usize;
+        unsafe { crate::object::temporal_subclass_cell(addr) }.and_then(temporal_value_ref)
+    })
+}
+
 /// The brand sub-kind of a Temporal value, or `None` if not a Temporal cell.
 #[inline]
 pub fn temporal_kind(value: f64) -> Option<TemporalKind> {
     temporal_value_ref(value).map(TemporalValue::kind)
+}
+
+/// The calendar identifier string of a Temporal value that carries a calendar
+/// (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay, ZonedDateTime),
+/// or `None` for types without a calendar (Instant, PlainTime, Duration) or
+/// non-Temporal values.
+#[cfg(feature = "temporal")]
+pub fn temporal_calendar_id(value: f64) -> Option<&'static str> {
+    match temporal_value_ref(value)? {
+        TemporalValue::PlainDate(d) => Some(d.calendar().identifier()),
+        TemporalValue::PlainDateTime(dt) => Some(dt.calendar().identifier()),
+        TemporalValue::PlainYearMonth(ym) => Some(ym.calendar().identifier()),
+        TemporalValue::PlainMonthDay(md) => Some(md.calendar().identifier()),
+        TemporalValue::ZonedDateTime(z) => Some(z.calendar().identifier()),
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "temporal"))]
+pub fn temporal_calendar_id(_value: f64) -> Option<&'static str> {
+    None
 }
 
 /// Drop the embedded `temporal_rs` value when a Temporal cell is swept,

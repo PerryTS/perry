@@ -517,6 +517,9 @@ jobs:
       - name: Run harness unit tests
         run: python3 -m unittest tests.test_compiler_output_regression
 
+      - name: Run native ABI evidence report unit tests
+        run: python3 -m unittest tests.test_native_abi_evidence_report
+
       - name: Gate native-region proof compiler output
         run: |
           python3 scripts/compiler_output_regression.py suite \
@@ -525,7 +528,24 @@ jobs:
             --benchmark-mode smoke \
             --runs 1 \
             --perf-counters off \
+            --gate \
             --print-summary
+
+      - name: Gate native-ABI proof compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py suite \
+            --suite native-abi-proof \
+            --perry target/debug/perry \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
+      - name: Gate typed feedback runtime evidence
+        env:
+          PERRY_BIN: ${{ github.workspace }}/target/debug/perry
+        run: python3 -m unittest tests.test_typed_feedback_runtime_evidence
 
       - name: Gate positive vectorization compiler output
         run: |
@@ -581,6 +601,70 @@ jobs:
         with:
           name: compiler-output-regression
           path: target/compiler-output-regression/
+
+  # ---------------------------------------------------------------------------
+  # Native ABI evidence packet
+  #
+  # Full material-performance packet for the type-lowering gate. This is heavier
+  # than the per-PR compiler-output smoke because it runs the native-ABI proof
+  # packet with timing-quality samples, runtime checks, and release/LTO symbol
+  # freshness. Gate tag pushes and opt-in PR/manual runs; ordinary PRs rely on
+  # the lighter report/unit and compiler-output structural gates above.
+  # ---------------------------------------------------------------------------
+  native-abi-evidence-packet:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache sccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Gate native ABI evidence packet
+        env:
+          RUSTC_WRAPPER: ""
+          RUSTFLAGS: -Awarnings
+        run: |
+          PYTHON=python3 bash tests/test_native_abi_evidence_packet_smoke.sh \
+            target/native-abi-evidence-packet
+
+      - name: Upload native ABI evidence packet
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-abi-evidence-packet
+          path: target/native-abi-evidence-packet/
 
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)

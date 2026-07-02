@@ -249,8 +249,14 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(
+                    record,
+                    "receiver_proof=declared_named_receiver_guarded_exact_class"
+                )
+                && record_has_note(record, "field_layout=raw_f64_slot_array")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
         }),
-        "expected raw numeric class field f64 store record:\n{artifact:#}"
+        "expected raw numeric class field f64 store record with exact receiver proof:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
@@ -259,8 +265,24 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(
+                    record,
+                    "receiver_proof=declared_named_receiver_guarded_exact_class",
+                )
+                && record_has_note(record, "field_layout=raw_f64_slot_array")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
         }),
-        "expected raw numeric class field f64 load record:\n{artifact:#}"
+        "expected raw numeric class field f64 load record with exact receiver proof:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "WriteBarrierElided"
+                && record["consumer"] == "write_barrier.elided_raw_f64_class_field"
+                && record["native_rep_name"] == "f64"
+                && record_has_note(record, "reason=raw_f64_class_field_pointer_free")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
+        }),
+        "expected pointer-free raw numeric class field store to record barrier elision:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
@@ -278,5 +300,12 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
             .unwrap_or(0)
             >= 2,
         "expected raw-f64 layout consumed summary:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["write_barrier_elided_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "expected raw numeric class-field barrier elision summary:\n{artifact:#}"
     );
 }

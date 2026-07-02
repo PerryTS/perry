@@ -245,6 +245,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "appOnActivate" => "perry_ui_app_on_activate",
         "appOnTerminate" => "perry_ui_app_on_terminate",
         "appSetTimer" => "perry_ui_app_set_timer",
+        "appSetActivationPolicy" => "perry_ui_app_set_activation_policy",
         // Table
         "tableSetColumnHeader" => "perry_ui_table_set_column_header",
         "tableSetColumnWidth" => "perry_ui_table_set_column_width",

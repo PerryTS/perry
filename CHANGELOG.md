@@ -1,3 +1,79 @@
+## v0.5.1215 — boxing analysis descends into labeled blocks (#5871)
+
+Five walkers in perry-codegen's `boxed_vars.rs` had no `Stmt::Labeled` arm (while `collect_write_ids_in_stmt` did), so a captured variable reassigned — or captured — inside a labeled block was never boxed: closures kept a creation-time snapshot and never observed later writes. Signature: a captured array read `.length === 0` through the closure while `JSON.stringify` in the same scope printed all four elements — previously seen only inside large minified webpack bundles, which emit labeled early-exit blocks (`e: { … break e; }`) pervasively (#5869). Adds the `Stmt::Labeled { body, .. }` recursion arm to `collect_self_recursive_closure_ids`, `collect_for_init_ids`, `collect_closure_refs_and_writes_in_stmt`, `collect_outer_writes_in_stmt`, and `collect_let_types_in_stmts`. The closure-created-INSIDE-the-label variant remains open on #5869 (perry-hir lowers it with `mutable_captures: []` under the `Labeled{DoWhile(false)}` wrapper); its regression test ships `#[ignore]`d in `crates/perry/tests/issue_5869_labeled_block_capture_boxing.rs`.
+
+## v0.5.1214 — setPrototypeOf cycle walk must not advance past chain end (#5866)
+
+Fixes the #5763 regression that broke `Object.setPrototypeOf(obj, proto)` for every acyclic prototype chain of ≥2 links ("Cannot convert undefined or null to object"): the OrdinarySetPrototypeOf Floyd walk advanced the hare past the chain end, and fed exotic `undefined` prototype reports back into the next advance. Every transpiled `__extends` (`setPrototypeOf(Derived, Base)` — a 3-link function proto chain) threw; comment-json's `__extends` + its `{ __proto__: [] }` feature test killed Next.js server boot. The hare now freezes at null (the tortoise completes the membership walk alone, so cycle detection is unchanged) and `undefined` ends the walk like null. e2e regression suite: `crates/perry/tests/issue_5763_setprototypeof_chain_end.rs` (chains of length 2/4, the `__extends` statics link, the feature-test evaluation, and a genuine-cycle negative), byte-for-byte vs `node --experimental-strip-types`.
+
+## v0.5.1213 — representation-aware type lowering + native-ABI material evidence gate (#5466)
+
+Lands the type-lowering track on main (builds on #5291; integrates #5462's
+material evidence gate, #5464's packed-loop follow-ups, and the CodeRabbit
+review fixes).
+
+- **Representation-aware type lowering**: i32/u32/f64/i128(BigInt)/StringRef
+  native reps with runtime-guarded fast/fallback splits for scalar params,
+  number-keyed Map/Set, typed string/i32 methods, typed function/closure/method
+  clones (f64/i32/i1/string families), and packed numeric array loops (f64 +
+  i32 loop versioning with side-exit slow clones). `lower_expr` now
+  speculatively tries the native-rep value path for every expression and
+  materializes through the evidence-recording boundary.
+- **Native-ABI material evidence gate**: differential typed-vs-`any` CI gate
+  recomputing speedups/counter reductions from real `-O3` IR + GC traces with
+  anti-gaming guards; 185+ codegen proof-suite regression tests; release-symbol
+  sentinel check; `--explain-lowering` user-facing report.
+- **ToInt32 correctness (pre-existing, surfaced by review)**: the guarded
+  `toint32` lowering now performs the spec's modular reduction instead of a
+  bare `fptosi`, so finite values ≥ 2^63 (`(1e20) | 0`, nested integer-local
+  multiplies) wrap to the correct int32 instead of LLVM-poison NaN; the
+  `toint32_fast` gate (`is_known_finite`) is now a conservative magnitude-bound
+  proof. New `test_gap_toint32_large_finite.ts`.
+- **Review fixes**: closure-captured buffer locals can no longer receive
+  unchecked native-pointer proofs before an escape walk stamps the hazard map;
+  `invalidate_local_write_facts` drops reverse local-value alias chains;
+  runtime-key array stores register the `array_set_index_or_string` typed-
+  feedback contract matching the emitted helper; `typed_i1_functions` is
+  plumbed into `FnCtx` so the i1 typed-call branch gates like its siblings.
+- Verified: the three pre-merge runtime regressions (Array.fromAsync,
+  dynamic-import namespace, fetch headers.forEach) match node byte-for-byte;
+  16-test gap differential clean (3 pre-existing mismatches attributed to main
+  via control binary); evidence suites, typed-feedback runtime evidence, and
+  capture workloads green.
+
+## v0.5.1212 — fix(runtime): #5839 — PlainYearMonth/PlainMonthDay toLocaleString reject ISO calendar
+
+Part of the #5839 Temporal test262 worklist (56 failing built-ins/Temporal + intl402/Temporal cases). Picked the `toLocaleString/calendar-mismatch.js` "even when instance has the ISO calendar" cluster as a coherent, self-contained fix.
+
+`Temporal.PlainYearMonth.prototype.toLocaleString` and `Temporal.PlainMonthDay.prototype.toLocaleString` shared the same calendar-mismatch check as `PlainDate`/`PlainDateTime`/`ZonedDateTime` (`assert_locale_string_calendar` in `crates/perry-runtime/src/temporal/options.rs`), which permits the instance calendar to be either `"iso8601"` or the locale's resolved calendar (`"gregory"`, Perry's default). Per ecma402 `HandleDateTimeTemporalYearMonth`/`HandleDateTimeTemporalMonthDay` (sup-intl.html #1132, #1157), year-month and month-day values do **not** get that ISO carve-out — unlike the other three types, an ISO-calendar `PlainYearMonth`/`PlainMonthDay` must always throw a `RangeError` against the locale-default calendar. Added `assert_locale_string_calendar_no_iso_carveout` (rejects everything but `"gregory"`) and switched `plain_year_month.rs`/`plain_month_day.rs` to call it instead.
+
+Fixes `intl402/Temporal/{PlainYearMonth,PlainMonthDay}/prototype/toLocaleString/calendar-mismatch.js`. The remaining 54 cases in the #5839 worklist are unrelated root causes (Duration rounding `ceil` behavior in the vendored `temporal_rs` crate, and full `dateStyle`/`timeStyle`/`hourCycle`/locale-calendar option threading through Temporal's `toLocaleString`, a materially larger change) — left as follow-ups.
+
+## v0.5.1211 — fix(intl): #5840 — Intl.DateTimeFormat dayPeriod-only formatting (6 test262 cases)
+
+Fixes the `dayPeriod`-only subcluster of the #5840 DateTimeFormat worklist: `new Intl.DateTimeFormat('en', {dayPeriod: 'long'})` (with no other date/time component options) silently fell back to the default `M/D/YYYY` date string in both `format` and `formatToParts`, because `dtf_primary_mask` (`crates/perry-runtime/src/intl/date_collator.rs`) never counted `dayPeriod` toward its "has a time-dimension field" bit, and neither `format_components` nor `build_parts_from_components` had any dayPeriod rendering path at all — `dayPeriod` was only ever emitted as a byproduct of the AM/PM 12-hour clock.
+
+- Added `day_period_string(hour, style)`: `en` CLDR day-period boundaries at hour granularity (`0-11` morning, `12` noon, `13-17` afternoon, `18-20` evening, `21-23` night; `narrow` abbreviates only "noon" → "n", matching real ICU `en` data — verified empirically against `node`).
+- `dtf_primary_mask` now sets `BIT_TIME` when `dayPeriod` is set, so a dayPeriod-only DTF is no longer misclassified as "no primary fields" and forced through the Temporal-default fallback path.
+- `format_components`/`build_parts_from_components` both thread a new `day_period_opt` parameter through: dayPeriod-only renders just the period text (one part in `formatToParts`); dayPeriod combined with a numeric `hour` renders `"<hour> <period>"` (`[hour, literal " ", dayPeriod]` in `formatToParts`), replacing the default AM/PM suffix. Behavior is unchanged when `day_period_opt` is `None`.
+- Fixes: `prototype/format/dayPeriod-{long,narrow,short}-en.js`, `prototype/formatToParts/dayPeriod-{long,narrow,short}-en.js`. Verified via `scripts/test262_subset.py --dir intl402/DateTimeFormat` (run under `TZ=UTC` — Perry's DTF hardcodes a `UTC` default timeZone while `Date`'s local-component constructor honors the real host offset, so a non-UTC dev box shows an unrelated pre-existing hour-shift on `new Date(y,m,d,h,...)`-based cases; CI runs UTC) with zero regressions (45 remaining failures, exactly the other 45 of the original 51-case worklist).
+
+## v0.5.1210 — fix(hir+codegen+runtime): #5833 — global-code declaration-instantiation cluster (4 test262 cases)
+
+Closes 4 of the 6 `language/global-code` + `language/identifier-resolution` cases from the #5833 worklist (the remaining `decl-var.js`/`S10.4.1_A1_T1.js` need a live-synced `var` → `globalThis` reflection, a materially larger change — left as a follow-up rather than folded into this PR).
+
+- **Reassigned top-level `class` bindings were silently immutable** (`decl-lex.js`): a top-level `class Foo {}` never allocated a real local slot — every bare read re-derived `Expr::ClassRef` from the class registry, and `expr_assign.rs`'s "class/function binding, don't shadow with an implicit local" special case (added for Drizzle's `sql || (sql = {})` idiom, #420) silently dropped any assignment. `Foo = 5; console.log(Foo)` printed the frozen class-id value instead of `5`. Fix: `stmt.rs`'s top-level `Decl::Class` arm now seeds a real mutable local **only for classes that are actually reassigned somewhere in the module** (reusing the existing whole-module "assigned via simple identifier target" scan, `collect_assigned_function_binding_candidates`, stashed on `ctx.reassigned_top_level_identifiers`). Scoping to reassigned-only was required after a naive "always seed a local" version broke `export default Widget;` (#665), which pattern-matches `Expr::ClassRef` after lowering a bare class-name identifier.
+- **Top-level `function` reflection used the wrong `configurable` attribute** (`decl-func.js`): `emit_script_global_function_decls` (entry.rs) reflected a Script's bare top-level function declarations onto `globalThis` via a plain `js_object_set_field_by_name` — which creates a configurable property. GlobalDeclarationInstantiation's `CreateGlobalFunctionBinding` runs with `D = false` for a Script (only sloppy-eval's Annex B.3.3.3 path uses `D = true`), so the reflected property must be non-configurable. Added `js_object_set_field_by_name_nonconfigurable` (mirrors the existing `_nonenum` sibling used for `super(message)`) and switched the reflection call site to it.
+- **The reflection gate missed top-level `this`** (also `decl-func.js`, surfaced while fixing the above): `Module::references_global_this` was a plain substring scan for the literal token `globalThis`, so a program that reads the global object only through top-level `this` (Test262's `verifyProperty(this, ...)` idiom, under `PERRY_GLOBAL_SCRIPT_THIS`) never tripped the gate and the reflection silently never ran at all. Now OR'd with a new `ctx.saw_global_this_expr` flag, set whenever lowering produces `Expr::GlobalThisExpr` from a top-level `this`.
+- **No early SyntaxError for a restricted-global lexical collision** (`decl-lex-restricted-global.js`): `let undefined;` at Script top level must throw before any statement runs (GlobalDeclarationInstantiation step 5c, `HasRestrictedGlobalProperty`). Added a static check in `lower_module_full` — only `undefined`/`NaN`/`Infinity` are non-configurable value properties of a pristine global object, so this is a plain compile-time name check against the entry module's own top-level lexical names (scoped to the entry module compiled as a Script; an ES module or a non-entry module never reaches GlobalDeclarationInstantiation regardless of syntax).
+- `identifier-resolution/assign-to-global-undefined.js` was already passing — the strict-mode `undeclared = (this.undeclared = 5)` ReferenceError-on-unresolvable-assignment ordering was correct; no code change needed, just verification.
+
+New test: `crates/perry-hir/tests/issue_5833_global_code_cluster.rs` (6 cases — reassigned/never-reassigned class binding shape, restricted-global rejection + its entry-module/ordinary-name/non-entry-module guards).
+
+## v0.5.1209 — fix(hir): #5592 — indirect eval in class field initializers folds to global-scope IIFE
+
+`eval_is_module_top_global` in `const_fold_fn.rs` blocked the completion-IIFE fold with a `ctx.current_class.is_none()` guard. Class field initializers at module top level do not create a new variable environment — `scope_depth` stays 0 and the enclosing scope is still the global scope in global-script mode. The guard was overly conservative: class *methods* are already excluded by the `scope_depth == 0` check (methods call `enter_scope()`). Removing the `current_class` guard fixes four test262 cases: `language/{statements,expressions}/class/elements/{,private-}indirect-eval-contains-arguments`. Two regression tests added to `issue_5579_indirect_eval_global_completion.rs`.
+
 ## v0.5.1208 — test(net): #5540 — lock in Map-stored `socket.write()` from a `setInterval` callback reaching the wire
 
 Issue #5540 reported that `socket.write(buf)` was silently dropped (no `sendto`, bytes never hit the wire) when the socket was reached through a property of a `Map`-stored object **and** the write was issued from a timer (`setInterval`) callback — the exact pattern `@perryts/mysql`'s deferred flush pump uses (`CONN_STATES.get(id).sock.write(bytes)`), so password auth timed out. It was distinct from #5021 (write-from-`'data'`-handler) and #91 (Map-retrieved write from a `'data'` handler), both already fixed.

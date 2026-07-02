@@ -2,11 +2,18 @@
 
 use super::*;
 
-use crate::expr::{nanbox_pointer_inline, BoundedIndexPair, IntRangeFact};
+use crate::expr::{
+    array_kind_fact, effect_fact, emit_typed_feedback_register_site, nanbox_pointer_inline,
+    raw_f64_layout_fact, BoundedIndexPair, IntRangeFact, PackedF64LoopFact, PackedNumericLoopKind,
+    TypedFeedbackContract, TypedFeedbackKind,
+};
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
-use crate::native_value::{BoundedBufferIndex, BoundsProof, BoundsState, LengthSource};
-use crate::types::{I1, I32, I64};
+use crate::native_value::{
+    BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, LengthSource, LoweredValue,
+    MaterializationReason,
+};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 #[derive(Clone, Copy)]
 enum NumericBulkFillValue {
@@ -30,20 +37,84 @@ struct LengthHoist {
     buffer_bounds_width_units: Option<u32>,
 }
 
-/// Runtime-guarded i32 specialization for `i < n` loops whose bound `n` is an
-/// `any`/untyped (non-`number`) local. The `is-number` flag and `fptosi(n)`
-/// value are both hoisted to stack slots once before the loop; the cond block
-/// branches on the (loop-invariant) flag to choose the `icmp slt i32` fast loop
-/// or the generic per-iteration comparison. See `classify_for_local_bound_dynamic`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoopArrayLengthEffect {
+    Preserves,
+    AliasLengthMutation,
+    ArrayLengthMutation,
+    DynamicPropertyWrite,
+    UnknownCallEscape,
+    AsyncMicrotask,
+    AggregateAliasEscape,
+    MaterializationHazard,
+    Reassignment,
+    UnsupportedExpression,
+}
+
+impl LoopArrayLengthEffect {
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Preserves => "preserves_array_length",
+            Self::AliasLengthMutation => "alias_may_mutate_array_length",
+            Self::ArrayLengthMutation => "array_length_may_change",
+            Self::DynamicPropertyWrite => "dynamic_property_write",
+            Self::UnknownCallEscape => "unknown_call_escape",
+            Self::AsyncMicrotask => "async_microtask_escape",
+            Self::AggregateAliasEscape => "aggregate_alias_escape",
+            Self::MaterializationHazard => "materialization_hazard",
+            Self::Reassignment => "tracked_local_reassignment",
+            Self::UnsupportedExpression => "unsupported_effect",
+        }
+    }
+
+    fn materialization_reason(self) -> Option<MaterializationReason> {
+        match self {
+            Self::Preserves => None,
+            Self::AliasLengthMutation | Self::AggregateAliasEscape => {
+                Some(MaterializationReason::UnknownAlias)
+            }
+            Self::MaterializationHazard => Some(MaterializationReason::UnknownAlias),
+            Self::DynamicPropertyWrite => Some(MaterializationReason::DynamicPropertyAccess),
+            Self::UnknownCallEscape | Self::AsyncMicrotask => {
+                Some(MaterializationReason::UnknownCallEscape)
+            }
+            Self::Reassignment => Some(MaterializationReason::Reassignment),
+            Self::ArrayLengthMutation | Self::UnsupportedExpression => {
+                Some(MaterializationReason::UnknownBounds)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LengthHoistRejection {
+    arr_id: u32,
+    effect: LoopArrayLengthEffect,
+}
+
+/// Runtime-guarded i32 specialization for `i < n` loops whose bound `n` is a
+/// directly accessible local but not statically proven to be an invariant i32.
+/// The guard flag and `fptosi(n)` value are hoisted to stack slots once before
+/// the loop; the cond block branches on the flag to choose the `icmp slt i32`
+/// fast loop or the generic per-iteration comparison. The `fptosi` is emitted
+/// only on a guard-passing block so NaN, infinities, fractional values, and
+/// out-of-i32-range values keep JS comparison semantics.
 struct DynamicI32Bound {
     counter_id: u32,
     op: perry_hir::CompareOp,
-    /// `i1` slot: true when `n` was a primitive number at loop entry.
+    /// `i1` slot: true when `n` was a finite integral i32 at loop entry.
     flag_slot: String,
     /// `i32` slot holding `fptosi(n)` (valid only when `flag_slot` is true).
     bound_i32_slot: String,
     /// Whether we allocated the counter's i32 slot (so we remove it at exit).
     counter_i32_was_fresh: bool,
+}
+
+#[derive(Clone)]
+struct PackedF64VersionedLoop {
+    counter_id: u32,
+    array_id: u32,
+    array_kind: PackedNumericLoopKind,
 }
 
 fn match_numeric_bulk_fill_loop(
@@ -173,13 +244,7 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
             {
                 (*n as u32).to_string()
             }
-            perry_hir::Expr::LocalGet(id)
-                if ctx.integer_locals.contains(id)
-                    || matches!(
-                        ctx.local_types.get(id),
-                        Some(perry_types::Type::Number | perry_types::Type::Int32)
-                    ) =>
-            {
+            perry_hir::Expr::LocalGet(id) if ctx.integer_locals.contains(id) => {
                 let bound_d = lower_expr(ctx, &matched.bound)?;
                 let raw_i32 = ctx.block().fptosi(DOUBLE, &bound_d, I32);
                 let positive = ctx.block().fcmp("ogt", &bound_d, "0.0");
@@ -218,6 +283,704 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
     Ok(true)
 }
 
+fn lower_packed_f64_versioned_for(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<bool> {
+    let Some(matched) = match_packed_f64_versioned_loop(ctx, init, condition, update, body) else {
+        return Ok(false);
+    };
+
+    let arr_expr = perry_hir::Expr::LocalGet(matched.array_id);
+    let arr_box = lower_expr(ctx, &arr_expr)?;
+    let guard_id = match matched.array_kind {
+        PackedNumericLoopKind::F64 => "packed_f64_array_loop_guard",
+        PackedNumericLoopKind::I32 => "packed_i32_array_loop_guard",
+        PackedNumericLoopKind::U32 => "packed_u32_array_loop_guard",
+    };
+    let feedback_site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        match matched.array_kind {
+            PackedNumericLoopKind::F64 => "array[packed_f64_loop]",
+            PackedNumericLoopKind::I32 => "array[packed_i32_loop]",
+            PackedNumericLoopKind::U32 => "array[packed_u32_loop]",
+        },
+        match matched.array_kind {
+            PackedNumericLoopKind::F64 => TypedFeedbackContract::packed_f64_array_loop(),
+            PackedNumericLoopKind::I32 => TypedFeedbackContract::packed_i32_array_loop(),
+            PackedNumericLoopKind::U32 => TypedFeedbackContract::packed_u32_array_loop(),
+        },
+    );
+    let guard_ok = {
+        let blk = ctx.block();
+        let guard_fn = match matched.array_kind {
+            PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
+            PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
+            PackedNumericLoopKind::U32 => "js_typed_feedback_packed_u32_array_loop_guard",
+        };
+        let guard_i32 = blk.call(
+            I32,
+            guard_fn,
+            &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
+        );
+        blk.icmp_ne(I32, &guard_i32, "0")
+    };
+
+    record_packed_f64_loop_guard_artifacts(
+        ctx,
+        matched.array_id,
+        &arr_box,
+        guard_id,
+        matched.array_kind,
+    );
+
+    let loop_label = matched.array_kind.loop_label();
+    let fast_pre_idx = ctx.new_block(&format!("{loop_label}.loop.fast.preheader"));
+    let slow_pre_idx = ctx.new_block(&format!("{loop_label}.loop.slow.preheader"));
+    let merge_idx = ctx.new_block(&format!("{loop_label}.loop.merge"));
+    let fast_pre_label = ctx.block_label(fast_pre_idx);
+    let slow_pre_label = ctx.block_label(slow_pre_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&guard_ok, &fast_pre_label, &slow_pre_label);
+
+    let packed_scope_id = ctx.next_loop_proof_scope_id();
+
+    ctx.current_block = fast_pre_idx;
+    ctx.packed_f64_loop_facts.push(PackedF64LoopFact {
+        index_local_id: matched.counter_id,
+        array_local_id: matched.array_id,
+        scope_id: packed_scope_id,
+        guard_id: guard_id.to_string(),
+        store_side_exit_label: slow_pre_label.clone(),
+        array_kind: matched.array_kind,
+    });
+    lower_for_after_init(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        &format!("for.{loop_label}_fast"),
+    )?;
+    ctx.packed_f64_loop_facts
+        .retain(|fact| fact.scope_id != packed_scope_id);
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = slow_pre_idx;
+    lower_for_after_init(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        &format!("for.{loop_label}_slow"),
+    )?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Ok(true)
+}
+
+fn record_packed_f64_loop_guard_artifacts(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    arr_box: &str,
+    guard_id: &str,
+    array_kind: PackedNumericLoopKind,
+) {
+    let guarded_arr = LoweredValue::js_value(arr_box.to_string());
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        array_kind.guard_expr_kind(),
+        Some(arr_id),
+        array_kind.guard_consumer(),
+        &guarded_arr,
+        Some(BoundsState::Guarded {
+            guard_id: guard_id.to_string(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![
+            array_kind_fact(
+                Some(arr_id),
+                "consumed",
+                array_kind.array_kind_label(),
+                None,
+            ),
+            raw_f64_layout_fact(Some(arr_id), "consumed", guard_id, None),
+        ],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            format!("loop_versioning={}", array_kind.loop_label()),
+            "index_range=nonnegative_i32".to_string(),
+            "length_range=guarded_i32".to_string(),
+            "storage_layout=raw_f64_numeric_slots".to_string(),
+        ],
+    );
+
+    let fallback_arr = LoweredValue::js_value(arr_box.to_string());
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        array_kind.guard_expr_kind(),
+        Some(arr_id),
+        array_kind.fallback_consumer(),
+        &fallback_arr,
+        Some(BoundsState::Unknown),
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::RuntimeApi),
+        None,
+        None,
+        Vec::new(),
+        vec![
+            array_kind_fact(
+                Some(arr_id),
+                "rejected",
+                array_kind.array_kind_label(),
+                Some(MaterializationReason::RuntimeApi),
+            ),
+            raw_f64_layout_fact(
+                Some(arr_id),
+                "rejected",
+                guard_id,
+                Some(MaterializationReason::RuntimeApi),
+            ),
+            raw_f64_layout_fact(
+                Some(arr_id),
+                "invalidated",
+                "runtime_api",
+                Some(MaterializationReason::RuntimeApi),
+            ),
+        ],
+        false,
+        false,
+        vec![format!(
+            "loop_versioning={}_fallback",
+            array_kind.loop_label()
+        )],
+    );
+}
+
+fn record_loop_array_length_effect(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    effect: LoopArrayLengthEffect,
+    consumed: bool,
+) {
+    let lowered = LoweredValue::js_value("0.0");
+    let fact = effect_fact(
+        Some(arr_id),
+        if consumed { "consumed" } else { "rejected" },
+        effect.detail(),
+        effect.materialization_reason(),
+    );
+    let mut consumed_facts = Vec::new();
+    let mut rejected_facts = Vec::new();
+    if consumed {
+        consumed_facts.push(fact);
+    } else {
+        rejected_facts.push(fact);
+    }
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "LoopArrayLengthEffect",
+        Some(arr_id),
+        "loop_array_length_effect",
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        consumed_facts,
+        rejected_facts,
+        false,
+        false,
+        vec![
+            format!("loop_length_effect={}", effect.detail()),
+            format!(
+                "loop_length_proof={}",
+                if consumed { "accepted" } else { "rejected" }
+            ),
+        ],
+    );
+}
+
+fn match_packed_f64_versioned_loop(
+    ctx: &FnCtx<'_>,
+    init: Option<&perry_hir::Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<PackedF64VersionedLoop> {
+    if !ctx.pending_labels.is_empty() {
+        return None;
+    }
+    let hoist = condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))?;
+    if !matches!(hoist.op, perry_hir::CompareOp::Lt) || hoist.lhs_addend != 0 {
+        return None;
+    }
+    if !ctx.integer_locals.contains(&hoist.counter_id)
+        || !loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+        || !loop_counter_entry_i32_range_is_safe(init, hoist.counter_id)
+    {
+        return None;
+    }
+    if !ctx.locals.contains_key(&hoist.arr_id)
+        || ctx.boxed_vars.contains(&hoist.arr_id)
+        || ctx.module_globals.contains_key(&hoist.arr_id)
+        || ctx.scalar_replaced_arrays.contains_key(&hoist.arr_id)
+        || ctx.native_facts.has_materialization_hazard(hoist.arr_id)
+    {
+        return None;
+    }
+    let store_array_kind =
+        supported_packed_numeric_loop_store_kind(ctx, body, hoist.arr_id, hoist.counter_id);
+    let array_kind = if let Some(store_array_kind) = store_array_kind {
+        if !ctx.native_facts.proves_noalias_array(hoist.arr_id) {
+            return None;
+        }
+        store_array_kind
+    } else if ctx.native_facts.proves_packed_i32_array(hoist.arr_id)
+        && local_is_int32_array(ctx, hoist.arr_id)
+    {
+        PackedNumericLoopKind::I32
+    } else if ctx.native_facts.proves_packed_u32_array(hoist.arr_id)
+        && local_is_u32_array(ctx, hoist.arr_id)
+    {
+        PackedNumericLoopKind::U32
+    } else if ctx.native_facts.proves_packed_f64_array(hoist.arr_id) {
+        PackedNumericLoopKind::F64
+    } else {
+        return None;
+    };
+    if !local_is_number_array(ctx, hoist.arr_id) {
+        return None;
+    }
+    let body_is_supported = store_array_kind.is_some()
+        || body
+            .iter()
+            .all(|stmt| stmt_is_packed_f64_loop_safe(ctx, stmt, hoist.arr_id, hoist.counter_id));
+    if !body_is_supported {
+        return None;
+    }
+    Some(PackedF64VersionedLoop {
+        counter_id: hoist.counter_id,
+        array_id: hoist.arr_id,
+        array_kind,
+    })
+}
+
+fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Array(elem))
+            if matches!(elem.as_ref(), perry_types::Type::Number | perry_types::Type::Int32)
+                || matches!(elem.as_ref(), perry_types::Type::Named(name) if name == "PerryU32")
+    )
+}
+
+fn local_allows_packed_f64_loop_store(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Array(elem)) if matches!(elem.as_ref(), perry_types::Type::Number)
+    )
+}
+
+fn local_is_int32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Array(elem)) if matches!(elem.as_ref(), perry_types::Type::Int32)
+    )
+}
+
+fn local_is_u32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Array(elem))
+            if matches!(elem.as_ref(), perry_types::Type::Named(name) if name == "PerryU32")
+    )
+}
+
+fn stmt_is_packed_f64_loop_safe(
+    ctx: &FnCtx<'_>,
+    stmt: &Stmt,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    match stmt {
+        Stmt::Expr(expr) => expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id),
+        Stmt::Let { init, .. } => init
+            .as_ref()
+            .is_none_or(|expr| expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id)),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_is_packed_f64_loop_safe(ctx, condition, arr_id, counter_id)
+                && then_branch
+                    .iter()
+                    .all(|stmt| stmt_is_packed_f64_loop_safe(ctx, stmt, arr_id, counter_id))
+                && else_branch.as_ref().is_none_or(|branch| {
+                    branch
+                        .iter()
+                        .all(|stmt| stmt_is_packed_f64_loop_safe(ctx, stmt, arr_id, counter_id))
+                })
+        }
+        Stmt::Labeled { body, .. } => {
+            stmt_is_packed_f64_loop_safe(ctx, body.as_ref(), arr_id, counter_id)
+        }
+        Stmt::PreallocateBoxes(_) => true,
+        Stmt::Return(_)
+        | Stmt::Throw(_)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::While { .. }
+        | Stmt::DoWhile { .. }
+        | Stmt::For { .. }
+        | Stmt::Try { .. }
+        | Stmt::Switch { .. } => false,
+    }
+}
+
+fn supported_packed_numeric_loop_store_kind(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    arr_id: u32,
+    counter_id: u32,
+) -> Option<PackedNumericLoopKind> {
+    let [Stmt::Expr(perry_hir::Expr::IndexSet {
+        object,
+        index,
+        value,
+    })] = body
+    else {
+        return None;
+    };
+    if !is_packed_f64_loop_index(object, index, arr_id, counter_id) {
+        return None;
+    }
+    if local_is_int32_array(ctx, arr_id)
+        && expr_is_packed_i32_loop_store_rhs_safe(ctx, value, arr_id, counter_id)
+    {
+        return Some(PackedNumericLoopKind::I32);
+    }
+    if local_allows_packed_f64_loop_store(ctx, arr_id)
+        && expr_is_packed_f64_loop_store_rhs_safe(ctx, value, arr_id, counter_id)
+    {
+        return Some(PackedNumericLoopKind::F64);
+    }
+    None
+}
+
+fn expr_is_packed_f64_loop_store_rhs_safe(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::Expr;
+
+    match expr {
+        Expr::IndexGet { object, index } => {
+            is_packed_f64_loop_index(object, index, arr_id, counter_id)
+        }
+        Expr::LocalGet(id) => *id != arr_id && crate::type_analysis::is_numeric_expr(ctx, expr),
+        Expr::Number(_) | Expr::Integer(_) => true,
+        Expr::Binary { left, right, .. } => {
+            if !crate::type_analysis::is_numeric_expr(ctx, expr) {
+                return false;
+            }
+            expr_is_packed_f64_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_f64_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
+        }
+        Expr::MathAbs(value) => {
+            expr_is_packed_f64_loop_store_abs_rhs_safe(ctx, value, arr_id, counter_id)
+        }
+        _ => false,
+    }
+}
+
+fn expr_is_packed_f64_loop_store_abs_rhs_safe(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    crate::type_analysis::is_numeric_expr(ctx, expr)
+        && matches!(
+            expr,
+            perry_hir::Expr::IndexGet { object, index }
+                if is_packed_f64_loop_index(object, index, arr_id, counter_id)
+        )
+}
+
+fn expr_is_packed_i32_loop_store_rhs_safe(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::{BinaryOp, Expr};
+
+    match expr {
+        Expr::IndexGet { object, index } => {
+            is_packed_f64_loop_index(object, index, arr_id, counter_id)
+        }
+        Expr::LocalGet(id) => *id != arr_id && local_is_int32_value(ctx, *id),
+        Expr::Integer(n) => (i32::MIN as i64..=i32::MAX as i64).contains(n),
+        Expr::Number(n)
+            if n.is_finite()
+                && n.fract() == 0.0
+                && *n >= i32::MIN as f64
+                && *n <= i32::MAX as f64 =>
+        {
+            true
+        }
+        Expr::MathImul(left, right) => {
+            expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_i32_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
+        }
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+        }
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+            ) =>
+        {
+            expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_i32_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
+        }
+        _ => false,
+    }
+}
+
+fn local_is_int32_value(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Int32)
+    ) || ctx.integer_locals.contains(&local_id)
+}
+
+fn expr_is_packed_f64_loop_safe(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::{ArrayElement, Expr};
+    match expr {
+        Expr::IndexGet { object, index } => {
+            is_packed_f64_loop_index(object, index, arr_id, counter_id)
+        }
+        // A numeric-store fallback can downgrade/invalidate raw-f64 layout.
+        // Without a loop restart, later packed-loop loads would keep using the
+        // loop-entry raw-f64 proof, so store-bearing loops stay on guarded paths.
+        Expr::IndexSet { .. } | Expr::PutValueSet { .. } => false,
+        Expr::LocalSet(id, value) => {
+            *id != arr_id
+                && *id != counter_id
+                && expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id)
+        }
+        Expr::Update { id, .. } => *id != arr_id && *id != counter_id,
+        Expr::PropertyGet { object, property } => {
+            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id) {
+                property == "length"
+            } else {
+                false
+            }
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
+            expr_is_packed_f64_loop_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_f64_loop_safe(ctx, right, arr_id, counter_id)
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::NumberCoerce(operand)
+        | Expr::BooleanCoerce(operand) => {
+            expr_is_packed_f64_loop_safe(ctx, operand, arr_id, counter_id)
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_is_packed_f64_loop_safe(ctx, condition, arr_id, counter_id)
+                && expr_is_packed_f64_loop_safe(ctx, then_expr, arr_id, counter_id)
+                && expr_is_packed_f64_loop_safe(ctx, else_expr, arr_id, counter_id)
+        }
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            expr_is_packed_f64_loop_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_f64_loop_safe(ctx, right, arr_id, counter_id)
+        }
+        Expr::MathMin(values) | Expr::MathMax(values) => values
+            .iter()
+            .all(|expr| expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id)),
+        Expr::MathAbs(value)
+        | Expr::MathSqrt(value)
+        | Expr::MathFloor(value)
+        | Expr::MathCeil(value)
+        | Expr::MathRound(value)
+        | Expr::MathTrunc(value)
+        | Expr::MathSign(value)
+        | Expr::MathF16round(value) => expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id),
+        Expr::Array(elements) => elements
+            .iter()
+            .all(|expr| expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id)),
+        Expr::ArraySpread(elements) => elements.iter().all(|element| match element {
+            ArrayElement::Expr(expr) => expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id),
+            ArrayElement::Spread(_) | ArrayElement::Hole => false,
+        }),
+        Expr::LocalGet(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        Expr::Call { .. } | Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => false,
+        Expr::Closure { .. }
+        | Expr::PropertySet { .. }
+        | Expr::PropertyUpdate { .. }
+        | Expr::IndexUpdate { .. }
+        | Expr::ArrayPush { .. }
+        | Expr::ArrayPushSpread { .. }
+        | Expr::ArrayPop(_)
+        | Expr::ArrayShift(_)
+        | Expr::ArrayUnshift { .. }
+        | Expr::ArraySplice { .. } => false,
+        _ => false,
+    }
+}
+
+fn is_packed_f64_loop_index(
+    object: &perry_hir::Expr,
+    index: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    matches!(
+        (object, index),
+        (perry_hir::Expr::LocalGet(object_id), perry_hir::Expr::LocalGet(index_id))
+            if *object_id == arr_id && *index_id == counter_id
+    )
+}
+
+fn emit_guarded_i32_bound(
+    ctx: &mut FnCtx<'_>,
+    counter_id: u32,
+    bound_id: u32,
+    op: perry_hir::CompareOp,
+    label_prefix: &str,
+) -> Option<DynamicI32Bound> {
+    let bound_slot = ctx.locals.get(&bound_id).cloned()?;
+    let counter_i32_was_fresh = ensure_loop_counter_i32_slot(ctx, counter_id)?;
+
+    let flag_slot = ctx.func.alloca_entry(I1);
+    let bound_i32_slot = ctx.func.alloca_entry(I32);
+    ctx.block().store(I1, "false", &flag_slot);
+    ctx.block().store(I32, "0", &bound_i32_slot);
+
+    let n_dbl = ctx.block().load(DOUBLE, &bound_slot);
+    let is_number = emit_js_value_is_number(ctx, &n_dbl);
+
+    let number_idx = ctx.new_block(&format!("{label_prefix}.bound_i32.number"));
+    let convert_idx = ctx.new_block(&format!("{label_prefix}.bound_i32.convert"));
+    let merge_idx = ctx.new_block(&format!("{label_prefix}.bound_i32.merge"));
+    let number_label = ctx.block_label(number_idx);
+    let convert_label = ctx.block_label(convert_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&is_number, &number_label, &merge_label);
+
+    ctx.current_block = number_idx;
+    let ge_min = ctx.block().fcmp("oge", &n_dbl, "-2147483648.0");
+    let le_max = ctx.block().fcmp("ole", &n_dbl, "2147483647.0");
+    let in_i32_range = ctx.block().and(I1, &ge_min, &le_max);
+    ctx.block()
+        .cond_br(&in_i32_range, &convert_label, &merge_label);
+
+    ctx.current_block = convert_idx;
+    let bound_i32 = ctx.block().fptosi(DOUBLE, &n_dbl, I32);
+    let roundtrip = ctx.block().sitofp(I32, &bound_i32, DOUBLE);
+    let is_integral = ctx.block().fcmp("oeq", &roundtrip, &n_dbl);
+    ctx.block().store(I1, &is_integral, &flag_slot);
+    ctx.block().store(I32, &bound_i32, &bound_i32_slot);
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Some(DynamicI32Bound {
+        counter_id,
+        op,
+        flag_slot,
+        bound_i32_slot,
+        counter_i32_was_fresh,
+    })
+}
+
+fn ensure_loop_counter_i32_slot(ctx: &mut FnCtx<'_>, counter_id: u32) -> Option<bool> {
+    if ctx.i32_counter_slots.contains_key(&counter_id) {
+        return Some(false);
+    }
+    let counter_slot = ctx.locals.get(&counter_id).cloned()?;
+    let i32_slot = ctx.func.alloca_entry(I32);
+    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
+    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
+    ctx.block().store(I32, &cur_i32, &i32_slot);
+    ctx.i32_counter_slots.insert(counter_id, i32_slot);
+    Some(true)
+}
+
+fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
+    let n_bits = ctx.block().bitcast_double_to_i64(value);
+    let tag = ctx.block().and(
+        I64,
+        &n_bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let below = ctx.block().icmp_ult(
+        I64,
+        &tag,
+        &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
+    );
+    let above = ctx.block().icmp_ugt(
+        I64,
+        &tag,
+        &crate::nanbox::i64_literal(crate::nanbox::STRING_TAG),
+    );
+    ctx.block().or(I1, &below, &above)
+}
+
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
 ///
 /// ```text
@@ -254,13 +1017,29 @@ pub(crate) fn lower_for(
     if let Some(init_stmt) = init {
         lower_stmt(ctx, init_stmt)?;
     }
-    let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     if let Some(matched) = match_numeric_bulk_fill_loop(ctx, init, condition, update, body) {
         if lower_numeric_bulk_fill_loop(ctx, matched)? {
             return Ok(());
         }
     }
+
+    if lower_packed_f64_versioned_for(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
+    lower_for_after_init(ctx, init, condition, update, body, "for")
+}
+
+fn lower_for_after_init(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    label_prefix: &str,
+) -> Result<()> {
+    let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     // Loop-invariant length hoisting peephole. Detect the very common
     // shape `for (...; i < arr.length; ...)` where `arr` is a local
@@ -282,8 +1061,14 @@ pub(crate) fn lower_for(
     // Saves ~25-30% on `for (let i = 0; i < arr.length; i++) arr[i] = i`
     // and `for (let i = 0; i < arr.length; i++) for (let j = 0; j <
     // arr.length; j++) ...` patterns.
-    let hoist_classification: Option<LengthHoist> = condition
-        .and_then(|cond| classify_for_length_hoist(cond, body))
+    let raw_hoist_classification: Option<LengthHoist> =
+        condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    let hoist_rejection = if raw_hoist_classification.is_none() {
+        condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
+    } else {
+        None
+    };
+    let hoist_classification: Option<LengthHoist> = raw_hoist_classification
         // `__arr_N` is the for-of desugar's holder — an ALIAS of the user's
         // iterable local. Body mutations go through the user's name
         // (`array.push(1)` → ArrayPush on the user id), so the walker above
@@ -296,6 +1081,11 @@ pub(crate) fn lower_for(
                 .get(&hoist.arr_id)
                 .is_some_and(|n| n.starts_with("__arr_"))
         });
+    if let Some(hoist) = hoist_classification {
+        record_loop_array_length_effect(ctx, hoist.arr_id, LoopArrayLengthEffect::Preserves, true);
+    } else if let Some(rejection) = hoist_rejection {
+        record_loop_array_length_effect(ctx, rejection.arr_id, rejection.effect, false);
+    }
     let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|hoist| hoist.arr_id);
     let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|hoist| {
         matches!(hoist.op, perry_hir::CompareOp::Lt)
@@ -385,15 +1175,14 @@ pub(crate) fn lower_for(
     };
 
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
-    // detect the simpler `i < n` shape where `n` is a number-typed local
-    // or function parameter. Emitting `fptosi(n)` once at the loop head
-    // and using `icmp slt i32 %i, %n.i32` in the condition block
-    // replaces `fcmp olt double`, letting LLVM's SCEV model `i` as a
-    // clean integer induction variable — prerequisite for LoopVectorizer
-    // to widen Buffer-read and similar intrinsic-heavy bodies.
+    // detect the simpler `i < n` shape where `n` is a statically proven
+    // loop-invariant i32 local. Emitting `fptosi(n)` once at the loop head
+    // and using `icmp slt i32 %i, %n.i32` in the condition block replaces
+    // `fcmp olt double`, letting LLVM's SCEV model `i` as a clean integer
+    // induction variable.
     let local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)> =
         if hoist_classification.is_none() {
-            condition.and_then(|cond| classify_for_local_bound(cond, ctx))
+            condition.and_then(|cond| classify_for_local_bound(cond, update, body, ctx))
         } else {
             None
         };
@@ -441,72 +1230,20 @@ pub(crate) fn lower_for(
             None
         };
     // Issue #168 follow-up: when neither the `arr.length` hoist nor the static
-    // `i < n` (number-typed bound) peephole fired, try the runtime-guarded path
-    // for an `any`/untyped numeric bound. We hoist the `is-number` check and
-    // `fptosi(n)` once here, in the pre-loop block, so the cond block can pick
-    // an `icmp slt i32` fast loop (no per-iteration `sitofp` / `js_rel_*` call)
-    // when `n` was a primitive number at entry, and fall back to the generic
-    // comparison (full coercion semantics) otherwise.
-    let dynamic_i32_bound: Option<DynamicI32Bound> = if hoist_classification.is_none()
-        && local_bound_classification.is_none()
-    {
-        condition
-            .and_then(|cond| classify_for_local_bound_dynamic(cond, ctx))
-            .and_then(|(counter_id, bound_id, op)| {
-                let bound_slot = ctx.locals.get(&bound_id).cloned()?;
-                // Ensure an i32 counter slot exists (the Let site allocates
-                // one for `integer_locals`, but allocate here if absent so
-                // the fast path and Update stay in sync).
-                let counter_i32_was_fresh = if !ctx.i32_counter_slots.contains_key(&counter_id) {
-                    let counter_slot = ctx.locals.get(&counter_id).cloned()?;
-                    let i32_slot = ctx.func.alloca_entry(I32);
-                    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
-                    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
-                    ctx.block().store(I32, &cur_i32, &i32_slot);
-                    ctx.i32_counter_slots.insert(counter_id, i32_slot);
-                    true
-                } else {
-                    false
-                };
-                // One-time `is-number` test, mirroring runtime
-                // `JSValue::is_number`: a value is a number unless its tag
-                // bits fall in the Perry-owned band [SHORT_STRING_TAG,
-                // STRING_TAG].
-                let n_dbl = ctx.block().load(DOUBLE, &bound_slot);
-                let n_bits = ctx.block().bitcast_double_to_i64(&n_dbl);
-                let tag = ctx.block().and(
-                    I64,
-                    &n_bits,
-                    &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
-                );
-                let below = ctx.block().icmp_ult(
-                    I64,
-                    &tag,
-                    &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
-                );
-                let above = ctx.block().icmp_ugt(
-                    I64,
-                    &tag,
-                    &crate::nanbox::i64_literal(crate::nanbox::STRING_TAG),
-                );
-                let is_number = ctx.block().or(I1, &below, &above);
-                let flag_slot = ctx.func.alloca_entry(I1);
-                ctx.block().store(I1, &is_number, &flag_slot);
-                // `fptosi(n)` is valid only on the fast (is-number) path.
-                let bound_i32 = ctx.block().fptosi(DOUBLE, &n_dbl, I32);
-                let bound_i32_slot = ctx.func.alloca_entry(I32);
-                ctx.block().store(I32, &bound_i32, &bound_i32_slot);
-                Some(DynamicI32Bound {
-                    counter_id,
-                    op,
-                    flag_slot,
-                    bound_i32_slot,
-                    counter_i32_was_fresh,
+    // `i < n` peephole fired, try the runtime-guarded path. We emit a
+    // finite-integral-i32 guard and `fptosi(n)` once here, in the pre-loop
+    // block, so the cond block can pick an `icmp slt/sle i32` fast loop when
+    // safe and fall back to the generic comparison otherwise.
+    let dynamic_i32_bound: Option<DynamicI32Bound> =
+        if hoist_classification.is_none() && local_bound_classification.is_none() {
+            condition
+                .and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
+                .and_then(|(counter_id, bound_id, op)| {
+                    emit_guarded_i32_bound(ctx, counter_id, bound_id, op, label_prefix)
                 })
-            })
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     let local_bound_index_bounds_are_safe =
         local_bound_classification.is_some_and(|(counter_id, _, op)| {
             matches!(op, perry_hir::CompareOp::Lt)
@@ -553,15 +1290,15 @@ pub(crate) fn lower_for(
         }
     }
     if let Some(fact) =
-        classify_for_counter_range(init, condition, update, ctx, loop_proof_scope_id)
+        classify_for_counter_range(init, condition, update, body, ctx, loop_proof_scope_id)
     {
         ctx.int_range_facts.push(fact);
     }
 
-    let cond_idx = ctx.new_block("for.cond");
-    let body_idx = ctx.new_block("for.body");
-    let update_idx = ctx.new_block("for.update");
-    let exit_idx = ctx.new_block("for.exit");
+    let cond_idx = ctx.new_block(&format!("{label_prefix}.cond"));
+    let body_idx = ctx.new_block(&format!("{label_prefix}.body"));
+    let update_idx = ctx.new_block(&format!("{label_prefix}.update"));
+    let exit_idx = ctx.new_block(&format!("{label_prefix}.exit"));
 
     let cond_label = ctx.block_label(cond_idx);
     let body_label = ctx.block_label(body_idx);
@@ -595,8 +1332,9 @@ pub(crate) fn lower_for(
         } else if let (Some((counter_id, _, op)), Some(ref bound_i32_slot)) =
             (local_bound_classification, &i32_local_bound_slot)
         {
-            // Issue #168: `i < n` / `i <= n` where `n` is a number-typed local
-            // or parameter.  The fptosi(n) was hoisted above; use icmp i32.
+            // Issue #168: `i < n` / `i <= n` where `n` is statically proven
+            // safe for unguarded i32 materialization. The fptosi(n) was
+            // hoisted above; use icmp i32.
             if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() {
                 let ctr = ctx.block().load(I32, &ctr_i32_slot);
                 let bound = ctx.block().load(I32, bound_i32_slot);
@@ -610,15 +1348,16 @@ pub(crate) fn lower_for(
                 false
             }
         } else if let Some(ref dyn_bound) = dynamic_i32_bound {
-            // Issue #168 follow-up: `i < n` / `i <= n` where `n` is an `any`/untyped
-            // local. Branch on the one-time `is-number` flag hoisted above: the
-            // fast loop uses `icmp slt i32`; the slow loop keeps full JS comparison
-            // semantics. The branch is loop-invariant, so LLVM's LoopUnswitch peels
-            // it into two loops at -O2+; even unswitched, the hot (is-number) path
-            // executes pure integer compares with no per-iteration `sitofp` / call.
+            // Issue #168 follow-up: `i < n` / `i <= n` with a runtime-guarded
+            // local bound. Branch on the one-time finite-integral-i32 flag
+            // hoisted above: the fast loop uses `icmp`, and the slow loop keeps
+            // full JS comparison semantics. The branch is loop-invariant, so
+            // LLVM's LoopUnswitch peels it into two loops at -O2+; even
+            // unswitched, the hot path executes pure integer compares with no
+            // per-iteration `sitofp` / call.
             if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&dyn_bound.counter_id).cloned() {
-                let fast_idx = ctx.new_block("for.cond.fast");
-                let slow_idx = ctx.new_block("for.cond.slow");
+                let fast_idx = ctx.new_block(&format!("{label_prefix}.cond.fast"));
+                let slow_idx = ctx.new_block(&format!("{label_prefix}.cond.slow"));
                 let fast_label = ctx.block_label(fast_idx);
                 let slow_label = ctx.block_label(slow_idx);
                 let flag = ctx.block().load(I1, &dyn_bound.flag_slot);
@@ -768,6 +1507,192 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
     emit_shadow_slot_clears(ctx, &slots);
 }
 
+fn guarded_array_aliases_for_loop(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> std::collections::HashSet<u32> {
+    let mut aliases = std::collections::HashSet::new();
+    aliases.insert(arr_id);
+    let guarded_root = crate::expr::local_value_alias_root(ctx, arr_id);
+    aliases.insert(guarded_root);
+    for alias_id in ctx.local_value_aliases.keys() {
+        if crate::expr::local_value_alias_root(ctx, *alias_id) == guarded_root {
+            aliases.insert(*alias_id);
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        if let Some(update) = update {
+            changed |= collect_guarded_array_aliases_in_expr(ctx, arr_id, update, &mut aliases);
+        }
+        changed |= collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, &mut aliases);
+    }
+    aliases
+}
+
+fn local_may_alias_guarded_array(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    local_id: u32,
+    aliases: &std::collections::HashSet<u32>,
+) -> bool {
+    aliases.contains(&local_id)
+        || crate::expr::local_value_alias_root(ctx, local_id)
+            == crate::expr::local_value_alias_root(ctx, arr_id)
+}
+
+fn expr_may_resolve_to_guarded_array_alias(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    expr: &perry_hir::Expr,
+    aliases: &std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::LocalGet(id) => local_may_alias_guarded_array(ctx, arr_id, *id, aliases),
+        Expr::LocalSet(_, value) => {
+            expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, aliases)
+        }
+        Expr::Sequence(exprs) => exprs.last().is_some_and(|expr| {
+            expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases)
+        }),
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_may_resolve_to_guarded_array_alias(ctx, arr_id, then_expr, aliases)
+                || expr_may_resolve_to_guarded_array_alias(ctx, arr_id, else_expr, aliases)
+        }
+        _ => false,
+    }
+}
+
+fn collect_guarded_array_alias_for_local_write(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    target_id: u32,
+    value: &perry_hir::Expr,
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    target_id != arr_id
+        && expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, aliases)
+        && aliases.insert(target_id)
+}
+
+fn collect_guarded_array_aliases_in_stmts(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    stmts: &[perry_hir::Stmt],
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| collect_guarded_array_aliases_in_stmt(ctx, arr_id, stmt, aliases))
+}
+
+fn collect_guarded_array_aliases_in_stmt(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    stmt: &perry_hir::Stmt,
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Stmt;
+    match stmt {
+        Stmt::Let { id, init, .. } => init.as_ref().is_some_and(|expr| {
+            collect_guarded_array_alias_for_local_write(ctx, arr_id, *id, expr, aliases)
+                | collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+        }),
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, condition, aliases)
+                | collect_guarded_array_aliases_in_stmts(ctx, arr_id, then_branch, aliases)
+                | else_branch.as_ref().is_some_and(|body| {
+                    collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+                })
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, condition, aliases)
+                | collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|stmt| {
+                collect_guarded_array_aliases_in_stmt(ctx, arr_id, stmt, aliases)
+            }) | condition.as_ref().is_some_and(|expr| {
+                collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+            }) | update.as_ref().is_some_and(|expr| {
+                collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+            }) | collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+                | catch.as_ref().is_some_and(|catch| {
+                    collect_guarded_array_aliases_in_stmts(ctx, arr_id, &catch.body, aliases)
+                })
+                | finally.as_ref().is_some_and(|body| {
+                    collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+                })
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, discriminant, aliases)
+                | cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(|expr| {
+                        collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+                    }) | collect_guarded_array_aliases_in_stmts(ctx, arr_id, &case.body, aliases)
+                })
+        }
+        Stmt::Labeled { body, .. } => {
+            collect_guarded_array_aliases_in_stmt(ctx, arr_id, body.as_ref(), aliases)
+        }
+    }
+}
+
+fn collect_guarded_array_aliases_in_expr(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    expr: &perry_hir::Expr,
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Expr;
+    let mut changed = match expr {
+        Expr::LocalSet(id, value) => {
+            collect_guarded_array_alias_for_local_write(ctx, arr_id, *id, value, aliases)
+        }
+        _ => false,
+    };
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        changed |= collect_guarded_array_aliases_in_expr(ctx, arr_id, child, aliases);
+    });
+    changed
+}
+
 /// Inspect a `for` loop's condition expression and body, and return
 /// `Some(...)` if the loop is the well-known shape
 /// `for (let i = ...; i < <arr>.length; ...) { body }` (or `<=`) AND the
@@ -782,8 +1707,16 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
 /// inbounds and therefore can't trigger the realloc slow path that would
 /// extend `arr.length`. Under `<=`, `i == arr.length` is reachable, so
 /// array writes must go through the normal extension-capable path.
+///
+/// The proof is intentionally disabled when the guarded array has a local alias
+/// in scope, or when the loop/update creates one. The existing walker reasons
+/// about one local id; accepting `const alias = arr; alias.push(...)` would let
+/// a length mutation bypass both the cached-length slot and the derived
+/// bounded-index facts.
 fn classify_for_length_hoist(
+    ctx: &crate::expr::FnCtx<'_>,
     cond: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
 ) -> Option<LengthHoist> {
     use perry_hir::{BinaryOp, CompareOp, Expr};
@@ -801,6 +1734,10 @@ fn classify_for_length_hoist(
         },
         _ => return None,
     };
+    if !array_length_receiver_is_loop_local(ctx, arr_id) {
+        return None;
+    }
+    let guarded_aliases = guarded_array_aliases_for_loop(ctx, arr_id, update, body);
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
@@ -828,10 +1765,21 @@ fn classify_for_length_hoist(
         _ => return None,
     };
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
-    if !body
-        .iter()
-        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
-    {
+    if !body.iter().all(|s| {
+        stmt_preserves_array_length(
+            ctx,
+            s,
+            arr_id,
+            bounded_idx_id,
+            has_strict_bound,
+            &guarded_aliases,
+        )
+    }) {
+        return None;
+    }
+    if update.is_some_and(|e| {
+        !expr_preserves_array_length(ctx, e, arr_id, u32::MAX, false, &guarded_aliases)
+    }) {
         return None;
     }
     let buffer_bounds_width_units = match op {
@@ -850,25 +1798,115 @@ fn classify_for_length_hoist(
     })
 }
 
+fn classify_for_length_hoist_rejection(
+    ctx: &crate::expr::FnCtx<'_>,
+    cond: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> Option<LengthHoistRejection> {
+    use perry_hir::{BinaryOp, CompareOp, Expr};
+    let (op, left, right) = match cond {
+        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        _ => return None,
+    };
+    if !matches!(op, CompareOp::Lt | CompareOp::Le) {
+        return None;
+    }
+    let arr_id = match right {
+        Expr::PropertyGet { object, property } if property == "length" => match object.as_ref() {
+            Expr::LocalGet(id) => *id,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let receiver_has_materialization_hazard = ctx.native_facts.has_materialization_hazard(arr_id);
+    if !array_length_receiver_is_loop_local(ctx, arr_id) && !receiver_has_materialization_hazard {
+        return None;
+    }
+    let (bounded_idx_id, lhs_addend) = match left {
+        Expr::LocalGet(id) => (*id, 0),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                    let addend = if matches!(op, BinaryOp::Sub) {
+                        addend.checked_neg()?
+                    } else {
+                        *addend
+                    };
+                    if !(0..=i32::MAX as i64).contains(&addend) {
+                        return None;
+                    }
+                    (*id, addend as i32)
+                }
+                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                    if !(0..=i32::MAX as i64).contains(addend) {
+                        return None;
+                    }
+                    (*id, *addend as i32)
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
+    let guarded_aliases = guarded_array_aliases_for_loop(ctx, arr_id, update, body);
+    let body_effect = stmts_array_length_effect(
+        ctx,
+        body,
+        arr_id,
+        bounded_idx_id,
+        has_strict_bound,
+        &guarded_aliases,
+    );
+    if body_effect != LoopArrayLengthEffect::Preserves {
+        return Some(LengthHoistRejection {
+            arr_id,
+            effect: body_effect,
+        });
+    }
+    if let Some(update) = update {
+        let update_effect =
+            expr_array_length_effect(ctx, update, arr_id, u32::MAX, false, &guarded_aliases);
+        if update_effect != LoopArrayLengthEffect::Preserves {
+            return Some(LengthHoistRejection {
+                arr_id,
+                effect: update_effect,
+            });
+        }
+    }
+    if receiver_has_materialization_hazard {
+        return Some(LengthHoistRejection {
+            arr_id,
+            effect: LoopArrayLengthEffect::MaterializationHazard,
+        });
+    }
+    None
+}
+
+fn array_length_receiver_is_loop_local(ctx: &crate::expr::FnCtx<'_>, arr_id: u32) -> bool {
+    ctx.locals.contains_key(&arr_id)
+        && !ctx.boxed_vars.contains(&arr_id)
+        && !ctx.module_globals.contains_key(&arr_id)
+        && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
+        && !ctx.native_facts.has_materialization_hazard(arr_id)
+}
+
 /// Inspect a `for` loop's condition and return `Some((counter_id, bound_id,
 /// op))` if the condition is the shape `counter < bound` (or `<=`) where
-/// both sides are `LocalGet` ids, the counter is in `integer_locals`, and
-/// the bound is either (a) provably integer-valued (`integer_locals`) or
-/// (b) a number-typed local / parameter whose slot is accessible directly
-/// (i.e. not boxed and not a module global).
-///
-/// Case (b) relies on Perry's trust-types philosophy: a `number`-typed local
-/// used as a for-loop bound is expected to hold a whole-number value at
-/// runtime.  Callers that pass non-integer floats as loop bounds would
-/// observe at most one iteration difference — a trade-off that is within
-/// Perry's existing trust-types contract.
+/// both sides are `LocalGet` ids, the counter is in `integer_locals`, and the
+/// bound is an accessible, loop-invariant local that is statically safe to
+/// materialize as signed i32.
 ///
 /// Used by `lower_for` to enable the same i32 counter specialization as
 /// the `i < arr.length` peephole (`classify_for_length_hoist`) on the
-/// common case where the loop bound comes from a function parameter or a
-/// number-typed local variable.
+/// common case where the loop bound is a local variable with a proven i32
+/// representation. Ambiguous `number`/`any` bounds are handled by the guarded
+/// dynamic classifier or the generic JS comparison path instead.
 pub(crate) fn classify_for_local_bound(
     cond: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
     ctx: &crate::expr::FnCtx<'_>,
 ) -> Option<(u32, u32, perry_hir::CompareOp)> {
     use perry_hir::{CompareOp, Expr};
@@ -892,19 +1930,13 @@ pub(crate) fn classify_for_local_bound(
     if !ctx.integer_locals.contains(&counter_id) {
         return None;
     }
-    // Bound is safe to fptosi when provably integer-valued, OR when it is a
-    // number-typed slot that is accessible without boxing (params and simple
-    // `let` locals).  Module globals and boxed (closure-captured) variables
-    // go through different load paths so we skip those.
-    let bound_is_integer_safe = ctx.integer_locals.contains(&bound_id)
-        || (ctx.locals.contains_key(&bound_id)
-            && !ctx.boxed_vars.contains(&bound_id)
-            && !ctx.module_globals.contains_key(&bound_id)
-            && matches!(
-                ctx.local_types.get(&bound_id),
-                Some(perry_types::Type::Number | perry_types::Type::Int32)
-            ));
-    if !bound_is_integer_safe {
+    // Bound is safe to hoist only when it is both i32-proven and loop
+    // invariant. A `number`-typed local can hold 1.5/NaN/Infinity at runtime;
+    // using unguarded `fptosi` for those values changes JS trip counts.
+    if !local_bound_storage_accessible(ctx, bound_id)
+        || !local_bound_is_loop_invariant(cond, update, body, bound_id)
+        || !local_bound_can_use_static_i32(ctx, bound_id)
+    {
         return None;
     }
     Some((counter_id, bound_id, op))
@@ -912,23 +1944,17 @@ pub(crate) fn classify_for_local_bound(
 
 /// Like [`classify_for_local_bound`], but for the case the static classifier
 /// deliberately rejects: an `i < n` / `i <= n` loop whose bound `n` is an
-/// accessible (unboxed, non-module-global) local whose *static* type is **not**
-/// `number`/`int32` — most commonly an `any`-typed value or an un-annotated
-/// parameter (e.g. a count pulled out of `JSON.parse`).
+/// accessible (unboxed, non-module-global), loop-invariant local that is not
+/// statically proven safe for unguarded `fptosi`.
 ///
-/// We can't `fptosi` such a bound unconditionally: at runtime it may hold a
-/// non-number, and JS `<` would coerce it (`ToNumber`/`ToPrimitive`).  So this
-/// only reports the shape; the caller emits a **one-time** `is-number` guard at
-/// the loop head and runs the `icmp slt i32` fast loop when it holds, falling
-/// back to the generic per-iteration `js_rel_*` comparison otherwise.  This
-/// removes the per-iteration `sitofp` + runtime `callq` from the hot path for
-/// the extremely common untyped-count loop (issue #168 follow-up).
-///
-/// When the bound *is* a primitive number at runtime, hoisting `fptosi(n)` once
-/// is subject to the same documented trust-types trade-off as the static path
-/// (a non-integer float bound shifts the trip count by at most one).
+/// The caller emits a one-time finite-integral-i32 guard at the loop head and
+/// runs the `icmp slt/sle i32` fast loop only when the guard holds. Non-number,
+/// NaN, infinity, fractional, and out-of-i32-range bounds fall back to the
+/// generic per-iteration comparison, preserving JS semantics.
 pub(crate) fn classify_for_local_bound_dynamic(
     cond: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
     ctx: &crate::expr::FnCtx<'_>,
 ) -> Option<(u32, u32, perry_hir::CompareOp)> {
     use perry_hir::{CompareOp, Expr};
@@ -950,26 +1976,70 @@ pub(crate) fn classify_for_local_bound_dynamic(
     if !ctx.integer_locals.contains(&counter_id) {
         return None;
     }
-    // Bound must be a directly-accessible slot — same load-path constraints as
-    // the static classifier (skip module globals and boxed/closure-captured
-    // variables, which load differently).
-    if !ctx.locals.contains_key(&bound_id)
-        || ctx.boxed_vars.contains(&bound_id)
-        || ctx.module_globals.contains_key(&bound_id)
-    {
-        return None;
-    }
-    // Defer to the static classifier for integer- and `number`-typed bounds;
-    // this path only handles the residual non-`number` (e.g. `any`) case.
-    if ctx.integer_locals.contains(&bound_id)
-        || matches!(
-            ctx.local_types.get(&bound_id),
-            Some(perry_types::Type::Number | perry_types::Type::Int32)
-        )
+    if !local_bound_storage_accessible(ctx, bound_id)
+        || !local_bound_is_loop_invariant(cond, update, body, bound_id)
     {
         return None;
     }
     Some((counter_id, bound_id, op))
+}
+
+fn local_bound_storage_accessible(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -> bool {
+    ctx.locals.contains_key(&bound_id)
+        && !ctx.boxed_vars.contains(&bound_id)
+        && !ctx.module_globals.contains_key(&bound_id)
+}
+
+fn local_bound_is_loop_invariant(
+    cond: &perry_hir::Expr,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+    bound_id: u32,
+) -> bool {
+    !expr_mutates_local(cond, bound_id)
+        && update.is_none_or(|expr| !expr_mutates_local(expr, bound_id))
+        && !stmts_mutate_local(body, bound_id)
+}
+
+fn local_bound_can_use_static_i32(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -> bool {
+    if ctx.integer_locals.contains(&bound_id)
+        && crate::expr::int_range_expr(ctx, &perry_hir::Expr::LocalGet(bound_id))
+            .is_some_and(|range| range.min >= i32::MIN as i64 && range.max <= i32::MAX as i64)
+    {
+        return true;
+    }
+    min_length_bound_can_use_static_i32(ctx, bound_id)
+}
+
+fn min_length_bound_can_use_static_i32(ctx: &crate::expr::FnCtx<'_>, bound_id: u32) -> bool {
+    let Some(buffer_ids) = ctx.min_length_bounds.get(&bound_id) else {
+        return false;
+    };
+    !buffer_ids.is_empty()
+        && buffer_ids.iter().all(|buffer_id| {
+            ctx.buffer_view_slots
+                .get(buffer_id)
+                .and_then(|view| view.length_source.as_ref())
+                .is_some_and(|source| length_source_can_use_static_i32(ctx, source))
+        })
+}
+
+fn length_source_can_use_static_i32(ctx: &crate::expr::FnCtx<'_>, source: &LengthSource) -> bool {
+    match source {
+        LengthSource::Constant(n) => (0..=i64::from(i32::MAX)).contains(n),
+        LengthSource::Local { id, addend } => {
+            let Some(range) = crate::expr::int_range_expr(ctx, &perry_hir::Expr::LocalGet(*id))
+            else {
+                return false;
+            };
+            range
+                .min
+                .checked_add(*addend)
+                .zip(range.max.checked_add(*addend))
+                .is_some_and(|(min, max)| min >= 0 && max <= i64::from(i32::MAX))
+        }
+        LengthSource::Unknown => false,
+    }
 }
 
 fn loop_counter_bounds_are_safe(
@@ -981,6 +2051,28 @@ fn loop_counter_bounds_are_safe(
     loop_counter_is_nonnegative_at_entry(ctx, counter_id)
         && update_is_absent_or_counter_increment(update, counter_id)
         && !stmts_mutate_local(body, counter_id)
+}
+
+fn loop_counter_entry_i32_range_is_safe(init: Option<&perry_hir::Stmt>, counter_id: u32) -> bool {
+    use perry_hir::{Expr, Stmt};
+    let Some(Stmt::Let {
+        id,
+        init: Some(init),
+        ..
+    }) = init
+    else {
+        return false;
+    };
+    if *id != counter_id {
+        return false;
+    }
+    match init {
+        Expr::Integer(n) => (0..=i64::from(i32::MAX)).contains(n),
+        Expr::Number(n) => {
+            n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX)
+        }
+        _ => false,
+    }
 }
 
 fn loop_counter_is_nonnegative_at_entry(ctx: &crate::expr::FnCtx<'_>, counter_id: u32) -> bool {
@@ -1116,6 +2208,7 @@ fn classify_for_counter_range(
     init: Option<&perry_hir::Stmt>,
     cond: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
     ctx: &crate::expr::FnCtx<'_>,
     scope_id: u32,
 ) -> Option<IntRangeFact> {
@@ -1147,6 +2240,11 @@ fn classify_for_counter_range(
     ) {
         return None;
     }
+    if let Expr::LocalGet(bound_id) = right.as_ref() {
+        if !local_bound_is_loop_invariant(cond?, update, body, *bound_id) {
+            return None;
+        }
+    }
     let bound_range = crate::expr::int_range_expr(ctx, right)?;
     if bound_range.min != bound_range.max {
         return None;
@@ -1168,43 +2266,542 @@ fn classify_for_counter_range(
     }
 }
 
-pub(crate) fn stmt_preserves_array_length(
+fn first_blocking_loop_effect<I>(effects: I) -> LoopArrayLengthEffect
+where
+    I: IntoIterator<Item = LoopArrayLengthEffect>,
+{
+    effects
+        .into_iter()
+        .find(|effect| *effect != LoopArrayLengthEffect::Preserves)
+        .unwrap_or(LoopArrayLengthEffect::Preserves)
+}
+
+fn stmts_array_length_effect(
+    ctx: &crate::expr::FnCtx<'_>,
+    stmts: &[perry_hir::Stmt],
+    arr_id: u32,
+    bounded_idx_id: u32,
+    has_strict_bound: bool,
+    aliases: &std::collections::HashSet<u32>,
+) -> LoopArrayLengthEffect {
+    first_blocking_loop_effect(stmts.iter().map(|stmt| {
+        stmt_array_length_effect(ctx, stmt, arr_id, bounded_idx_id, has_strict_bound, aliases)
+    }))
+}
+
+fn stmt_array_length_effect(
+    ctx: &crate::expr::FnCtx<'_>,
     s: &perry_hir::Stmt,
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
+    aliases: &std::collections::HashSet<u32>,
+) -> LoopArrayLengthEffect {
+    use perry_hir::Stmt;
+    match s {
+        Stmt::Expr(e) | Stmt::Throw(e) => {
+            expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
+        }
+        Stmt::Return(opt) => opt.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
+            expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
+        }),
+        Stmt::Let { init, .. } => init.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
+            expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
+        }),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => first_blocking_loop_effect(
+            std::iter::once(expr_array_length_effect(
+                ctx,
+                condition,
+                arr_id,
+                bounded_idx_id,
+                has_strict_bound,
+                aliases,
+            ))
+            .chain(then_branch.iter().map(|stmt| {
+                stmt_array_length_effect(
+                    ctx,
+                    stmt,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
+            }))
+            .chain(else_branch.iter().flat_map(|body| {
+                body.iter().map(|stmt| {
+                    stmt_array_length_effect(
+                        ctx,
+                        stmt,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                })
+            })),
+        ),
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            first_blocking_loop_effect(
+                std::iter::once(expr_array_length_effect(
+                    ctx,
+                    condition,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                ))
+                .chain(body.iter().map(|stmt| {
+                    stmt_array_length_effect(
+                        ctx,
+                        stmt,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                })),
+            )
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => first_blocking_loop_effect(
+            init.iter()
+                .map(|stmt| {
+                    stmt_array_length_effect(
+                        ctx,
+                        stmt,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                })
+                .chain(condition.iter().map(|expr| {
+                    expr_array_length_effect(
+                        ctx,
+                        expr,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                }))
+                .chain(update.iter().map(|expr| {
+                    expr_array_length_effect(
+                        ctx,
+                        expr,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                }))
+                .chain(body.iter().map(|stmt| {
+                    stmt_array_length_effect(
+                        ctx,
+                        stmt,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                })),
+        ),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => first_blocking_loop_effect(
+            body.iter()
+                .map(|stmt| {
+                    stmt_array_length_effect(
+                        ctx,
+                        stmt,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                })
+                .chain(catch.iter().flat_map(|catch| {
+                    catch.body.iter().map(|stmt| {
+                        stmt_array_length_effect(
+                            ctx,
+                            stmt,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                            aliases,
+                        )
+                    })
+                }))
+                .chain(finally.iter().flat_map(|body| {
+                    body.iter().map(|stmt| {
+                        stmt_array_length_effect(
+                            ctx,
+                            stmt,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                            aliases,
+                        )
+                    })
+                })),
+        ),
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => first_blocking_loop_effect(
+            std::iter::once(expr_array_length_effect(
+                ctx,
+                discriminant,
+                arr_id,
+                bounded_idx_id,
+                has_strict_bound,
+                aliases,
+            ))
+            .chain(cases.iter().flat_map(|case| {
+                case.test
+                    .iter()
+                    .map(|expr| {
+                        expr_array_length_effect(
+                            ctx,
+                            expr,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                            aliases,
+                        )
+                    })
+                    .chain(case.body.iter().map(|stmt| {
+                        stmt_array_length_effect(
+                            ctx,
+                            stmt,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                            aliases,
+                        )
+                    }))
+            })),
+        ),
+        Stmt::Labeled { body, .. } => stmt_array_length_effect(
+            ctx,
+            body.as_ref(),
+            arr_id,
+            bounded_idx_id,
+            has_strict_bound,
+            aliases,
+        ),
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {
+            LoopArrayLengthEffect::Preserves
+        }
+        Stmt::PreallocateBoxes(_) => LoopArrayLengthEffect::Preserves,
+    }
+}
+
+fn expr_array_length_effect(
+    ctx: &crate::expr::FnCtx<'_>,
+    e: &perry_hir::Expr,
+    arr_id: u32,
+    bounded_idx_id: u32,
+    has_strict_bound: bool,
+    aliases: &std::collections::HashSet<u32>,
+) -> LoopArrayLengthEffect {
+    use perry_hir::{ArrayElement, Expr};
+    let walk = |sub: &Expr| {
+        expr_array_length_effect(ctx, sub, arr_id, bounded_idx_id, has_strict_bound, aliases)
+    };
+    match e {
+        Expr::ArrayPush { array_id, value } => {
+            if local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) {
+                LoopArrayLengthEffect::AliasLengthMutation
+            } else {
+                walk(value)
+            }
+        }
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
+            if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
+                LoopArrayLengthEffect::AliasLengthMutation
+            } else {
+                LoopArrayLengthEffect::Preserves
+            }
+        }
+        Expr::ArraySplice {
+            array_id,
+            start,
+            delete_count,
+            items,
+        } => {
+            if local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) {
+                LoopArrayLengthEffect::AliasLengthMutation
+            } else {
+                first_blocking_loop_effect(
+                    std::iter::once(walk(start))
+                        .chain(delete_count.iter().map(|expr| walk(expr)))
+                        .chain(items.iter().map(walk)),
+                )
+            }
+        }
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
+                    if has_strict_bound
+                        && matches!(index.as_ref(), Expr::LocalGet(idx_id) if *idx_id == bounded_idx_id)
+                    {
+                        return walk(value);
+                    }
+                    return LoopArrayLengthEffect::ArrayLengthMutation;
+                }
+            }
+            first_blocking_loop_effect([walk(object), walk(index), walk(value)])
+        }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let target_is_arr = matches!(target.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
+            let receiver_is_arr = matches!(receiver.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
+            if target_is_arr || receiver_is_arr {
+                if target_is_arr
+                    && receiver_is_arr
+                    && has_strict_bound
+                    && matches!(key.as_ref(), Expr::LocalGet(idx_id) if *idx_id == bounded_idx_id)
+                {
+                    return walk(value);
+                }
+                return LoopArrayLengthEffect::DynamicPropertyWrite;
+            }
+            first_blocking_loop_effect([walk(target), walk(key), walk(value), walk(receiver)])
+        }
+        Expr::LocalSet(id, value) => {
+            if *id == arr_id || *id == bounded_idx_id {
+                LoopArrayLengthEffect::Reassignment
+            } else {
+                walk(value)
+            }
+        }
+        Expr::Update { id, .. } => {
+            if *id == arr_id || *id == bounded_idx_id {
+                LoopArrayLengthEffect::Reassignment
+            } else {
+                LoopArrayLengthEffect::Preserves
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                {
+                    return first_blocking_loop_effect(
+                        std::iter::once(walk(object)).chain(args.iter().map(walk)),
+                    );
+                }
+            }
+            LoopArrayLengthEffect::UnknownCallEscape
+        }
+        Expr::NativeMethodCall {
+            object: Some(object),
+            method,
+            args,
+            ..
+        } => {
+            if is_buffer_numeric_read_method(method) && is_static_buffer_receiver(ctx, object) {
+                first_blocking_loop_effect(
+                    std::iter::once(walk(object)).chain(args.iter().map(walk)),
+                )
+            } else {
+                LoopArrayLengthEffect::UnknownCallEscape
+            }
+        }
+        Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => {
+            LoopArrayLengthEffect::UnknownCallEscape
+        }
+        Expr::Closure { .. } => LoopArrayLengthEffect::UnknownCallEscape,
+        Expr::Await(operand) | Expr::QueueMicrotask(operand) => {
+            let operand_effect = walk(operand);
+            if operand_effect != LoopArrayLengthEffect::Preserves {
+                operand_effect
+            } else {
+                LoopArrayLengthEffect::AsyncMicrotask
+            }
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
+            first_blocking_loop_effect([walk(left), walk(right)])
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::Delete(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand) => walk(operand),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => first_blocking_loop_effect([walk(condition), walk(then_expr), walk(else_expr)]),
+        Expr::PropertyGet { object, .. } => walk(object),
+        Expr::PropertySet { .. } => LoopArrayLengthEffect::DynamicPropertyWrite,
+        Expr::IndexGet { object, index } => first_blocking_loop_effect([walk(object), walk(index)]),
+        Expr::Uint8ArrayGet { array, index } => {
+            first_blocking_loop_effect([walk(array), walk(index)])
+        }
+        Expr::Uint8ArraySet {
+            array,
+            index,
+            value,
+        } => first_blocking_loop_effect([walk(array), walk(index), walk(value)]),
+        Expr::BufferIndexGet { buffer, index } => {
+            first_blocking_loop_effect([walk(buffer), walk(index)])
+        }
+        Expr::BufferIndexSet {
+            buffer,
+            index,
+            value,
+        } => first_blocking_loop_effect([walk(buffer), walk(index), walk(value)]),
+        Expr::MathImul(a, b) | Expr::MathPow(a, b) => {
+            first_blocking_loop_effect([walk(a), walk(b)])
+        }
+        Expr::MathMin(elems) | Expr::MathMax(elems) => {
+            first_blocking_loop_effect(elems.iter().map(walk))
+        }
+        Expr::MathAbs(a)
+        | Expr::MathSqrt(a)
+        | Expr::MathFloor(a)
+        | Expr::MathCeil(a)
+        | Expr::MathRound(a)
+        | Expr::MathTrunc(a)
+        | Expr::MathSign(a)
+        | Expr::MathF16round(a) => walk(a),
+        Expr::Array(elements) => first_blocking_loop_effect(elements.iter().map(|expr| {
+            if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases) {
+                LoopArrayLengthEffect::AggregateAliasEscape
+            } else {
+                walk(expr)
+            }
+        })),
+        Expr::ArraySpread(elements) => {
+            first_blocking_loop_effect(elements.iter().map(|el| match el {
+                ArrayElement::Expr(e) => {
+                    if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, e, aliases) {
+                        LoopArrayLengthEffect::AggregateAliasEscape
+                    } else {
+                        walk(e)
+                    }
+                }
+                ArrayElement::Spread(e) => walk(e),
+                ArrayElement::Hole => LoopArrayLengthEffect::Preserves,
+            }))
+        }
+        Expr::Object(fields) => first_blocking_loop_effect(fields.iter().map(|(_, value)| {
+            if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, aliases) {
+                LoopArrayLengthEffect::AggregateAliasEscape
+            } else {
+                walk(value)
+            }
+        })),
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::String(_)
+        | Expr::WtfString(_) => LoopArrayLengthEffect::Preserves,
+        _ => LoopArrayLengthEffect::UnsupportedExpression,
+    }
+}
+
+pub(crate) fn stmt_preserves_array_length(
+    ctx: &crate::expr::FnCtx<'_>,
+    s: &perry_hir::Stmt,
+    arr_id: u32,
+    bounded_idx_id: u32,
+    has_strict_bound: bool,
+    aliases: &std::collections::HashSet<u32>,
 ) -> bool {
     use perry_hir::Stmt;
     match s {
         Stmt::Expr(e) | Stmt::Throw(e) => {
-            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }
         Stmt::Return(opt) => opt.as_ref().is_none_or(|e| {
-            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }),
         Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| {
-            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            expr_preserves_array_length(condition, arr_id, bounded_idx_id, has_strict_bound)
-                && then_branch.iter().all(|s| {
-                    stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(
+                ctx,
+                condition,
+                arr_id,
+                bounded_idx_id,
+                has_strict_bound,
+                aliases,
+            ) && then_branch.iter().all(|s| {
+                stmt_preserves_array_length(
+                    ctx,
+                    s,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
+            }) && else_branch.as_ref().is_none_or(|b| {
+                b.iter().all(|s| {
+                    stmt_preserves_array_length(
+                        ctx,
+                        s,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
                 })
-                && else_branch.as_ref().is_none_or(|b| {
-                    b.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                    })
-                })
+            })
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_preserves_array_length(condition, arr_id, bounded_idx_id, has_strict_bound)
-                && body.iter().all(|s| {
-                    stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                })
+            expr_preserves_array_length(
+                ctx,
+                condition,
+                arr_id,
+                bounded_idx_id,
+                has_strict_bound,
+                aliases,
+            ) && body.iter().all(|s| {
+                stmt_preserves_array_length(
+                    ctx,
+                    s,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
+            })
         }
         Stmt::For {
             init,
@@ -1213,73 +2810,185 @@ pub(crate) fn stmt_preserves_array_length(
             body,
         } => {
             init.as_ref().is_none_or(|s| {
-                stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                stmt_preserves_array_length(
+                    ctx,
+                    s,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
             }) && condition.as_ref().is_none_or(|e| {
-                expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+                expr_preserves_array_length(
+                    ctx,
+                    e,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
             }) && update.as_ref().is_none_or(|e| {
-                expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
-            }) && body
-                .iter()
-                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
+                expr_preserves_array_length(
+                    ctx,
+                    e,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
+            }) && body.iter().all(|s| {
+                stmt_preserves_array_length(
+                    ctx,
+                    s,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
+            })
         }
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
-            body.iter()
-                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
-                && catch.as_ref().is_none_or(|c| {
-                    c.body.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                    })
+            body.iter().all(|s| {
+                stmt_preserves_array_length(
+                    ctx,
+                    s,
+                    arr_id,
+                    bounded_idx_id,
+                    has_strict_bound,
+                    aliases,
+                )
+            }) && catch.as_ref().is_none_or(|c| {
+                c.body.iter().all(|s| {
+                    stmt_preserves_array_length(
+                        ctx,
+                        s,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
                 })
-                && finally.as_ref().is_none_or(|b| {
-                    b.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                    })
+            }) && finally.as_ref().is_none_or(|b| {
+                b.iter().all(|s| {
+                    stmt_preserves_array_length(
+                        ctx,
+                        s,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
                 })
+            })
         }
         Stmt::Switch {
             discriminant,
             cases,
         } => {
-            expr_preserves_array_length(discriminant, arr_id, bounded_idx_id, has_strict_bound)
-                && cases.iter().all(|c| {
-                    c.test.as_ref().is_none_or(|e| {
-                        expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
-                    }) && c.body.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                    })
+            expr_preserves_array_length(
+                ctx,
+                discriminant,
+                arr_id,
+                bounded_idx_id,
+                has_strict_bound,
+                aliases,
+            ) && cases.iter().all(|c| {
+                c.test.as_ref().is_none_or(|e| {
+                    expr_preserves_array_length(
+                        ctx,
+                        e,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
+                }) && c.body.iter().all(|s| {
+                    stmt_preserves_array_length(
+                        ctx,
+                        s,
+                        arr_id,
+                        bounded_idx_id,
+                        has_strict_bound,
+                        aliases,
+                    )
                 })
+            })
         }
-        Stmt::Labeled { body, .. } => {
-            stmt_preserves_array_length(body.as_ref(), arr_id, bounded_idx_id, has_strict_bound)
-        }
+        Stmt::Labeled { body, .. } => stmt_preserves_array_length(
+            ctx,
+            body.as_ref(),
+            arr_id,
+            bounded_idx_id,
+            has_strict_bound,
+            aliases,
+        ),
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
         Stmt::PreallocateBoxes(_) => true,
     }
 }
 
+fn is_static_buffer_receiver(ctx: &crate::expr::FnCtx<'_>, object: &perry_hir::Expr) -> bool {
+    matches!(
+        crate::type_analysis::static_type_of(ctx, object),
+        Some(perry_types::Type::Named(name)) if name == "Buffer"
+    )
+}
+
+fn is_buffer_numeric_read_method(method: &str) -> bool {
+    matches!(
+        method,
+        "readUInt8"
+            | "readUint8"
+            | "readInt8"
+            | "readUInt16BE"
+            | "readUint16BE"
+            | "readUInt16LE"
+            | "readUint16LE"
+            | "readInt16BE"
+            | "readInt16LE"
+            | "readUInt32BE"
+            | "readUint32BE"
+            | "readUInt32LE"
+            | "readUint32LE"
+            | "readInt32BE"
+            | "readInt32LE"
+            | "readFloatBE"
+            | "readFloatLE"
+            | "readDoubleBE"
+            | "readDoubleLE"
+    )
+}
+
 pub(crate) fn expr_preserves_array_length(
+    ctx: &crate::expr::FnCtx<'_>,
     e: &perry_hir::Expr,
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
+    aliases: &std::collections::HashSet<u32>,
 ) -> bool {
-    use perry_hir::{ArrayElement, CallArg, Expr};
-    let walk =
-        |sub: &Expr| expr_preserves_array_length(sub, arr_id, bounded_idx_id, has_strict_bound);
+    use perry_hir::{ArrayElement, Expr};
+    let walk = |sub: &Expr| {
+        expr_preserves_array_length(ctx, sub, arr_id, bounded_idx_id, has_strict_bound, aliases)
+    };
     match e {
-        Expr::ArrayPush { array_id, value } => *array_id != arr_id && walk(value),
-        Expr::ArrayPop(id) | Expr::ArrayShift(id) => *id != arr_id,
+        Expr::ArrayPush { array_id, value } => {
+            !local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) && walk(value)
+        }
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
+            !local_may_alias_guarded_array(ctx, arr_id, *id, aliases)
+        }
         Expr::ArraySplice {
             array_id,
             start,
             delete_count,
             items,
         } => {
-            *array_id != arr_id
+            !local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases)
                 && walk(start)
                 && delete_count.as_ref().is_none_or(|e| walk(e))
                 && items.iter().all(&walk)
@@ -1294,7 +3003,7 @@ pub(crate) fn expr_preserves_array_length(
             // guard. With `i <= arr.length`, `i == length` can extend
             // the array and invalidate a hoisted length.
             if let Expr::LocalGet(id) = object.as_ref() {
-                if *id == arr_id {
+                if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
                     if has_strict_bound {
                         if let Expr::LocalGet(idx_id) = index.as_ref() {
                             if *idx_id == bounded_idx_id {
@@ -1307,6 +3016,27 @@ pub(crate) fn expr_preserves_array_length(
             }
             walk(object) && walk(index) && walk(value)
         }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let target_is_arr = matches!(target.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
+            let receiver_is_arr = matches!(receiver.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
+            if target_is_arr || receiver_is_arr {
+                if target_is_arr && receiver_is_arr && has_strict_bound {
+                    if let Expr::LocalGet(idx_id) = key.as_ref() {
+                        if *idx_id == bounded_idx_id {
+                            return walk(value);
+                        }
+                    }
+                }
+                return false;
+            }
+            walk(target) && walk(key) && walk(value) && walk(receiver)
+        }
         // Reassigning the bounded index would invalidate the bound.
         // Reassigning the array variable would also invalidate (we'd
         // be tracking the wrong array).
@@ -1315,54 +3045,32 @@ pub(crate) fn expr_preserves_array_length(
         // the loop-local inbounds proof. The normal `for` update expression is
         // outside the body and is checked separately before facts are emitted.
         Expr::Update { id, .. } => *id != arr_id && *id != bounded_idx_id,
-        Expr::NativeMethodCall { object, args, .. } => {
-            if let Some(o) = object {
-                if let Expr::LocalGet(id) = o.as_ref() {
-                    if *id == arr_id {
-                        return false;
-                    }
-                }
-                if !walk(o) {
-                    return false;
-                }
-            }
-            args.iter().all(&walk)
-        }
+        // Calls are dynamic boundaries until an effect summary proves the
+        // callee cannot mutate or expose the guarded array. Accepting
+        // `mutate([arr])`, `mutate({ arr })`, or a closure captured from an
+        // outer scope would make the cached length and bounded-index facts
+        // unsound.
         Expr::Call { callee, args, .. } => {
-            if !walk(callee) {
-                return false;
-            }
-            for a in args {
-                if let Expr::LocalGet(id) = a {
-                    if *id == arr_id {
-                        return false;
-                    }
-                }
-                if !walk(a) {
-                    return false;
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                {
+                    return walk(object) && args.iter().all(&walk);
                 }
             }
-            true
+            false
         }
-        Expr::CallSpread { callee, args, .. } => {
-            if !walk(callee) {
-                return false;
-            }
-            for a in args {
-                let inner = match a {
-                    CallArg::Expr(e) | CallArg::Spread(e) => e,
-                };
-                if let Expr::LocalGet(id) = inner {
-                    if *id == arr_id {
-                        return false;
-                    }
-                }
-                if !walk(inner) {
-                    return false;
-                }
-            }
-            true
+        Expr::NativeMethodCall {
+            object: Some(object),
+            method,
+            args,
+            ..
+        } => {
+            is_buffer_numeric_read_method(method)
+                && is_static_buffer_receiver(ctx, object)
+                && walk(object)
+                && args.iter().all(&walk)
         }
+        Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => false,
         Expr::Closure { .. } => false,
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
@@ -1370,19 +3078,26 @@ pub(crate) fn expr_preserves_array_length(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => walk(operand),
+        // Await can resume after user code/microtasks have run, so it cannot
+        // preserve cached array length or bounded-index facts without a future
+        // effect summary for the awaited value.
+        Expr::Await(_) => false,
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => walk(condition) && walk(then_expr) && walk(else_expr),
         Expr::PropertyGet { object, .. } => walk(object),
-        Expr::PropertySet { object, value, .. } => walk(object) && walk(value),
+        // A property write can be `arr.length = ...`, can hit a setter, or can
+        // otherwise run dynamic object semantics. Keep length hoisting behind a
+        // future effect summary instead of assuming writes preserve the guarded
+        // array length.
+        Expr::PropertySet { .. } => false,
         Expr::IndexGet { object, index } => walk(object) && walk(index),
         // Buffer / Uint8Array reads + writes preserve the underlying array
         // length — Buffer.alloc allocates a fixed-capacity blob, and the
@@ -1421,12 +3136,19 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::MathTrunc(a)
         | Expr::MathSign(a)
         | Expr::MathF16round(a) => walk(a),
-        Expr::Array(elements) => elements.iter().all(&walk),
+        Expr::Array(elements) => elements.iter().all(|expr| {
+            !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases) && walk(expr)
+        }),
         Expr::ArraySpread(elements) => elements.iter().all(|el| match el {
-            ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e),
+            ArrayElement::Expr(e) => {
+                !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, e, aliases) && walk(e)
+            }
+            ArrayElement::Spread(e) => walk(e),
             ArrayElement::Hole => true,
         }),
-        Expr::Object(fields) => fields.iter().all(|(_, v)| walk(v)),
+        Expr::Object(fields) => fields.iter().all(|(_, v)| {
+            !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, v, aliases) && walk(v)
+        }),
         Expr::LocalGet(_)
         | Expr::GlobalGet(_)
         | Expr::FuncRef(_)

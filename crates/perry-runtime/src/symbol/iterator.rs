@@ -418,7 +418,9 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
         return value_handle.get_nanbox_f64();
     }
     // Validate CLOSURE_MAGIC before calling.
-    let type_tag = std::ptr::read_volatile((closure_ptr as *const u8).add(12) as *const u32);
+    let type_tag = std::ptr::read_volatile(
+        (closure_ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+    );
     if type_tag != crate::closure::CLOSURE_MAGIC {
         return value_handle.get_nanbox_f64();
     }

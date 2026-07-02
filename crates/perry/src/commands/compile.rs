@@ -34,6 +34,7 @@ mod init_order;
 mod library_search;
 mod link;
 mod lock_scan;
+mod lowering_report;
 mod object_cache;
 mod optimized_libs;
 mod parse_cache;

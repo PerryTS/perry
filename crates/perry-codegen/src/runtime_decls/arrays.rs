@@ -38,6 +38,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // (outlines the inline alloc + per-element store/note/barrier). (values_ptr, n).
     module.declare_function("js_array_from_values", I64, &[PTR, I32]);
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
+    module.declare_function("js_array_push_guard", VOID, &[I64]);
     module.declare_function("js_array_push_hole", I64, &[I64]);
     module.declare_function("js_array_numeric_push_f64_unboxed", I64, &[I64, DOUBLE]);
     // Refs #488: bulk push for `arr.push(...src)` spread call.

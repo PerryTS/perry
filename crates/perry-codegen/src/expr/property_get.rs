@@ -47,8 +47,8 @@ pub(crate) use globalget::lower_globalget_property;
 pub(crate) use helpers::{
     builtin_prototype_method_read, class_has_computed_runtime_members,
     is_global_builtin_value_expr, is_primitive_builtin_proto_method, lower_class_method_bind,
-    lower_global_builtin_static_value, lower_runtime_property_get_by_name,
-    promise_static_function_length_expr,
+    lower_global_builtin_static_value, lower_raw_f64_class_field_get_for_number_context,
+    lower_runtime_property_get_by_name, promise_static_function_length_expr,
 };
 
 #[allow(unused_imports)]
@@ -148,20 +148,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(double_literal(len as f64))
         }
 
-        // TypedArray `.length` can be shadowed by an own property, so use
-        // the runtime length helper before the Buffer/Uint8Array inline path.
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && receiver_class_name(ctx, object)
-                    .as_deref()
-                    .is_some_and(is_numeric_typed_array_class) =>
-        {
-            let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
-        }
-
         Expr::PropertyGet { object, property }
             if property == "length"
                 && matches!(object.as_ref(), Expr::LocalGet(id)
@@ -214,6 +200,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered,
                 MaterializationReason::FunctionAbi,
             ))
+        }
+
+        // TypedArray `.length` can be shadowed by an own property, so use
+        // the runtime length helper only when lowering has not already
+        // registered the receiver as a native Buffer/TypedArray view above.
+        Expr::PropertyGet { object, property }
+            if property == "length"
+                && receiver_class_name(ctx, object)
+                    .as_deref()
+                    .is_some_and(is_numeric_typed_array_class) =>
+        {
+            let recv_box = lower_expr(ctx, object)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
@@ -1089,18 +1090,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 if class_name == "ClientRequest" && is_http_client_request_method_name(property) {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_class_method_bind",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
+                    return lower_class_method_bind(ctx, object, property);
                 }
                 if class_name == "Agent" && is_http_agent_method_name(property) {
                     return lower_class_method_bind(ctx, object, property);
@@ -1168,18 +1158,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 if is_web_stream_method {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_class_method_bind",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
+                    return lower_class_method_bind(ctx, object, property);
                 }
                 // Fast path: known class instance + plain instance field
                 // (no getter/setter shadowing). Inline a direct GEP+load
@@ -1354,8 +1333,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 vec![
                                     format!("class={}", class_name),
+                                    format!("class_id={}", expected_class_id_str),
                                     format!("field={}", property),
                                     format!("field_index={}", field_idx_str),
+                                    "receiver_proof=declared_named_receiver_guarded_exact_class"
+                                        .to_string(),
+                                    "field_layout=raw_f64_slot_array".to_string(),
+                                    "pointer_bitmap=non_pointer".to_string(),
                                 ],
                             );
                         }
@@ -1442,18 +1426,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `undefined`.
                 let method_key = (class_name.clone(), property.clone());
                 if ctx.methods.contains_key(&method_key) {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_class_method_bind",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
+                    return lower_class_method_bind(ctx, object, property);
                 }
             }
             lower_generic_property_get(ctx, object, property)

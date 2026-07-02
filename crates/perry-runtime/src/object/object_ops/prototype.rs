@@ -209,6 +209,27 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 return Some(proto);
             }
         }
+        // #5834: WeakMap/WeakSet instances are `GC_TYPE_OBJECT`s stamped with
+        // a reserved `class_id` (CLASS_ID_WEAKMAP/CLASS_ID_WEAKSET), not a
+        // registered declared-class id, so the generic class-id prototype
+        // walk further down never resolves them and instance receivers fell
+        // through to `return obj_value` (i.e. `getPrototypeOf(wm) === wm`).
+        // `weak_class_id_from_receiver` pre-validates the address via the
+        // GC-header read (safe for a garbage/foreign pointer) before
+        // comparing `class_id`, matching the `is_registered_map`/
+        // `is_registered_set` safety bar above.
+        let receiver = crate::value::js_nanbox_pointer(addr as i64);
+        if let Some(class_id) = crate::weakref::weak_class_id_from_receiver(receiver) {
+            let name = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
+                "WeakMap"
+            } else {
+                "WeakSet"
+            };
+            let proto = crate::object::builtin_prototype_value(name);
+            if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                return Some(proto);
+            }
+        }
         None
     };
     let buffer_backed_prototype = |addr: usize| -> Option<f64> {

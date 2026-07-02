@@ -114,7 +114,7 @@ pub extern "C" fn js_array_indexOf_jsvalue(
     value: f64,
     from_index: f64,
     has_from: i32,
-) -> i32 {
+) -> i64 {
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
@@ -137,7 +137,7 @@ pub extern "C" fn js_array_indexOf_jsvalue(
             if crate::value::js_jsvalue_equals(crate::typedarray::js_typed_array_get(ta, i), value)
                 == 1
             {
-                return i;
+                return i as i64;
             }
         }
         return -1;
@@ -169,7 +169,7 @@ pub extern "C" fn js_array_indexOf_jsvalue(
                 }
             };
             if crate::value::js_jsvalue_equals(element, value) == 1 {
-                return i as i32;
+                return i;
             }
         }
         -1
@@ -187,7 +187,7 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
     value: f64,
     from_index: f64,
     has_from: i32,
-) -> i32 {
+) -> i64 {
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
@@ -221,7 +221,7 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
                 value,
             ) == 1
             {
-                return i as i32;
+                return i as i64;
             }
             i -= 1;
         }
@@ -271,7 +271,7 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
                 }
             };
             if crate::value::js_jsvalue_equals(element, value) == 1 {
-                return i as i32;
+                return i;
             }
             i -= 1;
         }

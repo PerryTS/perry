@@ -46,6 +46,10 @@ fn register(site_id: u64, kind: TypedFeedbackSiteKind, op: &'static str) {
     );
 }
 
+fn assert_undefined(value: f64) {
+    assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
+}
+
 fn class_instance(
     class_id: u32,
     key_name: &'static [u8],
@@ -438,7 +442,7 @@ fn typed_feedback_array_get_guard_failure_uses_jsvalue_object_fallback() {
     // Models an array-typed compiled read whose receiver was replaced by
     // a dynamic object at a JS boundary. The guard must reject it before
     // codegen reads ArrayHeader fields; fallback then performs obj["0"].
-    let guard = js_typed_feedback_plain_array_index_get_guard(25, obj_box, 0.0, 0, 1);
+    let guard = js_typed_feedback_plain_array_index_get_guard(25, obj_box, 0, 1);
     assert_eq!(guard, 0);
 
     let actual = js_typed_feedback_array_index_get_fallback_boxed(25, obj_box, 0.0);
@@ -537,6 +541,216 @@ fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
 }
 
 #[test]
+fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receivers() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(73, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_box = crate::value::js_nanbox_pointer(buf as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, buf_box, 1.0),
+        22.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, buf_box, 1.5,
+    ));
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, ta_box, 1.0),
+        33.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, ta_box, 1.5,
+    ));
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_box = crate::value::js_nanbox_pointer(set as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, set_box, 1.0),
+        20.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, set_box, 1.5,
+    ));
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_box = crate::value::js_nanbox_pointer(map as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, map_box, 1.0),
+        20.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, map_box, 1.5,
+    ));
+
+    let site = typed_feedback_snapshot()
+        .sites
+        .into_iter()
+        .find(|site| site.site_id == 73)
+        .expect("site 73");
+    assert_eq!(site.fallback_calls, 8);
+}
+
+#[test]
+fn typed_feedback_boxed_set_fallback_does_not_truncate_fractional_array_like_keys() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(74, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
+
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_box = crate::value::js_nanbox_pointer(buf as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.5, 99.0);
+    assert_eq!(crate::buffer::js_buffer_get(buf, 1), 22);
+    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.0, 99.0);
+    assert_eq!(crate::buffer::js_buffer_get(buf, 1), 99);
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.5, 88.0);
+    assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 33.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.0, 88.0);
+    assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 88.0);
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_box = crate::value::js_nanbox_pointer(set as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, set_box, 1.5, 77.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_box = crate::value::js_nanbox_pointer(map as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, map_box, 1.5, 66.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+
+    let map_handle = map_box.to_bits() as i64;
+    js_typed_feedback_object_set_index_polymorphic(74, map_handle, 1.5, 55.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+
+    let set_handle = set_box.to_bits() as i64;
+    js_typed_feedback_object_set_index_polymorphic(74, set_handle, 1.5, 44.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let site = typed_feedback_snapshot()
+        .sites
+        .into_iter()
+        .find(|site| site.site_id == 74)
+        .expect("site 74");
+    assert_eq!(site.fallback_calls, 8);
+}
+
+#[test]
+fn runtime_dynamic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers() {
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_box = crate::value::js_nanbox_pointer(buf as i64);
+    assert_eq!(crate::value::js_dyn_index_get(buf_box, 1.0), 22.0);
+    assert_undefined(crate::value::js_dyn_index_get(buf_box, 1.5));
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+    assert_eq!(crate::value::js_dyn_index_get(ta_box, 1.0), 33.0);
+    assert_undefined(crate::value::js_dyn_index_get(ta_box, 1.5));
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_box = crate::value::js_nanbox_pointer(set as i64);
+    assert_eq!(crate::value::js_dyn_index_get(set_box, 1.0), 20.0);
+    assert_undefined(crate::value::js_dyn_index_get(set_box, 1.5));
+    crate::value::js_dyn_index_set(set_box, 1.5, 99.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_box = crate::value::js_nanbox_pointer(map as i64);
+    assert_eq!(crate::value::js_dyn_index_get(map_box, 1.0), 20.0);
+    assert_undefined(crate::value::js_dyn_index_get(map_box, 1.5));
+    crate::value::js_dyn_index_set(map_box, 1.5, 88.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+}
+
+#[test]
+fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers() {
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_handle = crate::value::js_nanbox_pointer(buf as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(buf_handle, 1.0),
+        22.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        buf_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(buf_handle, 1.5, 99.0);
+    assert_eq!(crate::buffer::js_buffer_get(buf, 1), 22);
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_handle = crate::value::js_nanbox_pointer(ta as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(ta_handle, 1.0),
+        33.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        ta_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(ta_handle, 1.5, 88.0);
+    assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 33.0);
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_handle = crate::value::js_nanbox_pointer(set as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(set_handle, 1.0),
+        20.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        set_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(set_handle, 1.5, 77.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_handle = crate::value::js_nanbox_pointer(map as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(map_handle, 1.0),
+        20.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        map_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(map_handle, 1.5, 66.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+}
+
+#[test]
 fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
@@ -546,7 +760,7 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     let arr_box = crate::value::js_nanbox_pointer(arr as i64);
 
-    let first = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0.0, 0, 1);
+    let first = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0, 1);
     assert_eq!(first, 1);
 
     let payload = crate::string::js_string_from_bytes(b"downgraded".as_ptr(), 10);
@@ -554,13 +768,74 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
     crate::array::js_array_set_f64(arr, 0, payload_value);
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
 
-    let second = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0.0, 0, 1);
+    let second = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0, 1);
     assert_eq!(second, 0);
 
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
     assert_eq!(site.guard_failures, 1);
     assert_eq!(site.fallback_calls, 0);
+}
+
+#[test]
+fn typed_feedback_packed_i32_loop_guard_rejects_fractional_numeric_layout() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(70, TypedFeedbackSiteKind::ArrayElement, "packed_i32_loop");
+
+    let ints = [1.0, 2.0, 3.0];
+    let int_arr = crate::array::js_array_from_f64(ints.as_ptr(), ints.len() as u32);
+    let int_box = crate::value::js_nanbox_pointer(int_arr as i64);
+    assert_eq!(
+        js_typed_feedback_packed_i32_array_loop_guard(70, int_box),
+        1
+    );
+
+    let fractional = [1.0, 2.5, 3.0];
+    let fractional_arr =
+        crate::array::js_array_from_f64(fractional.as_ptr(), fractional.len() as u32);
+    let fractional_box = crate::value::js_nanbox_pointer(fractional_arr as i64);
+    assert_eq!(
+        crate::array::js_array_is_numeric_f64_layout(fractional_arr),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_packed_i32_array_loop_guard(70, fractional_box),
+        0
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 1);
+}
+
+#[test]
+fn typed_feedback_packed_u32_loop_guard_rejects_signed_fractional_and_overflow_layouts() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(71, TypedFeedbackSiteKind::ArrayElement, "packed_u32_loop");
+
+    let uints = [0.0, 4_294_967_295.0];
+    let uint_arr = crate::array::js_array_from_f64(uints.as_ptr(), uints.len() as u32);
+    let uint_box = crate::value::js_nanbox_pointer(uint_arr as i64);
+    assert_eq!(
+        js_typed_feedback_packed_u32_array_loop_guard(71, uint_box),
+        1
+    );
+
+    for values in [[-1.0, 2.0], [1.5, 2.0], [4_294_967_296.0, 2.0]] {
+        let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+        let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
+        assert_eq!(
+            js_typed_feedback_packed_u32_array_loop_guard(71, arr_box),
+            0
+        );
+    }
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 3);
 }
 
 #[test]
@@ -664,6 +939,590 @@ fn typed_feedback_numeric_array_push_guard_requires_room_numeric_value_and_layou
     assert_eq!(site.guard_passes, 1);
     assert_eq!(site.guard_failures, 2);
     assert_eq!(site.fallback_calls, 0);
+}
+
+#[test]
+fn typed_feedback_numeric_array_push_guard_rejects_mutability_restricted_arrays() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(72, TypedFeedbackSiteKind::ArrayElement, "arr.push");
+
+    let assert_rejected = |site_id, arr: *mut crate::array::ArrayHeader| {
+        assert_eq!(crate::array::js_array_mark_numeric_f64_layout(arr), 1);
+        let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+        assert_eq!(
+            js_typed_feedback_numeric_array_push_guard(site_id, arr_box, 4.0),
+            0
+        );
+    };
+
+    let frozen = crate::array::js_array_alloc(4);
+    crate::object::js_object_freeze(crate::value::js_nanbox_pointer(frozen as i64));
+    assert_rejected(72, frozen);
+
+    let sealed = crate::array::js_array_alloc(4);
+    crate::object::js_object_seal(crate::value::js_nanbox_pointer(sealed as i64));
+    assert_rejected(72, sealed);
+
+    let no_extend = crate::array::js_array_alloc(4);
+    crate::object::js_object_prevent_extensions(crate::value::js_nanbox_pointer(no_extend as i64));
+    assert_rejected(72, no_extend);
+
+    let non_writable_length = crate::array::js_array_alloc(4);
+    let descriptor = crate::object::js_object_alloc(0, 0);
+    let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+    crate::object::js_object_set_field_by_name(
+        descriptor,
+        writable_key,
+        f64::from_bits(crate::value::TAG_FALSE),
+    );
+    crate::object::js_object_define_property(
+        crate::value::js_nanbox_pointer(non_writable_length as i64),
+        crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"length".as_ptr(), 6) as i64
+        ),
+        crate::value::js_nanbox_pointer(descriptor as i64),
+    );
+    assert_rejected(72, non_writable_length);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 4);
+    assert_eq!(site.fallback_calls, 0);
+}
+
+fn assert_lto_keepalive_anchor(src: &str, static_name: &str, signature: &str, target: &str) {
+    let static_pos = src
+        .find(static_name)
+        .unwrap_or_else(|| panic!("missing keepalive static {static_name} for {target}"));
+    let start = static_pos.saturating_sub(32);
+    let end = (static_pos + 512).min(src.len());
+    let window = &src[start..end];
+    assert!(
+        window.contains("#[used]"),
+        "keepalive static {static_name} for {target} is not #[used]"
+    );
+    assert!(
+        window.contains(signature),
+        "missing keepalive signature for {target}"
+    );
+    assert!(window.contains(target), "missing keepalive target {target}");
+}
+
+#[test]
+fn numeric_array_helpers_have_lto_keepalive_anchors() {
+    let header = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/array/header.rs"));
+    let indexing = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/array/indexing.rs"
+    ));
+    let push_pop = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/array/push_pop.rs"
+    ));
+
+    for (src, static_name, signature, target) in [
+        (
+            header,
+            "KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64",
+            "static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern \"C\" fn(f64) -> f64",
+            "js_array_numeric_value_to_raw_f64",
+        ),
+        (
+            header,
+            "KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT",
+            "static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern \"C\" fn(*mut ArrayHeader) -> i32",
+            "js_array_mark_numeric_f64_layout",
+        ),
+        (
+            header,
+            "KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT",
+            "static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern \"C\" fn(*mut ArrayHeader)",
+            "js_array_clear_numeric_layout",
+        ),
+        (
+            header,
+            "KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE",
+            "static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern \"C\" fn(*mut ArrayHeader, u64)",
+            "js_array_note_numeric_write",
+        ),
+        (
+            header,
+            "KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT",
+            "static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern \"C\" fn(*const ArrayHeader) -> i32",
+            "js_array_is_numeric_f64_layout",
+        ),
+        (
+            indexing,
+            "KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED",
+            "static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern \"C\" fn(*mut ArrayHeader, u32) -> f64",
+            "js_array_numeric_get_f64_unboxed",
+        ),
+        (
+            indexing,
+            "KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED",
+            "static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern \"C\" fn(*mut ArrayHeader, u32, f64) -> i32",
+            "js_array_numeric_set_f64_unboxed",
+        ),
+        (
+            push_pop,
+            "KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED",
+            "static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern \"C\" fn(",
+            "js_array_numeric_push_f64_unboxed",
+        ),
+    ] {
+        assert_lto_keepalive_anchor(src, static_name, signature, target);
+    }
+}
+
+#[test]
+fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
+    let typed_feedback = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback.rs"
+    ));
+
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
+        "js_typed_feedback_packed_i32_array_loop_guard",
+    );
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
+        "js_typed_feedback_packed_u32_array_loop_guard",
+    );
+}
+
+#[test]
+fn representation_lowering_helpers_have_lto_keepalive_anchors() {
+    let native_abi = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_abi.rs"));
+    let native_module = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/object/native_module.rs"
+    ));
+    let guards = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback/guards.rs"
+    ));
+    let trace = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback/trace.rs"
+    ));
+    let map = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/map.rs"));
+    let set = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/set.rs"));
+    let boxes = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/box.rs"));
+    let closure_alloc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/closure/alloc.rs"));
+    let promise = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/promise/mod.rs"));
+
+    for (src, static_name, signature, target) in [
+        (
+            native_abi,
+            "KEEP_JS_TYPED_F64_ARG_GUARD",
+            "static KEEP_JS_TYPED_F64_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_f64_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_F64_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_F64_ARG_TO_RAW: extern \"C\" fn(f64) -> f64",
+            "js_typed_f64_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I32_ARG_GUARD",
+            "static KEEP_JS_TYPED_I32_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_i32_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I32_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_I32_ARG_TO_RAW: extern \"C\" fn(f64) -> i32",
+            "js_typed_i32_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I1_ARG_GUARD",
+            "static KEEP_JS_TYPED_I1_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_i1_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I1_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_I1_ARG_TO_RAW: extern \"C\" fn(f64) -> i32",
+            "js_typed_i1_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_STRING_ARG_GUARD",
+            "static KEEP_JS_TYPED_STRING_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_string_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_STRING_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_STRING_ARG_TO_RAW: extern \"C\" fn(f64) -> i64",
+            "js_typed_string_arg_to_raw",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOX_ALLOC_BITS",
+            "static KEEP_JS_BOX_ALLOC_BITS: extern \"C\" fn(i64) -> *mut Box",
+            "js_box_alloc_bits",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOX_GET_BITS",
+            "static KEEP_JS_BOX_GET_BITS: extern \"C\" fn(*mut Box) -> i64",
+            "js_box_get_bits",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOX_SET_BITS",
+            "static KEEP_JS_BOX_SET_BITS: extern \"C\" fn(*mut Box, i64)",
+            "js_box_set_bits",
+        ),
+        (
+            closure_alloc,
+            "KEEP_JS_CLOSURE_GET_CAPTURE_BITS",
+            "static KEEP_JS_CLOSURE_GET_CAPTURE_BITS: extern \"C\" fn(*const ClosureHeader, u32) -> u64",
+            "js_closure_get_capture_bits",
+        ),
+        (
+            closure_alloc,
+            "KEEP_JS_CLOSURE_SET_CAPTURE_BITS",
+            "static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern \"C\" fn(*mut ClosureHeader, u32, u64)",
+            "js_closure_set_capture_bits",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_OBJECT_GET_FIELD_BY_PROPERTY_ID_F64",
+            "static KEEP_JS_OBJECT_GET_FIELD_BY_PROPERTY_ID_F64: extern \"C\" fn(*const ObjectHeader, i64) -> f64",
+            "js_object_get_field_by_property_id_f64",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID",
+            "static KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID: extern \"C\" fn(*mut ObjectHeader, i64, f64)",
+            "js_object_set_field_by_property_id",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_NATIVE_CALL_METHOD_BY_ID",
+            "static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern \"C\" fn(f64, i64, *const f64, usize) -> f64",
+            "js_native_call_method_by_id",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID",
+            "static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern \"C\" fn(f64, i64, i64) -> f64",
+            "js_native_call_method_apply_by_id",
+        ),
+        (
+            native_module,
+            "KEEP_CLASS_METHOD_BIND_BY_ID",
+            "static KEEP_CLASS_METHOD_BIND_BY_ID: extern \"C\" fn(f64, i64) -> f64",
+            "js_class_method_bind_by_id",
+        ),
+        (
+            guards,
+            "static G0",
+            "static G0: extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32",
+            "js_typed_feedback_class_field_get_guard",
+        ),
+        (
+            guards,
+            "static G1",
+            "static G1: extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32",
+            "js_typed_feedback_class_field_set_guard",
+        ),
+        (
+            guards,
+            "static G2",
+            "static G2: unsafe extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32",
+            "js_typed_feedback_method_direct_call_guard",
+        ),
+        (
+            guards,
+            "static G3",
+            "static G3: extern \"C\" fn(u64, f64, *const u8, u32, u32) -> i32",
+            "js_typed_feedback_closure_direct_call_guard",
+        ),
+        (
+            guards,
+            "static G4",
+            "static G4: unsafe extern \"C\" fn(f64, u32, *const ArrayHeader) -> i32",
+            "js_method_direct_shape_guard",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_NUMBER",
+            "static KEEP_JS_MAP_SET_STRING_NUMBER: extern \"C\" fn(",
+            "js_map_set_string_number",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_KEY",
+            "static KEEP_JS_MAP_SET_STRING_KEY: extern \"C\" fn(",
+            "js_map_set_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_I32",
+            "static KEEP_JS_MAP_SET_STRING_I32: extern \"C\" fn(",
+            "js_map_set_string_i32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_U32",
+            "static KEEP_JS_MAP_SET_STRING_U32: extern \"C\" fn(",
+            "js_map_set_string_u32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_F32",
+            "static KEEP_JS_MAP_SET_STRING_F32: extern \"C\" fn(",
+            "js_map_set_string_f32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_BOOL",
+            "static KEEP_JS_MAP_SET_STRING_BOOL: extern \"C\" fn(",
+            "js_map_set_string_bool",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_STRING",
+            "static KEEP_JS_MAP_SET_STRING_STRING: extern \"C\" fn(",
+            "js_map_set_string_string",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_NUMBER_KEY",
+            "static KEEP_JS_MAP_SET_NUMBER_KEY: extern \"C\" fn(*mut MapHeader, f64, f64) -> *mut MapHeader",
+            "js_map_set_number_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_HAS_STRING_KEY",
+            "static KEEP_JS_MAP_HAS_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> i32",
+            "js_map_has_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_HAS_NUMBER_KEY",
+            "static KEEP_JS_MAP_HAS_NUMBER_KEY: extern \"C\" fn(*const MapHeader, f64) -> i32",
+            "js_map_has_number_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_GET_STRING_KEY",
+            "static KEEP_JS_MAP_GET_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> f64",
+            "js_map_get_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_GET_NUMBER_KEY",
+            "static KEEP_JS_MAP_GET_NUMBER_KEY: extern \"C\" fn(*const MapHeader, f64) -> f64",
+            "js_map_get_number_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_DELETE_STRING_KEY",
+            "static KEEP_JS_MAP_DELETE_STRING_KEY: extern \"C\" fn(*mut MapHeader, *const StringHeader) -> i32",
+            "js_map_delete_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_DELETE_NUMBER_KEY",
+            "static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern \"C\" fn(*mut MapHeader, f64) -> i32",
+            "js_map_delete_number_key",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_STRING",
+            "static KEEP_JS_SET_ADD_STRING: extern \"C\" fn(",
+            "js_set_add_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_NUMBER",
+            "static KEEP_JS_SET_ADD_NUMBER: extern \"C\" fn(*mut SetHeader, f64) -> *mut SetHeader",
+            "js_set_add_number",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_STRING",
+            "static KEEP_JS_SET_HAS_STRING: extern \"C\" fn(*const SetHeader, *const StringHeader) -> i32",
+            "js_set_has_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_NUMBER",
+            "static KEEP_JS_SET_HAS_NUMBER: extern \"C\" fn(*const SetHeader, f64) -> i32",
+            "js_set_has_number",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_STRING",
+            "static KEEP_JS_SET_DELETE_STRING: extern \"C\" fn(*mut SetHeader, *const StringHeader) -> i32",
+            "js_set_delete_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_NUMBER",
+            "static KEEP_JS_SET_DELETE_NUMBER: extern \"C\" fn(*mut SetHeader, f64) -> i32",
+            "js_set_delete_number",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_I32",
+            "static KEEP_JS_SET_ADD_I32: extern \"C\" fn(*mut SetHeader, i32) -> *mut SetHeader",
+            "js_set_add_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_I32",
+            "static KEEP_JS_SET_HAS_I32: extern \"C\" fn(*const SetHeader, i32) -> i32",
+            "js_set_has_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_I32",
+            "static KEEP_JS_SET_DELETE_I32: extern \"C\" fn(*mut SetHeader, i32) -> i32",
+            "js_set_delete_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_U32",
+            "static KEEP_JS_SET_ADD_U32: extern \"C\" fn(*mut SetHeader, u32) -> *mut SetHeader",
+            "js_set_add_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_U32",
+            "static KEEP_JS_SET_HAS_U32: extern \"C\" fn(*const SetHeader, u32) -> i32",
+            "js_set_has_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_U32",
+            "static KEEP_JS_SET_DELETE_U32: extern \"C\" fn(*mut SetHeader, u32) -> i32",
+            "js_set_delete_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_F32",
+            "static KEEP_JS_SET_ADD_F32: extern \"C\" fn(*mut SetHeader, f32) -> *mut SetHeader",
+            "js_set_add_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_F32",
+            "static KEEP_JS_SET_HAS_F32: extern \"C\" fn(*const SetHeader, f32) -> i32",
+            "js_set_has_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_F32",
+            "static KEEP_JS_SET_DELETE_F32: extern \"C\" fn(*mut SetHeader, f32) -> i32",
+            "js_set_delete_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_BOOL",
+            "static KEEP_JS_SET_ADD_BOOL: extern \"C\" fn(*mut SetHeader, i32) -> *mut SetHeader",
+            "js_set_add_bool",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_BOOL",
+            "static KEEP_JS_SET_HAS_BOOL: extern \"C\" fn(*const SetHeader, i32) -> i32",
+            "js_set_has_bool",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_BOOL",
+            "static KEEP_JS_SET_DELETE_BOOL: extern \"C\" fn(*mut SetHeader, i32) -> i32",
+            "js_set_delete_bool",
+        ),
+        (
+            boxes,
+            "KEEP_JS_I32_BOX_ALLOC",
+            "static KEEP_JS_I32_BOX_ALLOC: extern \"C\" fn(i32) -> *mut I32Box",
+            "js_i32_box_alloc",
+        ),
+        (
+            boxes,
+            "KEEP_JS_I32_BOX_GET",
+            "static KEEP_JS_I32_BOX_GET: extern \"C\" fn(*mut I32Box) -> i32",
+            "js_i32_box_get",
+        ),
+        (
+            boxes,
+            "KEEP_JS_I32_BOX_SET",
+            "static KEEP_JS_I32_BOX_SET: extern \"C\" fn(*mut I32Box, i32)",
+            "js_i32_box_set",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOOL_BOX_ALLOC",
+            "static KEEP_JS_BOOL_BOX_ALLOC: extern \"C\" fn(i32) -> *mut BoolBox",
+            "js_bool_box_alloc",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOOL_BOX_GET",
+            "static KEEP_JS_BOOL_BOX_GET: extern \"C\" fn(*mut BoolBox) -> i32",
+            "js_bool_box_get",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOOL_BOX_SET",
+            "static KEEP_JS_BOOL_BOX_SET: extern \"C\" fn(*mut BoolBox, i32)",
+            "js_bool_box_set",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_SET_I32",
+            "static KEEP_JS_ITER_RESULT_SET_I32: extern \"C\" fn(i32, i32) -> f64",
+            "js_iter_result_set_i32",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_SET_I1",
+            "static KEEP_JS_ITER_RESULT_SET_I1: extern \"C\" fn(i32, i32) -> f64",
+            "js_iter_result_set_i1",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_GET_VALUE_I32",
+            "static KEEP_JS_ITER_RESULT_GET_VALUE_I32: extern \"C\" fn() -> i32",
+            "js_iter_result_get_value_i32",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_GET_VALUE_I1",
+            "static KEEP_JS_ITER_RESULT_GET_VALUE_I1: extern \"C\" fn() -> i32",
+            "js_iter_result_get_value_i1",
+        ),
+        (
+            trace,
+            "static K30",
+            "static K30: unsafe extern \"C\" fn(u64, f64, i64, *const f64, usize) -> f64",
+            "js_typed_feedback_native_call_method_by_id",
+        ),
+        (
+            trace,
+            "static K31",
+            "static K31: unsafe extern \"C\" fn(u64, f64, i64, i64) -> f64",
+            "js_typed_feedback_native_call_method_apply_by_id",
+        ),
+    ] {
+        assert_lto_keepalive_anchor(src, static_name, signature, target);
+    }
 }
 
 #[test]

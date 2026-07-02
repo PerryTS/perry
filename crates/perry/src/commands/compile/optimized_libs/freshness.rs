@@ -131,7 +131,15 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_intl_locale {
         cross_features.push("perry-runtime/intl-locale".to_string());
     }
-    if ctx.uses_diagnostics {
+    // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
+    // pulled only by them) — enabled only when the program uses a heap-snapshot
+    // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON
+    // ride this feature, so honor `PERRY_GC_TRACE` too; both stay off in
+    // size-optimized binaries by default.
+    let gc_trace_requested = std::env::var("PERRY_GC_TRACE")
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    if ctx.uses_diagnostics || gc_trace_requested {
         cross_features.push("perry-runtime/diagnostics".to_string());
     }
     if ctx.uses_dgram {

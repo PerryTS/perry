@@ -350,6 +350,31 @@ pub(super) unsafe fn dispatch_handle(
                         );
                         return Some(f64::from_bits(JSValue::pointer(deleted as *mut u8).bits()));
                     }
+                    "pop" => {
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        return Some(crate::array::js_array_pop_f64(arr));
+                    }
+                    "push" => {
+                        // Spec §23.1.3.21: Set(O,"length",…) fires even with 0
+                        // args, so frozen / non-writable-length must throw.
+                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
+                        if crate::array::array_is_frozen(arr) {
+                            crate::collection_iter::throw_type_error(
+                                "Cannot mutate a frozen array",
+                            );
+                        }
+                        crate::array::guard_writable_length(arr);
+                        let mut a = arr;
+                        for i in 0..args_len {
+                            let v = if !args_ptr.is_null() {
+                                unsafe { *args_ptr.add(i) }
+                            } else {
+                                f64::from_bits(crate::value::TAG_UNDEFINED)
+                            };
+                            a = crate::array::js_array_push_f64(a, v);
+                        }
+                        return Some(crate::array::js_array_length(a) as f64);
+                    }
                     "shift" => {
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
                         return Some(crate::array::js_array_shift_f64(arr));

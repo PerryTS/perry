@@ -174,13 +174,56 @@ pub unsafe extern "C" fn js_native_call_method_str_key(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    if name_handle == 0 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) =
+        crate::string::perry_string_ref_from_dispatch_id(name_handle, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    js_native_call_method(
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_ptr,
+        args_len,
+    )
+}
+
+/// Static-name compiled callsites pass an interned method id rather than raw
+/// bytes. For now the id is the interned heap StringHeader pointer emitted by
+/// the StringPool, which lets the runtime preserve the existing dispatch tower
+/// while codegen stops plumbing byte pointer + length pairs through hot paths.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_by_id(
+    object: f64,
+    method_id: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let str_ptr = name_handle as *const crate::StringHeader;
-    let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
-    let bytes_len = (*str_ptr).byte_len as usize;
-    js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len)
+    js_native_call_method_str_key(object, method_id, args_ptr, args_len)
+}
+
+/// Apply/spread sibling of `js_native_call_method_by_id`.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_apply_by_id(
+    object: f64,
+    method_id: i64,
+    args_array_handle: i64,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    js_native_call_method_apply(
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_array_handle,
+    )
 }
 
 /// Dispatch `obj[key](args)` where `key` is a *runtime value* whose static type
@@ -1032,7 +1075,8 @@ pub unsafe extern "C" fn js_native_call_method(
         // the call result was an empty object stub instead of the
         // dynamic-prop closure's return value.
         let is_closure = gc_type == crate::gc::GC_TYPE_CLOSURE
-            || *((obj as *const u8).add(12) as *const u32) == crate::closure::CLOSURE_MAGIC;
+            || *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32)
+                == crate::closure::CLOSURE_MAGIC;
         if is_closure {
             let dyn_val = crate::closure::closure_get_dynamic_prop(obj as usize, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {

@@ -402,21 +402,19 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 }
                 ZeroFillRShift => Type::Number,
 
-                // Logical operators → type of operands (simplified).
-                //
-                // `A && B` yields B's value when A is truthy (else A); `A || B`
-                // yields B when A is falsy (else A). So when B has a concrete
-                // type we approximate the result as that type. But when B is
-                // `Any` we must NOT fall back to A's type: #3527 hit
-                // `var hasMap = typeof Map === "function" && Map.prototype`,
-                // where A is a boolean compare and B (`Map.prototype`) is `Any`.
-                // Returning A's `Boolean` mistyped `hasMap` as a boolean even
-                // though it holds an object, so a later `hasMap && d && d.get`
-                // chain miscompiled and dereferenced `null`. The result can be
-                // the (unknown) right value, so `Any` is the only sound type.
+                // `A || B` / `A && B` can evaluate to EITHER operand, so typing
+                // the result as `right` is only sound when both operands share a
+                // type. Pre-fix, `arr || 99` inferred `Number`, so `lower_truthy`
+                // took the numeric `fcmp one <v>, 0.0` path and read the NaN-boxed
+                // array pointer as NaN — `!(arr||99)` / ternary / `Array.isArray`
+                // were wrong (value ops were fine). Return `right` only when the
+                // operand types match, else `Any` (dynamic truthiness/isArray).
+                // Extends the #3527 fix (right = `Any` → `Any`) to the
+                // mismatched-type case.
                 LogicalAnd | LogicalOr => {
+                    let left = infer_type_from_expr(&bin.left, ctx);
                     let right = infer_type_from_expr(&bin.right, ctx);
-                    if !matches!(right, Type::Any) {
+                    if left == right && !matches!(right, Type::Any) {
                         right
                     } else {
                         Type::Any

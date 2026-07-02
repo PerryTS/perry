@@ -223,6 +223,16 @@ pub unsafe extern "C" fn js_new_function_construct(
     if crate::builtins::boxed_primitive_payload(func_value).is_some() {
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
+    // `new (new RegExp())` — a RegExp instance has no [[Construct]] internal
+    // method (Test262 `S15.10.7_A2_T2`). Without this it fell through to the
+    // empty-object construction fallback and silently produced `{}` instead
+    // of throwing.
+    {
+        let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+        if jv.is_pointer() && crate::regex::is_registered_regex(jv.as_pointer::<u8>() as usize) {
+            super::super::object_ops::throw_object_type_error(b"is not a constructor");
+        }
+    }
     // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
@@ -910,9 +920,34 @@ pub unsafe extern "C" fn js_new_function_construct(
         let fp = (func_value.to_bits() & crate::value::POINTER_MASK) as usize;
         if fp != 0 && crate::closure::is_closure_ptr(fp) {
             let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
-            let is_object_prototype = unsafe { super::super::value_is_object_like(dyn_proto) }
-                || super::super::class_ref_id(dyn_proto).is_some();
-            if is_object_prototype {
+            let dp = JSValue::from_bits(dyn_proto.to_bits());
+            let has_user_proto = super::super::class_ref_id(dyn_proto).is_some()
+                || if dp.is_pointer() {
+                    let raw = dp.as_pointer::<u8>() as usize;
+                    // Function objects (closures) are identified by CLOSURE_MAGIC,
+                    // not a GC type tag — check them first.
+                    let is_fn = crate::closure::is_closure_ptr(raw);
+                    is_fn
+                        || (raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
+                            let hdr = unsafe {
+                                &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+                            };
+                            // Arrays: test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*.
+                            // Objects: Intl/Temporal constructors install .prototype via
+                            // closure_set_dynamic_prop (bypassing js_set_function_prototype),
+                            // so CLASS_PROTOTYPE_OBJECTS has no entry; ensure_function_prototype_object
+                            // would otherwise create a fresh empty proto and overwrite .prototype.
+                            matches!(
+                                hdr.obj_type,
+                                crate::gc::GC_TYPE_ARRAY
+                                    | crate::gc::GC_TYPE_LAZY_ARRAY
+                                    | crate::gc::GC_TYPE_OBJECT
+                            )
+                        })
+                } else {
+                    false
+                };
+            if has_user_proto {
                 super::super::prototype_chain::object_set_static_prototype(
                     obj_ptr as usize,
                     dyn_proto.to_bits(),

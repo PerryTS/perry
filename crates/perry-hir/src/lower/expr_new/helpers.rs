@@ -295,6 +295,10 @@ pub(crate) fn lower_worker_messaging_new(
 }
 
 pub(crate) fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
+    // Parse `eval: true` from the raw AST options object BEFORE lowering (the
+    // lowered options become an anonymous shape-class `New`, which is much
+    // harder to inspect). This is the authoritative eval-mode signal.
+    let is_eval = worker_options_is_eval(new_expr);
     let args = new_expr
         .args
         .as_ref()
@@ -312,7 +316,46 @@ pub(crate) fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExp
         paths: Vec::new(),
         filename: Box::new(filename),
         options,
+        is_eval,
     })
+}
+
+/// True when `new Worker(src, { eval: true })` — the second argument is an
+/// object literal with a literal `eval: true` member.
+fn worker_options_is_eval(new_expr: &ast::NewExpr) -> bool {
+    let Some(args) = new_expr.args.as_ref() else {
+        return false;
+    };
+    let Some(opts) = args.get(1) else {
+        return false;
+    };
+    let ast::Expr::Object(obj) = &*opts.expr else {
+        return false;
+    };
+    // Evaluate props in order so the LAST `eval` wins (JS duplicate-key
+    // semantics), and a spread conservatively clears any earlier static
+    // `eval: true` — its runtime value could override it, and misclassifying a
+    // file Worker as eval-mode is worse than missing an obscure spread case.
+    let mut eval = false;
+    for prop in &obj.props {
+        match prop {
+            ast::PropOrSpread::Spread(_) => eval = false,
+            ast::PropOrSpread::Prop(prop) => {
+                let ast::Prop::KeyValue(kv) = &**prop else {
+                    continue;
+                };
+                let is_eval_key = match &kv.key {
+                    ast::PropName::Ident(i) => &*i.sym == "eval",
+                    ast::PropName::Str(s) => &*s.value == "eval",
+                    _ => false,
+                };
+                if is_eval_key {
+                    eval = matches!(&*kv.value, ast::Expr::Lit(ast::Lit::Bool(b)) if b.value);
+                }
+            }
+        }
+    }
+    eval
 }
 
 pub(crate) fn is_worker_threads_module_name(module_name: &str) -> bool {

@@ -4,7 +4,9 @@
 //! the plain types.
 
 use super::dispatch::{self, field_u16, field_u8, ok_or_throw, raw_arg, string};
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::options::ToStringRoundingOptions;
 use temporal_rs::PlainTime;
@@ -52,7 +54,7 @@ fn coerce_time_overflow(v: f64, overflow: temporal_rs::options::Overflow) -> Pla
     // its internal slot — NO observable property getter calls
     // (`argument-plaindatetime`'s fast-path assertion). Reading `hour`…`second`
     // off such a value as a bag (the old fallthrough) called the getters.
-    match temporal_value_ref(v) {
+    match temporal_value_ref_or_subclass(v) {
         Some(TemporalValue::PlainTime(t)) => return *t,
         Some(TemporalValue::PlainDateTime(dt)) => return dt.to_plain_time(),
         Some(TemporalValue::ZonedDateTime(z)) => return z.to_plain_time(),
@@ -107,7 +109,7 @@ pub fn from_static(args: &[f64]) -> f64 {
         let _ = super::options::overflow(opts);
         return wrap(t);
     }
-    match temporal_value_ref(item) {
+    match temporal_value_ref_or_subclass(item) {
         Some(TemporalValue::PlainTime(t)) => {
             let _ = super::options::overflow(opts);
             return wrap(*t);

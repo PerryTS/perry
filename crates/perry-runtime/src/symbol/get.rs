@@ -136,10 +136,20 @@ unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
     }
 }
 
+/// Walk the explicit static prototype chain to find an inherited symbol property.
+/// Used by `Object.prototype.toString` to implement the spec's
+/// `Get(O, @@toStringTag)` prototype-chain walk.
+pub(crate) unsafe fn inherited_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    resolve_explicit_object_prototype_symbol(obj_f64, sym_f64)
+}
+
 unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -> Option<f64> {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let mut owner = object_header_ptr_from_value_bits(obj_f64.to_bits())?;
-    for _ in 0..8 {
+    let mut visited_buf = [0usize; 16];
+    let mut visited_len = 0usize;
+    let mut visited_overflow: Option<std::collections::HashSet<usize>> = None;
+    loop {
         let proto_bits = crate::object::prototype_chain::object_static_prototype(owner)?;
         if proto_bits == TAG_NULL {
             return None;
@@ -149,8 +159,21 @@ unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -
             return Some(v);
         }
         let proto_ptr = object_header_ptr_from_value_bits(proto_bits)?;
-        if proto_ptr == owner {
+        // Cycle detection.
+        let cycle = if visited_len < visited_buf.len() {
+            visited_buf[..visited_len].contains(&proto_ptr)
+        } else {
+            let set = visited_overflow.get_or_insert_with(|| visited_buf.iter().copied().collect());
+            !set.insert(proto_ptr)
+        };
+        if cycle {
             return None;
+        }
+        if visited_len < visited_buf.len() {
+            visited_buf[visited_len] = owner;
+            visited_len += 1;
+        } else if let Some(set) = &mut visited_overflow {
+            set.insert(owner);
         }
         let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
         let cid = crate::object::js_object_get_class_id(proto_obj);
@@ -161,7 +184,6 @@ unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -
         }
         owner = proto_ptr;
     }
-    None
 }
 
 unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {

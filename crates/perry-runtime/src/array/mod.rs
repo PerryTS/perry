@@ -115,6 +115,7 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
+pub(crate) use self::push_pop::guard_writable_length;
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_hole, js_array_push_spread_f64, js_array_set_length,

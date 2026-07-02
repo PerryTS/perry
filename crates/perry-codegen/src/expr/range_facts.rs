@@ -44,6 +44,28 @@ fn resolve_native_i32_alias(ctx: &FnCtx<'_>, mut id: u32) -> u32 {
     id
 }
 
+pub(crate) fn local_value_alias_root(ctx: &FnCtx<'_>, mut id: u32) -> u32 {
+    let mut seen = std::collections::HashSet::new();
+    while let Some(next) = ctx.local_value_aliases.get(&id).copied() {
+        if !seen.insert(id) {
+            break;
+        }
+        id = next;
+    }
+    id
+}
+
+pub(crate) fn record_local_value_alias_for_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
+    if let Expr::LocalGet(source_id) = value {
+        let root = local_value_alias_root(ctx, *source_id);
+        if root != id {
+            ctx.local_value_aliases.insert(id, root);
+            return;
+        }
+    }
+    ctx.local_value_aliases.remove(&id);
+}
+
 fn native_i32_alias_chain_mentions(
     aliases: &std::collections::HashMap<u32, u32>,
     alias_id: u32,
@@ -331,6 +353,14 @@ pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value
 }
 
 pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
+    // Drop the forward link AND any alias whose chain passes through `id` —
+    // a stale `other -> id` link would otherwise resolve `other` to the
+    // REASSIGNED `id`'s fresh facts (same chain hygiene as the
+    // `native_i32_aliases` retain below).
+    let value_aliases = ctx.local_value_aliases.clone();
+    ctx.local_value_aliases
+        .retain(|alias_id, _| !native_i32_alias_chain_mentions(&value_aliases, *alias_id, id));
+
     let aliases = ctx.native_i32_aliases.clone();
     ctx.native_i32_aliases
         .retain(|alias_id, _| !native_i32_alias_chain_mentions(&aliases, *alias_id, id));

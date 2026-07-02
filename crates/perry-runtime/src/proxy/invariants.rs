@@ -206,6 +206,13 @@ fn is_compatible_descriptor(current: &TargetProp, descriptor: f64) -> bool {
     let desc_is_accessor = desc_has(descriptor, b"get") || desc_has(descriptor, b"set");
     let desc_is_data = desc_has(descriptor, b"value") || desc_has(descriptor, b"writable");
 
+    // ECMA-262 §10.5.6 step 7.a.i: a descriptor that attempts to set
+    // `configurable:true` on a non-configurable own property is always invalid,
+    // regardless of whether it is generic, data, or accessor.
+    if desc_has(descriptor, b"configurable") && truthy(desc_field(ptr, b"configurable")) {
+        return false;
+    }
+
     // A generic descriptor — only `configurable`/`enumerable`, with no
     // type-defining field (get/set or value/writable) — is compatible with
     // any non-configurable current property. Per ValidateAndApplyProperty-

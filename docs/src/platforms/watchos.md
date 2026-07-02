@@ -29,9 +29,14 @@ watches your app runs on:
 | **arm64** (simulator) | — | — | `--target watchos-simulator` |
 
 Apple moved S9-and-later watches to full arm64 in watchOS 26. Older watches stay
-arm64_32 forever. Perry's NaN-boxed value representation works on both (a 32-bit
-pointer fits in the 48-bit NaN payload); the architecture split is purely about
-which hardware the binary loads on. The simulator is always arm64 (Apple Silicon
+arm64_32 forever. Perry's NaN-boxed value representation is sound on both — a
+32-bit pointer fits in the 48-bit NaN payload and clean tagged values round-trip
+— but **heap-struct layouts are pointer-width-dependent**: any code that bakes in
+a 64-bit field offset (the closure `type_tag`, the `ObjectHeader` field-region
+base, …) reads the wrong bytes and segfaults on arm64_32 unless it derives the
+offset from the target pointer width. See
+`perry_runtime::closure::CLOSURE_TYPE_TAG_OFFSET` and `perry_codegen::target_layout`.
+The simulator is always arm64 (Apple Silicon
 host) and **cannot run an arm64_32 binary** — device-arch builds can only be
 tested on real hardware (or shipped via TestFlight).
 
@@ -94,6 +99,19 @@ them into a fat binary — see [Publishing to the App Store](watchos-app-store.m
 > ≥ 2³² — those are a hard "literal out of range" error on arm64_32 (and wasm32).
 > Use `usize::try_from(...).unwrap_or(usize::MAX)` to saturate length caps like
 > `1usize << 53`.
+>
+> **Hardcoded struct-field offsets are the other arm64_32 trap.** A heap header
+> whose layout includes a pointer shifts on arm64_32 — e.g. `ClosureHeader`'s
+> `type_tag` sits at +12 after an 8-byte `func_ptr` on 64-bit but at +8 after a
+> 4-byte one on ILP32, and `ObjectHeader`'s field region starts at +24 on 64-bit
+> but +20 on ILP32 (the trailing `keys_array` pointer is 4 bytes). NEVER hardcode
+> such an offset: in `perry-runtime` use `std::mem::offset_of!` / `size_of`
+> (these track the target); in `perry-codegen` (which runs on the host but emits
+> for the target) derive it from the target triple via `crate::target_layout`.
+> Hardcoded `12` (closure magic) and `24` (`ObjectHeader` size) were the original
+> arm64_32 startup-crash root causes — a real getter failed its `CLOSURE_MAGIC`
+> probe, was judged non-callable, and the resulting `TypeError` value-coercion
+> dereferenced the closure as an object.
 
 ## Running with `perry run`
 

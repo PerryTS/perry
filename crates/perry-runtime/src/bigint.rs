@@ -204,6 +204,22 @@ pub extern "C" fn js_bigint_from_i64(value: i64) -> *mut BigIntHeader {
     bigint_alloc_with_limbs(limbs)
 }
 
+/// Create a BigInt from a compiler-owned signed 128-bit temporary, passed as
+/// raw low/high 64-bit words so generated LLVM can keep small BigInt literal
+/// arithmetic native until the JS-visible BigInt object boundary.
+#[no_mangle]
+pub extern "C" fn js_bigint_from_i128_parts(lo: u64, hi: i64) -> *mut BigIntHeader {
+    let bits = ((hi as u64 as u128) << 64) | (lo as u128);
+    let value = bits as i128;
+    let mut limbs = ZERO_LIMBS;
+    write_i128(value, &mut limbs);
+    bigint_alloc_with_limbs(limbs)
+}
+
+#[used]
+static KEEP_JS_BIGINT_FROM_I128_PARTS: extern "C" fn(u64, i64) -> *mut BigIntHeader =
+    js_bigint_from_i128_parts;
+
 /// Create a BigInt from a JS value (the `BigInt(value)` coercion).
 ///
 /// Matches Node/ECMAScript `ToBigInt` semantics (#2754, #2907):
@@ -1505,6 +1521,30 @@ mod tests {
         let c = js_bigint_mul(a, b);
         unsafe {
             assert_eq!((*c).limbs[0], 2_000_000);
+        }
+    }
+
+    #[test]
+    fn test_bigint_from_i128_parts_preserves_wide_small_result() {
+        let value = (i64::MAX as i128) + 1;
+        let lo = value as u128 as u64;
+        let hi = ((value as u128) >> 64) as u64 as i64;
+        let bi = js_bigint_from_i128_parts(lo, hi);
+        unsafe {
+            assert_eq!((*bi).limbs[0], 0x8000_0000_0000_0000);
+            assert_eq!((*bi).limbs[1], 0);
+            assert!(fits_in_i64(&(*bi).limbs).is_none());
+        }
+
+        let negative = -((i64::MAX as i128) + 2);
+        let lo = negative as u128 as u64;
+        let hi = ((negative as u128) >> 64) as u64 as i64;
+        let bi = js_bigint_from_i128_parts(lo, hi);
+        unsafe {
+            assert_eq!((*bi).limbs[0], 0x7fff_ffff_ffff_ffff);
+            assert_eq!((*bi).limbs[1], u64::MAX);
+            assert_eq!((*bi).limbs[BIGINT_LIMBS - 1], u64::MAX);
+            assert!(fits_in_i64(&(*bi).limbs).is_none());
         }
     }
 

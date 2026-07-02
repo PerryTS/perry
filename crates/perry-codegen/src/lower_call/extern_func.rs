@@ -70,7 +70,7 @@ fn record_native_abi_return(
     );
 }
 
-fn lower_buffer_and_len_param(
+pub(super) fn lower_buffer_and_len_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     js_argument_index: usize,
@@ -414,7 +414,7 @@ fn build_pod_temp_from_object_value(
     data_slot
 }
 
-fn lower_manifest_pod_param(
+pub(super) fn lower_manifest_pod_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     pod: &NativePodAbi,
@@ -649,7 +649,7 @@ fn record_native_abi_pod_view_param(
     );
 }
 
-fn lower_manifest_pod_view_param(
+pub(super) fn lower_manifest_pod_view_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     pod: &NativePodAbi,
@@ -786,7 +786,7 @@ fn materialize_native_handle_return(
     boxed
 }
 
-fn lower_manifest_param(
+pub(super) fn lower_manifest_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     js_argument_index: usize,
@@ -1602,6 +1602,23 @@ pub fn try_lower_extern_func_call(
                 abi_slot_index += 1;
             }
         }
+
+        // Issue #5812 item 4 — pad omitted trailing manifest params with
+        // defined null/zero sentinels so the emitted call/declaration has
+        // the same ABI slot count the native function reads (otherwise it
+        // reads an uninitialized register — the win64 `read_string` crash).
+        // See `omitted_native_params::pad_omitted_native_params`.
+        if let Some((manifest_params, _)) = manifest_sig.as_ref() {
+            super::omitted_native_params::pad_omitted_native_params(
+                ctx,
+                manifest_params,
+                args.len(),
+                abi_slot_index,
+                &mut lowered,
+                &mut arg_types,
+            )?;
+        }
+
         let arg_slices: Vec<(crate::types::LlvmType, &str)> = arg_types
             .iter()
             .zip(lowered.iter())

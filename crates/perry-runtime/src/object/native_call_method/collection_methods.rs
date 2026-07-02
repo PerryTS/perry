@@ -227,7 +227,8 @@ pub(super) unsafe fn dispatch_map_set(
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     _ if args.is_empty() => {
-                        if let Some(result) = dispatch_inherited_object_method(object, method_name) {
+                        if let Some(result) = dispatch_inherited_object_method(object, method_name)
+                        {
                             result
                         } else {
                             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -288,7 +289,8 @@ pub(super) unsafe fn dispatch_map_set(
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
                     _ if args.is_empty() => {
-                        if let Some(result) = dispatch_inherited_object_method(object, method_name) {
+                        if let Some(result) = dispatch_inherited_object_method(object, method_name)
+                        {
                             result
                         } else {
                             f64::from_bits(crate::value::TAG_UNDEFINED)

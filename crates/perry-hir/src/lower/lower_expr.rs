@@ -175,6 +175,10 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                 // `node --experimental-strip-types`. (#5579 global prop-desc
                 // cluster — `verifyProperty(this, "decodeURI", ...)`.)
                 if global_script_this_enabled() {
+                    // #5833: a top-level `this` read is just as much a global-
+                    // object reference as the literal `globalThis` token — see
+                    // `saw_global_this_expr`'s doc comment.
+                    ctx.saw_global_this_expr = true;
                     return Ok(Expr::GlobalThisExpr);
                 }
                 return Ok(Expr::ModuleTopThis);

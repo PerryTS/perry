@@ -90,7 +90,7 @@ pub extern "C" fn js_object_coerce(value: f64) -> f64 {
         return crate::builtins::js_boxed_boolean_new(value);
     }
     if jsval.is_any_string() {
-        return crate::builtins::js_boxed_string_new(value);
+        return crate::builtins::js_boxed_string_new(value, 1);
     }
     crate::builtins::js_boxed_number_new(value)
 }
@@ -1205,8 +1205,12 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             })
             .collect();
         for i in 0..n {
-            // js_array_get yields `undefined` for a hole; array literals and
-            // pushed arrays are dense, matching Node for the common case.
+            // Holes (absent indices) in a sparse array are NOT own enumerable
+            // properties and must be skipped — Object.assign only copies own
+            // enumerable properties (test262 assign/target-Array.js).
+            if !crate::array::array_spec_has_index(arr, i) {
+                continue;
+            }
             let value = crate::array::js_array_get(arr, i);
             let key = i.to_string();
             let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);

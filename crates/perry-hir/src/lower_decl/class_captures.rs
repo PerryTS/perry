@@ -537,21 +537,20 @@ pub fn synthesize_class_captures(
     // ctor may read a captured outer before calling `super()`, and that read
     // must already see the recovered value. Only the `this.__perry_cap_* =
     // param` field STASHES must wait until after `super()` (no `this` exists
-    // before super). A non-derived ctor has no `super`, so both groups land at
-    // entry (assignments right after the rebinds).
-    let rebind_count = rebind_stmts.len();
+    // before super) AND after all user stmts (see comment below).
     for (i, stmt) in rebind_stmts.into_iter().enumerate() {
         ctor.body.insert(i, stmt);
     }
-    // `super_pos` is recomputed AFTER inserting the rebinds (they shifted the
-    // body), so the assignments land just past the (now-relocated) `super()`.
-    let super_pos = ctor
-        .body
-        .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
-    let assignment_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
-    for (i, stmt) in assignment_stmts.into_iter().enumerate() {
-        ctor.body.insert(assignment_insert_at + i, stmt);
+    // The field STASHES (`this.__perry_cap_* = param`) must come AFTER
+    // `super()` (no `this` exists before super in derived classes) AND after
+    // ALL user body stmts — user code may mutate the outer-local after
+    // `super()` (e.g. `++called` in the TemporalHelpers sub-check pattern).
+    // Inserting immediately after `super()` captured the pre-mutation value.
+    // Insert stashes before each explicit `return` so they run on every exit
+    // path, then append at the end for the fall-through path.
+    insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
+    for stmt in assignment_stmts {
+        ctor.body.push(stmt);
     }
     *constructor = Some(ctor);
 
@@ -576,6 +575,73 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Recursively insert `stashes` immediately before every `Stmt::Return` in
+/// `body` so that cap-field stash assignments run on EVERY early-exit path,
+/// not just the fall-through.  Does not descend into nested function
+/// expressions (closures defined inside the constructor) — only direct
+/// control-flow of the constructor body itself.
+fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
+    let mut i = 0;
+    while i < body.len() {
+        // Check via shared ref first to decide what to do.
+        let is_return = matches!(body[i], Stmt::Return(_));
+        if is_return {
+            for (j, s) in stashes.iter().enumerate() {
+                body.insert(i + j, s.clone());
+            }
+            i += stashes.len() + 1;
+            continue;
+        }
+        // Recurse into nested control-flow via mutable ref.
+        match &mut body[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                insert_stashes_before_returns(then_branch, stashes);
+                if let Some(eb) = else_branch {
+                    insert_stashes_before_returns(eb, stashes);
+                }
+            }
+            Stmt::While { body: wb, .. } | Stmt::DoWhile { body: wb, .. } => {
+                insert_stashes_before_returns(wb, stashes);
+            }
+            Stmt::For { body: fb, .. } => {
+                insert_stashes_before_returns(fb, stashes);
+            }
+            Stmt::Labeled { body: lb, .. } => match lb.as_mut() {
+                Stmt::While { body: wb, .. }
+                | Stmt::DoWhile { body: wb, .. }
+                | Stmt::For { body: wb, .. } => {
+                    insert_stashes_before_returns(wb, stashes);
+                }
+                _ => {}
+            },
+            Stmt::Try {
+                body: tb,
+                catch,
+                finally,
+            } => {
+                insert_stashes_before_returns(tb, stashes);
+                if let Some(c) = catch {
+                    insert_stashes_before_returns(&mut c.body, stashes);
+                }
+                if let Some(f) = finally {
+                    insert_stashes_before_returns(f, stashes);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    insert_stashes_before_returns(&mut case.body, stashes);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
 
 /// Append `cap_args` (the `.1` ids) to every `new <class_name>(…)` site in

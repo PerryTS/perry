@@ -236,6 +236,11 @@ fn string_content_hash(value_bits: u64) -> Option<u64> {
     Some(h)
 }
 
+#[inline]
+fn boxed_heap_string_key(key: *const StringHeader) -> f64 {
+    f64::from_bits(crate::value::STRING_TAG | ((key as u64) & crate::value::POINTER_MASK))
+}
+
 /// Drop the side-table entry AND deregister from `MAP_REGISTRY` for a
 /// map address that's about to be reused or freed. Safe to call on
 /// unregistered addresses.
@@ -441,8 +446,27 @@ unsafe fn entries_ptr_mut(map: *mut MapHeader) -> *mut f64 {
 fn normalize_zero(key: f64) -> f64 {
     if key == 0.0 {
         0.0
+    } else if key.is_nan() && crate::value::JSValue::from_bits(key.to_bits()).is_number() {
+        // SameValueZero treats every NaN as the same key (23.1.3.x). The
+        // bits-keyed side-table and the bit-equality fast path in `jsvalue_eq`
+        // would otherwise bucket distinct NaN payloads separately. Canonicalize
+        // genuine number NaNs only — `is_number()` excludes NaN-boxed tagged
+        // values (objects/strings/bigints), whose payloads must be preserved.
+        f64::NAN
     } else {
         key
+    }
+}
+
+#[inline(always)]
+fn normalize_number_key_from_boxed(key: f64) -> Option<f64> {
+    let js_value = crate::value::JSValue::from_bits(key.to_bits());
+    if js_value.is_int32() {
+        Some(normalize_zero(js_value.as_int32() as f64))
+    } else if js_value.is_number() {
+        Some(normalize_zero(key))
+    } else {
+        None
     }
 }
 
@@ -739,6 +763,58 @@ unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     -1
 }
 
+unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader) -> i32 {
+    let size = (*map).size;
+    let key_value = boxed_heap_string_key(key);
+    let key_bits = key_value.to_bits();
+
+    if size <= SIDE_TABLE_THRESHOLD {
+        let entries = entries_ptr(map);
+        for i in 0..size {
+            let entry_key = ptr::read(entries.add((i as usize) * 2));
+            if jsvalue_eq(entry_key, key_value) {
+                return i as i32;
+            }
+        }
+        return -1;
+    }
+
+    if let Some(h) = string_content_hash(key_bits) {
+        let entries = entries_ptr(map);
+        let hit = MAP_STRING_INDEX.with(|idx| {
+            let idx = idx.borrow();
+            if let Some(slot) = idx.get(&(map as usize)) {
+                if let Some(bucket) = slot.get(&h) {
+                    for &cand_idx in bucket {
+                        if cand_idx >= size {
+                            continue;
+                        }
+                        let cand_key = ptr::read(entries.add((cand_idx as usize) * 2));
+                        if jsvalue_eq(cand_key, key_value) {
+                            return Some(cand_idx as i32);
+                        }
+                    }
+                }
+                return Some(-1i32);
+            }
+            None
+        });
+        if let Some(v) = hit {
+            return v;
+        }
+    }
+
+    let entries = entries_ptr(map);
+    for i in 0..size {
+        let entry_key = ptr::read(entries.add((i as usize) * 2));
+        if jsvalue_eq(entry_key, key_value) {
+            return i as i32;
+        }
+    }
+
+    -1
+}
+
 /// Grow the entries array if needed (header stays at same address)
 unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     let size = (*map).size;
@@ -764,6 +840,66 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     (*map).entries = new_entries;
     (*map).capacity = new_capacity;
     true
+}
+
+unsafe fn map_set_string_key_value(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: f64,
+) -> *mut MapHeader {
+    let idx = find_string_key_index(map, key);
+
+    if idx >= 0 {
+        let entries = entries_ptr_mut(map);
+        let value_slot = entries.add((idx as usize) * 2 + 1);
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map value slot uses the shared external-slot helper.
+        crate::gc::runtime_store_external_jsvalue_slot(
+            map as usize,
+            value_slot as usize,
+            value.to_bits(),
+        );
+        return map;
+    }
+
+    let grew = ensure_capacity(map);
+    let size = (*map).size;
+    let entries = entries_ptr_mut(map);
+    if grew && size > 0 {
+        crate::gc::runtime_dirty_external_slot_span(
+            map as usize,
+            entries as usize,
+            size as usize * 2,
+        );
+    }
+
+    let key_value = boxed_heap_string_key(key);
+    let key_slot = entries.add((size as usize) * 2);
+    let value_slot = entries.add((size as usize) * 2 + 1);
+    // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
+    crate::gc::runtime_store_external_jsvalue_slot(
+        map as usize,
+        key_slot as usize,
+        key_value.to_bits(),
+    );
+    crate::gc::runtime_store_external_jsvalue_slot(
+        map as usize,
+        value_slot as usize,
+        value.to_bits(),
+    );
+
+    (*map).size = size + 1;
+
+    if let Some(h) = string_content_hash(key_value.to_bits()) {
+        MAP_STRING_INDEX.with(|idx| {
+            let mut idx = idx.borrow_mut();
+            let slot = idx
+                .entry(map as usize)
+                .or_insert_with(std::collections::HashMap::new);
+            slot.entry(h).or_insert_with(Vec::new).push(size);
+        });
+    }
+
+    map
 }
 
 /// Set a key-value pair in the map
@@ -851,6 +987,115 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_map_set_number_key(
+    map: *mut MapHeader,
+    key: f64,
+    value: f64,
+) -> *mut MapHeader {
+    let Some(key) = normalize_number_key_from_boxed(key) else {
+        return js_map_set(map, key, value);
+    };
+    js_map_set(map, key, value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_number(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: f64,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    unsafe { map_set_string_key_value(map, key, value) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_key(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: f64,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    unsafe { map_set_string_key_value(map, key, value) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_i32(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: i32,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    let value_bits = crate::value::INT32_TAG | ((value as u32) as u64);
+    unsafe { map_set_string_key_value(map, key, f64::from_bits(value_bits)) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_u32(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: u32,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    unsafe { map_set_string_key_value(map, key, f64::from(value)) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_f32(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: f32,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    unsafe { map_set_string_key_value(map, key, f64::from(value)) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_bool(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: i32,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    let value_bits = if value != 0 {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    };
+    unsafe { map_set_string_key_value(map, key, f64::from_bits(value_bits)) }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_set_string_string(
+    map: *mut MapHeader,
+    key: *const StringHeader,
+    value: *const StringHeader,
+) -> *mut MapHeader {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return map;
+    }
+    unsafe { map_set_string_key_value(map, key, boxed_heap_string_key(value)) }
+}
+
 /// Get a value from the map by key
 /// Returns the value, or TAG_UNDEFINED if not found
 #[no_mangle]
@@ -862,6 +1107,32 @@ pub extern "C" fn js_map_get(map: *const MapHeader, key: f64) -> f64 {
     let key = normalize_zero(key);
     unsafe {
         let idx = find_key_index(map, key);
+
+        if idx >= 0 {
+            let entries = entries_ptr(map);
+            return ptr::read(entries.add((idx as usize) * 2 + 1));
+        }
+
+        f64::from_bits(TAG_UNDEFINED)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_get_number_key(map: *const MapHeader, key: f64) -> f64 {
+    let Some(key) = normalize_number_key_from_boxed(key) else {
+        return js_map_get(map, key);
+    };
+    js_map_get(map, key)
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_get_string_key(map: *const MapHeader, key: *const StringHeader) -> f64 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
+        let idx = find_string_key_index(map, key);
 
         if idx >= 0 {
             let entries = entries_ptr(map);
@@ -890,6 +1161,116 @@ pub extern "C" fn js_map_has(map: *const MapHeader, key: f64) -> i32 {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_map_has_number_key(map: *const MapHeader, key: f64) -> i32 {
+    let Some(key) = normalize_number_key_from_boxed(key) else {
+        return js_map_has(map, key);
+    };
+    js_map_has(map, key)
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_has_string_key(map: *const MapHeader, key: *const StringHeader) -> i32 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return 0;
+    }
+    unsafe {
+        if find_string_key_index(map, key) >= 0 {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_delete_string_key(map: *mut MapHeader, key: *const StringHeader) -> i32 {
+    let map = clean_map_ptr_mut(map);
+    if map.is_null() {
+        return 0;
+    }
+    unsafe {
+        let idx = find_string_key_index(map, key);
+        delete_entry_at_index(map, idx)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_map_delete_number_key(map: *mut MapHeader, key: f64) -> i32 {
+    let Some(key) = normalize_number_key_from_boxed(key) else {
+        return js_map_delete(map, key);
+    };
+    js_map_delete(map, key)
+}
+
+// Codegen emits these string-key typed lowering helpers directly from
+// generated LLVM IR. Keep roots prevent whole-program LTO/dead-strip from
+// removing the exported symbols when the Rust crate graph has no caller.
+#[used]
+static KEEP_JS_MAP_SET_STRING_NUMBER: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    f64,
+) -> *mut MapHeader = js_map_set_string_number;
+#[used]
+static KEEP_JS_MAP_SET_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64, f64) -> *mut MapHeader =
+    js_map_set_number_key;
+#[used]
+static KEEP_JS_MAP_SET_STRING_KEY: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    f64,
+) -> *mut MapHeader = js_map_set_string_key;
+#[used]
+static KEEP_JS_MAP_SET_STRING_I32: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    i32,
+) -> *mut MapHeader = js_map_set_string_i32;
+#[used]
+static KEEP_JS_MAP_SET_STRING_U32: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    u32,
+) -> *mut MapHeader = js_map_set_string_u32;
+#[used]
+static KEEP_JS_MAP_SET_STRING_F32: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    f32,
+) -> *mut MapHeader = js_map_set_string_f32;
+#[used]
+static KEEP_JS_MAP_SET_STRING_BOOL: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    i32,
+) -> *mut MapHeader = js_map_set_string_bool;
+#[used]
+static KEEP_JS_MAP_SET_STRING_STRING: extern "C" fn(
+    *mut MapHeader,
+    *const StringHeader,
+    *const StringHeader,
+) -> *mut MapHeader = js_map_set_string_string;
+#[used]
+static KEEP_JS_MAP_GET_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> f64 =
+    js_map_get_string_key;
+#[used]
+static KEEP_JS_MAP_GET_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> f64 =
+    js_map_get_number_key;
+#[used]
+static KEEP_JS_MAP_HAS_STRING_KEY: extern "C" fn(*const MapHeader, *const StringHeader) -> i32 =
+    js_map_has_string_key;
+#[used]
+static KEEP_JS_MAP_HAS_NUMBER_KEY: extern "C" fn(*const MapHeader, f64) -> i32 =
+    js_map_has_number_key;
+#[used]
+static KEEP_JS_MAP_DELETE_STRING_KEY: extern "C" fn(*mut MapHeader, *const StringHeader) -> i32 =
+    js_map_delete_string_key;
+#[used]
+static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern "C" fn(*mut MapHeader, f64) -> i32 =
+    js_map_delete_number_key;
+
 /// Delete a key from the map
 /// Returns 1 if deleted, 0 if key not found
 #[no_mangle]
@@ -901,46 +1282,49 @@ pub extern "C" fn js_map_delete(map: *mut MapHeader, key: f64) -> i32 {
     let key = normalize_zero(key);
     unsafe {
         let idx = find_key_index(map, key);
-
-        if idx < 0 {
-            return 0;
-        }
-
-        let size = (*map).size;
-        let entries = entries_ptr_mut(map);
-
-        // #2831: preserve insertion order. JS Map iteration must keep the
-        // relative order of surviving entries after a delete (and a
-        // delete-then-re-add appends at the end). The previous swap-and-pop
-        // moved the last entry into the hole, reordering iteration. Shift
-        // every entry after `idx` down by one slot instead.
-        for i in (idx as usize)..(size as usize - 1) {
-            let next_key = ptr::read(entries.add((i + 1) * 2));
-            let next_value = ptr::read(entries.add((i + 1) * 2 + 1));
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map compaction slots use the shared external-slot helper.
-            crate::gc::runtime_store_external_jsvalue_slot(
-                map as usize,
-                entries.add(i * 2) as usize,
-                next_key.to_bits(),
-            );
-            crate::gc::runtime_store_external_jsvalue_slot(
-                map as usize,
-                entries.add(i * 2 + 1) as usize,
-                next_value.to_bits(),
-            );
-        }
-
-        (*map).size = size - 1;
-
-        // The shift changes the entry index of every surviving key at or
-        // after `idx`, so the O(1) lookup side-tables can't be patched in
-        // place cheaply — rebuild them from the compacted buffer. Small
-        // maps don't use the side-table fast path (linear scan under
-        // SIDE_TABLE_THRESHOLD), so this only matters for large maps where
-        // a full rebuild is still O(size) like the shift itself.
-        rebuild_map_index(map);
-        1
+        delete_entry_at_index(map, idx)
     }
+}
+
+unsafe fn delete_entry_at_index(map: *mut MapHeader, idx: i32) -> i32 {
+    if idx < 0 {
+        return 0;
+    }
+    let size = (*map).size;
+    let idx = idx as usize;
+    if idx >= size as usize {
+        return 0;
+    }
+    let entries = entries_ptr_mut(map);
+
+    // #2831: preserve insertion order. JS Map iteration must keep the
+    // relative order of surviving entries after a delete (and a
+    // delete-then-re-add appends at the end). The previous swap-and-pop
+    // moved the last entry into the hole, reordering iteration. Shift
+    // every entry after `idx` down by one slot instead.
+    for i in idx..(size as usize - 1) {
+        let next_key = ptr::read(entries.add((i + 1) * 2));
+        let next_value = ptr::read(entries.add((i + 1) * 2 + 1));
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map compaction slots use the shared external-slot helper.
+        crate::gc::runtime_store_external_jsvalue_slot(
+            map as usize,
+            entries.add(i * 2) as usize,
+            next_key.to_bits(),
+        );
+        crate::gc::runtime_store_external_jsvalue_slot(
+            map as usize,
+            entries.add(i * 2 + 1) as usize,
+            next_value.to_bits(),
+        );
+    }
+
+    (*map).size = size - 1;
+
+    // The shift changes the entry index of every surviving key at or
+    // after `idx`, so the O(1) lookup side-tables can't be patched in
+    // place cheaply. Rebuild them from the compacted buffer.
+    rebuild_map_index(map);
+    1
 }
 
 /// Rebuild the numeric + string lookup side-tables for `map` from its
@@ -1485,5 +1869,187 @@ fn js_map_foreach_impl(
             crate::object::js_implicit_this_set(prev_this);
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::string::js_string_from_bytes;
+
+    #[test]
+    fn string_number_specialized_helpers_use_string_content_keys() {
+        let key_a = js_string_from_bytes(b"score".as_ptr(), 5);
+        let key_b = js_string_from_bytes(b"score".as_ptr(), 5);
+        assert_ne!(key_a as usize, key_b as usize);
+
+        let map = js_map_alloc(4);
+        js_map_set_string_number(map, key_a, 7.5);
+
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(js_map_has_string_key(map, key_b), 1);
+        assert_eq!(js_map_get(map, boxed_heap_string_key(key_b)), 7.5);
+        assert_eq!(js_map_get_string_key(map, key_b), 7.5);
+
+        js_map_set_string_number(map, key_b, 9.25);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update the existing entry"
+        );
+        assert_eq!(js_map_get(map, boxed_heap_string_key(key_a)), 9.25);
+        assert_eq!(js_map_get_string_key(map, key_a), 9.25);
+
+        assert_eq!(js_map_delete_string_key(map, key_b), 1);
+        assert_eq!(js_map_size(map), 0);
+        assert_eq!(js_map_has_string_key(map, key_a), 0);
+        assert_eq!(js_map_get_string_key(map, key_a).to_bits(), TAG_UNDEFINED);
+        assert_eq!(js_map_delete_string_key(map, key_a), 0);
+
+        let missing = js_string_from_bytes(b"missing".as_ptr(), 7);
+        assert_eq!(js_map_get_string_key(map, missing).to_bits(), TAG_UNDEFINED);
+
+        js_map_set_string_key(map, key_a, f64::from_bits(crate::value::TAG_TRUE));
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(
+            js_map_get_string_key(map, key_b).to_bits(),
+            crate::value::TAG_TRUE
+        );
+
+        js_map_set_string_key(map, key_b, f64::from_bits(crate::value::TAG_FALSE));
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update generic JSValue entries"
+        );
+        assert_eq!(
+            js_map_get_string_key(map, key_a).to_bits(),
+            crate::value::TAG_FALSE
+        );
+
+        js_map_set_string_bool(map, key_a, 1);
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(
+            js_map_get_string_key(map, key_b).to_bits(),
+            crate::value::TAG_TRUE
+        );
+
+        js_map_set_string_bool(map, key_b, 0);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update typed boolean entries"
+        );
+        assert_eq!(
+            js_map_get_string_key(map, key_a).to_bits(),
+            crate::value::TAG_FALSE
+        );
+
+        js_map_set_string_i32(map, key_a, 42);
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(
+            js_map_get_string_key(map, key_b).to_bits(),
+            crate::value::JSValue::int32(42).bits()
+        );
+
+        js_map_set_string_i32(map, key_b, -7);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update typed int32 entries"
+        );
+        assert_eq!(
+            js_map_get_string_key(map, key_a).to_bits(),
+            crate::value::JSValue::int32(-7).bits()
+        );
+
+        js_map_set_string_u32(map, key_a, u32::MAX);
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(
+            js_map_get_string_key(map, key_b).to_bits(),
+            (u32::MAX as f64).to_bits()
+        );
+
+        js_map_set_string_u32(map, key_b, 4_000_000_000);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update typed uint32 entries"
+        );
+        assert_eq!(
+            js_map_get_string_key(map, key_a).to_bits(),
+            4_000_000_000_f64.to_bits()
+        );
+
+        js_map_set_string_f32(map, key_a, 1.5);
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(js_map_get_string_key(map, key_b), 1.5);
+
+        js_map_set_string_f32(map, key_b, -2.25);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update typed float32 entries"
+        );
+        assert_eq!(js_map_get_string_key(map, key_a), -2.25);
+
+        let value_a = js_string_from_bytes(b"ready".as_ptr(), 5);
+        let value_b = js_string_from_bytes(b"done".as_ptr(), 4);
+        js_map_set_string_string(map, key_a, value_a);
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(
+            js_map_get_string_key(map, key_b).to_bits(),
+            boxed_heap_string_key(value_a).to_bits()
+        );
+
+        js_map_set_string_string(map, key_b, value_b);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "same-content string keys should update typed string value entries"
+        );
+        assert_eq!(
+            js_map_get_string_key(map, key_a).to_bits(),
+            boxed_heap_string_key(value_b).to_bits()
+        );
+    }
+
+    #[test]
+    fn number_key_specialized_helpers_preserve_numeric_keys_and_fallback() {
+        let map = js_map_alloc(4);
+
+        js_map_set_number_key(map, -0.0, 7.5);
+        assert_eq!(js_map_size(map), 1);
+        assert_eq!(js_map_has_number_key(map, 0.0), 1);
+        assert_eq!(js_map_get_number_key(map, 0.0), 7.5);
+        assert!(
+            test_map_numeric_index_contains(map, 0.0),
+            "numeric helper should populate the numeric side-table"
+        );
+
+        js_map_set_number_key(map, 0.0, 9.25);
+        assert_eq!(
+            js_map_size(map),
+            1,
+            "-0 and +0 should update the same numeric-key entry"
+        );
+        assert_eq!(js_map_get(map, -0.0), 9.25);
+        assert_eq!(js_map_delete_number_key(map, -0.0), 1);
+        assert_eq!(js_map_has_number_key(map, 0.0), 0);
+
+        let string_key = js_string_from_bytes(b"fallback".as_ptr(), 8);
+        let boxed_string_key = boxed_heap_string_key(string_key);
+        js_map_set_number_key(map, boxed_string_key, 13.0);
+        assert_eq!(
+            js_map_get_number_key(map, boxed_string_key),
+            13.0,
+            "nonnumeric calls to the numeric helper should preserve generic fallback semantics"
+        );
+        assert!(
+            test_map_string_index_contains(map, boxed_string_key),
+            "fallback insertion should still update the string content side-table"
+        );
+        assert_eq!(js_map_delete_number_key(map, boxed_string_key), 1);
+        assert_eq!(js_map_has(map, boxed_string_key), 0);
     }
 }

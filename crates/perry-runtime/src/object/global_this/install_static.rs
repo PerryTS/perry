@@ -641,6 +641,15 @@ pub(crate) fn install_builtin_constructor_statics(
                 super::super::PropertyAttrs::new(true, true, true),
             );
         }
+        "Proxy" => {
+            install_constructor_static(
+                ctor,
+                "revocable",
+                proxy_revocable_thunk as *const u8,
+                2,
+                false,
+            );
+        }
         _ => {}
     }
 }

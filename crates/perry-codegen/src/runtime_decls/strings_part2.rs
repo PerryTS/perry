@@ -823,6 +823,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, PTR, I64, PTR, I64],
     );
+    module.declare_function(
+        "js_native_call_method_by_id",
+        DOUBLE,
+        &[DOUBLE, I64, PTR, I64],
+    );
     // Apply form: takes the args as a JS array handle (i64). The runtime
     // materialises the array elements into a temp f64 buffer and forwards to
     // js_native_call_method. Used by `Expr::CallSpread` for the
@@ -831,6 +836,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_native_call_method_apply",
         DOUBLE,
         &[DOUBLE, PTR, I64, I64],
+    );
+    module.declare_function(
+        "js_native_call_method_apply_by_id",
+        DOUBLE,
+        &[DOUBLE, I64, I64],
     );
     // v0.5.754: dispatch obj[strKey](args) — computed-key method call.
     // Takes a StringHeader pointer (already-unboxed) for the method name.

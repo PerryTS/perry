@@ -206,6 +206,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // can't form a fresh cycle by setting obj's proto to `proto`.
     if !proto_is_null {
         const TAG_NULL_U64: u64 = 0x7FFC_0000_0000_0002;
+        const TAG_UNDEFINED_U64: u64 = 0x7FFC_0000_0000_0001;
         let advance = |bits: u64| -> u64 {
             let current_js = crate::value::JSValue::from_bits(bits);
             if current_js.is_null() || current_js.is_undefined() {
@@ -214,8 +215,15 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             let val = f64::from_bits(bits);
             let next = js_object_get_prototype_of(val);
             let nb = next.to_bits();
-            let next_js = crate::value::JSValue::from_bits(nb);
-            if nb == TAG_NULL_U64 || next_js.is_undefined() {
+            // Treat undefined as chain-end like null: `js_object_get_prototype_of`
+            // returns undefined (not spec's object-or-null) for some exotic
+            // receivers, and feeding that back into the next advance would call
+            // `js_object_get_prototype_of(undefined)`, which throws "Cannot
+            // convert undefined or null to object". comment-json's `__extends`
+            // feature-test `{__proto__: []}` hit this at Next.js server boot. A
+            // genuine cycle can never contain undefined, so ending the walk is
+            // sound.
+            if nb == TAG_NULL_U64 || nb == TAG_UNDEFINED_U64 {
                 TAG_NULL_U64
             } else {
                 nb
@@ -232,9 +240,31 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             if tortoise == TAG_NULL_U64 {
                 break;
             }
-            // Advance tortoise one step, hare two steps.
+            // Advance tortoise one step, hare two steps.  Guard the second
+            // advance: if the first step lands on null, calling advance(null)
+            // would invoke js_object_get_prototype_of(null) which throws
+            // "Cannot convert undefined or null to object" (test262
+            // setPrototypeOf/success.js — plain object proto chain ends at null).
             tortoise = advance(tortoise);
-            hare = advance(advance(hare));
+            // The hare reaches the chain end (null) before the tortoise on any
+            // acyclic chain longer than one link (e.g. a function proto:
+            // fn → Function.prototype → Object.prototype → null). Freeze it at
+            // null instead of advancing again — advance(null) would call
+            // js_object_get_prototype_of(null), which throws "Cannot convert
+            // undefined or null to object". comment-json's `__extends` hit this
+            // on every transpiled subclass at Next.js server boot. The tortoise
+            // still walks the remaining chain alone, so the obj-membership
+            // (cycle) check stays complete.
+            hare = if hare == TAG_NULL_U64 {
+                TAG_NULL_U64
+            } else {
+                let h1 = advance(hare);
+                if h1 == TAG_NULL_U64 {
+                    TAG_NULL_U64
+                } else {
+                    advance(h1)
+                }
+            };
             // If they meet, the existing chain already has a cycle — the walk
             // will never reach null, so we also can never form a new one by
             // setting obj's proto. Just break; the set is safe.

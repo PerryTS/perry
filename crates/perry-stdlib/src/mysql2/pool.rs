@@ -169,7 +169,7 @@ pub unsafe extern "C" fn js_mysql2_pool_query(
             if let Some(wrapper) = get_handle::<MysqlPoolHandle>(pool_handle) {
                 // Build the query with parameter bindings (no-op when
                 // param_values is empty, preserving the no-param call shape).
-                let mut query = sqlx::query(&sql);
+                let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                 for param in &param_values {
                     query = match param {
                         ParamValue::Null => query.bind(Option::<String>::None),
@@ -265,7 +265,7 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
 
             if let Some(wrapper) = get_handle::<MysqlPoolHandle>(pool_handle) {
                 // Build the query with parameter bindings
-                let mut query = sqlx::query(&sql);
+                let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
 
                 for param in &param_values {
                     query = match param {
@@ -519,7 +519,7 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_query(
 
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
-                    let mut query = sqlx::query(&sql);
+                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
                     for param in &param_values {
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
@@ -615,7 +615,7 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
                     // Build the query with parameter bindings
-                    let mut query = sqlx::query(&sql);
+                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
 
                     for param in &param_values {
                         query = match param {

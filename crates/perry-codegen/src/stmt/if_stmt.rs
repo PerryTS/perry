@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use super::*;
 
 use crate::lower_conditional::lower_truthy;
+use crate::native_value::NativeRep;
 
 #[derive(Clone)]
 struct NativeArenaOwnerAliasSnapshot {
@@ -159,8 +160,7 @@ pub(crate) fn lower_if(
         return Ok(());
     }
 
-    let cond_val = lower_expr(ctx, condition)?;
-    let i1 = lower_truthy(ctx, &cond_val, condition);
+    let i1 = lower_if_condition_i1(ctx, condition)?;
     let alias_entry_snapshot = NativeArenaOwnerAliasSnapshot::capture(ctx);
 
     let then_idx = ctx.new_block("if.then");
@@ -214,4 +214,17 @@ pub(crate) fn lower_if(
     // Continue emitting subsequent statements into the merge block.
     ctx.current_block = merge_idx;
     Ok(())
+}
+
+fn lower_if_condition_i1(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr) -> Result<String> {
+    if let Some(lowered) = lower_expr_value(ctx, condition)? {
+        if matches!(lowered.rep, NativeRep::I1) {
+            return Ok(lowered.value);
+        }
+        let boxed = materialize_js_value(ctx, lowered, MaterializationReason::RuntimeApi);
+        return Ok(lower_truthy(ctx, &boxed, condition));
+    }
+
+    let cond_val = lower_expr(ctx, condition)?;
+    Ok(lower_truthy(ctx, &cond_val, condition))
 }

@@ -184,7 +184,9 @@ pub(crate) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(crate) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 pub(crate) const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
+pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
 pub(crate) const TYPE_UNKNOWN: u32 = 0;
 pub(crate) const TYPE_OBJECT: u32 = 1;
@@ -798,6 +800,53 @@ mod tests {
         let outer_boxed = crate::value::js_nanbox_pointer(outer as i64);
         let output = unsafe { js_json_stringify(outer_boxed, TYPE_UNKNOWN) };
         assert_eq!(unsafe { str_from_header(output).unwrap() }, r#"{"o":{}}"#);
+    }
+
+    #[test]
+    fn stringify_int32_fields_emit_integers_not_null() {
+        // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN.
+        // Before the `write_number` int32 funnel, an int32 object field — e.g. a
+        // sqlite INTEGER column from the better-sqlite3 binding — fell into the
+        // `is_nan()` → "null" arm and serialized as `null`, silently corrupting
+        // integers crossing JSON/IPC. They must emit the integer value.
+        let obj = crate::object::js_object_alloc(0, 3);
+        let k_id = js_string_from_bytes(b"id".as_ptr(), 2);
+        let k_neg = js_string_from_bytes(b"neg".as_ptr(), 3);
+        let k_zero = js_string_from_bytes(b"zero".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            k_id,
+            f64::from_bits(JSValue::int32(42).bits()),
+        );
+        crate::object::js_object_set_field_by_name(
+            obj,
+            k_neg,
+            f64::from_bits(JSValue::int32(-7).bits()),
+        );
+        crate::object::js_object_set_field_by_name(
+            obj,
+            k_zero,
+            f64::from_bits(JSValue::int32(0).bits()),
+        );
+        let boxed = crate::value::js_nanbox_pointer(obj as i64);
+        let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
+        assert_eq!(
+            unsafe { str_from_header(output).unwrap() },
+            r#"{"id":42,"neg":-7,"zero":0}"#
+        );
+    }
+
+    #[test]
+    fn stringify_int32_array_elements_emit_integers_not_null() {
+        // Same INT32_TAG funnel for array elements (drizzle raw-mode rows,
+        // integer arrays over IPC).
+        let mut arr = crate::array::js_array_alloc(3);
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(1).bits()));
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(2).bits()));
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(-9).bits()));
+        let boxed = crate::value::js_nanbox_pointer(arr as i64);
+        let output = unsafe { js_json_stringify(boxed, TYPE_ARRAY) };
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "[1,2,-9]");
     }
 
     #[test]

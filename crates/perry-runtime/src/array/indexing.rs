@@ -770,6 +770,15 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
     0
 }
 
+// These raw numeric-array helpers are called from generated code, so release/LTO
+// builds may otherwise internalize and strip the `#[no_mangle]` exports.
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32) -> f64 =
+    js_array_numeric_get_f64_unboxed;
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32, f64) -> i32 =
+    js_array_numeric_set_f64_unboxed;
+
 /// Set an element in an array by index
 /// Note: This does NOT extend the array if index >= length
 #[no_mangle]

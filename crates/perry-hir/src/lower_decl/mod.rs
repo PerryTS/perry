@@ -20,6 +20,7 @@ mod fn_decl;
 mod helpers;
 mod interface_decl;
 mod private_members;
+mod static_init;
 mod type_alias;
 mod typeof_narrow;
 
@@ -60,4 +61,5 @@ pub(crate) use private_members::{
     build_private_scope, lower_private_getter, lower_private_method, lower_private_prop,
     lower_private_setter,
 };
+pub(crate) use static_init::build_interleaved_static_init_stmts;
 pub(crate) use type_alias::lower_type_alias_decl;

@@ -415,6 +415,12 @@ pub fn app_run(_app_handle: i64) {
     };
     app.setActivationPolicy(activation_policy);
 
+    // Menu-bar / background apps (accessory / background activation policy)
+    // don't auto-present their main window at launch — they're driven by a
+    // status-item / tray and open windows on demand. Regular apps keep the
+    // existing behaviour of showing the window immediately.
+    let suppress_window = matches!(policy.as_deref(), Some("accessory") | Some("background"));
+
     // Apply pending dock icon
     PENDING_ICON_PATH.with(|p| {
         if let Some(path) = p.borrow().as_ref() {
@@ -481,6 +487,12 @@ pub fn app_run(_app_handle: i64) {
                         }
                     }
                 }
+            }
+
+            // Accessory/background apps stay window-less at launch (the tray
+            // owns presentation). Skip ordering the window front.
+            if suppress_window {
+                continue;
             }
 
             entry.window.makeKeyAndOrderFront(None);

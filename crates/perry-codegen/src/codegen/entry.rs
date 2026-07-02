@@ -216,8 +216,14 @@ fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
         let closure_box = crate::expr::nanbox_pointer_inline(blk, &closure_handle);
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_raw = crate::expr::unbox_to_i64(blk, &key_box);
+        // #5833: GlobalDeclarationInstantiation's `CreateGlobalFunctionBinding`
+        // runs with `D = false` for a Script (only sloppy-eval's Annex B.3.3.3
+        // path uses `D = true`), so the reflected property must be
+        // non-configurable — a plain `js_object_set_field_by_name` created it
+        // configurable, failing `verifyProperty(this, name, {configurable:
+        // false})` (test262 `language/global-code/decl-func.js`).
         blk.call_void(
-            "js_object_set_field_by_name",
+            "js_object_set_field_by_name_nonconfigurable",
             &[(I64, &obj_raw), (I64, &key_raw), (DOUBLE, &closure_box)],
         );
     }
@@ -552,6 +558,10 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            compiler_private_async_i32_control_locals: &cross_module
+                .compiler_private_async_i32_control_locals,
+            compiler_private_async_i1_control_locals: &cross_module
+                .compiler_private_async_i1_control_locals,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
@@ -590,7 +600,9 @@ pub(super) fn compile_module_entry(
             class_keys_slots: HashMap::new(),
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
+            packed_f64_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
+            i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: main_native_facts.strictly_i32_bounded_locals(),
             i18n: &cross_module.i18n,
@@ -598,6 +610,7 @@ pub(super) fn compile_module_entry(
             local_class_aliases: HashMap::new(),
             local_class_field_aliases: HashMap::new(),
             local_id_to_name: HashMap::new(),
+            local_value_aliases: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
             compile_time_constants: main_native_facts.compile_time_constants(),
             target_triple: &cross_module.target_triple,
@@ -623,6 +636,22 @@ pub(super) fn compile_module_entry(
             clamp_u8_functions: &cross_module.clamp_u8_functions,
             integer_returning_functions: &cross_module.returns_int_functions,
             i32_identity_functions: &cross_module.i32_identity_functions,
+            typed_f64_functions: &cross_module.typed_f64_functions,
+            typed_i32_functions: &cross_module.typed_i32_functions,
+            typed_string_functions: &cross_module.typed_string_functions,
+            typed_i1_functions: &cross_module.typed_i1_functions,
+            typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
+            typed_f64_methods: &cross_module.typed_f64_methods,
+            typed_i32_methods: &cross_module.typed_i32_methods,
+            typed_i1_methods: &cross_module.typed_i1_methods,
+            typed_string_methods: &cross_module.typed_string_methods,
+            typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
+            typed_f64_closures: &cross_module.typed_f64_closures,
+            typed_i32_closures: &cross_module.typed_i32_closures,
+            typed_i1_closures: &cross_module.typed_i1_closures,
+            typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
+            typed_string_closures: &cross_module.typed_string_closures,
+            typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
             was_unrolled: hir.init_was_unrolled,
             ic_site_counter: ic_base,
             ic_globals: Vec::new(),
@@ -1037,6 +1066,10 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            compiler_private_async_i32_control_locals: &cross_module
+                .compiler_private_async_i32_control_locals,
+            compiler_private_async_i1_control_locals: &cross_module
+                .compiler_private_async_i1_control_locals,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
@@ -1075,7 +1108,9 @@ pub(super) fn compile_module_entry(
             class_keys_slots: HashMap::new(),
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
+            packed_f64_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
+            i1_local_slots: HashMap::new(),
             index_used_locals: init_native_facts.index_used_locals(),
             strictly_i32_bounded_locals: init_native_facts.strictly_i32_bounded_locals(),
             i18n: &cross_module.i18n,
@@ -1083,6 +1118,7 @@ pub(super) fn compile_module_entry(
             local_class_aliases: HashMap::new(),
             local_class_field_aliases: HashMap::new(),
             local_id_to_name: HashMap::new(),
+            local_value_aliases: HashMap::new(),
             imported_vars: &cross_module.imported_vars,
             compile_time_constants: init_native_facts.compile_time_constants(),
             target_triple: &cross_module.target_triple,
@@ -1108,6 +1144,22 @@ pub(super) fn compile_module_entry(
             clamp_u8_functions: &cross_module.clamp_u8_functions,
             integer_returning_functions: &cross_module.returns_int_functions,
             i32_identity_functions: &cross_module.i32_identity_functions,
+            typed_f64_functions: &cross_module.typed_f64_functions,
+            typed_i32_functions: &cross_module.typed_i32_functions,
+            typed_string_functions: &cross_module.typed_string_functions,
+            typed_i1_functions: &cross_module.typed_i1_functions,
+            typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
+            typed_f64_methods: &cross_module.typed_f64_methods,
+            typed_i32_methods: &cross_module.typed_i32_methods,
+            typed_i1_methods: &cross_module.typed_i1_methods,
+            typed_string_methods: &cross_module.typed_string_methods,
+            typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
+            typed_f64_closures: &cross_module.typed_f64_closures,
+            typed_i32_closures: &cross_module.typed_i32_closures,
+            typed_i1_closures: &cross_module.typed_i1_closures,
+            typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
+            typed_string_closures: &cross_module.typed_string_closures,
+            typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
             was_unrolled: hir.init_was_unrolled,
             ic_site_counter: ic_base,
             ic_globals: Vec::new(),

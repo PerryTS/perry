@@ -260,3 +260,56 @@ fn eval_declaration_completion_is_empty_global_script() {
         "`function fn(){{}}{{}}` -> undefined\n{out}"
     );
 }
+
+/// Regression (#5592): `(0, eval)('arguments;')` inside a class field
+/// initializer (at module top level) must see the global `arguments` binding,
+/// not produce `undefined`. The fold was blocked by a `current_class.is_none()`
+/// guard in `eval_is_module_top_global`; class field initializers don't create a
+/// new variable environment so the guard was overly conservative.
+const CLASS_FIELD_INDIRECT_EVAL_ARGUMENTS: &str = r#"
+var arguments = 1;
+class C {
+  x = (0, eval)('arguments;');
+}
+var result = new C().x;
+console.log("result:", result);
+console.log("DONE");
+"#;
+
+#[test]
+fn indirect_eval_in_class_field_sees_global_arguments() {
+    let (ok, out) = compile_and_run(
+        CLASS_FIELD_INDIRECT_EVAL_ARGUMENTS,
+        /* global_script */ true,
+    );
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("result: 1"),
+        "indirect eval in class field must see global `arguments = 1`\n{out}"
+    );
+}
+
+/// Same as above but with a private class field (#5592, private variant).
+const PRIVATE_CLASS_FIELD_INDIRECT_EVAL_ARGUMENTS: &str = r#"
+var arguments = 1;
+class C {
+  #x = (0, eval)('arguments;');
+  getX() { return this.#x; }
+}
+var result = new C().getX();
+console.log("result:", result);
+console.log("DONE");
+"#;
+
+#[test]
+fn indirect_eval_in_private_class_field_sees_global_arguments() {
+    let (ok, out) = compile_and_run(
+        PRIVATE_CLASS_FIELD_INDIRECT_EVAL_ARGUMENTS,
+        /* global_script */ true,
+    );
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("result: 1"),
+        "indirect eval in private class field must see global `arguments = 1`\n{out}"
+    );
+}

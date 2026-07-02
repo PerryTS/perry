@@ -25,11 +25,12 @@ pub(crate) fn store_param_slot(
     boxed_vars: &HashSet<u32>,
     arg_name: &str,
 ) -> String {
-    let slot = blk.alloca(DOUBLE);
-    if boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
-        let box_ptr = blk.call(I64, "js_box_alloc", &[(DOUBLE, arg_name)]);
-        let boxed = blk.bitcast_i64_to_double(&box_ptr);
-        blk.store(DOUBLE, &boxed, &slot);
+    let boxed_param = boxed_vars.contains(&param.id) && param.arguments_object.is_none();
+    let slot = blk.alloca(if boxed_param { I64 } else { DOUBLE });
+    if boxed_param {
+        let arg_bits = blk.bitcast_double_to_i64(arg_name);
+        let box_ptr = blk.call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
+        blk.store(I64, &box_ptr, &slot);
     } else {
         blk.store(DOUBLE, arg_name, &slot);
     }
@@ -80,8 +81,7 @@ pub(crate) fn materialize_arguments_object(
     );
     for (arg_index, param_id) in mapped_arguments_params(params) {
         if let Some(param_slot) = ctx.locals.get(&param_id).cloned() {
-            let box_bits = ctx.block().load(DOUBLE, &param_slot);
-            let box_ptr = ctx.block().bitcast_double_to_i64(&box_bits);
+            let box_ptr = ctx.block().load(I64, &param_slot);
             ctx.block().call_void(
                 "js_arguments_object_map_index",
                 &[

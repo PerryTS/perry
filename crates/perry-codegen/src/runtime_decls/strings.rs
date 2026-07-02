@@ -138,8 +138,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // - js_closure_alloc(func_ptr, capture_count) -> *mut ClosureHeader
     //     Allocates a closure object pointing at the given function with
     //     space for `capture_count` captured-value slots.
+    // - js_closure_set/get_capture_bits(closure, idx, bits)
+    //     Read/write a captured value's raw JSValueBits at slot `idx`.
     // - js_closure_set/get_capture_f64(closure, idx, value)
-    //     Read/write a captured value (NaN-boxed double) at slot `idx`.
+    //     Compatibility shims over the bits helpers for legacy f64 call sites.
     // - js_closure_call0..call16(closure, args…) -> double
     //     Invoke the closure with N args. The runtime extracts the
     //     function pointer from the closure header and calls it with
@@ -161,6 +163,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[PTR, I32, PTR],
     );
+    module.declare_function("js_closure_set_capture_bits", VOID, &[I64, I32, I64]);
+    module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
     module.declare_function("js_closure_set_capture_f64", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_closure_get_capture_f64", DOUBLE, &[I64, I32]);
     // Issue #493: register a closure body's rest-param arity in the runtime
@@ -324,9 +328,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // as void-return for LLVM purposes.
     module.declare_function("js_throw_error_with_code", VOID, &[PTR, I64, PTR, I64, I32]);
     module.declare_function("js_map_set", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_map_set_string_number", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_map_set_string_key", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_map_set_string_i32", I64, &[I64, I64, I32]);
+    module.declare_function("js_map_set_string_u32", I64, &[I64, I64, I32]);
+    module.declare_function("js_map_set_string_f32", I64, &[I64, I64, F32]);
+    module.declare_function("js_map_set_string_bool", I64, &[I64, I64, I32]);
+    module.declare_function("js_map_set_string_string", I64, &[I64, I64, I64]);
+    module.declare_function("js_map_set_number_key", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_map_get_string_key", DOUBLE, &[I64, I64]);
+    module.declare_function("js_map_get_number_key", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_map_has", I32, &[I64, DOUBLE]);
+    module.declare_function("js_map_has_string_key", I32, &[I64, I64]);
+    module.declare_function("js_map_has_number_key", I32, &[I64, DOUBLE]);
     module.declare_function("js_map_delete", I32, &[I64, DOUBLE]);
+    module.declare_function("js_map_delete_string_key", I32, &[I64, I64]);
+    module.declare_function("js_map_delete_number_key", I32, &[I64, DOUBLE]);
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_for_in_keys_value", I64, &[DOUBLE]);
@@ -522,8 +540,26 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_number_coerce", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_to_number", DOUBLE, &[DOUBLE]);
     module.declare_function("js_set_add", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_add_string", I64, &[I64, I64]);
+    module.declare_function("js_set_add_number", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_add_i32", I64, &[I64, I32]);
+    module.declare_function("js_set_add_u32", I64, &[I64, I32]);
+    module.declare_function("js_set_add_f32", I64, &[I64, F32]);
+    module.declare_function("js_set_add_bool", I64, &[I64, I32]);
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_has_string", I32, &[I64, I64]);
+    module.declare_function("js_set_has_number", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_has_i32", I32, &[I64, I32]);
+    module.declare_function("js_set_has_u32", I32, &[I64, I32]);
+    module.declare_function("js_set_has_f32", I32, &[I64, F32]);
+    module.declare_function("js_set_has_bool", I32, &[I64, I32]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_delete_string", I32, &[I64, I64]);
+    module.declare_function("js_set_delete_number", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_delete_i32", I32, &[I64, I32]);
+    module.declare_function("js_set_delete_u32", I32, &[I64, I32]);
+    module.declare_function("js_set_delete_f32", I32, &[I64, F32]);
+    module.declare_function("js_set_delete_bool", I32, &[I64, I32]);
     module.declare_function("js_set_size", I32, &[I64]);
     // #2872: ES2024 Set composition methods.
     module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
@@ -648,7 +684,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_transferable_abort_signal", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_parse_args", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_arguments_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_promise", DOUBLE, &[DOUBLE]);
@@ -861,9 +897,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // See crates/perry-runtime/src/box.rs. These let multiple
     // closures share mutable state (e.g. a counter captured by
     // both inc() and get() in a returned object literal).
+    module.declare_function("js_box_alloc_bits", I64, &[I64]);
+    module.declare_function("js_box_get_bits", I64, &[I64]);
+    module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
     module.declare_function("js_box_set", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_i32_box_alloc", I64, &[I32]);
+    module.declare_function("js_i32_box_get", I32, &[I64]);
+    module.declare_function("js_i32_box_set", VOID, &[I64, I32]);
+    module.declare_function("js_bool_box_alloc", I64, &[I32]);
+    module.declare_function("js_bool_box_get", I32, &[I64]);
+    module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
     module.declare_function("js_arguments_object_alloc", I64, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_arguments_object_map_index", VOID, &[I64, I32, I64]);
     module.declare_function("js_array_like_to_array", I64, &[DOUBLE]);
@@ -969,10 +1014,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
     // #2804: indexOf/includes carry an optional fromIndex (value, fromIndex, has_from).
-    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE, DOUBLE, I32]);
+    // Return I64 so indices >= 2^31 are not truncated.
+    module.declare_function("js_array_indexOf_jsvalue", I64, &[I64, DOUBLE, DOUBLE, I32]);
     module.declare_function(
         "js_array_last_index_of_jsvalue",
-        I32,
+        I64,
         &[I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);
@@ -1081,6 +1127,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_addref_if_heap_string", VOID, &[DOUBLE]);
     module.declare_function("js_bigint_from_string", I64, &[PTR, I32]);
     module.declare_function("js_bigint_from_f64", I64, &[DOUBLE]);
+    module.declare_function("js_bigint_from_i128_parts", I64, &[I64, I64]);
     module.declare_function("js_bigint_cmp", I32, &[I64, I64]);
     // Dynamic bigint arithmetic — lowered from `Expr::Binary` when
     // either operand is statically bigint-typed. These unbox, call

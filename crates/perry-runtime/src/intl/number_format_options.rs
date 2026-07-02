@@ -65,6 +65,12 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         }
         set_internal_field(obj, KEY_CURRENCY, string_value(&code.to_ascii_uppercase()));
     }
+    // Throw TypeError for missing currency BEFORE reading currencyDisplay /
+    // currencySign — so proxy-get traps on those keys are never triggered when
+    // currency is missing, matching the spec-observable option-read order.
+    if style == "currency" && currency.is_none() {
+        throw_type_error("Currency code is required with currency style.");
+    }
     let currency_display = get_string_option_enum(
         options,
         "currencyDisplay",
@@ -101,9 +107,6 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     );
     set_internal_field(obj, KEY_NF_UNIT_DISPLAY, string_value(&unit_display));
 
-    if style == "currency" && currency.is_none() {
-        throw_type_error("Currency code is required with currency style.");
-    }
     if style == "unit" && unit.is_none() {
         throw_type_error("unit is required with unit style.");
     }

@@ -527,7 +527,9 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
         let c_ptr = (c_bits & POINTER_MASK) as *mut crate::closure::ClosureHeader;
         if !c_ptr.is_null() && (c_ptr as usize) >= 0x1000 {
             // Read the type_tag at offset 12 (layout: func_ptr u64, capture_count u32, type_tag u32).
-            let type_tag = std::ptr::read_volatile((c_ptr as *const u8).add(12) as *const u32);
+            let type_tag = std::ptr::read_volatile(
+                (c_ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+            );
             if type_tag == crate::closure::CLOSURE_MAGIC {
                 let raw_count = (*c_ptr).capture_count;
                 let real_count = crate::closure::real_capture_count(raw_count);
@@ -568,7 +570,9 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
     if c_tag == POINTER_TAG {
         let c_ptr = (c_bits & POINTER_MASK) as *mut crate::closure::ClosureHeader;
         if !c_ptr.is_null() && (c_ptr as usize) >= 0x1000 {
-            let type_tag = std::ptr::read_volatile((c_ptr as *const u8).add(12) as *const u32);
+            let type_tag = std::ptr::read_volatile(
+                (c_ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+            );
             if type_tag == crate::closure::CLOSURE_MAGIC {
                 let raw_count = (*c_ptr).capture_count;
                 let real_count = crate::closure::real_capture_count(raw_count);

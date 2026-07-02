@@ -254,6 +254,13 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+    let explain_lowering = if args.explain_lowering {
+        Some(lowering_report::ExplainLoweringRun::prepare(
+            &ctx.cache_root,
+        )?)
+    } else {
+        None
+    };
     // Resolve the on-disk cache directory ONCE, here, before any cache
     // consumer runs. Precedence: `--cache-dir` → `PERRY_CACHE_DIR` →
     // perry.toml `[perry] cacheDir` → package.json `perry.cacheDir` →
@@ -1678,6 +1685,7 @@ pub fn run_with_parse_cache(
     // Key derivation: `compute_object_cache_key(opts, source_hash, perry_version)`.
     let cache_env_disabled = std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
     let verify_native_regions = args.verify_native_regions
+        || args.explain_lowering
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
     let disable_buffer_fast_path = args.disable_buffer_fast_path
         || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
@@ -4713,6 +4721,10 @@ pub fn run_with_parse_cache(
             eprintln!("runtime (and may crash if actually invoked).");
             eprintln!();
         }
+    }
+
+    if let Some(explain_lowering) = explain_lowering.as_ref() {
+        explain_lowering.emit(format)?;
     }
 
     // #835 + #846: fold the codegen-side FFI provenance registry into

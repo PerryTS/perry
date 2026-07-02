@@ -817,6 +817,29 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn js_typed_feedback_native_call_method_by_id(
+    site_id: u64,
+    object: f64,
+    method_id: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    js_typed_feedback_native_call_method(
+        site_id,
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_ptr,
+        args_len,
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
     site_id: u64,
     object: f64,
@@ -857,6 +880,27 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
         record_fallback_call(site_id);
     }
     crate::object::js_native_call_method_apply(object, method_name_ptr, method_name_len, args_array)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply_by_id(
+    site_id: u64,
+    object: f64,
+    method_id: i64,
+    args_array: i64,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    js_typed_feedback_native_call_method_apply(
+        site_id,
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_array,
+    )
 }
 
 #[no_mangle]
@@ -1006,4 +1050,5 @@ mod keep_guard_symbols {
     #[used] static G1E: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
     #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
+    #[used] static G4: unsafe extern "C" fn(f64, u32, *const ArrayHeader) -> i32 = js_method_direct_shape_guard;
 }

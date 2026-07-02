@@ -430,13 +430,32 @@ pub fn check_escapes_in_expr(
         }
         Expr::Call { callee, args, .. } => {
             // Method-call form: `local.method(...)` needs a real heap `this`
-            // pointer. HIR exact-receiver inlining is the layer that may prove
-            // a safe `return this.field` replacement; if a method call reaches
-            // codegen as a call, keep the receiver allocated.
+            // pointer unless a conservative method summary proves that the
+            // body is just a numeric expression over `this.field`, literals,
+            // and fixed numeric params. That summary lets codegen inline the
+            // body against scalar field slots instead of dispatching with a
+            // heap receiver.
             if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if candidates.contains_key(id) {
-                        escaped.insert(*id);
+                        let is_summarized = if let Expr::PropertyGet { property, .. } =
+                            callee.as_ref()
+                        {
+                            candidates.get(id).is_some_and(|class_name| {
+                                crate::collectors::simple_scalar_method_summary(
+                                    classes,
+                                    class_name,
+                                    property,
+                                    args.len(),
+                                )
+                                .is_some()
+                            })
+                        } else {
+                            false
+                        };
+                        if !is_summarized {
+                            escaped.insert(*id);
+                        }
                     }
                 }
             }

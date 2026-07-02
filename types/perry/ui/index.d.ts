@@ -1844,6 +1844,23 @@ export function onActivate(callback: () => void): void;
 export function appSetTimer(intervalMs: number, callback: () => void): void;
 export function appSetTimer(app: Widget, intervalMs: number, callback: () => void): void;
 
+/**
+ * Set the application activation policy. Call before `App()`.
+ *
+ * - `"regular"` (default): normal app — dock icon, app-switcher entry,
+ *   main window auto-presented at launch.
+ * - `"accessory"`: menu-bar / status-item app — **no dock icon**, no
+ *   app-switcher entry, and on macOS the launch window is **not**
+ *   auto-presented (open windows on demand from the tray instead). The
+ *   macOS equivalent of `LSUIElement`.
+ * - `"background"`: fully background (`NSApplicationActivationPolicy.Prohibited`);
+ *   also suppresses the launch window on macOS.
+ *
+ * Windows: `accessory`/`background` hide the taskbar button. Linux/GTK4:
+ * maps to the equivalent hint. No-op on mobile/TV backends.
+ */
+export function appSetActivationPolicy(policy: "regular" | "accessory" | "background"): void;
+
 // ---------------------------------------------------------------------------
 // Embed
 // ---------------------------------------------------------------------------

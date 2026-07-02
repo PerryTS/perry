@@ -6,7 +6,9 @@
 use super::dispatch::{
     self, boolean, field_u16, field_u8, ok_or_throw, raw_arg, string, undefined,
 };
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::{Calendar, PlainDateTime};
 
@@ -65,7 +67,7 @@ fn coerce_dt(v: f64) -> PlainDateTime {
 /// throws before options are read, and a bag reads its fields first). `opts` is
 /// `undefined` for `compare`/`until`/`since` (no options arg).
 fn coerce_dt_with_opts(v: f64, opts: f64) -> PlainDateTime {
-    match temporal_value_ref(v) {
+    match temporal_value_ref_or_subclass(v) {
         Some(TemporalValue::PlainDateTime(dt)) => {
             let dt = dt.clone();
             let _ = super::options::overflow(opts);

@@ -16,7 +16,7 @@ perry-ffi.workspace = true
 # unresolved at the final link step on hosts that don't ship
 # libsqlite3 in the default search path (or where the system one
 # is too old).
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

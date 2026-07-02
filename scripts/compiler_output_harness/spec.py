@@ -83,6 +83,10 @@ def validate_workload_spec(data: dict[str, Any]) -> None:
                 raise HarnessError(
                     f"workload {name!r} native_rep_checks.allow_materialization_reasons must be a list"
                 )
+            if not isinstance(native_rep_checks.get("materialization_regions", []), list):
+                raise HarnessError(
+                    f"workload {name!r} native_rep_checks.materialization_regions must be a list"
+                )
             for required in native_rep_checks.get("require_records", []) or []:
                 if not isinstance(required, dict) or not required.get("name"):
                     raise HarnessError(
