@@ -263,7 +263,7 @@ pub fn try_lower_namespace_member_call(
     let origin_suffix =
         crate::expr::import_origin_suffix(ctx.import_function_origin_names, property);
     let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-    if ctx.imported_vars.contains(property) {
+    if ctx.imported_vars.contains(property) || ctx.imported_vars.contains(origin_suffix) {
         // Var-shaped export: fetch closure via zero-arg
         // getter, then closure-call with the user args.
         ctx.pending_declares.push((symbol.clone(), DOUBLE, vec![]));
@@ -290,10 +290,18 @@ pub fn try_lower_namespace_member_call(
     // Function-decl-shaped export: direct call with rest bundling.
     let declared_count = ctx
         .imported_func_param_counts
-        .get(property)
+        .get(origin_suffix)
+        .or_else(|| ctx.imported_func_param_counts.get(property))
         .copied()
-        .unwrap_or(args.len());
-    let has_rest = ctx.imported_func_has_rest.contains(property);
+        .unwrap_or_else(|| {
+            if args.is_empty() && origin_suffix != property {
+                1
+            } else {
+                args.len()
+            }
+        });
+    let has_rest = ctx.imported_func_has_rest.contains(origin_suffix)
+        || ctx.imported_func_has_rest.contains(property);
     let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
     if has_rest {
         let fixed_count = declared_count.saturating_sub(1);
