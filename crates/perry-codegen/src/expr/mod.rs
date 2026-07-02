@@ -2381,5 +2381,3 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
         _ => Ok(None),
     }
 }
-
-

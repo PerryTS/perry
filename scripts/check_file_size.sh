@@ -67,6 +67,30 @@ crates/perry-runtime/src/node_vm.rs
 # bodies. The file is 2018 lines (18 over the gate). A structural split of the
 # generator for-of lowering into a sibling module is tracked as a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs
+# --- Representation-aware type lowering (#5466 / #5464) ---
+# These files crossed the gate on the type-lowering branch (native i32/u32/f64/
+# i128/StringRef reps, guarded fast/fallback splits, and the material-evidence
+# artifact plumbing). Each already delegates to sibling modules where the split
+# was mechanical; the remainders are the coupled cores (typed-clone decision
+# tables, packed-loop versioning, evidence recording) whose decomposition is a
+# focused follow-up under #1435 rather than a merge-time file cut.
+crates/perry-codegen/src/codegen/mod.rs
+crates/perry-codegen/src/collectors/hir_facts.rs
+crates/perry-codegen/src/expr/mod.rs
+crates/perry-codegen/src/stmt/loops.rs
+crates/perry-runtime/src/map.rs
+crates/perry-runtime/src/set.rs
+crates/perry-runtime/src/typed_feedback.rs
+# Typed-feedback + native-ABI evidence regression suites: table-driven test
+# bodies (one fn per proof shape, 185 codegen regression tests). Length tracks
+# proof-surface breadth, not complexity; splitting is a test-organization
+# follow-up (part is already peeled into native_proof_regressions/*.rs).
+crates/perry-codegen/tests/native_proof_regressions.rs
+crates/perry-runtime/src/typed_feedback/tests.rs
+# `--explain-lowering` report builder: one report schema (aggregation structs +
+# JSON/pretty emitters + self-tests in one file). Splitting the emitters from
+# the schema they render obscures the report contract; revisit if it grows.
+crates/perry/src/commands/compile/lowering_report.rs
 EOF
 )
 

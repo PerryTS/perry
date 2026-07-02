@@ -2011,7 +2011,6 @@ fn artifact_records_native_module_handle_and_promise_boundary_boxing() {
     );
 }
 
-
 #[path = "native_proof_regressions/native_library.rs"]
 mod native_library;
 
@@ -2135,7 +2134,6 @@ fn oversized_bigint_literal_records_small_bigint_rejection_and_falls_back() {
         "expected oversized BigInt literal rejection evidence before fallback:\n{artifact:#}"
     );
 }
-
 
 #[test]
 fn packed_f64_loop_store_update_versions_with_side_exit() {
@@ -2557,6 +2555,67 @@ fn packed_i32_loop_store_rejects_fractional_number_rhs() {
             )
         }),
         "fractional-capable Int32[] store should not record packed loop store facts:\n{artifact:#}"
+    );
+}
+
+/// #5464 follow-up: `PerryU32[]` stores have NO packed-u32 store fast path —
+/// the IndexSet lowering routes U32 facts to the generic array-store path
+/// (full-value F64 store; every uint32 is exactly representable in f64), and
+/// the defensive U32 arm in `lower_packed_numeric_loop_store_value` degrades
+/// to the same full-value store instead of `bail!`ing. This pins the fast/slow
+/// round-trip equivalence for the unsigned lane: whichever loop clone runs,
+/// the stored element is the exact ToUint32 value (`(v + 1) >>> 0`), so a
+/// wrap-range update (`4_000_000_000 + 1`) reads back identically — it must
+/// never detour through the SIGNED packed-i32 lane, whose `fptosi` would flip
+/// values above `i32::MAX` negative.
+#[test]
+fn packed_u32_loop_store_routes_to_generic_full_value_store() {
+    let module = module_with_classes_and_params(
+        "packed_u32_store_generic_routing.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            u32_array_let(1, "values", vec![0, 4_000_000_000]),
+            for_loop(
+                4,
+                length(1),
+                vec![array_set(
+                    1,
+                    local(4),
+                    ushr_zero(add(index_get(1, local(4)), int(1))),
+                )],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        !ir.contains("packed_u32_loop_store."),
+        "PerryU32[] store must not emit a packed-u32 store block (no such fast path):\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_i32_array_loop_guard"),
+        "PerryU32[] store loop must not claim the signed packed-i32 guard:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "PackedU32LoopStore"
+                || record["consumer"] == "packed_u32_loop_store"
+        }),
+        "PerryU32[] stores must route to the generic array-store path, not a packed-u32 store:\n{artifact:#}"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("PackedI32Loop"))
+        }),
+        "PerryU32[] store loop must not record signed packed-i32 loop facts:\n{artifact:#}"
     );
 }
 
@@ -6198,7 +6257,6 @@ fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
         "later read should use its own guarded numeric-array get, not a packed-loop raw load:\n{artifact:#}"
     );
 }
-
 
 #[test]
 fn artifact_records_array_push_value_bits_before_slot_store() {
@@ -13153,7 +13211,6 @@ fn static_name_class_method_value_uses_method_id_bind_wrapper() {
         "static-name class method value reads should not pass raw name bytes:\n{ir}"
     );
 }
-
 
 #[test]
 fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
