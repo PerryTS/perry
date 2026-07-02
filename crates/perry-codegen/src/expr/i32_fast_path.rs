@@ -17,47 +17,78 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, F32, I32, I64};
 
-/// Returns true if `e` is guaranteed to produce a finite double value
-/// (not NaN, not ±Infinity). Used to skip the NaN/Inf guard in `toint32`
-/// for integer-arithmetic hot paths — saving 5 instructions per bitwise op.
+/// Returns true if `e` provably produces a finite double whose magnitude is
+/// small enough (`|v| < 2^63`) for the unguarded `toint32_fast` lowering.
+/// Used to skip the NaN/Inf/range guard in `toint32` for integer-arithmetic
+/// hot paths — saving 5 instructions per bitwise op.
 pub(crate) fn is_known_finite(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    known_finite_magnitude_bits(ctx, e).is_some_and(|bits| bits <= 62)
+}
+
+/// Conservative magnitude bound for `e`'s numeric value: `Some(b)` proves the
+/// value is finite AND `|v| < 2^b`. `toint32_fast` is a bare
+/// `fptosi f64 → i64` + `trunc` — exactly JS ToInt32 for every `|v| < 2^63`,
+/// but LLVM *poison* at or beyond it. Finiteness alone is NOT enough:
+/// `(1e20) | 0` and nested integer multiplies (`(a*a)*a | 0` with i32-range
+/// `a`) are finite yet exceed 2^63, and pre-fix produced NaN instead of the
+/// ToInt32-wrapped value (CodeRabbit review on #5466; the same hole shipped
+/// on main). Composition keeps the proof airtight where the old boolean
+/// recursion silently escalated: Add/Sub grow the bound by one bit, Mul sums
+/// the operand bounds, and anything unprovable returns `None` so callers fall
+/// back to the guarded `toint32` runtime helper.
+fn known_finite_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
     match e {
-        Expr::Integer(_)
-        | Expr::PodLayoutSizeOf { .. }
+        Expr::Integer(n) => Some(64 - n.unsigned_abs().leading_zeros()),
+        // Pod layout sizes/alignments/offsets are u32-class quantities.
+        Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
-        | Expr::PodLayoutOffsetOf { .. } => true,
+        | Expr::PodLayoutOffsetOf { .. } => Some(32),
         // Number literals can be NaN or ±Infinity (e.g., `Number(NaN)`,
-        // `Number(f64::INFINITY)`). Inspect the value: only true f64
-        // finites can use the toint32_fast path. Without this check
-        // `(NaN) | 0` and `(Infinity) | 0` hit fast-path `fptosi NaN`,
-        // which is poison in LLVM and produced subnormal-double output
-        // (which downstream code interpreted as a NaN-boxed string with
+        // `Number(f64::INFINITY)`). Inspect the value: `fptosi NaN` is
+        // poison in LLVM and produced subnormal-double output (which
+        // downstream code interpreted as a NaN-boxed string with
         // STRING_TAG bits, leading to garbled `console.log` output).
-        Expr::Number(n) => n.is_finite(),
-        Expr::LocalGet(id) => {
-            ctx.integer_locals.contains(id) || ctx.unsigned_i32_locals.contains(id)
+        Expr::Number(n) => {
+            if !n.is_finite() {
+                return None;
+            }
+            let magnitude = n.abs();
+            if magnitude < 1.0 {
+                Some(0)
+            } else {
+                Some(magnitude.log2() as u32 + 1)
+            }
         }
-        Expr::Update { id, .. } => {
-            ctx.integer_locals.contains(id) || ctx.unsigned_i32_locals.contains(id)
-        }
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
-        Expr::MathImul(_, _) => true, // Math.imul returns i32 → always finite
+        Expr::LocalGet(id) | Expr::Update { id, .. } => (ctx.integer_locals.contains(id)
+            || ctx.unsigned_i32_locals.contains(id))
+        .then_some(32),
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => Some(8),
+        Expr::MathImul(_, _) => Some(32), // Math.imul returns i32 → always finite
         Expr::Call { callee, .. } => {
             matches!(callee.as_ref(), Expr::FuncRef(fid) if ctx.integer_returning_functions.contains(fid))
+                .then_some(32)
         }
         Expr::Binary { op, left, right } => match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
-                is_known_finite(ctx, left) && is_known_finite(ctx, right)
+            BinaryOp::Add | BinaryOp::Sub => {
+                let l = known_finite_magnitude_bits(ctx, left)?;
+                let r = known_finite_magnitude_bits(ctx, right)?;
+                Some(l.max(r) + 1)
             }
+            BinaryOp::Mul => {
+                let l = known_finite_magnitude_bits(ctx, left)?;
+                let r = known_finite_magnitude_bits(ctx, right)?;
+                Some(l + r)
+            }
+            // Bitwise results are already ToInt32/ToUint32-wrapped.
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
             | BinaryOp::Shr
-            | BinaryOp::UShr => true,
-            _ => false,
+            | BinaryOp::UShr => Some(32),
+            _ => None,
         },
-        _ => false,
+        _ => None,
     }
 }
 

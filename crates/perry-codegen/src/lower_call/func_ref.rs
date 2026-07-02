@@ -324,6 +324,7 @@ pub fn try_lower_func_ref_call(
     let typed_i1_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
+        && ctx.typed_i1_functions.contains(fid)
         && declared_count == args.len()
     {
         ctx.typed_i1_function_param_reps

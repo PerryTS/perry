@@ -66,7 +66,7 @@ The harness also captures best-effort explanation counters:
 
 ## Native ABI Evidence Packet Matrix
 
-`scripts/native_abi_evidence_packet.sh --gate` aggregates the
+`scripts/native_abi_evidence_packet.sh --gate` (with `--runs >= 5`) aggregates the
 `native-abi-proof` compiler-output suite into
 `native-abi-evidence.json` and `native-abi-evidence.md`. The packet is the
 representative material type-lowering gate for PRs and release sweeps.

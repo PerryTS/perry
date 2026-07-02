@@ -82,6 +82,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.floor.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.ceil.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.fabs.f64", DOUBLE, &[DOUBLE]);
+    module.declare_function("llvm.trunc.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.copysign.f64", DOUBLE, &[DOUBLE, DOUBLE]);
     // `llvm.assume` — used by Buffer index-set/get fast paths
     // (`crates/perry-codegen/src/expr.rs::Expr::BufferIndexSet/Get` etc.)

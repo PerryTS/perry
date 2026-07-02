@@ -98,6 +98,18 @@ impl TypedFeedbackContract {
         Self::new("plain_array_index_set_guard", "js_array_set_f64_extend")
     }
 
+    /// Runtime-key array store (`arr[k] = v` where `k` may be a string):
+    /// the emitted edge is `js_typed_feedback_array_set_index_or_string`,
+    /// so the contract must name that helper — not the numeric-only
+    /// `js_array_set_f64_extend` — for the evidence packet to describe the
+    /// dispatch actually taken.
+    pub(crate) const fn array_set_index_or_string() -> Self {
+        Self::new(
+            "plain_array_index_set_guard",
+            "js_typed_feedback_array_set_index_or_string",
+        )
+    }
+
     // #854: near-future typed-feedback contract seam, not yet emitted.
     #[allow(dead_code)]
     pub(crate) const fn bounded_array_set_index() -> Self {

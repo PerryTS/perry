@@ -490,9 +490,15 @@ impl LlBlock {
         r
     }
 
-    /// ECMAScript ToInt32: `fptosi` with a NaN/Infinity guard.
-    /// JS ToInt32: NaN and ±Infinity produce 0 (per spec), normal values
-    /// go through `fptosi(f64→i64) + trunc(i64→i32)`.
+    /// ECMAScript ToInt32. NaN and ±Infinity produce 0 (per spec); every
+    /// finite value truncates toward zero and reduces modulo 2^32 before the
+    /// two's-complement reinterpretation. The modular step matters: a bare
+    /// `fptosi` is LLVM poison for finite `|v| >= 2^63`, so `(1e20) | 0`
+    /// printed NaN instead of 1661992960 (CodeRabbit review on #5466; the
+    /// hole predates the branch). This mirrors the runtime's
+    /// `to_uint32_bits` (`trunc` + `rem_euclid(2^32)`) in f64 space,
+    /// branchlessly: `frem` keeps the dividend's sign, so a negative
+    /// remainder wraps up by 2^32 into `[0, 2^32)` before `fptoui`.
     pub fn toint32(&mut self, val: &str) -> String {
         use crate::types::{DOUBLE, I1, I32, I64};
         let is_nan = self.fcmp("uno", val, "0.0");
@@ -500,7 +506,13 @@ impl LlBlock {
         let is_inf = self.fcmp("oeq", &fabs, "0x7FF0000000000000");
         let is_bad = self.or(I1, &is_nan, &is_inf);
         let safe = self.select(I1, &is_bad, DOUBLE, "0.0", val);
-        let as_i64 = self.fptosi(DOUBLE, &safe, I64);
+        let truncated = self.call(DOUBLE, "llvm.trunc.f64", &[(DOUBLE, &safe)]);
+        // 0x41F0000000000000 == 2^32 as an f64 literal.
+        let rem = self.frem(&truncated, "0x41F0000000000000");
+        let is_neg = self.fcmp("olt", &rem, "0.0");
+        let wrapped = self.fadd(&rem, "0x41F0000000000000");
+        let canonical = self.select(I1, &is_neg, DOUBLE, &wrapped, &rem);
+        let as_i64 = self.fptoui(DOUBLE, &canonical, I64);
         self.trunc(I64, &as_i64, I32)
     }
 

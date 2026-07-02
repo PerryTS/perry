@@ -461,12 +461,14 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
     // Apply ToNumber first so that ~"3", ~true, ~new Boolean(true), etc.
     // coerce correctly before the ToInt32 truncation.
     let a_num = crate::builtins::js_number_coerce(a);
-    // ES ToInt32: NaN, ±0, ±Infinity all map to 0; finite values use
-    // C-style i64 truncation (equivalent to modulo-2^32 + sign-extend).
+    // ES ToInt32: NaN, ±0, ±Infinity all map to 0; finite values truncate
+    // toward zero and reduce modulo 2^32. `as i64` is NOT equivalent — it
+    // saturates for |v| >= 2^63, so `~(1e20)` came out as `~(-1)` == 0
+    // instead of -1661992961 (CodeRabbit review on #5466).
     let a_i32 = if a_num.is_nan() || !a_num.is_finite() {
         0i32
     } else {
-        a_num as i64 as i32
+        a_num.trunc().rem_euclid(4294967296.0) as u32 as i32
     };
     (!a_i32) as f64
 }

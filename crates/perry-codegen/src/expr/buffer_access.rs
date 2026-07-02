@@ -270,10 +270,20 @@ pub(crate) fn lower_buffer_access_proof(
         _ => return Ok(None),
     };
 
-    if matches!(
-        ctx.buffer_hazard_reasons.get(&buffer_local_id),
-        Some(MaterializationReason::ClosureCapture)
-    ) {
+    // A closure-captured buffer local is hazardous even before any escape
+    // walk stamped `buffer_hazard_reasons` — the closure may mutate/realloc
+    // the buffer between the proof and the access. Consult the capture map
+    // directly (mirroring `buffer_access_materialization_reason`) and persist
+    // the decision so later gates agree.
+    if ctx.closure_captures.contains_key(&buffer_local_id)
+        || matches!(
+            ctx.buffer_hazard_reasons.get(&buffer_local_id),
+            Some(MaterializationReason::ClosureCapture)
+        )
+    {
+        ctx.buffer_hazard_reasons
+            .entry(buffer_local_id)
+            .or_insert(MaterializationReason::ClosureCapture);
         return Ok(None);
     }
 

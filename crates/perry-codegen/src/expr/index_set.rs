@@ -240,7 +240,7 @@ fn lower_array_index_set_via_runtime_key(
         ctx,
         TypedFeedbackKind::ArrayElement,
         source_label,
-        TypedFeedbackContract::array_set_index(),
+        TypedFeedbackContract::array_set_index_or_string(),
     );
     let new_handle = ctx.block().call(
         I64,
@@ -820,7 +820,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     TypedFeedbackKind::ArrayElement,
                     "array[dynamic_index]",
-                    TypedFeedbackContract::array_set_index(),
+                    TypedFeedbackContract::array_set_index_or_string(),
                 );
                 ctx.block().call(
                     I64,
