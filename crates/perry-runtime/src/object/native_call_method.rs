@@ -1221,6 +1221,28 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             }
         }
+
+        if matches!(method_name, "toString" | "toLocaleString" | "valueOf") {
+            let method_key =
+                crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+            if !method_key.is_null() {
+                let method = super::js_object_get_field_by_name(obj, method_key);
+                if !method.is_undefined() && !method.is_null() {
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        method.bits(),
+                        f64::from_bits(jsval.bits()),
+                    );
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
+                    let result = crate::closure::js_native_call_value(
+                        f64::from_bits(bound),
+                        args_ptr,
+                        args_len,
+                    );
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
+            }
+        }
     }
 
     // Issue #510: throw `TypeError: <expr> is not a function` when

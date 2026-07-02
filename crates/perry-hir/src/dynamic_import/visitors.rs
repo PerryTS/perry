@@ -437,6 +437,11 @@ fn visit_expr_for_dyn_imports_ref<F: FnMut(&Expr)>(expr: &Expr, f: &mut F) {
     if matches!(expr, Expr::DynamicImport { .. }) {
         f(expr);
     }
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            visit_stmt_for_dyn_imports_ref(s, f);
+        }
+    }
     walk_expr_children(expr, &mut |child| visit_expr_for_dyn_imports_ref(child, f));
 }
 

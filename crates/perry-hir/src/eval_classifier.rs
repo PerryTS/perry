@@ -319,20 +319,21 @@ pub fn eval_override_enabled() -> bool {
     env_flag("PERRY_ALLOW_EVAL")
 }
 
-/// Whether `PERRY_EVAL_CSP` is set — present runtime dynamic-code generation as
-/// *unavailable* to capability probes. With it set, a trivial no-op
-/// `new Function("")` / `Function("")` (the canonical
-/// `try { new Function(""), true } catch { false }` feature-test — the same
-/// shape a CSP `unsafe-eval` policy blocks) throws at construction instead of
-/// const-folding to a no-op function. Libraries that probe this way (e.g. zod 4's
-/// object-validator JIT) then take their non-codegen interpreter fallback, which
-/// perry compiles normally. Default off (spec-compliant: Node returns an empty
-/// function); opt-in for ahead-of-time binaries that hit such a JIT. Only the
-/// trivial no-op shape is affected — real literal bodies (`new Function("return
-/// 42")`, the `return this` globalThis polyfill) still fold, so those idioms are
-/// unaffected.
+/// Whether trivial dynamic-codegen capability probes should report unavailable.
+/// A no-op `new Function("")` / `Function("")` is commonly used as an
+/// `unsafe-eval` feature-test. Perry is ahead-of-time compiled, so the default
+/// is to throw at construction for that probe shape and let callers select their
+/// non-codegen fallback. Set `PERRY_EVAL_CSP=0` to opt back into const-folding
+/// the empty function. Real literal bodies (`new Function("return 42")`, the
+/// `return this` globalThis polyfill) still fold.
 pub fn eval_csp_probe_unavailable() -> bool {
-    env_flag("PERRY_EVAL_CSP")
+    match std::env::var("PERRY_EVAL_CSP") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !matches!(v.as_str(), "" | "0" | "off" | "false" | "no")
+        }
+        Err(_) => true,
+    }
 }
 
 /// Whether `PERRY_ALLOW_UNIMPLEMENTED` is set — forces non-strict (defer) mode

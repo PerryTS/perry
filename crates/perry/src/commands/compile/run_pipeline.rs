@@ -2279,6 +2279,12 @@ pub fn run_with_parse_cache(
             // member_name)` → `source_prefix`.
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
+            let mut namespace_member_origin_names: std::collections::HashMap<(String, String), String> =
+                std::collections::HashMap::new();
+            let mut namespace_member_vars: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+            let mut namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String> =
+                std::collections::HashMap::new();
             let mut namespace_import_prefixes: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
@@ -2449,6 +2455,19 @@ pub fn run_with_parse_cache(
                         if let Some(target_mod) = ctx.native_modules.get(&resolved_key) {
                             let prefix = sanitize_name(&target_mod.name);
                             namespace_import_prefixes.insert(local.clone(), prefix);
+                            let lookup = |s: &str| module_name_to_module.get(s);
+                            for entry in perry_hir::flatten_exports(&target_mod.name, &lookup) {
+                                if let Some(nested_module_name) = entry.nested_namespace_of {
+                                    let nested_prefix = module_name_to_module
+                                        .get(&nested_module_name)
+                                        .map(|m| sanitize_module_name(&m.name))
+                                        .unwrap_or_else(|| sanitize_module_name(&nested_module_name));
+                                    namespace_member_namespace_prefixes.insert(
+                                        (local.clone(), entry.name),
+                                        nested_prefix,
+                                    );
+                                }
+                            }
                         }
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
@@ -2480,6 +2499,14 @@ pub fn run_with_parse_cache(
                                     (local.clone(), export_name.clone()),
                                     origin_prefix.clone(),
                                 );
+                                if let Some(ref origin_name) = resolved_origin_name {
+                                    if origin_name != export_name {
+                                        namespace_member_origin_names.insert(
+                                            (local.clone(), export_name.clone()),
+                                            origin_name.clone(),
+                                        );
+                                    }
+                                }
 
                                 let key = (origin_path.clone(), export_name.clone());
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
@@ -2528,6 +2555,7 @@ pub fn run_with_parse_cache(
                                         .unwrap_or(false)
                                 {
                                     imported_vars.insert(export_name.clone());
+                                    namespace_member_vars.insert((local.clone(), export_name.clone()));
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
                                     let class_prefix = canonical_class_source_prefix(
@@ -2693,6 +2721,79 @@ pub fn run_with_parse_cache(
                     // name, then route the local through `namespace_imports`
                     // + register the namespace target's full export surface.
                     let mut handled_as_namespace_reexport = false;
+                    macro_rules! register_namespace_export_surface {
+                        ($namespace_local:expr, $target_path:expr) => {{
+                            let target_path_str = $target_path;
+                            let target_key = normalize_namespace_path(PathBuf::from(target_path_str));
+                            if let Some(target_hir_for_ns) = ctx.native_modules.get(&target_key) {
+                                let lookup = |s: &str| module_name_to_module.get(s);
+                                for entry in perry_hir::flatten_exports(&target_hir_for_ns.name, &lookup) {
+                                    if let Some(nested_module_name) = entry.nested_namespace_of {
+                                        let nested_prefix = module_name_to_module
+                                            .get(&nested_module_name)
+                                            .map(|m| sanitize_module_name(&m.name))
+                                            .unwrap_or_else(|| sanitize_module_name(&nested_module_name));
+                                        namespace_member_namespace_prefixes.insert(
+                                            ($namespace_local.clone(), entry.name),
+                                            nested_prefix,
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some(target_exports) = all_module_exports.get(target_path_str) {
+                                for (export_name, origin_path) in target_exports {
+                                    let origin_prefix =
+                                        compute_module_prefix(origin_path, &ctx.project_root);
+                                    import_function_prefixes
+                                        .insert(export_name.clone(), origin_prefix.clone());
+                                    namespace_member_prefixes.insert(
+                                        ($namespace_local.clone(), export_name.clone()),
+                                        origin_prefix.clone(),
+                                    );
+                                    let resolved_origin_name = all_module_export_origin_names
+                                        .get(target_path_str)
+                                        .and_then(|m| m.get(export_name))
+                                        .cloned();
+                                    if let Some(ref origin_name) = resolved_origin_name {
+                                        if origin_name != export_name {
+                                            import_function_origin_names
+                                                .insert(export_name.clone(), origin_name.clone());
+                                            namespace_member_origin_names.insert(
+                                                ($namespace_local.clone(), export_name.clone()),
+                                                origin_name.clone(),
+                                            );
+                                        }
+                                    }
+
+                                    let key = (origin_path.clone(), export_name.clone());
+                                    if let Some(&param_count) = exported_func_param_counts.get(&key)
+                                    {
+                                        imported_param_counts
+                                            .insert(export_name.clone(), param_count);
+                                    }
+                                    if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
+                                        imported_has_rest.insert(export_name.clone());
+                                    }
+                                    if exported_func_synthetic_arguments.contains(&key) {
+                                        imported_synthetic_arguments.insert(export_name.clone());
+                                    }
+                                    let origin_key_under_origin_name = resolved_origin_name
+                                        .as_ref()
+                                        .map(|n| (origin_path.clone(), n.clone()));
+                                    if exported_var_names.contains(&key)
+                                        || origin_key_under_origin_name
+                                            .as_ref()
+                                            .map(|k| exported_var_names.contains(k))
+                                            .unwrap_or(false)
+                                    {
+                                        imported_vars.insert(export_name.clone());
+                                        namespace_member_vars
+                                            .insert(($namespace_local.clone(), export_name.clone()));
+                                    }
+                                }
+                            }
+                        }};
+                    }
                     if let Some(src_hir) = source_module {
                         let direct_namespace_source = src_hir.imports.iter().find_map(|import| {
                             import.specifiers.iter().find_map(|spec| match spec {
@@ -2711,6 +2812,7 @@ pub fn run_with_parse_cache(
                                 namespace_imports.push(local_name.clone());
                                 namespace_import_prefixes
                                     .insert(local_name.clone(), sanitize_name(&target_mod.name));
+                                register_namespace_export_surface!(local_name, namespace_source);
                                 continue;
                             }
                         }
@@ -2732,6 +2834,11 @@ pub fn run_with_parse_cache(
                                     namespace_import_prefixes.insert(
                                         local_name.clone(),
                                         sanitize_name(&target_mod.name),
+                                    );
+                                    let namespace_path_str = namespace_path.to_string_lossy();
+                                    register_namespace_export_surface!(
+                                        local_name,
+                                        namespace_path_str.as_ref()
                                     );
                                     continue;
                                 }
@@ -2766,6 +2873,7 @@ pub fn run_with_parse_cache(
                             namespace_imports.push(local_name.clone());
                             namespace_import_prefixes
                                 .insert(local_name.clone(), sanitize_name(&target_mod.name));
+                            register_namespace_export_surface!(local_name, namespace_source);
                             handled_as_namespace_reexport = true;
                             break;
                         }
@@ -2804,6 +2912,7 @@ pub fn run_with_parse_cache(
                                 // expr.rs StaticMethodCall comment for why this
                                 // is scoped narrowly.
                                 namespace_reexport_named_imports.insert(local_name.clone());
+                                register_namespace_export_surface!(local_name, ns_target_str.as_str());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
@@ -4159,6 +4268,9 @@ pub fn run_with_parse_cache(
                 namespace_node_submodules,
                 namespace_v8_specifiers,
                 namespace_member_prefixes,
+                namespace_member_origin_names,
+                namespace_member_vars,
+                namespace_member_namespace_prefixes,
                 namespace_import_prefixes,
                 emit_ir_only: bitcode_link,
                 verify_native_regions,

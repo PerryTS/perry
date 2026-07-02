@@ -175,6 +175,15 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// Per-namespace member origin-name overrides. Keyed by
+    /// `(namespace_local_name, exported_member_name)` → `origin_export_name`.
+    pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
+    /// Per-namespace exported-variable members. Keyed by
+    /// `(namespace_local_name, exported_member_name)`.
+    pub namespace_member_vars: std::collections::HashSet<(String, String)>,
+    /// Per-namespace nested namespace re-exports. Keyed by
+    /// `(namespace_local_name, exported_member_name)` → nested module prefix.
+    pub namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String>,
     /// Namespace import local → target module prefix. Used when the namespace
     /// binding itself is read as a value so codegen can return the producer's
     /// real module namespace object, including nested `export * as` members.
@@ -571,6 +580,12 @@ pub(crate) struct CrossModuleCtx {
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// See `CompileOptions::namespace_member_origin_names`.
+    pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
+    /// See `CompileOptions::namespace_member_vars`.
+    pub namespace_member_vars: std::collections::HashSet<(String, String)>,
+    /// See `CompileOptions::namespace_member_namespace_prefixes`.
+    pub namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String>,
     /// See `CompileOptions::namespace_import_prefixes`.
     pub namespace_import_prefixes: std::collections::HashMap<String, String>,
     pub imported_async_funcs: std::collections::HashSet<String>,

@@ -1216,6 +1216,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             namespace_extern_prefixes.insert(source_prefix.clone());
         }
     }
+    for source_prefix in cross_module.namespace_member_namespace_prefixes.values() {
+        if source_prefix != module_prefix {
+            namespace_extern_prefixes.insert(source_prefix.clone());
+        }
+    }
     for source_prefix in namespace_extern_prefixes {
         llmod.add_external_global(&format!("__perry_ns_{}", source_prefix), DOUBLE);
     }

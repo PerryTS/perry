@@ -1335,6 +1335,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
         }
 
+        if gc_type != crate::gc::GC_TYPE_OBJECT {
+            return false_val;
+        }
+
         // For user-defined classes that extend Error: `myErr instanceof Error` should be true.
         if class_id == crate::error::CLASS_ID_ERROR {
             let obj_class_id = (*obj_ptr).class_id;

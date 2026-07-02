@@ -439,6 +439,13 @@ pub(crate) struct FnCtx<'a> {
     /// by namespace member access lowering to disambiguate when the same
     /// export name appears in multiple `import * as X / Y` sources.
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
+    /// Per-namespace member origin-name overrides.
+    pub namespace_member_origin_names: &'a std::collections::HashMap<(String, String), String>,
+    /// Per-namespace exported-variable members.
+    pub namespace_member_vars: &'a std::collections::HashSet<(String, String)>,
+    /// Per-namespace nested namespace re-exports.
+    pub namespace_member_namespace_prefixes:
+        &'a std::collections::HashMap<(String, String), String>,
     /// Namespace import local → target module prefix for whole-namespace value
     /// reads.
     pub namespace_import_prefixes: &'a std::collections::HashMap<String, String>,

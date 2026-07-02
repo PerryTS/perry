@@ -238,7 +238,6 @@ pub fn try_lower_namespace_member_call(
         .namespace_member_prefixes
         .get(&(ns_name.clone(), property.clone()))
         .cloned()
-        .or_else(|| ctx.import_function_prefixes.get(property).cloned())
     else {
         return Ok(None);
     };
@@ -260,11 +259,17 @@ pub fn try_lower_namespace_member_call(
     // Issue #678: re-exported names (e.g. `export { default as
     // render }`) emit `perry_fn_<src>__default` in the origin —
     // resolve the actual origin suffix before forming the symbol.
-    let origin_suffix =
-        crate::expr::import_origin_suffix(ctx.import_function_origin_names, property);
+    let origin_suffix = ctx
+        .namespace_member_origin_names
+        .get(&(ns_name.clone(), property.clone()))
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| {
+            crate::expr::import_origin_suffix(ctx.import_function_origin_names, property)
+        });
     let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-    if ctx.imported_vars.contains(property)
-        || (origin_suffix != "default" && ctx.imported_vars.contains(origin_suffix))
+    if ctx
+        .namespace_member_vars
+        .contains(&(ns_name.clone(), property.clone()))
     {
         // Var-shaped export: fetch closure via zero-arg
         // getter, then closure-call with the user args.
