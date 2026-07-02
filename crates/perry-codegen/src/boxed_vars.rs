@@ -592,6 +592,13 @@ fn collect_self_recursive_closure_ids(
                     collect_self_recursive_closure_ids(&case.body, closure_refs, out);
                 }
             }
+            Stmt::Labeled { body, .. } => {
+                collect_self_recursive_closure_ids(
+                    std::slice::from_ref(body.as_ref()),
+                    closure_refs,
+                    out,
+                );
+            }
             _ => {}
         }
     }
@@ -637,6 +644,9 @@ fn collect_for_init_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                 for case in cases {
                     collect_for_init_ids(&case.body, out);
                 }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_for_init_ids(std::slice::from_ref(body.as_ref()), out);
             }
             _ => {}
         }
@@ -733,6 +743,12 @@ fn collect_closure_refs_and_writes_in_stmt(
                 }
                 collect_closure_refs_and_writes_in_stmts(&case.body, refs, writes);
             }
+        }
+        // Minified bundles wrap early-exit regions in labeled blocks
+        // (`e: { … break e; }`); a closure or reassignment inside one must
+        // still count toward boxing (#5869).
+        Stmt::Labeled { body, .. } => {
+            collect_closure_refs_and_writes_in_stmt(body, refs, writes);
         }
         _ => {}
     }
@@ -967,6 +983,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
                 collect_outer_writes_in_stmts(&case.body, out);
             }
         }
+        Stmt::Labeled { body, .. } => collect_outer_writes_in_stmt(body, out),
         _ => {}
     }
 }
@@ -1363,6 +1380,9 @@ pub(crate) fn collect_let_types_in_stmts(
                 for case in cases {
                     collect_let_types_in_stmts(&case.body, out);
                 }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_let_types_in_stmts(std::slice::from_ref(body.as_ref()), out);
             }
             _ => {}
         }
