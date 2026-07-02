@@ -387,16 +387,18 @@ fn reject_bare_islamic(id: &str) {
 
 // ---- `Temporal.*.prototype.toLocaleString` ---------------------------------
 
-/// `Temporal.*.prototype.toLocaleString` calendar check. A Temporal value
-/// renders only when its calendar matches the formatter's: the ISO-8601
-/// calendar (always permitted) or the calendar the locale resolves to. With no
-/// explicit `calendar` option that resolved calendar is the locale default,
-/// which Perry's `Intl.DateTimeFormat` reports as `gregory`. Any other calendar
-/// is a `RangeError` (the test262 `toLocaleString/calendar-mismatch` cases).
+/// `Temporal.*.prototype.toLocaleString` calendar check for `PlainDate`,
+/// `PlainDateTime`, and `ZonedDateTime` — per `HandleDateTimeTemporalDate`
+/// (ecma402 sup-intl.html #1107) and the analogous `ZonedDateTime` clause
+/// (#1953), a value renders only when its calendar matches the formatter's:
+/// the ISO-8601 calendar (always permitted) or the calendar the locale
+/// resolves to. With no explicit `calendar` option that resolved calendar is
+/// the locale default, which Perry's `Intl.DateTimeFormat` reports as
+/// `gregory`. Any other calendar is a `RangeError` (the test262
+/// `toLocaleString/calendar-mismatch` cases).
 ///
-/// Only the calendar-bearing types (`PlainDate`/`PlainDateTime`/`PlainYearMonth`
-/// /`PlainMonthDay`/`ZonedDateTime`) call this; `Instant`/`PlainTime` have no
-/// calendar slot.
+/// `PlainYearMonth`/`PlainMonthDay` do NOT get the ISO carve-out — see
+/// [`assert_locale_string_calendar_no_iso_carveout`].
 ///
 /// NOTE: the `locales`/`options` arguments — which could name a *different*
 /// calendar to validate against — are dropped by the `Expr::DateToLocaleString`
@@ -406,6 +408,21 @@ fn reject_bare_islamic(id: &str) {
 /// follow-up that depends on threading those arguments through that lowering.
 pub fn assert_locale_string_calendar(instance_calendar: &str) {
     if instance_calendar != "iso8601" && instance_calendar != "gregory" {
+        range("calendar mismatch: the value's calendar differs from the locale calendar");
+    }
+}
+
+/// `Temporal.PlainYearMonth`/`Temporal.PlainMonthDay` `toLocaleString` calendar
+/// check. `HandleDateTimeTemporalYearMonth`/`HandleDateTimeTemporalMonthDay`
+/// (ecma402 sup-intl.html #1132, #1157) require the instance calendar to
+/// equal the formatter's calendar exactly — unlike `PlainDate`/`PlainDateTime`
+/// /`ZonedDateTime`, there is no `"iso8601"`-is-always-permitted carve-out, so
+/// an ISO-calendar year-month/month-day always mismatches the locale's
+/// default (`gregory`) calendar and throws (test262
+/// `toLocaleString/calendar-mismatch` "even when instance has the ISO
+/// calendar" cases).
+pub fn assert_locale_string_calendar_no_iso_carveout(instance_calendar: &str) {
+    if instance_calendar != "gregory" {
         range("calendar mismatch: the value's calendar differs from the locale calendar");
     }
 }
