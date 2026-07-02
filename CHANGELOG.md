@@ -1,3 +1,38 @@
+## v0.5.1213 — representation-aware type lowering + native-ABI material evidence gate (#5466)
+
+Lands the type-lowering track on main (builds on #5291; integrates #5462's
+material evidence gate, #5464's packed-loop follow-ups, and the CodeRabbit
+review fixes).
+
+- **Representation-aware type lowering**: i32/u32/f64/i128(BigInt)/StringRef
+  native reps with runtime-guarded fast/fallback splits for scalar params,
+  number-keyed Map/Set, typed string/i32 methods, typed function/closure/method
+  clones (f64/i32/i1/string families), and packed numeric array loops (f64 +
+  i32 loop versioning with side-exit slow clones). `lower_expr` now
+  speculatively tries the native-rep value path for every expression and
+  materializes through the evidence-recording boundary.
+- **Native-ABI material evidence gate**: differential typed-vs-`any` CI gate
+  recomputing speedups/counter reductions from real `-O3` IR + GC traces with
+  anti-gaming guards; 185+ codegen proof-suite regression tests; release-symbol
+  sentinel check; `--explain-lowering` user-facing report.
+- **ToInt32 correctness (pre-existing, surfaced by review)**: the guarded
+  `toint32` lowering now performs the spec's modular reduction instead of a
+  bare `fptosi`, so finite values ≥ 2^63 (`(1e20) | 0`, nested integer-local
+  multiplies) wrap to the correct int32 instead of LLVM-poison NaN; the
+  `toint32_fast` gate (`is_known_finite`) is now a conservative magnitude-bound
+  proof. New `test_gap_toint32_large_finite.ts`.
+- **Review fixes**: closure-captured buffer locals can no longer receive
+  unchecked native-pointer proofs before an escape walk stamps the hazard map;
+  `invalidate_local_write_facts` drops reverse local-value alias chains;
+  runtime-key array stores register the `array_set_index_or_string` typed-
+  feedback contract matching the emitted helper; `typed_i1_functions` is
+  plumbed into `FnCtx` so the i1 typed-call branch gates like its siblings.
+- Verified: the three pre-merge runtime regressions (Array.fromAsync,
+  dynamic-import namespace, fetch headers.forEach) match node byte-for-byte;
+  16-test gap differential clean (3 pre-existing mismatches attributed to main
+  via control binary); evidence suites, typed-feedback runtime evidence, and
+  capture workloads green.
+
 ## v0.5.1211 — fix(intl): #5840 — Intl.DateTimeFormat dayPeriod-only formatting (6 test262 cases)
 
 Fixes the `dayPeriod`-only subcluster of the #5840 DateTimeFormat worklist: `new Intl.DateTimeFormat('en', {dayPeriod: 'long'})` (with no other date/time component options) silently fell back to the default `M/D/YYYY` date string in both `format` and `formatToParts`, because `dtf_primary_mask` (`crates/perry-runtime/src/intl/date_collator.rs`) never counted `dayPeriod` toward its "has a time-dimension field" bit, and neither `format_components` nor `build_parts_from_components` had any dayPeriod rendering path at all — `dayPeriod` was only ever emitted as a byproduct of the AM/PM 12-hour clock.
