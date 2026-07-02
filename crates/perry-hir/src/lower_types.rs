@@ -402,21 +402,34 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 }
                 ZeroFillRShift => Type::Number,
 
-                // Logical operators → type of operands (simplified).
+                // Logical operators → type of operands.
                 //
-                // `A && B` yields B's value when A is truthy (else A); `A || B`
-                // yields B when A is falsy (else A). So when B has a concrete
-                // type we approximate the result as that type. But when B is
-                // `Any` we must NOT fall back to A's type: #3527 hit
-                // `var hasMap = typeof Map === "function" && Map.prototype`,
-                // where A is a boolean compare and B (`Map.prototype`) is `Any`.
-                // Returning A's `Boolean` mistyped `hasMap` as a boolean even
-                // though it holds an object, so a later `hasMap && d && d.get`
-                // chain miscompiled and dereferenced `null`. The result can be
-                // the (unknown) right value, so `Any` is the only sound type.
+                // `A || B` yields A when A is truthy, else B; `A && B` yields A
+                // when A is falsy, else B. So the result can be EITHER operand's
+                // value. Approximating it as `right`'s type is only sound when
+                // both operands already share that type — otherwise the result
+                // may be the LEFT value with a different type.
+                //
+                // Pre-fix this returned `right` whenever it wasn't `Any`, so
+                // `arr || 99` inferred `Number` (from `99`). A local bound to it
+                // then had a numeric static type, and `lower_truthy` took the
+                // numeric fast path (`fcmp one <v>, 0.0`), reinterpreting the
+                // NaN-boxed array pointer as a raw double (NaN) → `!(arr||99)`,
+                // `(arr||99) ? …`, and `Array.isArray(arr||99)` (const-folded
+                // from the static type) were all wrong, even though the stored
+                // value was the correct array (value ops like `(arr||99)[0]`,
+                // `=== arr`, `.length` were fine). Any truthy heap operand hit
+                // this. The earlier #3527 fix (return `Any` when B is `Any`)
+                // only covered one side of the same hole:
+                // `typeof Map === "function" && Map.prototype`.
+                //
+                // Only trust `right`'s type when both operands share it;
+                // otherwise the union is unknown → `Any`, which routes
+                // truthiness / `Array.isArray` through the dynamic runtime path.
                 LogicalAnd | LogicalOr => {
+                    let left = infer_type_from_expr(&bin.left, ctx);
                     let right = infer_type_from_expr(&bin.right, ctx);
-                    if !matches!(right, Type::Any) {
+                    if left == right && !matches!(right, Type::Any) {
                         right
                     } else {
                         Type::Any
