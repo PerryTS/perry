@@ -4,6 +4,21 @@
 //! transform calls per `await`.
 
 use super::*;
+
+/// Inverse of `then::arg_to_closure` — reboxes an already-unboxed
+/// `ClosurePtr` handler arg back into a boxed `f64` JS value so it can be
+/// forwarded to `js_promise_then_checked`. Null (the "no handler" sentinel)
+/// becomes `undefined`, matching what `IsCallable(x) is false` resolves to
+/// on the `_checked` entry's own tag check.
+#[inline]
+fn closure_ptr_to_arg(ptr: ClosurePtr) -> f64 {
+    if ptr.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     bump(&MT_PROMISE_RESOLVED_COUNT);
@@ -131,9 +146,30 @@ pub extern "C" fn js_promise_resolved_then(
     // Skip the wrapper allocation: directly chain `.then()` off the
     // existing promise.
     if js_value_is_promise(value) != 0 {
-        bump(&MT_FAST_PATH_HIT);
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() {
+            // #5849: an own "then"/"constructor" expando on `inner` (e.g. a
+            // native Promise whose `.then` was reassigned) must still be
+            // invoked via `Invoke`/SpeciesConstructor semantics — the raw
+            // `js_promise_then` below operates directly on the native
+            // reaction slots and would silently ignore the override
+            // (test262 resolve/resolve-prms-cstm-then). `promise_has_own_*`
+            // bail out on a single cheap thread-local flag when no expando
+            // has ever been installed on ANY value, so this costs nothing
+            // in the steady-state await path this fast path exists for.
+            let inner_addr = inner as usize;
+            if super::promise_has_own_property(inner_addr, "then")
+                || super::promise_has_own_constructor(inner_addr)
+            {
+                bump(&MT_FAST_PATH_MISS);
+                let promise_val = box_promise_ptr(inner);
+                let fulfilled_val = closure_ptr_to_arg(on_fulfilled);
+                let rejected_val = closure_ptr_to_arg(on_rejected);
+                let result =
+                    super::js_promise_then_checked(promise_val, fulfilled_val, rejected_val);
+                return crate::value::js_nanbox_get_pointer(result) as *mut Promise;
+            }
+            bump(&MT_FAST_PATH_HIT);
             return js_promise_then(inner, on_fulfilled, on_rejected);
         }
     }
