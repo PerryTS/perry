@@ -129,20 +129,18 @@ fn ordinary_function_has_instance(value: f64, type_ref: f64) -> Option<f64> {
     if !value_is_callable(type_ref) {
         return None;
     }
-    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
     let bits = type_ref.to_bits();
-    let ptr_bits = if (bits >> 48) == 0x7FFD {
-        bits & crate::value::POINTER_MASK
+    let function_value = if (bits >> 48) == 0x7FFD {
+        type_ref
     } else if bits > 0x10000 && bits <= crate::value::POINTER_MASK {
-        bits
+        if !crate::closure::is_closure_ptr(bits as usize) {
+            return None;
+        }
+        crate::value::js_nanbox_pointer(bits as i64)
     } else {
         return None;
     };
-    let ptr = ptr_bits as *const ObjectHeader;
-    if ptr.is_null() {
-        return None;
-    }
-    let proto = js_object_get_field_by_name_f64(ptr, key);
+    let proto = super::class_registry::js_function_prototype_value_for_read(function_value);
     if unsafe { crate::object::value_is_object_like(proto) }
         || super::class_ref_id(proto).is_some()
         || super::class_prototype_ref_id(proto).is_some()
@@ -1410,5 +1408,29 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
 
         false_val
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    extern "C" fn test_ctor(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+
+    #[test]
+    fn ordinary_function_has_instance_reads_raw_closure_prototype_safely() {
+        let closure = crate::closure::js_closure_alloc(test_ctor as *const u8, 0);
+        let function_value = crate::value::js_nanbox_pointer(closure as i64);
+        let prototype = super::class_registry::js_function_prototype_value_for_read(function_value);
+
+        let instance = js_object_alloc(0, 0);
+        let instance_value = crate::value::js_nanbox_pointer(instance as i64);
+        js_object_set_prototype_of(instance_value, prototype);
+
+        let raw_function_value = f64::from_bits(closure as u64);
+        let result = ordinary_function_has_instance(instance_value, raw_function_value);
+        assert_eq!(result.map(f64::to_bits), Some(crate::value::TAG_TRUE));
     }
 }
