@@ -920,15 +920,18 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
                 Some(ctx.block().zext(lowered.llvm_ty, &lowered.value, I32))
             }
             NativeRep::F64 => {
+                // Index/internal i32 materialization — packed-store RHS and
+                // numeric-index consumers prove their ranges upstream, so
+                // keep the lean guard here (see toint32 vs toint32_wrap).
                 if is_known_finite(ctx, e) {
                     Some(ctx.block().toint32_fast(&lowered.value))
                 } else {
-                    Some(ctx.block().toint32_wrap(&lowered.value))
+                    Some(ctx.block().toint32(&lowered.value))
                 }
             }
             NativeRep::F32 => {
                 let widened = ctx.block().fpext(F32, &lowered.value, DOUBLE);
-                Some(ctx.block().toint32_wrap(&widened))
+                Some(ctx.block().toint32(&widened))
             }
             _ => None,
         };
