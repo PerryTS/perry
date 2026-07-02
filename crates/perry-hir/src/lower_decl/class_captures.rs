@@ -538,6 +538,7 @@ pub fn synthesize_class_captures(
     // must already see the recovered value. Only the `this.__perry_cap_* =
     // param` field STASHES must wait until after `super()` (no `this` exists
     // before super) AND after all user stmts (see comment below).
+    let rebind_count = rebind_stmts.len();
     for (i, stmt) in rebind_stmts.into_iter().enumerate() {
         ctor.body.insert(i, stmt);
     }
@@ -548,6 +549,26 @@ pub fn synthesize_class_captures(
     // Inserting immediately after `super()` captured the pre-mutation value.
     // Insert stashes before each explicit `return` so they run on every exit
     // path, then append at the end for the fall-through path.
+    //
+    // BUT the stashes must ALSO run right after `super()` (or at entry for a
+    // non-derived ctor): the ctor body may invoke instance methods
+    // (`this.has = this.getHas()`), and a method reading a captured outer
+    // resolves it through the `this.__perry_cap_*` field. Stashing only at
+    // the end left those reads undefined — Next.js's base `Server`
+    // constructor calls `this.getHasStaticDir()`, which reads the
+    // module-level `_fs` interop binding via its cap field and threw
+    // "Cannot read properties of undefined (reading 'default')" at boot
+    // (#5437). So stash EARLY for intra-ctor method calls AND re-stash at
+    // the end / before returns so post-`super()` mutations still win in the
+    // final state. The assignments are idempotent.
+    let super_pos = ctor
+        .body
+        .iter()
+        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
+    let early_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
+    for (i, stmt) in assignment_stmts.iter().cloned().enumerate() {
+        ctor.body.insert(early_insert_at + i, stmt);
+    }
     insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
     for stmt in assignment_stmts {
         ctor.body.push(stmt);
