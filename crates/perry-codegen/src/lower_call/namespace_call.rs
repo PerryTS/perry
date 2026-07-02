@@ -263,7 +263,9 @@ pub fn try_lower_namespace_member_call(
     let origin_suffix =
         crate::expr::import_origin_suffix(ctx.import_function_origin_names, property);
     let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-    if ctx.imported_vars.contains(property) || ctx.imported_vars.contains(origin_suffix) {
+    if ctx.imported_vars.contains(property)
+        || (origin_suffix != "default" && ctx.imported_vars.contains(origin_suffix))
+    {
         // Var-shaped export: fetch closure via zero-arg
         // getter, then closure-call with the user args.
         ctx.pending_declares.push((symbol.clone(), DOUBLE, vec![]));
