@@ -1067,6 +1067,7 @@ mod object_cache_tests {
             namespace_member_origin_names: std::collections::HashMap::new(),
             namespace_member_vars: std::collections::HashSet::new(),
             namespace_member_namespace_prefixes: std::collections::HashMap::new(),
+            namespace_import_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
             verify_native_regions: false,
             disable_buffer_fast_path: false,
