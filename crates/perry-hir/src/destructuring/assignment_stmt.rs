@@ -257,7 +257,42 @@ fn lower_object_assignment_from_expr(
                     ));
                 }
             }
-            ast::ObjectPatProp::Rest(_) => {}
+            ast::ObjectPatProp::Rest(rest) => {
+                // `{ ...rest } = source` → rest = ObjectRest(source, [named keys]).
+                // Previously skipped (same gap as assignment_expr.rs), leaving the
+                // rest binding undefined and collapsing spread-through props.
+                let exclude_keys: Vec<String> = obj_pat
+                    .props
+                    .iter()
+                    .filter_map(|p| match p {
+                        ast::ObjectPatProp::KeyValue(kv) => match &kv.key {
+                            ast::PropName::Ident(i) => Some(i.sym.to_string()),
+                            ast::PropName::Str(s) => {
+                                Some(s.value.as_str().unwrap_or("").to_string())
+                            }
+                            ast::PropName::Num(n) => Some(n.value.to_string()),
+                            _ => None,
+                        },
+                        ast::ObjectPatProp::Assign(a) => Some(a.key.sym.to_string()),
+                        ast::ObjectPatProp::Rest(_) => None,
+                    })
+                    .collect();
+                let rest_expr = Expr::ObjectRest {
+                    object: Box::new(source.clone()),
+                    exclude_keys,
+                };
+                if let ast::Pat::Ident(ident) = &*rest.arg {
+                    let name = ident.id.sym.to_string();
+                    if let Some(id) = ctx.lookup_local(&name) {
+                        result.push(Stmt::Expr(Expr::LocalSet(id, Box::new(rest_expr))));
+                    } else {
+                        return Err(anyhow!(
+                            "Assignment to undeclared variable in destructuring rest: {}",
+                            name
+                        ));
+                    }
+                }
+            }
         }
     }
 
