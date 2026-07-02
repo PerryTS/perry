@@ -127,9 +127,9 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
 pub(crate) fn object_from_f64(value: f64) -> Option<*mut ObjectHeader> {
     let bits = value.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        if !ptr.is_null() {
-            return Some(ptr);
+        let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::value::addr_class::is_plausible_heap_addr(addr) {
+            return Some(addr as *mut ObjectHeader);
         }
     }
     None
