@@ -141,6 +141,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,

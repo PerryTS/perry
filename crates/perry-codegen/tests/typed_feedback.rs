@@ -180,6 +180,7 @@ fn module_with_classes(
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,

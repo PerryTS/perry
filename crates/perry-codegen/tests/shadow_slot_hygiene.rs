@@ -66,6 +66,7 @@ fn shadow_hygiene_module() -> Module {
     Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         name: "shadow_hygiene.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -147,6 +148,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         init: vec![
             Stmt::Let {
                 id: 10,
@@ -224,6 +226,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         init: vec![
             Stmt::Let {
                 id: 30,
@@ -281,6 +284,7 @@ fn reassigned_any_shadow_module() -> Module {
     Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         name: "reassigned_any_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -340,6 +344,7 @@ fn mixed_any_alias_shadow_module() -> Module {
     Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         name: "mixed_any_alias_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -414,6 +419,7 @@ fn closure_captured_write_shadow_module() -> Module {
     Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         name: "closure_captured_write_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
