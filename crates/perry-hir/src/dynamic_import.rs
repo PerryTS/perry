@@ -1449,6 +1449,9 @@ fn resolve_registry_value_union<V: Borrow<Expr>>(
         ) {
             Resolution::Set(set) => {
                 for s in set {
+                    if !is_relative_module_specifier(&s) {
+                        return Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string());
+                    }
                     if !out.contains(&s) {
                         out.push(s);
                     }
@@ -1462,6 +1465,10 @@ fn resolve_registry_value_union<V: Borrow<Expr>>(
     } else {
         Resolution::Set(out)
     }
+}
+
+fn is_relative_module_specifier(value: &str) -> bool {
+    value.starts_with("./") || value.starts_with("../")
 }
 
 /// Shared "couldn't statically resolve this dynamic import() specifier"
