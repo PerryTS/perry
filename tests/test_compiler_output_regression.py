@@ -1211,11 +1211,21 @@ idxset.bounded_numeric_merge.5:
         self.assertNotIn("PERRY_GC_TRACE", CAPTURE_MODULE._compile_env("clang"))
 
     def test_auto_optimize_enables_diagnostics_for_gc_trace_evidence(self):
-        optimized_libs = (
-            REPO_ROOT / "crates" / "perry" / "src" / "commands" / "compile" / "optimized_libs.rs"
+        # The PERRY_GC_TRACE -> perry-runtime/diagnostics wiring lives in the
+        # cross-feature derivation, split out of optimized_libs.rs into
+        # optimized_libs/freshness.rs on main (#1435 file-size split).
+        freshness = (
+            REPO_ROOT
+            / "crates"
+            / "perry"
+            / "src"
+            / "commands"
+            / "compile"
+            / "optimized_libs"
+            / "freshness.rs"
         ).read_text(encoding="utf-8")
-        self.assertIn('std::env::var("PERRY_GC_TRACE")', optimized_libs)
-        self.assertIn("perry-runtime/diagnostics", optimized_libs)
+        self.assertIn('std::env::var("PERRY_GC_TRACE")', freshness)
+        self.assertIn("perry-runtime/diagnostics", freshness)
 
     def test_release_sweep_wires_native_abi_evidence_packet_smoke(self):
         release_sweep = (REPO_ROOT / "scripts" / "release_sweep.sh").read_text(
