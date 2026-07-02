@@ -234,12 +234,44 @@ pub fn transform_async_to_generator(module: &mut Module) {
                 );
             }
             for member in &mut class.computed_members {
+                rewrite_async_closures_in_expr(
+                    &mut member.key_expr,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
                 rewrite_async_closures_in_stmts(
                     &mut member.function.body,
                     &work,
                     &mut next_local_id,
                     &mut next_func_id,
                 );
+            }
+            // #5854: instance + static FIELD initializers (and computed-key
+            // exprs) can hold async closures (`handler = async () => await x`);
+            // mirror the collect scan above so they are actually rewritten into
+            // the async-step state machine, not merely listed in the set.
+            for field in class
+                .fields
+                .iter_mut()
+                .chain(class.static_fields.iter_mut())
+            {
+                if let Some(init) = &mut field.init {
+                    rewrite_async_closures_in_expr(
+                        init,
+                        &work,
+                        &mut next_local_id,
+                        &mut next_func_id,
+                    );
+                }
+                if let Some(key_expr) = &mut field.key_expr {
+                    rewrite_async_closures_in_expr(
+                        key_expr,
+                        &work,
+                        &mut next_local_id,
+                        &mut next_func_id,
+                    );
+                }
             }
         }
     }
@@ -1234,6 +1266,29 @@ fn collect_async_step_closures(module: &mut Module) {
         for setter in &class.setters {
             scan_stmts_for_async_closures(&setter.1.body, &mut found);
         }
+        // #5854: async closures reachable ONLY through computed-key members
+        // (`async [k]() {…}` / `[k] = async () => …`), instance FIELD
+        // initializers (`f = async () => …`), and static-field initializers.
+        // The rewrite pass walks these same containers but only rewrites a
+        // closure whose FuncId is in this set — so without scanning them here
+        // the rewrite is a no-op and the closure stays a raw block-waiting
+        // async fn (the exact dead-code the computed-members rewrite was before
+        // this scan). Safe against the #212/#5143 id-collision class:
+        // `compute_max_local_id`/`compute_max_func_id` (id_scan.rs) already
+        // scan these exact containers, so the state machine's fresh
+        // state/done/sent ids always clear a field/computed-member closure's.
+        for member in &class.computed_members {
+            scan_expr_for_async_closures(&member.key_expr, &mut found);
+            scan_stmts_for_async_closures(&member.function.body, &mut found);
+        }
+        for field in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                scan_expr_for_async_closures(init, &mut found);
+            }
+            if let Some(key_expr) = &field.key_expr {
+                scan_expr_for_async_closures(key_expr, &mut found);
+            }
+        }
     }
     module.async_step_closures = found;
 }
@@ -1431,4 +1486,165 @@ fn expr_contains_await_shallow(expr: &Expr, found: &mut bool) -> bool {
         }
     });
     *found
+}
+
+#[cfg(test)]
+mod computed_and_field_async_tests {
+    use super::*;
+
+    // The minimal shape the collect scan matches: `async () => { await 1 }`
+    // — `Expr::Closure { is_async, !is_generator }` whose body has an Await.
+    fn async_closure_with_await(func_id: perry_types::FuncId) -> Expr {
+        Expr::Closure {
+            func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Expr(Expr::Await(Box::new(Expr::Integer(1))))],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: true,
+            is_generator: false,
+            is_strict: false,
+        }
+    }
+
+    fn empty_fn(id: perry_types::FuncId, body: Vec<Stmt>) -> Function {
+        Function {
+            id,
+            name: String::new(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn empty_class(name: &str) -> Class {
+        Class {
+            id: 1,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            computed_members: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+        }
+    }
+
+    fn field_with_init(name: &str, init: Expr) -> ClassField {
+        ClassField {
+            name: name.to_string(),
+            key_expr: None,
+            ty: Type::Any,
+            init: Some(init),
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }
+    }
+
+    // `h = async () => await 1` as an INSTANCE field: before #5854's collect
+    // extension the scan skipped `class.fields`, so this closure's FuncId never
+    // entered `async_step_closures`, the rewrite pass (which filters on that
+    // set) skipped it, and it stayed a raw block-waiting async fn. It must now
+    // be BOTH collected and CPS-rewritten to a generator.
+    #[test]
+    fn async_closure_in_instance_field_is_collected_and_rewritten() {
+        let mut module = Module::new("test");
+        let mut class = empty_class("C");
+        class
+            .fields
+            .push(field_with_init("h", async_closure_with_await(50)));
+        module.classes.push(class);
+
+        transform_async_to_generator(&mut module);
+
+        assert!(
+            module.async_step_closures.contains(&50),
+            "instance-field async closure FuncId must be collected"
+        );
+        // An async CLOSURE with awaits is rewritten in place: its body becomes a
+        // state machine (via transform_plain_async_closure_body) and `is_async`
+        // is cleared. (Unlike a top-level async fn, it is NOT re-flagged as a
+        // generator — the transformed body IS the driver.) A cleared `is_async`
+        // is the definitive signal the rewrite fired rather than falling back to
+        // raw block-wait.
+        match &module.classes[0].fields[0].init {
+            Some(Expr::Closure { is_async, .. }) => assert!(
+                !*is_async,
+                "field async closure must be CPS-rewritten (is_async cleared)"
+            ),
+            other => panic!("field init should still be a Closure, got {other:?}"),
+        }
+    }
+
+    // Companion: a STATIC field initializer is a separate container the collect
+    // scan also skipped pre-#5854.
+    #[test]
+    fn async_closure_in_static_field_is_collected() {
+        let mut module = Module::new("test");
+        let mut class = empty_class("C");
+        class
+            .static_fields
+            .push(field_with_init("h", async_closure_with_await(60)));
+        module.classes.push(class);
+
+        transform_async_to_generator(&mut module);
+
+        assert!(
+            module.async_step_closures.contains(&60),
+            "static-field async closure FuncId must be collected"
+        );
+    }
+
+    // A computed-key member body (`[0]() { async () => await 1 }`). The rewrite
+    // loop already walked `computed_members` (commit f80652ad0) but the collect
+    // scan did not, so the id set it filters on never listed the closure and the
+    // walk was dead. With both sides covering computed_members it works.
+    #[test]
+    fn async_closure_in_computed_member_body_is_collected() {
+        let mut module = Module::new("test");
+        let mut class = empty_class("C");
+        class.computed_members.push(ClassComputedMember {
+            key_expr: Expr::Integer(0),
+            function: empty_fn(2, vec![Stmt::Expr(async_closure_with_await(70))]),
+            is_static: false,
+            kind: ClassComputedMemberKind::Method,
+        });
+        module.classes.push(class);
+
+        transform_async_to_generator(&mut module);
+
+        assert!(
+            module.async_step_closures.contains(&70),
+            "computed-member-body async closure FuncId must be collected"
+        );
+    }
 }
