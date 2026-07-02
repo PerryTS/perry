@@ -203,3 +203,29 @@ t.then((v) => console.log("then:", v));
         "each settled .finally must dispatch its own wrapper exactly once"
     );
 }
+
+/// A degenerate no-arg `p.then()` parks in the slot with BOTH handler
+/// fields null and only `next` set. The occupancy check must treat that
+/// `next` as occupied — otherwise a later combinator stores its handlers
+/// beside it and the pass-through chain resolves with the handler's return
+/// instead of the value (CodeRabbit finding on the initial version of this
+/// fix).
+#[test]
+fn degenerate_then_chain_survives_combinator() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+let resolveP: any;
+const p = new Promise((r) => { resolveP = r; });
+const chain = p.then();
+chain.then((v) => console.log("chain:", v));
+Promise.all([p]).then(([v]) => console.log("all:", v));
+resolveP(9);
+"#,
+    );
+    assert_eq!(
+        stdout, "chain: 9\nall: 9\n",
+        "a bare p.then() pass-through chain must survive a later combinator"
+    );
+}

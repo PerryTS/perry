@@ -835,11 +835,16 @@ pub extern "C" fn js_promise_then(
         // user `.then` racing a combinator's per-element `.then` when
         // `Promise.resolve(p) === p`). The inline slot holds the FIRST reaction;
         // 2nd+ reactions overflow into a side table and replay in registration
-        // order. Detect prior occupancy via the reaction closures (NOT `next`,
-        // which `.finally` deliberately nulls) — a reaction always sets at least
-        // one of `on_fulfilled`/`on_rejected` except a degenerate no-arg
-        // `then()`, where parking it under the slot is still harmless.
-        let slot_occupied = !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
+        // order. Occupancy = any of the two reaction closures OR `next`: a
+        // degenerate no-arg `then()` parks with BOTH closures null and only
+        // `next` set, and overwriting that `next` here stranded its chained
+        // promise (the spec combinators attach per-element reactions through
+        // this very path via `invoke_then`, so `const c = p.then();
+        // Promise.all([p])` lost `c`). `.finally` deliberately nulls `next`
+        // but always sets both wrapper closures, so it is still detected.
+        let slot_occupied = !(*promise).on_fulfilled.is_null()
+            || !(*promise).on_rejected.is_null()
+            || !(*promise).next.is_null();
 
         if !slot_occupied {
             // Fast path: first reaction uses the inline slot (unchanged behavior).
@@ -956,7 +961,15 @@ pub(crate) fn js_promise_attach_handlers(
         // divert to the overflow table (pending) or dispatch as their own
         // inline task (settled). `next` stays null throughout — these
         // callers own their settlement.
-        let slot_occupied = !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
+        //
+        // `next` counts as occupancy too: a degenerate no-arg `p.then()`
+        // parks with BOTH handler slots null and only `next` set, and its
+        // chained promise must still resolve with the pass-through value —
+        // storing handlers next to it would resolve that chain with the
+        // handler's return instead.
+        let slot_occupied = !(*promise).on_fulfilled.is_null()
+            || !(*promise).on_rejected.is_null()
+            || !(*promise).next.is_null();
         if slot_occupied {
             let context = capture_context();
             match (*promise).state {
@@ -1133,8 +1146,14 @@ pub extern "C" fn js_promise_finally(
                 // settled. Divert later reactions to the overflow table; the
                 // wrapper owns its `next` (null here), matching the settled
                 // arms below.
-                let slot_occupied =
-                    !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
+                //
+                // A non-null `next` also counts as occupancy: a degenerate
+                // no-arg `p.then()` parks with both handler slots null and
+                // only `next` set — nulling that `next` here would strand its
+                // chained promise forever.
+                let slot_occupied = !(*promise).on_fulfilled.is_null()
+                    || !(*promise).on_rejected.is_null()
+                    || !(*promise).next.is_null();
                 if slot_occupied {
                     push_overflow_reaction(
                         promise,
@@ -1164,24 +1183,30 @@ pub extern "C" fn js_promise_finally(
                 }
             }
             PromiseState::Fulfilled => {
+                // Capture the attach-time async context: these arms no longer
+                // store into the promise's context slot, so
+                // `context_for_promise` could hand back a context stored by
+                // an EARLIER reaction on the same promise.
+                let context = capture_context();
                 TASK_QUEUE.with(|q| {
                     q.borrow_mut().push_back(Task::Inline(
                         fulfill_wrap,
                         (*promise).value,
                         ptr::null_mut(),
                         true,
-                        context_for_promise(promise),
+                        context,
                     ));
                 });
             }
             PromiseState::Rejected => {
+                let context = capture_context();
                 TASK_QUEUE.with(|q| {
                     q.borrow_mut().push_back(Task::Inline(
                         reject_wrap,
                         (*promise).reason,
                         ptr::null_mut(),
                         false,
-                        context_for_promise(promise),
+                        context,
                     ));
                 });
             }
