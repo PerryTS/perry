@@ -729,7 +729,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if recv_unknown && !index_is_static_string_or_symbol {
                 let obj_box = lower_expr(ctx, object)?;
                 let idx_d = lower_expr(ctx, index)?;
-                let val_double = lower_expr(ctx, value)?;
+                // Keep the RHS on the js_value_bits evidence contract even on
+                // the #5525 inline typed-array route — the slow edge hands the
+                // boxed value to `js_dyn_index_set` unchanged, and the fast
+                // edge's per-kind conversion matches the runtime store exactly.
+                let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                    ctx,
+                    value,
+                    "index_set.dynamic_value_bits",
+                    "polymorphic_index_set_helper_edge",
+                )?;
                 // #5525 follow-up: guarded inline typed-array element STORE at the
                 // access site, mirroring the inline read in index_get.rs. Removes
                 // the per-element out-of-line `js_dyn_index_set` call +
