@@ -55,6 +55,14 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     run_microtasks(MicrotaskDrainMode::AllowTimers)
 }
 
+/// Drain entry for the codegen `await` busy-wait loop: like
+/// `js_promise_run_microtasks`, but due timers fire even when reentrant —
+/// see `MicrotaskDrainMode::AwaitLoop`.
+#[no_mangle]
+pub extern "C" fn js_promise_run_microtasks_await_loop() -> i32 {
+    run_microtasks(MicrotaskDrainMode::AwaitLoop)
+}
+
 pub(crate) fn js_promise_run_microtasks_checkpoint() -> i32 {
     run_microtasks(MicrotaskDrainMode::MicrotasksOnly)
 }
@@ -76,6 +84,15 @@ enum MicrotaskDrainMode {
     MicrotasksOnly,
     /// Promise/queueMicrotask jobs only — no nextTick drain, no timers.
     PromiseJobsOnly,
+    /// The synchronous `await` busy-wait loop (codegen `Expr::Await`
+    /// lowering). An `await` is a yield point: the real event loop would
+    /// run due timers there, so this mode fires them even when the drain
+    /// is reentrant. Without it, a busy-wait await entered from inside a
+    /// microtask (every HTTP request handler runs inside the main pump)
+    /// could never see a `setImmediate`-scheduled resolution — Next.js's
+    /// React server renderer schedules its render/flush work exactly that
+    /// way, and the dynamic-SSR routes deadlocked in the wait loop (#5437).
+    AwaitLoop,
 }
 
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
@@ -737,7 +754,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     // Node's turn ordering (`Promise.resolve().then(...)` before
     // `setTimeout(..., 0)`). Timer callbacks may enqueue more microtasks;
     // those drain on the next pump iteration before newly due timers.
-    if matches!(mode, MicrotaskDrainMode::AllowTimers) && !reentrant {
+    let fire_timers = match mode {
+        MicrotaskDrainMode::AllowTimers => !reentrant,
+        MicrotaskDrainMode::AwaitLoop => true,
+        _ => false,
+    };
+    if fire_timers {
         ran += crate::timer::js_timer_tick();
         ran += crate::timer::js_callback_timer_tick();
         ran += crate::builtins::drain_queued_microtasks_count();

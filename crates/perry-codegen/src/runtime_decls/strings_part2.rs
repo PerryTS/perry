@@ -677,6 +677,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // branch so `await thenable` enters the polling path.
     module.declare_function("js_assimilate_thenable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_run_microtasks", I32, &[]);
+    module.declare_function("js_promise_run_microtasks_await_loop", I32, &[]);
+    module.declare_function("js_await_loop_tick_timers", I32, &[]);
     // ESM entry marker: first microtask drain finishes promise jobs before
     // the nextTick queue (Node module-evaluation checkpoint ordering, #788).
     module.declare_function("js_mark_entry_module_esm", VOID, &[]);
