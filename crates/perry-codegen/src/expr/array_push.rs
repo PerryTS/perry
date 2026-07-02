@@ -436,6 +436,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // young) heap pointer stored into an existing box — barrier
                     // the box parent so a minor GC can't miss it.
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    // The capture slot holds the BOX pointer; the box content is
+                    // the shared storage every closure sees. Return here — do NOT
+                    // fall through to the `closure_set_capture_bits` store below,
+                    // which would clobber the box pointer in the capture slot with
+                    // the array pointer, so the next push would treat the array as
+                    // the box and silently lose the realloc write-back.
+                    return Ok(emit_array_handle_length(ctx, &new_handle));
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
@@ -443,6 +450,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: barrier the box parent (see capture path).
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    // The slot holds the BOX pointer — the box is the shared
+                    // storage. Return so the slot keeps pointing at the box (see
+                    // the captured branch above).
+                    return Ok(emit_array_handle_length(ctx, &new_handle));
                 }
                 // #5459: `array_id` is in `boxed_vars` but has no box location in
                 // THIS context — it's a module-level global accessed directly from
@@ -519,6 +530,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // young) heap pointer stored into an existing box — barrier
                     // the box parent so a minor GC can't miss it.
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    // Box content is the shared storage; the capture slot must keep
+                    // pointing at the box. Return so we don't fall through to the
+                    // capture-slot store, which would clobber the box pointer (see
+                    // the matching note in `Expr::ArrayPush`).
+                    return Ok(emit_array_handle_length(ctx, &new_handle));
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
@@ -526,6 +542,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: barrier the box parent (see capture path).
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
+                    return Ok(emit_array_handle_length(ctx, &new_handle));
                 }
                 // #5459: in `boxed_vars` but no box location here — a module-level
                 // global accessed directly from a nested function. Fall through to
