@@ -259,6 +259,11 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
         (3, "closed") => return box_promise(js_reader_closed(handle)),
         _ => {}
     }
+    // #5437: expando properties stored via `stream.prop = v` (React's
+    // renderToReadableStream reads back `stream.allReady`).
+    if let Some(v) = super::stream_expando_get(id, name) {
+        return v;
+    }
     // Callable members → bound-method closure so `typeof` reports
     // "function". The name must be a `&'static [u8]` because
     // `js_class_method_bind` stores the raw pointer in the closure.

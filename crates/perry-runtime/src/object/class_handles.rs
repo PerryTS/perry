@@ -72,6 +72,12 @@ pub type HandlePrototypeDispatchFn = unsafe extern "C" fn(handle: i64) -> f64;
 /// before routing the call to `handle_method_dispatch` — non-stream numbers
 /// fall through to the normal `(number).x is not a function` TypeError.
 pub type StreamHandleProbeFn = unsafe extern "C" fn(id: usize) -> bool;
+/// #5437: stdlib hook that stores an expando property on a live Web Stream
+/// handle (React's `renderToReadableStream` attaches `allReady` to the
+/// stream). Returns 1 when the id was a live stream and the value was
+/// stored, 0 otherwise.
+pub type StreamExpandoSetFn =
+    unsafe extern "C" fn(id: usize, key_ptr: *const u8, key_len: usize, value: f64) -> i32;
 
 /// #1545: classify a numeric Web Streams handle for `instanceof` and tags.
 /// Returns 0 = not a stream, 1 = ReadableStream, 2 = WritableStream,
@@ -144,6 +150,7 @@ static HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS: [AtomicPtr<()>; 4] = [
 static HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROTOTYPE_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static STREAM_EXPANDO_SET_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
@@ -383,6 +390,23 @@ pub fn stream_handle_probe() -> Option<StreamHandleProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_stream_handle_probe(f: StreamHandleProbeFn) {
     STREAM_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// #5437: expando-set getter — see `StreamExpandoSetFn`.
+#[inline]
+pub fn stream_expando_set() -> Option<StreamExpandoSetFn> {
+    let p = STREAM_EXPANDO_SET_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), StreamExpandoSetFn>(p) })
+    }
+}
+
+/// #5437: register the Web Streams expando-set hook (called by the stdlib at init).
+#[no_mangle]
+pub unsafe extern "C" fn js_register_stream_expando_set(f: StreamExpandoSetFn) {
+    STREAM_EXPANDO_SET_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// #1545: kind-probe getter — see `StreamHandleKindProbeFn`.
