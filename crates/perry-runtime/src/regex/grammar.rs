@@ -13,6 +13,34 @@ fn parse_decimal_escape(chars: &[char], mut i: usize) -> (usize, usize) {
     (value, i - start)
 }
 
+/// Annex B.1.4: emit a `\<digits>` escape that is *not* a valid backreference as
+/// a `LegacyOctalEscapeSequence` (or a `NonOctalDecimalEscapeSequence` for a
+/// leading `8`/`9`). `start` indexes the first digit (just past the backslash).
+/// Returns the number of digit chars consumed.
+///
+/// `\1` with no group 1, or `\2` referencing a non-existent group, must compile
+/// as the literal byte rather than throwing — the `regex`/`fancy-regex` crates
+/// reject `\1` outright, so we lower it to `\x{HH}`.
+fn push_legacy_octal_escape(out: &mut String, chars: &[char], start: usize) -> usize {
+    let first = chars[start];
+    // `\8` / `\9` are not octal: they match the literal digit.
+    if first == '8' || first == '9' {
+        push_escaped_literal(out, first);
+        return 1;
+    }
+    // Up to three octal digits, but only two when the first is `4`–`7`
+    // (the value must stay ≤ 0o377 = 255).
+    let max = if matches!(first, '0'..='3') { 3 } else { 2 };
+    let mut value: u32 = 0;
+    let mut n = 0;
+    while n < max && start + n < chars.len() && matches!(chars[start + n], '0'..='7') {
+        value = value * 8 + (chars[start + n] as u32 - '0' as u32);
+        n += 1;
+    }
+    push_hex_escape(out, value as u8);
+    n
+}
+
 fn collect_capture_spans(chars: &[char]) -> Vec<CaptureSpan> {
     let mut spans = Vec::new();
     let mut stack: Vec<(usize, usize)> = Vec::new();
@@ -66,6 +94,376 @@ fn is_forward_backreference(spans: &[CaptureSpan], escape_pos: usize, group: usi
     }
     let span = spans[group - 1];
     span.close == usize::MAX || escape_pos < span.close
+}
+
+/// Annex B.1.4 does NOT apply to Unicode-mode (`/u` or `/v`) patterns: the
+/// legacy escapes that `js_regex_to_rust` silently relaxes for sloppy patterns
+/// (a `LegacyOctalEscapeSequence`, a `NonOctalDecimalEscapeSequence`, or a `\c`
+/// not followed by an ASCII control letter) are a hard `SyntaxError` under
+/// `/u`. Returns `true` if `pattern` contains any such escape, so the caller
+/// can throw at construction instead of compiling a relaxed pattern.
+///
+/// Mirrors exactly the escapes the sloppy-mode translator would reinterpret:
+/// any other escape (a valid backreference, `\d`, `\x41`, `\u{…}`, an escaped
+/// metacharacter, …) is left for the normal translation path.
+pub(super) fn has_unicode_forbidden_legacy_escape(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let spans = collect_capture_spans(&chars);
+    let num_groups = spans.len();
+    let mut in_class = false;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if i + 1 < chars.len() => {
+                match chars[i + 1] {
+                    // `\c` is a valid control escape only when followed by an
+                    // ASCII control letter (`A`–`Z` / `a`–`z`); anything else
+                    // (a digit, `_`, a non-ASCII letter, end-of-pattern) is the
+                    // Annex B identity escape, forbidden under `/u`.
+                    'c' if !matches!(chars.get(i + 2), Some(c) if c.is_ascii_alphabetic()) => {
+                        return true;
+                    }
+                    // `\0` is the NUL escape (valid under `/u`) only when not
+                    // followed by a decimal digit; `\0DD` is a legacy octal.
+                    '0' if matches!(chars.get(i + 2), Some(c) if c.is_ascii_digit()) => {
+                        return true;
+                    }
+                    // `\1`–`\9`: a backreference to an existing group is valid;
+                    // anything else is a legacy octal / non-octal decimal escape.
+                    // Inside a class a decimal escape is never a backreference.
+                    '1'..='9' => {
+                        let (group, _) = parse_decimal_escape(&chars, i + 1);
+                        if in_class || group == 0 || group > num_groups {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+                // Any backslash escape consumes the following char, so `\[`,
+                // `\]`, and `\\` never toggle class state.
+                i += 2;
+                continue;
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// The `SyntaxCharacter` set — the only characters a bare `\X` IdentityEscape
+/// may carry under `/u` (plus `/`, handled by the caller). Mirrors the spec's
+/// `SyntaxCharacter :: one of ^ $ \ . * + ? ( ) [ ] { } |`.
+fn is_unicode_syntax_character(c: char) -> bool {
+    matches!(
+        c,
+        '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+    )
+}
+
+/// Length (including the leading backslash) of a well-formed escape under `/u`
+/// starting at index `bs` (which must point at `\`), or `None` if the escape is
+/// not permitted in Unicode mode. `in_class` selects between the AtomEscape and
+/// ClassEscape grammars (e.g. `\b` is a word boundary in an Atom but a backspace
+/// in a class, while `\B` and `\k<name>` are class-illegal).
+///
+/// Annex B.1.4's lenient IdentityEscape (`\X` for an arbitrary SourceCharacter)
+/// does NOT apply under `/u`: only SyntaxCharacters, `/`, the recognised
+/// character-class/control escapes, and the *complete* `\xHH` / `\uHHHH` /
+/// `\u{…}` / `\cX` / `\p{…}` / `\k<…>` forms are accepted. A bare `\x`, `\u`,
+/// `\c`, `\p`, `\k`, or `\A` is a `SyntaxError`.
+fn unicode_escape_len(chars: &[char], bs: usize, in_class: bool) -> Option<usize> {
+    let c = *chars.get(bs + 1)?; // a trailing lone backslash is never valid
+    let after = bs + 2; // index just past the escape letter
+    let is_hex = |idx: usize| chars.get(idx).is_some_and(|h| h.is_ascii_hexdigit());
+    match c {
+        // CharacterClassEscape / control escapes — fixed two-char forms.
+        'd' | 'D' | 's' | 'S' | 'w' | 'W' | 'f' | 'n' | 'r' | 't' | 'v' => Some(2),
+        // `\b` word boundary (Atom) / backspace (class); `\B` is class-illegal.
+        'b' => Some(2),
+        'B' => (!in_class).then_some(2),
+        // `\0` NUL — only when not the prefix of a legacy octal (`\0DD`), which
+        // `has_unicode_forbidden_legacy_escape` already rejects.
+        '0' => match chars.get(after) {
+            Some(d) if d.is_ascii_digit() => None,
+            _ => Some(2),
+        },
+        // Decimal backreference (Atom only). Validity of the target group is
+        // checked by `has_unicode_forbidden_legacy_escape`; here we only consume.
+        '1'..='9' if !in_class => {
+            let (_, digits) = parse_decimal_escape(chars, bs + 1);
+            Some(1 + digits)
+        }
+        // `\cX` control letter.
+        'c' => match chars.get(after) {
+            Some(x) if x.is_ascii_alphabetic() => Some(3),
+            _ => None,
+        },
+        // `\xHH` — exactly two hex digits.
+        'x' if is_hex(after) && is_hex(after + 1) => Some(4),
+        // `\uHHHH` or `\u{H+}`.
+        'u' => {
+            if matches!(chars.get(after), Some('{')) {
+                let mut j = after + 1;
+                let start = j;
+                while chars.get(j).is_some_and(|h| h.is_ascii_hexdigit()) {
+                    j += 1;
+                }
+                (j > start && matches!(chars.get(j), Some('}'))).then(|| j + 1 - bs)
+            } else if (0..4).all(|k| is_hex(after + k)) {
+                Some(6)
+            } else {
+                None
+            }
+        }
+        // `\p{…}` / `\P{…}` property escape (Unicode mode only — handled here).
+        'p' | 'P' if matches!(chars.get(after), Some('{')) => {
+            let mut j = after + 1;
+            while chars.get(j).is_some_and(|ch| *ch != '}') {
+                j += 1;
+            }
+            matches!(chars.get(j), Some('}')).then(|| j + 1 - bs)
+        }
+        // `\k<name>` named backreference (Atom only).
+        'k' if !in_class && matches!(chars.get(after), Some('<')) => {
+            let mut j = after + 1;
+            while chars.get(j).is_some_and(|ch| *ch != '>') {
+                j += 1;
+            }
+            matches!(chars.get(j), Some('>')).then(|| j + 1 - bs)
+        }
+        // IdentityEscape: a SyntaxCharacter or `/` anywhere; `-` additionally in a
+        // class (ClassEscape permits `\-`). Anything else is forbidden under `/u`.
+        '/' => Some(2),
+        '-' if in_class => Some(2),
+        _ if is_unicode_syntax_character(c) => Some(2),
+        _ => None,
+    }
+}
+
+/// True if the `\` at `backslash` opens a CharacterClassEscape (`\d \D \s \S
+/// \w \W` or a `\p{…}` / `\P{…}` property escape) — i.e. a class member that
+/// may not be an endpoint of a `-` range under `/u` (`[\d-a]`, `[\p{L}-a]`).
+fn class_escape_is_set(chars: &[char], backslash: usize) -> bool {
+    matches!(
+        chars.get(backslash + 1),
+        Some('d')
+            | Some('D')
+            | Some('s')
+            | Some('S')
+            | Some('w')
+            | Some('W')
+            | Some('p')
+            | Some('P')
+    )
+}
+
+/// Annex B.1.4's leniencies that ECMAScript forbids under `/u` (beyond the
+/// legacy escapes handled by [`has_unicode_forbidden_legacy_escape`]). Returns
+/// `true` — so the caller throws a `SyntaxError` at construction — when the
+/// pattern relies on any sloppy-mode extension that `js_regex_to_rust` would
+/// otherwise quietly relax into a valid `regex`-crate pattern:
+///
+/// * a lone `]` or `}` PatternCharacter (must be `\]` / `\}` under `/u`);
+/// * an incomplete or standalone `{` that is not a complete `{n}` / `{n,}` /
+///   `{n,m}` quantifier;
+/// * a `-` range whose endpoint is a `\d`-style CharacterClassEscape
+///   (`[\d-a]`, `[a-\w]`, `[\s-\S]`);
+/// * a quantifier applied directly to a lookaround assertion (`(?=.)*`);
+/// * a forbidden IdentityEscape (`\A`, `\-` outside a class, a bare `\x` / `\u`
+///   / `\p` / `\k`), via [`unicode_escape_len`].
+///
+/// Only sound to call when the `u` flag is set. (The `v` flag's ClassSetExpression
+/// grammar differs and is validated separately.)
+pub(super) fn has_unicode_forbidden_pattern(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    let mut in_class = false;
+    let mut class_start = 0usize;
+    // Whether the previous class member was a CharacterClassEscape (`\d`, …), so
+    // a following `-` range can flag it. Reset on entering a class / past a `]`.
+    let mut prev_member_was_class_escape = false;
+    let mut prev_member_exists = false;
+    // For each open `(`, whether it begins a lookaround assertion — so its `)`
+    // can reject an immediately-following quantifier.
+    let mut paren_is_assertion: Vec<bool> = Vec::new();
+
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            match unicode_escape_len(&chars, i, in_class) {
+                Some(len) => {
+                    if in_class {
+                        prev_member_was_class_escape = class_escape_is_set(&chars, i);
+                        prev_member_exists = true;
+                    }
+                    i += len;
+                    continue;
+                }
+                None => return true,
+            }
+        }
+        if in_class {
+            match c {
+                ']' => {
+                    in_class = false;
+                    prev_member_exists = false;
+                    prev_member_was_class_escape = false;
+                }
+                '-' => {
+                    let is_first = i == class_start;
+                    let is_last = matches!(chars.get(i + 1), Some(']'));
+                    if !is_first && !is_last && prev_member_exists {
+                        let right_is_class_escape = matches!(chars.get(i + 1), Some('\\'))
+                            && class_escape_is_set(&chars, i + 1);
+                        if prev_member_was_class_escape || right_is_class_escape {
+                            return true;
+                        }
+                    }
+                    // The `-` itself becomes the previous member (a literal hyphen).
+                    prev_member_was_class_escape = false;
+                    prev_member_exists = true;
+                }
+                _ => {
+                    prev_member_was_class_escape = false;
+                    prev_member_exists = true;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '[' => {
+                in_class = true;
+                class_start = i + 1;
+                prev_member_exists = false;
+                prev_member_was_class_escape = false;
+                i += 1;
+            }
+            // A lone `]` / `}` PatternCharacter is forbidden under `/u`; the valid
+            // occurrences (a class close, a quantifier or `\u{…}` / `\p{…}` brace)
+            // are consumed before reaching here.
+            ']' | '}' => return true,
+            '{' => match parse_braced_quantifier(&chars, i) {
+                Some(end) => i = end + 1,
+                None => return true,
+            },
+            '(' => {
+                let is_assertion = matches!(chars.get(i + 1), Some('?'))
+                    && (matches!(chars.get(i + 2), Some('=') | Some('!'))
+                        || (matches!(chars.get(i + 2), Some('<'))
+                            && matches!(chars.get(i + 3), Some('=') | Some('!'))));
+                paren_is_assertion.push(is_assertion);
+                i += 1;
+            }
+            ')' => {
+                let was_assertion = paren_is_assertion.pop().unwrap_or(false);
+                if was_assertion {
+                    let quantified = matches!(chars.get(i + 1), Some('*') | Some('+') | Some('?'))
+                        || (matches!(chars.get(i + 1), Some('{'))
+                            && parse_braced_quantifier(&chars, i + 1).is_some());
+                    if quantified {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+// JS \s excludes U+0085 NEL; Rust's \s includes it. Use explicit class for parity outside char-class.
+const JS_WHITESPACE_CLASS: &str = r"[\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
+const JS_NON_WHITESPACE_CLASS: &str = r"[^\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
+// ECMAScript allows quantifiers up to 2^53-1; regex-syntax uses u32 and rejects larger values.
+const MAX_QUANTIFIER: u64 = 65_535;
+
+fn clamp_large_quantifiers(s: &str) -> String {
+    if !s.contains('{') {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut in_class = false;
+    let mut i = 0;
+    let clamp = |s: &str| {
+        s.parse::<u64>()
+            .ok()
+            .filter(|&v| v > MAX_QUANTIFIER)
+            .map(|_| MAX_QUANTIFIER.to_string())
+            .unwrap_or_else(|| s.to_string())
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            out.push(c);
+            i += 1;
+            if i < chars.len() {
+                out.push(chars[i]);
+                i += 1;
+            }
+            continue;
+        }
+        if c == '[' && !in_class {
+            in_class = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ']' && in_class {
+            in_class = false;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '{' && !in_class {
+            if let Some(end) = parse_braced_quantifier(&chars, i) {
+                let inner: String = chars[i + 1..end].iter().collect();
+                let has_comma = inner.contains(',');
+                let mut parts = inner.splitn(2, ',');
+                let n1_s = parts.next().unwrap_or("").to_string();
+                let n2_s = parts.next().unwrap_or("").to_string();
+                if n1_s.parse::<u64>().map_or(false, |v| v > MAX_QUANTIFIER)
+                    || n2_s.parse::<u64>().map_or(false, |v| v > MAX_QUANTIFIER)
+                {
+                    out.push('{');
+                    out.push_str(&clamp(&n1_s));
+                    if has_comma {
+                        out.push(',');
+                        out.push_str(&clamp(&n2_s));
+                    }
+                    out.push('}');
+                } else {
+                    for &ch in chars[i..=end].iter() {
+                        out.push(ch);
+                    }
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn is_unsupported_property_value(value: &str) -> bool {
+    let script_val = value
+        .strip_prefix("script=")
+        .or_else(|| value.strip_prefix("se="))
+        .or_else(|| value.strip_prefix("scriptextensions="));
+    if let Some(sv) = script_val {
+        return matches!(
+            sv,
+            "unknown" | "zzzz" | "beriaerfe" | "sidetic" | "taiyo" | "tolongsiki"
+        );
+    }
+    value == "changeswhennfkccasefolded"
 }
 
 fn is_regex_identity_escape(ch: char) -> bool {
@@ -440,6 +838,26 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
                             continue;
                         }
                     }
+                    // Distribute a high-surrogate unit over an immediately
+                    // following non-capturing group: `H(?:A|B)` ≡ `(?:HA|HB)`.
+                    // emoji-regex (and string-width / ink, #348) factor the
+                    // leading high surrogate out before a group of
+                    // low-surrogate-led alternatives, e.g.
+                    // `\uD83C(?:[\uDC04…]️?|\uDDE6\uD83C[\uDDE8…]|…)`, so
+                    // the high surrogate is no longer directly adjacent to its
+                    // low half and the pair fold above can't see it — the lone
+                    // `\uD83C` then reaches the `regex` crate as a surrogate
+                    // scalar and the whole pattern is rejected as `invalid
+                    // pattern`. Re-prepend H to each alternative and recurse,
+                    // restoring adjacency so each `HA` folds normally. Only
+                    // fires when every alternative begins with a low-surrogate
+                    // unit and the group is unquantified, so patterns that
+                    // compile today are byte-for-byte unaffected.
+                    if let Some((rebuilt, next)) = distribute_high_over_group(&chars, i, j) {
+                        out.push_str(&fold_surrogate_pairs(&rebuilt));
+                        i = next;
+                        continue;
+                    }
                 }
             }
         }
@@ -447,6 +865,161 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Whether `s` begins with a low-surrogate unit (a `\uDCxx` escape or a `[…]`
+/// class of only low-surrogate escapes).
+fn starts_with_low_unit(s: &str) -> bool {
+    let c: Vec<char> = s.chars().collect();
+    matches!(
+        parse_surrogate_unit(&c, 0),
+        Some((ref r, _)) if r.iter().all(|(a, b)| is_low_surrogate(*a) && is_low_surrogate(*b))
+    )
+}
+
+/// Parse a low-surrogate unit at `chars[p]` (single escape or class). Returns its
+/// source text and the index just past it, or `None` if it is not a low unit.
+fn take_low_unit(chars: &[char], p: usize) -> Option<(String, usize)> {
+    let (r, end) = parse_surrogate_unit(chars, p)?;
+    r.iter()
+        .all(|(a, b)| is_low_surrogate(*a) && is_low_surrogate(*b))
+        .then(|| (chars[p..end].iter().collect(), end))
+}
+
+/// Distribute the high-surrogate unit `chars[i..j]` into an immediately following
+/// non-capturing group so each low half becomes adjacent to it (the existing
+/// pair fold then collapses them to astral scalars). emoji-regex / string-width
+/// (ink, #348) factor a shared high surrogate out before a group of
+/// low-surrogate-led alternatives:
+///
+/// * plain group `H(?:A|B)` ≡ `(?:HA|HB)` — H pairs inside the group;
+/// * optional group followed by a low unit `H(?:G)?L` ≡ `(?:HGL|HL)` — H pairs
+///   with the group's first low half (when present) or with `L` (when absent),
+///   as in the ZWJ "kiss"/"family" sequences `\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]`.
+///
+/// Returns the rewritten `(?:…)` and the index to resume scanning at, or `None`
+/// (leaving the segment byte-for-byte unchanged) when the shape does not match —
+/// so patterns that compile today are unaffected. The rewrite is re-folded by the
+/// caller, which resolves any nested high-surrogate groups recursively.
+fn distribute_high_over_group(chars: &[char], i: usize, j: usize) -> Option<(String, usize)> {
+    if chars.get(j) != Some(&'(')
+        || chars.get(j + 1) != Some(&'?')
+        || chars.get(j + 2) != Some(&':')
+    {
+        return None;
+    }
+    let close = matching_paren(chars, j)?;
+    let alts = split_alternatives(chars, j + 3, close);
+    if alts.is_empty() || !alts.iter().all(|a| starts_with_low_unit(a)) {
+        return None;
+    }
+    let high_src: String = chars[i..j].iter().collect();
+    match chars.get(close + 1) {
+        // Optional group: pull a trailing low unit into both branches.
+        Some('?') => {
+            let (low_src, after) = take_low_unit(chars, close + 2)?;
+            let mut rebuilt = String::from("(?:");
+            for a in &alts {
+                rebuilt.push_str(&high_src);
+                rebuilt.push_str(a);
+                rebuilt.push_str(&low_src);
+                rebuilt.push('|');
+            }
+            rebuilt.push_str(&high_src);
+            rebuilt.push_str(&low_src);
+            rebuilt.push(')');
+            Some((rebuilt, after))
+        }
+        // Other quantifiers can't be hoisted into the group; bail.
+        Some('*' | '+' | '{') => None,
+        // Plain group: H pairs with each alternative's leading low half.
+        _ => {
+            let mut rebuilt = String::from("(?:");
+            for (idx, a) in alts.iter().enumerate() {
+                if idx > 0 {
+                    rebuilt.push('|');
+                }
+                rebuilt.push_str(&high_src);
+                rebuilt.push_str(a);
+            }
+            rebuilt.push(')');
+            Some((rebuilt, close + 1))
+        }
+    }
+}
+
+/// Index of the `)` matching the `(` at `chars[open]`, scanning depth-aware and
+/// skipping `\`-escapes and `[…]` classes. `None` if unbalanced.
+fn matching_paren(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_class = false;
+    let mut k = open;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' {
+            k += 2;
+            continue;
+        }
+        if in_class {
+            if c == ']' {
+                in_class = false;
+            }
+        } else if c == '[' {
+            in_class = true;
+        } else if c == '(' {
+            depth += 1;
+        } else if c == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(k);
+            }
+        }
+        k += 1;
+    }
+    None
+}
+
+/// Split `chars[start..end]` into its top-level `|`-separated alternatives,
+/// honoring `\`-escapes, `[…]` classes, and `(…)` nesting.
+fn split_alternatives(chars: &[char], start: usize, end: usize) -> Vec<String> {
+    let mut alts = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    let mut in_class = false;
+    let mut k = start;
+    while k < end {
+        let c = chars[k];
+        if c == '\\' {
+            cur.push(c);
+            if k + 1 < end {
+                cur.push(chars[k + 1]);
+            }
+            k += 2;
+            continue;
+        }
+        if in_class {
+            cur.push(c);
+            if c == ']' {
+                in_class = false;
+            }
+        } else if c == '[' {
+            in_class = true;
+            cur.push(c);
+        } else if c == '(' {
+            depth += 1;
+            cur.push(c);
+        } else if c == ')' {
+            depth -= 1;
+            cur.push(c);
+        } else if c == '|' && depth == 0 {
+            alts.push(std::mem::take(&mut cur));
+        } else {
+            cur.push(c);
+        }
+        k += 1;
+    }
+    alts.push(cur);
+    alts
 }
 
 /// Parse a `\p{...}` / `\P{...}` Unicode property escape starting at `chars[i]`
@@ -607,19 +1180,182 @@ fn next_is_class_shorthand(chars: &[char], i: usize) -> bool {
     )
 }
 
-/// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
-/// Handles JS-specific escape sequences not supported by the Rust regex crate.
-/// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
+/// Rewrites quantified lookaround groups (`(?=…)?`, `(?!…)*`, `(?:(?=…))?`, etc.)
+/// into a form `fancy-regex` accepts. Lower-bound-0 → drop the assertion; ≥1 →
+/// keep the assertion, drop the quantifier. JS/V8 allow these; `fancy-regex`
+/// rejects them outright. Also handles the `(?:LOOK)Q` non-capturing-wrapper form.
+fn normalize_quantified_lookaround(pattern: &str) -> String {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    let mut in_class = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            // Copy an escape pair verbatim — a `\(` is a literal paren.
+            out.push(c);
+            if i + 1 < chars.len() {
+                out.push(chars[i + 1]);
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if in_class {
+            if c == ']' {
+                in_class = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '[' {
+            in_class = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        // Detect a lookaround group opener: `(?=`, `(?!`, `(?<=`, `(?<!`.
+        let look_len = lookaround_opener_len(&chars, i);
+        if let Some(open_len) = look_len {
+            // Find the matching close paren for this group (nesting-aware).
+            if let Some(close) = matching_group_close(&chars, i) {
+                // Is there a quantifier right after the close paren?
+                if let Some((qstart, qend, lower_zero)) = quantifier_after(&chars, close + 1) {
+                    let _ = open_len;
+                    if lower_zero {
+                        // No-op: drop the whole assertion + quantifier.
+                    } else {
+                        // Keep the assertion verbatim, drop the quantifier.
+                        for ch in &chars[i..=close] {
+                            out.push(*ch);
+                        }
+                    }
+                    let _ = qstart;
+                    i = qend;
+                    continue;
+                }
+            }
+        }
+        // `(?:LOOK)Q`: single-lookaround non-capturing group — same normalization.
+        if c == '(' && chars.get(i + 1) == Some(&'?') && chars.get(i + 2) == Some(&':') {
+            if let Some(close) = matching_group_close(&chars, i) {
+                if let Some((_, qend, lower_zero)) = quantifier_after(&chars, close + 1) {
+                    let content = i + 3;
+                    if lookaround_opener_len(&chars, content).is_some() {
+                        if let Some(inner_close) = matching_group_close(&chars, content) {
+                            if inner_close + 1 == close {
+                                if !lower_zero {
+                                    for ch in &chars[content..=inner_close] {
+                                        out.push(*ch);
+                                    }
+                                }
+                                i = qend;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// If `chars[i]` begins a lookaround opener (`(?=`, `(?!`, `(?<=`, `(?<!`),
+/// return the opener length (3 or 4); otherwise `None`.
+fn lookaround_opener_len(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'(') || chars.get(i + 1) != Some(&'?') {
+        return None;
+    }
+    match chars.get(i + 2) {
+        Some('=') | Some('!') => Some(3),
+        Some('<') => match chars.get(i + 3) {
+            Some('=') | Some('!') => Some(4),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Index of the `)` that closes the group opened at `chars[open]` (`open` must
+/// point at `(`), honoring nesting, escapes, and `[...]` classes. `None` if
+/// unbalanced.
+fn matching_group_close(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut j = open;
+    let mut in_class = false;
+    while j < chars.len() {
+        let c = chars[j];
+        if c == '\\' {
+            j += 2;
+            continue;
+        }
+        if in_class {
+            if c == ']' {
+                in_class = false;
+            }
+            j += 1;
+            continue;
+        }
+        match c {
+            '[' => in_class = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j);
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+/// If a quantifier starts at `chars[start]`, return `(start, end_exclusive,
+/// lower_bound_is_zero)`; otherwise `None`. Consumes a trailing lazy `?`.
+fn quantifier_after(chars: &[char], start: usize) -> Option<(usize, usize, bool)> {
+    let (mut end, lower_zero) = match chars.get(start) {
+        Some('?') | Some('*') => (start + 1, true),
+        Some('+') => (start + 1, false),
+        Some('{') => {
+            let close = parse_braced_quantifier(chars, start)?;
+            // Lower bound is the digits between `{` and `,`/`}`.
+            let mut k = start + 1;
+            let mut lower = 0u64;
+            let mut saw_digit = false;
+            while k < chars.len() && chars[k].is_ascii_digit() {
+                lower = lower
+                    .saturating_mul(10)
+                    .saturating_add(chars[k].to_digit(10).unwrap_or(0) as u64);
+                saw_digit = true;
+                k += 1;
+            }
+            (close + 1, saw_digit && lower == 0)
+        }
+        _ => return None,
+    };
+    // Lazy modifier on the quantifier (`*?`, `+?`, `{1,2}?`).
+    if chars.get(end) == Some(&'?') {
+        end += 1;
+    }
+    Some((start, end, lower_zero))
+}
+
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
     let folded = fold_surrogate_pairs(pattern);
+    let folded = normalize_quantified_lookaround(&folded);
+    let folded = clamp_large_quantifiers(&folded);
     let mut result = String::with_capacity(folded.len());
     let chars: Vec<char> = folded.chars().collect();
     let capture_spans = collect_capture_spans(&chars);
     let mut i = 0;
-    // Track whether we're inside a `[...]` character class. JS and the Rust
-    // `regex` crate disagree on how a bare `[` inside a class is read, so we
-    // reconcile it below.
-    let mut in_class = false;
+    let mut in_class = false; // track `[...]` position; JS and Rust disagree on bare `[` inside
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             match chars[i + 1] {
@@ -628,30 +1364,56 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     result.push('/');
                     i += 2;
                 }
-                'c' if i + 2 < chars.len() => {
-                    if let Some(value) = control_escape_value(chars[i + 2]) {
+                'c' => {
+                    if let Some(value) = chars.get(i + 2).copied().and_then(control_escape_value) {
                         push_hex_escape(&mut result, value);
                         i += 3;
                     } else {
+                        // Annex B.1.4: a `\c` not followed by an ASCII control
+                        // letter (e.g. `\cА` with a Cyrillic letter, `\c$`, or a
+                        // trailing `\c`) is *not* a control escape — it is the
+                        // literal two-character sequence `\` `c`. Emit an escaped
+                        // backslash plus a literal `c` (the `regex`/`fancy-regex`
+                        // crates reject a bare `\c`); the following char, if any,
+                        // is processed normally so quantifiers/class members keep
+                        // their meaning. Works the same inside a `[...]` class.
+                        result.push('\\');
                         result.push('\\');
                         result.push('c');
                         i += 2;
                     }
                 }
-                '0' if i + 2 >= chars.len() || !chars[i + 2].is_ascii_digit() => {
-                    push_hex_escape(&mut result, 0);
-                    i += 2;
+                '0' => {
+                    // `\0` (NUL) and the legacy octal forms `\0DD` (Annex B.1.4)
+                    // — `push_legacy_octal_escape` consumes the octal run and
+                    // emits `\x{HH}`; a bare `\0` yields `\x00`.
+                    let consumed = push_legacy_octal_escape(&mut result, &chars, i + 1);
+                    i += 1 + consumed;
                 }
                 '1'..='9' => {
                     let (group, digits) = parse_decimal_escape(&chars, i + 1);
-                    if is_forward_backreference(&capture_spans, i, group) {
-                        i += 1 + digits;
-                    } else {
-                        result.push('\\');
-                        for ch in &chars[i + 1..i + 1 + digits] {
-                            result.push(*ch);
+                    // Inside a `[...]` class a decimal escape is never a
+                    // backreference — it is always a legacy octal/identity
+                    // escape (e.g. `[\12-\14]` is the range `\x0A`–`\x0C`).
+                    // Outside a class, `\<n>` is a backreference only when group
+                    // `n` actually exists; otherwise Annex B.1.4 reinterprets it.
+                    if !in_class && group <= capture_spans.len() {
+                        if is_forward_backreference(&capture_spans, i, group) {
+                            // A not-yet-closed group can't be matched by the
+                            // `regex`/`fancy-regex` engines; drop the reference.
+                            i += 1 + digits;
+                        } else {
+                            // A real backward backreference — keep it for
+                            // fancy-regex (the `regex` crate has no backrefs).
+                            result.push('\\');
+                            for ch in &chars[i + 1..i + 1 + digits] {
+                                result.push(*ch);
+                            }
+                            i += 1 + digits;
                         }
-                        i += 1 + digits;
+                    } else {
+                        let consumed = push_legacy_octal_escape(&mut result, &chars, i + 1);
+                        i += 1 + consumed;
                     }
                 }
                 'p' | 'P' if chars.get(i + 2) == Some(&'{') => {
@@ -672,6 +1434,18 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     // mis-compiling (Node also rejects `\P{RGI_Emoji}`).
                     // All other properties pass through to the crate unchanged.
                     match parse_unicode_property(&chars, i) {
+                        Some((value, negated, end)) if is_unsupported_property_value(&value) => {
+                            if in_class {
+                                if negated {
+                                    result.push_str("\\s\\S");
+                                }
+                            } else if negated {
+                                result.push_str("[\\s\\S]");
+                            } else {
+                                result.push_str("[^\\s\\S]");
+                            }
+                            i = end;
+                        }
                         Some((value, negated, end)) if is_surrogate_property(&value) => {
                             if in_class {
                                 // A never-matching member contributes nothing to a
@@ -697,6 +1471,32 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                             result.push(chars[i + 1]);
                             i += 2;
                         }
+                    }
+                }
+                // `\s`/`\S` outside class: JS excludes NEL (U+0085), Rust includes it.
+                's' if !in_class => {
+                    result.push_str(JS_WHITESPACE_CLASS);
+                    i += 2;
+                }
+                'S' if !in_class => {
+                    result.push_str(JS_NON_WHITESPACE_CLASS);
+                    i += 2;
+                }
+                // `\uXXXX` lone surrogate outside class: `regex` rejects these; emit never-match.
+                'u' if !in_class => {
+                    if let Some((v, end)) = parse_u4_escape(&chars, i) {
+                        if is_surrogate(v) {
+                            result.push_str("[^\\s\\S]");
+                            i = end;
+                        } else {
+                            result.push('\\');
+                            result.push('u');
+                            i += 2;
+                        }
+                    } else {
+                        result.push('\\');
+                        result.push('u');
+                        i += 2;
                     }
                 }
                 // A lone-surrogate `\uXXXX` (or `\uXXXX-\uYYYY` range) inside a
@@ -812,7 +1612,160 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::has_unicode_forbidden_pattern;
     use super::js_regex_to_rust;
+    use super::normalize_quantified_lookaround;
+
+    #[test]
+    fn unicode_forbidden_pattern_rejects_annex_b_leniencies() {
+        // test262 built-ins/RegExp/unicode_restricted_* — Annex B.1.4 does NOT
+        // apply under `/u`, so each of these must be a SyntaxError.
+        let forbidden = [
+            // Standalone brackets (unicode_restricted_brackets).
+            "]",
+            "}",
+            "{",
+            // Incomplete quantifiers (unicode_restricted_incomplete_quantifier).
+            "a{",
+            "a{1",
+            "a{1,",
+            "a{1,2",
+            "{1",
+            "{1,",
+            "{1,2",
+            // ClassEscape in a range (unicode_restricted_character_class_escape).
+            "[\\d-a]",
+            "[\\D-a]",
+            "[\\s-a]",
+            "[\\S-a]",
+            "[\\w-a]",
+            "[\\W-a]",
+            "[a-\\d]",
+            "[a-\\w]",
+            "[\\d-\\d]",
+            "[\\s-\\S]",
+            // Property escapes are CharacterClassEscapes too (CodeRabbit #5749).
+            "[\\p{L}-a]",
+            "[a-\\p{L}]",
+            "[\\p{L}-\\p{N}]",
+            "[\\P{L}-a]",
+            // Quantified assertions (unicode_restricted_quantifiable_assertion).
+            "(?=.)*",
+            "(?=.)+",
+            "(?=.)?",
+            "(?=.){1}",
+            "(?=.){1,2}",
+            "(?=.)*?",
+            "(?!.)*",
+            "(?<=.)*",
+            "(?<!.)*",
+            // Forbidden IdentityEscapes (unicode_restricted_identity_escape[_alpha]).
+            "\\A",
+            "\\T",
+            "\\a",
+            "\\z",
+            "\\-",
+            "\\@",
+            "\\~",
+            // Bare incomplete escapes — also forbidden under `/u`.
+            "\\x",
+            "\\u",
+            "\\p",
+            "\\k",
+            "\\x4",
+            "\\u{}",
+            "[\\B]",
+        ];
+        for p in forbidden {
+            assert!(
+                has_unicode_forbidden_pattern(p),
+                "expected `/{p}/u` to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_forbidden_pattern_accepts_valid_unicode_patterns() {
+        // None of these may be falsely rejected — they are all valid under `/u`.
+        let allowed = [
+            "abc",
+            "a{1,2}",
+            "a{2}",
+            "a{2,}",
+            "(?=.)",
+            "(?:ab)*",
+            "(ab)?c",
+            "(?<name>x)",
+            "[a-z]",
+            "[\\d]",
+            "[\\d-]",
+            "[-\\d]",
+            "[\\p{L}-]",
+            "[-\\p{L}]",
+            "[\\w_]",
+            "[\\b]",
+            "[\\p{L}]",
+            "\\d+",
+            "\\w\\s\\b\\B",
+            "\\.",
+            "\\/",
+            "\\]",
+            "\\}",
+            "\\{",
+            "\\x41",
+            "\\u0041",
+            "\\u{1F600}",
+            "\\p{L}",
+            "\\P{N}",
+            "\\cA",
+            "\\n\\r\\t\\v\\f",
+            "\\k<n>(?<n>x)",
+            "[\\-]",
+            "a|b",
+            "^$",
+        ];
+        for p in allowed {
+            assert!(
+                !has_unicode_forbidden_pattern(p),
+                "expected `/{p}/u` to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn quantified_lookaround_normalizes() {
+        // #5437: a quantifier on a zero-width assertion is JS-valid but rejected
+        // by both the `regex` crate and fancy-regex. Lower bound 0 → drop the
+        // whole assertion (no-op); lower bound ≥1 → keep the assertion, drop the
+        // quantifier. Next's UA-parser table (`(?=lg)?[vl]k…`) hits this.
+        assert_eq!(normalize_quantified_lookaround("(?=lg)?x"), "x");
+        assert_eq!(normalize_quantified_lookaround("(?!a)*b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?<=a){0,3}b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?<!a){0}b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?=a)+b"), "(?=a)b");
+        assert_eq!(normalize_quantified_lookaround("(?=a){2,3}b"), "(?=a)b");
+        // Lazy modifier on the quantifier is consumed too.
+        assert_eq!(normalize_quantified_lookaround("(?=a)*?b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?=a)+?b"), "(?=a)b");
+        // A bare (unquantified) lookaround is left untouched.
+        assert_eq!(normalize_quantified_lookaround("(?=a)b"), "(?=a)b");
+        assert_eq!(normalize_quantified_lookaround("(?!a)b"), "(?!a)b");
+        // The exact Next UA-parser fragment: the inner optional lookahead drops,
+        // the surrounding capture group and the rest stay intact.
+        assert_eq!(
+            normalize_quantified_lookaround(r"((?=lg)?[vl]k\-?\d{3}) bui"),
+            r"([vl]k\-?\d{3}) bui"
+        );
+        // Nested group inside the lookaround: close-paren matching is depth-aware.
+        assert_eq!(normalize_quantified_lookaround("(?=(ab)c)?d"), "d");
+        // A literal escaped paren must not be treated as a group.
+        assert_eq!(normalize_quantified_lookaround(r"\(?=a\)?b"), r"\(?=a\)?b");
+        // Inside a character class, `(?=` is literal — leave it alone.
+        assert_eq!(normalize_quantified_lookaround("[(?=a)]?b"), "[(?=a)]?b");
+        // A quantifier on a normal (non-lookaround) group is untouched.
+        assert_eq!(normalize_quantified_lookaround("(ab)?c"), "(ab)?c");
+        assert_eq!(normalize_quantified_lookaround("(?:ab)?c"), "(?:ab)?c");
+    }
 
     #[test]
     fn surrogate_property_rewrites_to_never_match() {

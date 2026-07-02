@@ -39,6 +39,7 @@ impl JsEmitter {
                 body,
                 headers,
                 headers_dynamic,
+                signal,
             } => {
                 self.output.push_str("fetch(");
                 self.emit_expr(url);
@@ -62,6 +63,10 @@ impl JsEmitter {
                         self.emit_expr(val);
                     }
                     self.output.push('}');
+                }
+                if let Some(sig) = signal {
+                    self.output.push_str(", signal: ");
+                    self.emit_expr(sig);
                 }
                 self.output.push_str("})");
             }

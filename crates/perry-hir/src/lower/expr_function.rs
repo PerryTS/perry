@@ -578,6 +578,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // in a class field initializer. Cleared here, restored at the end.
     let saved_field_init = ctx.in_class_field_init;
     ctx.in_class_field_init = false;
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
 
     // Lower parameters and collect destructuring info.
     //
@@ -683,6 +685,21 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // repopulates it for this body.
     let saved_annexb_block_fn_var_ids = std::mem::take(&mut ctx.annexb_block_fn_var_ids);
     let saved_annexb_block_fn_names_all = std::mem::take(&mut ctx.annexb_block_fn_names_all);
+    // Nested `function*` declarations forward-referenced by an earlier sibling
+    // in this function-expression body (the cjs_wrap IIFE: `pathToRegexp` calls
+    // `flatten`, declared below it) must use the closure-lowering path. Scope
+    // the set to this body and restore on exit.
+    let saved_nested_gen_fwd = std::mem::take(&mut ctx.nested_generator_forward_referenced);
+    ctx.nested_generator_forward_referenced = fn_expr
+        .function
+        .body
+        .as_ref()
+        .map(|b| {
+            crate::lower_decl::forward_referenced_nested_generators(&b.stmts)
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Generate Let statements for destructuring patterns BEFORE lowering body
     let mut destructuring_stmts = Vec::new();
@@ -799,8 +816,27 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         }
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
-                if fn_decl.function.body.is_some() && !fn_decl.function.is_generator {
-                    let name = fn_decl.ident.sym.to_string();
+                let name = fn_decl.ident.sym.to_string();
+                // Non-generator fn-decls hoist as before. GENERATOR fn-decls
+                // only need a pre-defined+hoisted local when they take the
+                // closure-lowering path AND are forward-referenced by an earlier
+                // sibling (path-to-regexp's `pathToRegexp` → `flatten`): the
+                // closure path emits `let <name> = Closure`, which must be
+                // pre-defined so the earlier reference resolves to the local and
+                // hoisted (in `hoisted_id_set`) so the binding runs before that
+                // reference. A generator that takes the TOP-LEVEL path (the
+                // common, non-forward-referenced case) must NOT be pre-defined
+                // here — boxing/hoisting its `FuncRef` binding would make its own
+                // recursive self-call read a boxed slot instead of the callable
+                // `FuncRef` (`TypeError: value is not a function`).
+                let take = if fn_decl.function.body.is_none() {
+                    false
+                } else if fn_decl.function.is_generator {
+                    ctx.nested_generator_forward_referenced.contains(&name)
+                } else {
+                    true
+                };
+                if take {
                     let existing_in_scope = ctx
                         .locals
                         .lookup_index_in_scope(&name, outer_locals_len)
@@ -1011,7 +1047,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // `js_global_get_or_throw_unresolved("X")` → `ReferenceError: X is not
     // defined` (Next.js RSCPathnameNormalizer). Scoped: restored after the body.
     let saved_forward_class_names = ctx.forward_class_names.clone();
+    let saved_forward_class_decl_depth = ctx.forward_class_decl_depth.clone();
     let saved_class_renames = ctx.class_renames.clone();
+    let fn_body_scope_depth = ctx.scope_depth;
     if let Some(ref block) = fn_expr.function.body {
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
@@ -1020,8 +1058,12 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                 // `Struct` = `class s`, which collided with other `class s` in
                 // the bundle and was dedup-skipped). See `class_renames`.
                 ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
-                ctx.forward_class_names
-                    .insert(class_decl.ident.sym.to_string());
+                let cname = class_decl.ident.sym.to_string();
+                ctx.forward_class_decl_depth
+                    .entry(cname.clone())
+                    .and_modify(|d| *d = (*d).min(fn_body_scope_depth))
+                    .or_insert(fn_body_scope_depth);
+                ctx.forward_class_names.insert(cname);
             }
         }
     }
@@ -1085,11 +1127,69 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     } else {
         Vec::new()
     };
+
+    // Mirror `lower_fn_body_block_stmt`'s (block.rs) end-of-body class-capture
+    // re-registration for FUNCTION-EXPRESSION bodies — which previously skipped
+    // it (arrow / fn-decl bodies already do this; function expressions, incl.
+    // the cjs_wrap IIFE `(function() { … })()`, did not). The decl-site
+    // `RegisterClassCaptures` snapshot is taken at the class's declaration
+    // position, which runs BEFORE later statements assign captured vars: the
+    // ubiquitous tsc computed-member emit `var _a; class C { [_a]=… }; _a =
+    // Symbol.for(…)` assigns `_a` AFTER the class, so the decl-site snapshot
+    // recorded `undefined`. A statically-resolved `new C(…)` appends the live
+    // value and is fine, but a DYNAMICALLY-resolved construct (`new ns.C(…)`
+    // cross-module — how NestJS builds `InstanceWrapper`) appends no cap arg and
+    // falls back to that stale snapshot → captured field reads `undefined`.
+    // Refresh the snapshot with the FINAL values at body end (inserted before a
+    // trailing `return`).
+    if let Some(ref block) = fn_expr.function.body {
+        let mut re_regs: Vec<Stmt> = Vec::new();
+        for stmt in &block.stmts {
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                // A colliding `class X` may have been renamed during body
+                // lowering; captures + `new` are registered under the resolved
+                // name, so use it here too (the raw AST name would miss).
+                let cname = ctx.resolve_class_name(class_decl.ident.sym.as_str());
+                if let Some(captured) = ctx.lookup_class_captures(&cname) {
+                    if !captured.is_empty() {
+                        let captures: Vec<Expr> =
+                            captured.iter().map(|id| Expr::LocalGet(*id)).collect();
+                        let cap_args: Vec<(LocalId, LocalId)> =
+                            captured.iter().map(|id| (*id, *id)).collect();
+                        for s in body.iter_mut() {
+                            crate::lower_decl::append_new_args_stmt(s, &cname, &cap_args, true);
+                        }
+                        re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                            class_name: cname,
+                            captures,
+                        }));
+                    }
+                }
+            }
+        }
+        if !re_regs.is_empty() {
+            // Refresh the snapshot before EVERY reachable `return` in the body
+            // (not only a trailing one): an EARLY `return <class>` after the
+            // captured locals are assigned would otherwise return a class with
+            // the stale declaration-time snapshot. The walk descends statement
+            // children (if/loops/try/switch/labeled) but NOT into nested
+            // closures — their `return`s belong to a different function.
+            insert_class_capture_refresh_before_returns(&mut body, &re_regs);
+            // Fallthrough (implicit return at body end). When the body already
+            // ends in a `return`, the walk above handled it; otherwise append so
+            // a no-early-return fallthrough path also records the final values.
+            if !matches!(body.last(), Some(Stmt::Return(_))) {
+                body.extend(re_regs.iter().cloned());
+            }
+        }
+    }
     ctx.current_strict = outer_strict;
     ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
     ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
     ctx.forward_class_names = saved_forward_class_names;
+    ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
     ctx.class_renames = saved_class_renames;
+    ctx.nested_generator_forward_referenced = saved_nested_gen_fwd;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {
@@ -1119,6 +1219,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.in_class_field_init = saved_field_init;
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Scope popped: `ctx.locals.id_set()` is now the enclosing scope's locals.
     let (captures, mutable_captures) =
@@ -1153,6 +1254,72 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         is_generator: fn_expr.function.is_generator,
         is_strict,
     })
+}
+
+/// Insert a copy of `re_regs` (class-capture refresh statements) immediately
+/// before EVERY reachable `Stmt::Return` in `stmts`, descending into nested
+/// statement bodies (if/loops/try/switch/labeled) but NOT into nested closures
+/// — a closure's `return` exits a different function and must keep its own
+/// snapshot. Each return path then records the live capture values at that
+/// point. See the call site in `lower_fn_expr_anon` (CodeRabbit #5739).
+fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>, re_regs: &[Stmt]) {
+    let mut i = 0;
+    while i < stmts.len() {
+        insert_class_capture_refresh_into_stmt(&mut stmts[i], re_regs);
+        if matches!(&stmts[i], Stmt::Return(_)) {
+            for (j, s) in re_regs.iter().cloned().enumerate() {
+                stmts.insert(i + j, s);
+            }
+            i += re_regs.len();
+        }
+        i += 1;
+    }
+}
+
+/// Recurse into a single statement's child statement lists for
+/// [`insert_class_capture_refresh_before_returns`].
+fn insert_class_capture_refresh_into_stmt(stmt: &mut Stmt, re_regs: &[Stmt]) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            insert_class_capture_refresh_before_returns(then_branch, re_regs);
+            if let Some(eb) = else_branch {
+                insert_class_capture_refresh_before_returns(eb, re_regs);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            insert_class_capture_refresh_before_returns(body, re_regs);
+        }
+        Stmt::For { init, body, .. } => {
+            if let Some(init) = init {
+                insert_class_capture_refresh_into_stmt(init, re_regs);
+            }
+            insert_class_capture_refresh_before_returns(body, re_regs);
+        }
+        Stmt::Labeled { body, .. } => insert_class_capture_refresh_into_stmt(body, re_regs),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            insert_class_capture_refresh_before_returns(body, re_regs);
+            if let Some(c) = catch {
+                insert_class_capture_refresh_before_returns(&mut c.body, re_regs);
+            }
+            if let Some(f) = finally {
+                insert_class_capture_refresh_before_returns(f, re_regs);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for c in cases {
+                insert_class_capture_refresh_before_returns(&mut c.body, re_regs);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Shared closure-capture analysis used by both `lower_arrow` and

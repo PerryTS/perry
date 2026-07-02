@@ -117,6 +117,18 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return primitive;
     }
 
+    // A callable closure is NOT an `ObjectHeader`. The URL probe and the
+    // ordinary-object `valueOf`/`toString` machinery below all bit-cast `ptr`
+    // to an `ObjectHeader`; for a class-method closure
+    // (`"" + C.prototype.method`) the `valueOf` field lookup reads a bogus slot
+    // that it then calls → EXC_BAD_ACCESS. Resolve the function's ToPrimitive
+    // through the closure-aware path (own/inherited `valueOf` if primitive, else
+    // the `Function.prototype.toString` source form). `Symbol.toPrimitive` was
+    // already consulted by `js_to_primitive` above.
+    if crate::closure::is_closure_ptr(ptr) {
+        return crate::value::function_to_primitive_for_add(value);
+    }
+
     if crate::date::is_date_cell_addr(ptr) {
         let s = crate::date::js_date_to_string(value);
         return crate::value::js_nanbox_string(s as i64);
@@ -195,13 +207,29 @@ unsafe fn dynamic_bigint_binary_op_from_handles<'scope>(
     js_nanbox_bigint(result as i64)
 }
 
+/// Decode an int32-tagged operand to its plain-double value before an f64
+/// arithmetic op. An int32 is NaN-boxed (INT32_TAG = 0x7FFE), so its f64 bits
+/// ARE a NaN; a raw `a OP b` would propagate the tag through the FPU (ARM64
+/// keeps the NaN payload) and hand back the boxed operand instead of the
+/// result — e.g. a better-sqlite3 integer column `n` made `n + 100 === n`.
+/// Plain doubles (and real NaNs from arithmetic) pass through unchanged.
+#[inline]
+fn numify_arith_operand(v: f64) -> f64 {
+    let jv = JSValue::from_bits(v.to_bits());
+    if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        v
+    }
+}
+
 /// Dynamic multiply: BigInt * BigInt if either operand is BigInt, else f64 * f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mul);
     }
-    a * b
+    numify_arith_operand(a) * numify_arith_operand(b)
 }
 
 /// Dynamic add: BigInt + BigInt if either operand is BigInt, else f64 + f64.
@@ -210,7 +238,7 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
     }
-    a + b
+    numify_arith_operand(a) + numify_arith_operand(b)
 }
 
 /// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
@@ -265,6 +293,27 @@ pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64
 /// the results — turning `"c" + ""` into `NaN + 0 = NaN`).
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 {
+    // #5525 hot fast path: both operands are plain IEEE-754 doubles (not a
+    // NaN-boxed string / pointer / bigint / int32 / singleton — i.e. top 16 bits
+    // below the 0x7FF9 Perry tag band). Then `a + b` is exactly the spec result:
+    // ToPrimitive is identity on numbers, neither side is a string (no concat),
+    // neither is a BigInt or Symbol, and there are no GC pointers to root. This
+    // skips the `RuntimeHandleScope` + four `root_nanbox_f64` thread-local
+    // accesses (`_tlv_get_addr`) that otherwise run for *every* dynamic `+`.
+    // bcryptjs's Blowfish core does ~hundreds of millions of `n += S[i]` adds on
+    // `any`-typed locals whose values are always plain numbers, so this scope +
+    // rooting was the single largest remaining cost after the typed-array
+    // element-access fix (#5525). Canonical-NaN (0x7FF8) and negative-NaN
+    // payloads from real arithmetic stay on this path and add to NaN, matching
+    // IEEE semantics. Any tagged operand falls through to the full path below.
+    const TAG_BAND_FLOOR: u64 = 0x7FF9_0000_0000_0000;
+    let abits = a.to_bits();
+    let bbits = b.to_bits();
+    if (abits & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR
+        && (bbits & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR
+    {
+        return a + b;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let a_handle = scope.root_nanbox_f64(a);
     let b_handle = scope.root_nanbox_f64(b);
@@ -330,14 +379,22 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     }
 
     // Both numeric — coerce non-numbers (booleans, null, undefined) the
-    // same way the static fallback path did.
-    let a_num = if a_val.is_number() || a_val.is_int32() {
+    // same way the static fallback path did. An int32 must be DECODED to its
+    // plain-double value, not passed through as its NaN-boxed bits: the bits
+    // are a NaN, so `a_num + b_num` would propagate the int32 tag through fadd
+    // and return the boxed operand (a better-sqlite3 integer column `n` made
+    // `n + 100 === n`). Plain numbers already hold their value in the f64.
+    let a_num = if a_val.is_number() {
         a_prim_handle.get_nanbox_f64()
+    } else if a_val.is_int32() {
+        a_val.as_int32() as f64
     } else {
         crate::builtins::js_number_coerce(a_prim_handle.get_nanbox_f64())
     };
-    let b_num = if b_val.is_number() || b_val.is_int32() {
+    let b_num = if b_val.is_number() {
         b_prim_handle.get_nanbox_f64()
+    } else if b_val.is_int32() {
+        b_val.as_int32() as f64
     } else {
         crate::builtins::js_number_coerce(b_prim_handle.get_nanbox_f64())
     };
@@ -350,7 +407,7 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_sub);
     }
-    a - b
+    numify_arith_operand(a) - numify_arith_operand(b)
 }
 
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
@@ -359,7 +416,7 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_div);
     }
-    a / b
+    numify_arith_operand(a) / numify_arith_operand(b)
 }
 
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
@@ -369,6 +426,8 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mod);
     }
     // Float modulo: a - trunc(a / b) * b
+    let a = numify_arith_operand(a);
+    let b = numify_arith_operand(b);
     a - (a / b).trunc() * b
 }
 
@@ -399,7 +458,17 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
         );
         return js_nanbox_bigint(result as i64);
     }
-    (!(a as i64 as i32)) as f64
+    // Apply ToNumber first so that ~"3", ~true, ~new Boolean(true), etc.
+    // coerce correctly before the ToInt32 truncation.
+    let a_num = crate::builtins::js_number_coerce(a);
+    // ES ToInt32: NaN, ±0, ±Infinity all map to 0; finite values use
+    // C-style i64 truncation (equivalent to modulo-2^32 + sign-extend).
+    let a_i32 = if a_num.is_nan() || !a_num.is_finite() {
+        0i32
+    } else {
+        a_num as i64 as i32
+    };
+    (!a_i32) as f64
 }
 
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
@@ -498,3 +567,37 @@ static KEEP_DYNAMIC_BITNOT: unsafe extern "C" fn(f64) -> f64 = js_dynamic_bitnot
 static KEEP_TO_NUMERIC: unsafe extern "C" fn(f64) -> f64 = js_to_numeric;
 #[used]
 static KEEP_NUMERIC_STEP: unsafe extern "C" fn(f64, i32) -> f64 = js_numeric_step;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int32(n: i32) -> f64 {
+        f64::from_bits(JSValue::int32(n).bits())
+    }
+
+    // An int32-tagged operand (e.g. a better-sqlite3 integer column) must be
+    // decoded to its value before the f64 op; otherwise its NaN-boxed bits
+    // propagate through the FPU and the op returns the boxed operand. Pre-fix,
+    // `n + 100 === n` for an integer DB column.
+    #[test]
+    fn dynamic_arith_decodes_int32_operands() {
+        unsafe {
+            assert_eq!(js_dynamic_add(int32(42), 100.0), 142.0);
+            assert_eq!(js_dynamic_add(100.0, int32(42)), 142.0);
+            assert_eq!(js_dynamic_sub(int32(42), 1.0), 41.0);
+            assert_eq!(js_dynamic_mul(int32(42), 2.0), 84.0);
+            assert_eq!(js_dynamic_div(int32(84), 2.0), 42.0);
+            assert_eq!(js_dynamic_mod(int32(43), 10.0), 3.0);
+        }
+    }
+
+    #[test]
+    fn dynamic_string_or_number_add_decodes_int32() {
+        unsafe {
+            assert_eq!(js_dynamic_string_or_number_add(int32(42), 100.0), 142.0);
+            assert_eq!(js_dynamic_string_or_number_add(100.0, int32(42)), 142.0);
+            assert_eq!(js_dynamic_string_or_number_add(int32(2), int32(3)), 5.0);
+        }
+    }
+}

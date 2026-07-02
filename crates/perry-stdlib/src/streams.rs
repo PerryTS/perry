@@ -690,17 +690,34 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
 }
 
 pub(super) unsafe fn maybe_pull(stream_id: usize) {
+    maybe_pull_inner(stream_id, false);
+}
+
+/// `maybe_pull` that pulls whenever the source can produce more, ignoring the
+/// highWaterMark / read-request gate. Used by the synchronous body drain
+/// (`new Response(stream)` / `new Request(url, { body: stream })`): that drain
+/// has no parked reader, so for a `highWaterMark: 0` stream the normal
+/// `maybe_pull` would refuse to pull and the body would drain EMPTY (CodeRabbit
+/// #5776). Forcing the pull when the queue is empty drives such a stream to
+/// completion regardless of its strategy.
+pub(super) unsafe fn maybe_pull_force(stream_id: usize) {
+    maybe_pull_inner(stream_id, true);
+}
+
+unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
     // ShouldCallPull (#4915): a parked read request always justifies a
     // pull (this is what drives byte streams with highWaterMark 0 — the
     // pull only fires once a `read()` / `read(view)` is waiting);
-    // otherwise pull while the queue is under the highWaterMark.
+    // otherwise pull while the queue is under the highWaterMark. `force`
+    // (drain path) pulls whenever the queue is empty regardless of strategy.
     let has_byob_pending = byob::has_pending(stream_id);
     let (cb, controller, should_pull, pull_returns_byte_chunk) = {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) if s.state == ReadableState::Readable && !s.pulling && s.started => {
                 let has_read_request = !s.pending_reads.is_empty() || has_byob_pending;
-                let need = has_read_request
+                let need = (force && s.chunks.is_empty())
+                    || has_read_request
                     || (s.chunks.is_empty() && s.high_water_mark > 0.0)
                     || (!s.chunks.is_empty() && s.queue_total_size < s.high_water_mark);
                 if need && s.pull_cb != 0 {

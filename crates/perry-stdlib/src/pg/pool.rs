@@ -147,7 +147,10 @@ pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u
             // produced a pre-pool handle. Already-built pools (from the
             // older `js_pg_create_pool` factory) skip the build cheaply.
             let pool = wrapper.ensure_pool().await?;
-            match sqlx::query(&sql).fetch_all(pool).await {
+            match sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
+                .fetch_all(pool)
+                .await
+            {
                 Ok(rows) => {
                     let columns: Vec<_> = if !rows.is_empty() {
                         rows[0].columns().to_vec()

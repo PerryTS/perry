@@ -204,6 +204,15 @@ pub extern "C" fn perry_ui_divider_create() -> i64 {
     widgets::divider::create()
 }
 
+/// Create an AdBanner (#867). `unit_id_ptr` / `size_ptr` are string
+/// headers (ad unit id + size key). On macOS this is a layout-only
+/// placeholder — Google Mobile Ads ships no macOS SDK — sized to match
+/// the real banner slot on iOS/Android. Returns widget handle.
+#[no_mangle]
+pub extern "C" fn perry_ui_adbanner_create(unit_id_ptr: i64, size_ptr: i64) -> i64 {
+    widgets::adbanner::create(unit_id_ptr as *const u8, size_ptr as *const u8)
+}
+
 /// Create an editable TextField. placeholder_ptr = string, on_change = NaN-boxed closure.
 /// Returns widget handle.
 #[no_mangle]

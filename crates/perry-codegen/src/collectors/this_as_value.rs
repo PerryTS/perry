@@ -219,6 +219,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         } => true,
         Expr::SuperCall(_)
         | Expr::SuperMethodCall { .. }
+        | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertySet { .. }
         | Expr::ObjectSuperPropertyGet { .. }
         | Expr::ObjectSuperPropertySet { .. }
@@ -441,6 +442,7 @@ mod tests {
             extends_name: extends_name.map(str::to_string),
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields: Vec::new(),
             constructor: None,
             methods: Vec::new(),

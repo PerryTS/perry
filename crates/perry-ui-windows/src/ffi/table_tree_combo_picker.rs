@@ -76,8 +76,17 @@ pub extern "C" fn perry_ui_combobox_get_value(handle: i64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_picker_create(label_ptr: i64, on_change: f64, style: i64) -> i64 {
-    widgets::picker::create(label_ptr as *const u8, on_change, style)
+pub extern "C" fn perry_ui_picker_create(on_change: f64) -> i64 {
+    // The dispatch table (perry-dispatch `ui_table`) passes a single
+    // `Closure` arg, matching the TS `Picker(onChange)` API. A 3-arg
+    // `(label_ptr, on_change, style)` signature mis-binds `on_change` on
+    // the Windows x64 ABI, where register slots are assigned by argument
+    // position regardless of type: the lone f64 lands in XMM0, but a
+    // positional arg-1 f64 is read from XMM1, so the callback pointer is
+    // never stored and `onChange` never fires (issue #5491). On SysV
+    // (macOS/Linux) float args are classed independently, so it happened
+    // to work. label/style were never wired from TS — pass null/0.
+    widgets::picker::create(std::ptr::null(), on_change, 0)
 }
 
 /// Add an item to a Picker.

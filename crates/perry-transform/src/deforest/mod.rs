@@ -82,7 +82,9 @@ mod walk;
 mod tests;
 
 pub use call_sites::{rewrite_call_sites_in_stmts, rewrite_call_sites_in_stmts_with_local_pass};
-pub use detect::{analyze_producer, body_has_closure, detect_producers, stmt_contains_return};
+pub use detect::{
+    analyze_producer, body_has_closure, body_has_super, detect_producers, stmt_contains_return,
+};
 pub use out_usage::OutUsageAnalyzer;
 pub use producer_rewrite::{rewrite_producer_body, SubstituteLocal};
 pub use scan::{scan_funcref_misuses, scan_producers_used_in_closures, scan_unsafe_call_sites};
@@ -173,5 +175,74 @@ pub fn run(module: &mut Module) {
             continue;
         }
         rewrite_call_sites_in_stmts(&mut func.body, &producers, &out_param_ids, &mut next_local);
+    }
+
+    // Class member bodies (constructors, methods, accessors, static methods)
+    // are equally valid producer call sites — `detect_producers` already
+    // scans them for unsafe usages, so a producer admitted here may have its
+    // only `let x = f(...)` call inside a method. Without rewriting those
+    // sites the call keeps its original arity while the producer's signature
+    // gained the `__deforest_out` param; codegen then passes `undefined` for
+    // the missing arg and the body operates on a non-array, SIGSEGVing (same
+    // class of arity-mismatch miscompile as the in-closure bail-out, #5136 —
+    // but here the call sites are ordinary statement bodies we can rewrite
+    // rather than bail on). Producers are only ever free functions
+    // (`analyze_producer` runs on `module.functions`), so no skip is needed.
+    for class in &mut module.classes {
+        if let Some(ctor) = &mut class.constructor {
+            // Super-using bodies are excluded from deforestation by the
+            // detect phase (their producer calls are marked as unsafe
+            // call sites so no producer is admitted for them). Guard
+            // here too so the rewrite is a guaranteed no-op for those
+            // bodies and can never inadvertently corrupt [[HomeObject]].
+            if !body_has_super(&ctor.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut ctor.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
+        }
+        for method in &mut class.methods {
+            if !body_has_super(&method.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut method.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
+        }
+        for (_, getter) in &mut class.getters {
+            if !body_has_super(&getter.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut getter.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
+        }
+        for (_, setter) in &mut class.setters {
+            if !body_has_super(&setter.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut setter.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
+        }
+        for method in &mut class.static_methods {
+            if !body_has_super(&method.body) {
+                rewrite_call_sites_in_stmts(
+                    &mut method.body,
+                    &producers,
+                    &out_param_ids,
+                    &mut next_local,
+                );
+            }
+        }
     }
 }

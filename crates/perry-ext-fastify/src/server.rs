@@ -229,6 +229,31 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     // Extract port — accepts `{ port: 3000 }`, a bare number, or
     // falls back to 3000.
     let port = extract_port(opts);
+    // Honor an explicit `{ reusePort: true }` (the Node/Bun listen option) in
+    // addition to auto-enabling SO_REUSEPORT for cluster workers.
+    let reuse_port = extract_reuse_port(opts);
+
+    // Bind synchronously, BEFORE registering the server or firing the success
+    // callback, so a bind failure (e.g. EADDRINUSE) reaches the `(err, address)`
+    // callback as an error instead of being silently dropped inside the accept
+    // task while the caller has already been told listening succeeded. Only
+    // `from_std` needs a runtime context, so it stays in the spawned task below;
+    // the bind + `set_nonblocking` that actually fail on a port clash run here.
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let std_listener = match crate::cluster_bind::bind_listener(addr, reuse_port) {
+        Ok(l) => l,
+        Err(e) => {
+            fire_listen_error(callback, &e, port);
+            return;
+        }
+    };
+    if let Err(e) = std_listener.set_nonblocking(true) {
+        fire_listen_error(callback, &e, port);
+        return;
+    }
+    // `listen(0)` asks the OS for an ephemeral port; read the real one back so
+    // the registered handle + callback report the actual bound port.
+    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
 
     let (request_tx, request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
     // #1113 — separate channel for WebSocket upgrade events so a busy
@@ -260,14 +285,32 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     let upgrade_tx_for_spawn = upgrade_tx.clone();
     let routes_for_spawn = routes_arc.clone();
 
-    perry_ffi::spawn_blocking(move || {
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(async move {
-            let addr = SocketAddr::from(([0, 0, 0, 0], port));
-            let listener = match TcpListener::bind(addr).await {
+    // The accept loop must run as a cooperative task on the shared
+    // multi-thread runtime. A plain `spawn_blocking` thread does not
+    // reliably carry the runtime's reactor/worker context: with
+    // `Handle::current().block_on(accept_loop)` the listener bound and
+    // accepted connections, but the per-connection
+    // `tokio::spawn(serve_connection)` tasks below were never driven — the
+    // request bytes sat unread and every response hung (the "in release the
+    // IO loop silently failed to start" brittleness the net/ws adapters
+    // hit). `spawn_blocking_with_reactor` runs the closure inside a worker
+    // task (`runtime().spawn(async { … })`), so `tokio::spawn`-ing the
+    // accept loop drives it and its fan-out serve tasks on the worker pool —
+    // mirroring perry-ext-http-server / -net / -ws. (A bare
+    // `Handle::current().block_on` here would panic "Cannot start a runtime
+    // from within a runtime" inside the worker task; spawn instead.)
+    perry_ffi::spawn_blocking_with_reactor(move || {
+        tokio::spawn(async move {
+            // The bind already succeeded on the caller thread (so a port clash
+            // was reported to the listen callback). Here we only report the
+            // bound address for `cluster.on('listening')` and adopt the std
+            // listener into the tokio reactor — `from_std` is the one step that
+            // needs the runtime context this task provides.
+            crate::cluster_bind::notify_listening("0.0.0.0", actual_port);
+            let listener = match TcpListener::from_std(std_listener) {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("Failed to bind to port {}: {}", port, e);
+                    eprintln!("[fastify] adopting listener failed: {}", e);
                     return;
                 }
             };
@@ -326,7 +369,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     // handle so the pump (driven from perry-stdlib's main loop) can
     // drain it after `listen()` returns.
     let _server_handle = register_handle(FastifyServerHandle {
-        port,
+        port: actual_port,
         app_handle,
         shutdown_tx: Some(shutdown_tx),
         request_rx: Mutex::new(Some(request_rx)),
@@ -342,7 +385,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         } else {
             callback as *const RawClosureHeader
         };
-        let address = format!("http://0.0.0.0:{}", port);
+        let address = format!("http://0.0.0.0:{}", actual_port);
         let addr_str = alloc_string(&address);
         let addr_val = JsValue::from_string_ptr(addr_str.as_raw());
         let null_val = f64::from_bits(TAG_NULL);
@@ -352,7 +395,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         }
     }
 
-    println!("Server listening on http://0.0.0.0:{}", port);
+    println!("Server listening on http://0.0.0.0:{}", actual_port);
 
     // `listen()` is now non-blocking — the accept loop is already
     // spawned above, and `js_fastify_process_pending` drains pending
@@ -403,11 +446,82 @@ pub unsafe extern "C" fn js_fastify_app_close(app_handle: Handle) {
     }
 }
 
+/// Cap on the per-thread deferred-request queue (see
+/// `js_fastify_process_pending`). A pathological awaited-handler storm that
+/// exceeds this drops the newest pending — its `response_tx` Drop makes the
+/// awaiting hyper service-fn resolve `Err` (→ an error response), so memory is
+/// bounded (backpressure) rather than growing without limit.
+const DEFERRED_QUEUE_CAP: usize = 4096;
+
+/// Non-blocking `try_recv` of one pending request from a server's channel.
+/// Holds the `request_rx` mutex only for the `try_recv` itself, never across
+/// dispatch. Returns `None` when the channel is empty / the handle is gone.
+fn try_recv_pending_request(server_handle: Handle) -> Option<FastifyPendingRequest> {
+    let s = get_handle::<FastifyServerHandle>(server_handle)?;
+    let mut guard = s.request_rx.lock().unwrap();
+    guard.as_mut()?.try_recv().ok()
+}
+
+/// Move every currently-queued request out of one server's channel into
+/// `deferred` — the nested-pump path (see `js_fastify_process_pending`). Does
+/// NOT dispatch (dispatching in a nested frame would deepen the try-frame
+/// nesting toward `MAX_TRY_DEPTH`). Respects `cap`: once `deferred` holds `cap`
+/// entries, further pending are dropped, and dropping a `FastifyPendingRequest`
+/// drops its `response_tx`, signalling the awaiting service-fn with `Err`.
+/// Returns the number actually moved into `deferred`.
+fn drain_server_requests_into_deferred(
+    server_handle: Handle,
+    app_handle: Handle,
+    deferred: &mut std::collections::VecDeque<(Handle, FastifyPendingRequest)>,
+    cap: usize,
+) -> usize {
+    let mut moved = 0;
+    while let Some(pending) = try_recv_pending_request(server_handle) {
+        if deferred.len() < cap {
+            deferred.push_back((app_handle, pending));
+            moved += 1;
+        }
+        // else: `pending` is dropped here → response_tx Drop → service-fn Err.
+    }
+    moved
+}
+
+/// Drain & fire every queued WebSocket upgrade for one server (#1113). Upgrades
+/// are handled before request traffic — including *between* deferred-request
+/// dispatches in the pump's tail loop — so a busy / replenishing request stream
+/// can't starve them. Returns the number fired.
+fn drain_server_upgrades(server_handle: Handle) -> i32 {
+    let mut count = 0i32;
+    while let Some(up) = try_recv_fastify_upgrade(server_handle) {
+        let req_bits =
+            unsafe { crate::upgrade::build_request_object(&up.method, &up.path, &up.headers) }
+                .to_bits() as i64;
+        crate::upgrade::fire_fastify_upgrade_listeners(
+            up.app_handle,
+            req_bits,
+            up.ws_id,
+            Vec::new(),
+        );
+        count += 1;
+    }
+    count
+}
+
 /// Pump entrypoint — drain pending requests from every registered
 /// `FastifyServerHandle` and dispatch each on the main TS thread.
 /// Wired into perry-stdlib's `js_stdlib_process_pending` via the
 /// `external-fastify-pump` feature so the runtime's outer event loop
 /// drives us each tick.
+///
+/// Re-entrancy: dispatching a request runs user TS, which may `await`;
+/// `wait_for_promise` then drives `js_run_stdlib_pump`, which calls back into
+/// this pump. Each nested dispatch would push another `call_closure2_catching`
+/// try-frame (setjmp), so under sustained awaited-handler load the recursion
+/// could blow `MAX_TRY_DEPTH` (128 — "Try block nesting too deep"). An
+/// `IN_PROGRESS` thread-local guard makes a nested entry capture pending
+/// requests into a thread-local `DEFERRED` queue WITHOUT dispatching, and the
+/// outer frame drains `DEFERRED` at its tail — so every dispatch happens at the
+/// outer (bounded) try-depth.
 ///
 /// Returns the number of requests processed (matches the convention
 /// other pump arms follow — `js_ws_process_pending`,
@@ -425,7 +539,40 @@ pub extern "C" fn js_fastify_process_pending() -> i32 {
     thread_local! {
         static SCRATCH: std::cell::RefCell<Vec<Handle>> =
             const { std::cell::RefCell::new(Vec::new()) };
+        // Re-entrancy guard + deferred queue (see the fn doc-comment). Both are
+        // main-thread-only (the pump runs only on the main TS thread).
+        static IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static DEFERRED: std::cell::RefCell<std::collections::VecDeque<(Handle, FastifyPendingRequest)>> =
+            const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     }
+
+    if IN_PROGRESS.with(|f| f.replace(true)) {
+        // Nested entry (a dispatched handler's await re-drove the pump): capture
+        // every server's pending into DEFERRED for the outer frame to dispatch;
+        // do NOT dispatch here — that would deepen the try-frame nesting. Collect
+        // ids first (don't call `get_handle` inside `iter_handle_ids_of`).
+        let mut ids: Vec<Handle> = Vec::new();
+        iter_handle_ids_of::<FastifyServerHandle, _>(|id| ids.push(id));
+        DEFERRED.with(|q| {
+            let mut q = q.borrow_mut();
+            for &h in &ids {
+                if let Some(app_handle) = get_handle::<FastifyServerHandle>(h).map(|s| s.app_handle)
+                {
+                    drain_server_requests_into_deferred(h, app_handle, &mut q, DEFERRED_QUEUE_CAP);
+                }
+            }
+        });
+        return 0;
+    }
+    // Reset the guard on EVERY exit path (incl. an early return / unwind).
+    struct ResetReentryGuard;
+    impl Drop for ResetReentryGuard {
+        fn drop(&mut self) {
+            IN_PROGRESS.with(|f| f.set(false));
+        }
+    }
+    let _reset = ResetReentryGuard;
+
     let mut server_handles = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
     server_handles.clear();
     iter_handle_ids_of::<FastifyServerHandle, _>(|id| {
@@ -440,37 +587,38 @@ pub extern "C" fn js_fastify_process_pending() -> i32 {
         // #1113 — drain WebSocket upgrades FIRST so a busy request
         // stream can't starve them (mirror of perry-ext-http-server's
         // `js_node_http_server_process_pending`).
-        while let Some(up) = try_recv_fastify_upgrade(h) {
-            let req_bits =
-                unsafe { crate::upgrade::build_request_object(&up.method, &up.path, &up.headers) }
-                    .to_bits() as i64;
-            crate::upgrade::fire_fastify_upgrade_listeners(
-                up.app_handle,
-                req_bits,
-                up.ws_id,
-                Vec::new(),
-            );
-            count += 1;
-        }
-        loop {
-            let pending = match get_handle::<FastifyServerHandle>(h) {
-                Some(s) => {
-                    let mut guard = s.request_rx.lock().unwrap();
-                    match guard.as_mut() {
-                        Some(rx) => rx.try_recv().ok(),
-                        None => None,
-                    }
-                }
-                None => None,
-            };
-            let pending = match pending {
-                Some(p) => p,
-                None => break,
-            };
+        count += drain_server_upgrades(h);
+        while let Some(pending) = try_recv_pending_request(h) {
             process_request(app_handle, pending);
             count += 1;
         }
     }
+
+    // Tail: dispatch anything a nested pump call captured into DEFERRED. These
+    // were already `try_recv`'d out of the per-server channels, so we dispatch
+    // the captured structs here in the OUTER frame — the try-frame depth stays
+    // at the outer (bounded) level. A dispatch here may itself await and re-enter
+    // the pump; that nested call hits the guard above and appends to DEFERRED,
+    // which this same loop then drains — still all at the outer try-depth.
+    //
+    // Re-drain upgrades before each deferred dispatch: a long (nested-await
+    // replenished) deferred drain must not starve WebSocket upgrades that arrive
+    // after the initial pass. Nested entries defer only REQUESTS, so the outer
+    // frame is where late upgrades get picked up — keep them ahead of requests
+    // here too (#1113).
+    loop {
+        for &h in server_handles.iter() {
+            count += drain_server_upgrades(h);
+        }
+        let next = DEFERRED.with(|q| q.borrow_mut().pop_front());
+        let (app_handle, pending) = match next {
+            Some(t) => t,
+            None => break,
+        };
+        process_request(app_handle, pending);
+        count += 1;
+    }
+
     server_handles.clear();
     SCRATCH.with(|s| {
         let mut slot = s.borrow_mut();
@@ -748,17 +896,33 @@ async fn handle_fastify_websocket_upgrade(
         .unwrap())
 }
 
-/// Process one request — fire hooks, call route handler, send the
-/// response back through the oneshot channel.
-fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
-    let ctx = FastifyContext::new(
-        0,
+/// Build the per-request [`FastifyContext`], MOVING the pending request's
+/// headers/body/params out of `pending` (via `mem::take` / `Option::take`)
+/// rather than cloning them. Each is consumed exactly once, so cloning would
+/// fire three redundant per-request allocations (two `HashMap`s + one `Vec`,
+/// dominated by the O(headers) header-map clone) on the hot dispatch path.
+/// `method`/`path` stay cloned: `process_request` reuses them for the route
+/// match (`app.match_route(&pending.method, &pending.path)`) after the context
+/// is built. This is the single construction site `process_request` uses, so a
+/// regression test can drive it directly.
+pub(crate) fn build_context_from_pending(
+    request_id: u64,
+    pending: &mut FastifyPendingRequest,
+) -> FastifyContext {
+    FastifyContext::new(
+        request_id,
         pending.method.clone(),
         pending.path.clone(),
-        pending.headers.clone(),
-        pending.body.clone(),
-        pending.params.clone(),
-    );
+        std::mem::take(&mut pending.headers),
+        pending.body.take(),
+        std::mem::take(&mut pending.params),
+    )
+}
+
+/// Process one request — fire hooks, call route handler, send the
+/// response back through the oneshot channel.
+pub(crate) fn process_request(app_handle: Handle, mut pending: FastifyPendingRequest) -> Handle {
+    let ctx = build_context_from_pending(0, &mut pending);
     let ctx_handle = register_handle(ctx);
 
     // Snapshot hooks + matched route (need to drop the borrow before
@@ -919,6 +1083,13 @@ fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
 
     // Free the context handle so it doesn't leak.
     perry_ffi::drop_handle(ctx_handle);
+
+    // Return the (now-freed) context handle so the register → drop lifecycle
+    // is observable: the `context_handle_dropped_after_dispatch` regression
+    // test drives a real request through this function and asserts the handle
+    // is gone, which a missing `drop_handle` above would fail. The live
+    // dispatch loop calls this as a statement and discards the value.
+    ctx_handle
 }
 
 /// Call a hook closure, await any returned Promise, and report whether it
@@ -1331,6 +1502,66 @@ unsafe fn extract_port(opts: f64) -> u16 {
     3000
 }
 
+/// Read `reusePort: true` from a `{ port, reusePort }` listen-options object.
+/// `reusePort` is a real Node (`net` / `http` `listen`) and Bun (`Bun.serve`)
+/// option that sets SO_REUSEPORT so multiple processes can share one port;
+/// honoring it lets a non-cluster program opt into port sharing directly.
+/// Defaults to false for a bare-number `listen(port)` or a missing option.
+unsafe fn extract_reuse_port(opts: f64) -> bool {
+    let v = JsValue::from_bits(opts.to_bits());
+    if v.is_pointer() {
+        if let Some(json) = perry_ffi::json_stringify(v) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
+                return parsed
+                    .get("reusePort")
+                    .and_then(|p| p.as_bool())
+                    .unwrap_or(false);
+            }
+        }
+    }
+    false
+}
+
+/// Hand a failed bind to the `(err, address)` listen callback as a Node-style
+/// system `Error` (`.code` / `.syscall` / `.errno`), so user code branching on
+/// `err.code === 'EADDRINUSE'` sees the failure instead of being told the
+/// server is listening. Called before any server registration or success
+/// callback, so a port clash can no longer masquerade as a successful listen.
+unsafe fn fire_listen_error(callback: i64, e: &std::io::Error, port: u16) {
+    eprintln!("[fastify] listen on 0.0.0.0:{} failed: {}", port, e);
+    if callback == 0 {
+        return;
+    }
+    let raw = if (callback as u64 & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+        (callback as u64 & PTR_MASK) as *const RawClosureHeader
+    } else {
+        callback as *const RawClosureHeader
+    };
+    let closure = JsClosure::from_raw(raw);
+    if closure.is_null() {
+        return;
+    }
+    let code: std::borrow::Cow<'static, str> = match e.kind() {
+        std::io::ErrorKind::AddrInUse => "EADDRINUSE".into(),
+        std::io::ErrorKind::PermissionDenied => "EACCES".into(),
+        std::io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL".into(),
+        // Any other bind/setup errno: carry it through as `E<errno>` so the
+        // error stays truthy and inspectable rather than being mislabeled.
+        _ => match e.raw_os_error() {
+            Some(n) => format!("E{}", n).into(),
+            None => "EUNKNOWN".into(),
+        },
+    };
+    // Node/libuv reports the negated OS errno.
+    let errno = e.raw_os_error().map(|n| -(n as i64)).unwrap_or(0);
+    let msg = format!("listen {} 0.0.0.0:{}", code, port);
+    let err_val = perry_ffi::system_error_value(&msg, &code, "listen", errno);
+    let _ = closure.call2(
+        f64::from_bits(err_val.bits()),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+}
+
 // `js_promise_reason` is declared so wrappers that want to surface
 // rejected-promise errors can use it; not consumed by the v0 port,
 // but kept in the extern block so signature drift causes a link
@@ -1338,4 +1569,229 @@ unsafe fn extract_port(opts: f64) -> u16 {
 #[allow(dead_code)]
 unsafe fn _force_promise_reason_link(p: *mut Promise) -> f64 {
     js_promise_reason(p)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the re-entrancy deferred-queue path of
+    //! `js_fastify_process_pending`. These exercise the real
+    //! `drain_server_requests_into_deferred` / `try_recv_pending_request`
+    //! helpers against a live `FastifyServerHandle` + mpsc channel — no JS
+    //! runtime needed (the drain path is pure Rust). The full pump re-entry
+    //! (guard → defer → outer-tail dispatch) is exercised end-to-end by
+    //! `scripts/run_fastify_tests.sh`, which runs awaited handlers.
+    use super::*;
+    use perry_ffi::drop_handle;
+    use std::collections::{HashMap, VecDeque};
+
+    /// Build a pending request tagged by `path`; return it plus its response
+    /// receiver so a test can observe `response_tx`'s fate (kept open vs dropped).
+    fn make_pending(path: &str) -> (FastifyPendingRequest, oneshot::Receiver<FastifyResponse>) {
+        let (response_tx, response_rx) = oneshot::channel::<FastifyResponse>();
+        let pending = FastifyPendingRequest {
+            method: "GET".to_string(),
+            path: path.to_string(),
+            headers: HashMap::new(),
+            body: None,
+            params: HashMap::new(),
+            response_tx,
+        };
+        (pending, response_rx)
+    }
+
+    /// Register a `FastifyServerHandle` wrapping `rx`. Returns (server, app)
+    /// handles; the caller drops both.
+    fn register_test_server(rx: mpsc::Receiver<FastifyPendingRequest>) -> (Handle, Handle) {
+        let app_handle = register_handle(FastifyApp::new());
+        let server = FastifyServerHandle {
+            port: 0,
+            app_handle,
+            shutdown_tx: None,
+            request_rx: Mutex::new(Some(rx)),
+            upgrade_rx: Mutex::new(None),
+            listening: AtomicBool::new(true),
+        };
+        (register_handle(server), app_handle)
+    }
+
+    /// Cap + FIFO + full-drain: over-cap entries are dropped, the kept ones stay
+    /// in arrival order, and — critically — the channel is fully drained even
+    /// past the cap (no request is left stranded in the mpsc).
+    #[test]
+    fn deferred_drain_respects_cap_and_drains_channel_fully() {
+        let n = 10usize;
+        let cap = 4usize;
+        let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(n + 1);
+        let (server_h, app_h) = register_test_server(rx);
+        let mut rxs = Vec::new();
+        for i in 0..n {
+            let (p, r) = make_pending(&format!("req-{i}"));
+            tx.try_send(p).expect("send");
+            rxs.push(r);
+        }
+
+        let mut deferred: VecDeque<(Handle, FastifyPendingRequest)> = VecDeque::new();
+        let moved = drain_server_requests_into_deferred(server_h, app_h, &mut deferred, cap);
+
+        assert_eq!(moved, cap, "exactly `cap` entries are moved");
+        assert_eq!(deferred.len(), cap);
+        for (i, (h, p)) in deferred.iter().enumerate() {
+            assert_eq!(*h, app_h, "captured under the right app handle");
+            assert_eq!(p.path, format!("req-{i}"), "FIFO arrival order preserved");
+        }
+        assert!(
+            try_recv_pending_request(server_h).is_none(),
+            "channel must be fully drained even past the cap"
+        );
+
+        drop_handle(server_h);
+        drop_handle(app_h);
+        drop(rxs);
+    }
+
+    /// Under cap: every request is captured, in arrival order, and none is
+    /// dropped — every kept request's response channel stays open (the client
+    /// will get a real response, not an error).
+    #[test]
+    fn deferred_drain_under_cap_moves_all_without_dropping() {
+        let n = 5usize;
+        let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(n + 1);
+        let (server_h, app_h) = register_test_server(rx);
+        let mut rxs = Vec::new();
+        for i in 0..n {
+            let (p, r) = make_pending(&format!("r{i}"));
+            tx.try_send(p).expect("send");
+            rxs.push(r);
+        }
+
+        let mut deferred: VecDeque<(Handle, FastifyPendingRequest)> = VecDeque::new();
+        let moved =
+            drain_server_requests_into_deferred(server_h, app_h, &mut deferred, DEFERRED_QUEUE_CAP);
+
+        assert_eq!(moved, n, "all moved when under cap");
+        for (i, (_, p)) in deferred.iter().enumerate() {
+            assert_eq!(p.path, format!("r{i}"));
+        }
+        // Nothing dropped: every response channel is still open (Empty, not Closed).
+        for r in &mut rxs {
+            assert!(
+                matches!(r.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+                "kept request's response_tx must remain alive"
+            );
+        }
+
+        drop_handle(server_h);
+        drop_handle(app_h);
+    }
+
+    /// Backpressure contract: when the cap is hit, the OVER-cap requests are
+    /// dropped, and dropping a pending drops its `response_tx`, which makes the
+    /// awaiting hyper service-fn resolve `Closed` → an error response. This
+    /// proves the client is signalled (no hang / no leak) rather than the
+    /// request silently vanishing.
+    #[test]
+    fn deferred_drain_over_cap_signals_dropped_clients() {
+        let n = 8usize;
+        let cap = 3usize;
+        let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(n + 1);
+        let (server_h, app_h) = register_test_server(rx);
+        let mut rxs = Vec::new();
+        for i in 0..n {
+            let (p, r) = make_pending(&format!("q{i}"));
+            tx.try_send(p).expect("send");
+            rxs.push(r);
+        }
+
+        let mut deferred: VecDeque<(Handle, FastifyPendingRequest)> = VecDeque::new();
+        drain_server_requests_into_deferred(server_h, app_h, &mut deferred, cap);
+
+        // Kept entries: response channel still open.
+        for r in rxs.iter_mut().take(cap) {
+            assert!(
+                matches!(r.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+                "kept entries stay open"
+            );
+        }
+        // Over-cap entries: dropped → response_tx Drop → client observes Closed.
+        for r in rxs.iter_mut().skip(cap) {
+            assert!(
+                matches!(r.try_recv(), Err(oneshot::error::TryRecvError::Closed)),
+                "over-cap entries must signal the client (error response, not a hang)"
+            );
+        }
+
+        drop_handle(server_h);
+        drop_handle(app_h);
+    }
+
+    /// No-loss / no-duplication property across multiple servers + repeated
+    /// drain passes (simulating repeated nested pump entries): every queued
+    /// request lands in DEFERRED exactly once, in per-server FIFO order, and a
+    /// second pass captures nothing (channels already drained).
+    #[test]
+    fn deferred_drain_no_loss_across_servers_and_repeated_passes() {
+        let mut deferred: VecDeque<(Handle, FastifyPendingRequest)> = VecDeque::new();
+        let mut servers: Vec<(
+            Handle,
+            Handle,
+            mpsc::Sender<FastifyPendingRequest>,
+            usize,
+            usize,
+        )> = Vec::new();
+        let mut expected_total = 0usize;
+        for (s, depth) in [(0usize, 1usize), (1, 5), (2, 0), (3, 12)] {
+            let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(depth + 1);
+            let (server_h, app_h) = register_test_server(rx);
+            for i in 0..depth {
+                let (p, _r) = make_pending(&format!("s{s}-r{i}"));
+                tx.try_send(p).expect("send");
+                // `_r` dropped here is harmless: it never affects the moved sender.
+            }
+            expected_total += depth;
+            servers.push((server_h, app_h, tx, s, depth));
+        }
+
+        // First pass: capture everything exactly once.
+        for (server_h, app_h, _tx, _s, _d) in &servers {
+            drain_server_requests_into_deferred(
+                *server_h,
+                *app_h,
+                &mut deferred,
+                DEFERRED_QUEUE_CAP,
+            );
+        }
+        assert_eq!(
+            deferred.len(),
+            expected_total,
+            "every request captured exactly once"
+        );
+
+        // Second pass: nothing new (no loss, no double-capture).
+        let before = deferred.len();
+        for (server_h, app_h, _tx, _s, _d) in &servers {
+            drain_server_requests_into_deferred(
+                *server_h,
+                *app_h,
+                &mut deferred,
+                DEFERRED_QUEUE_CAP,
+            );
+        }
+        assert_eq!(deferred.len(), before, "repeated drain captures nothing");
+
+        // Per-server FIFO order preserved.
+        for (_, app_h, _tx, s, depth) in &servers {
+            let seq: Vec<String> = deferred
+                .iter()
+                .filter(|(h, _)| h == app_h)
+                .map(|(_, p)| p.path.clone())
+                .collect();
+            let want: Vec<String> = (0..*depth).map(|i| format!("s{s}-r{i}")).collect();
+            assert_eq!(seq, want, "per-server FIFO order");
+        }
+
+        for (server_h, app_h, _tx, _s, _d) in servers {
+            drop_handle(server_h);
+            drop_handle(app_h);
+        }
+    }
 }

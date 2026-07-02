@@ -371,6 +371,18 @@ pub extern "C" fn js_to_integer_or_infinity(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_number_coerce(value: f64) -> f64 {
+    // #5525 hot fast path: a plain IEEE-754 double (top 16 bits, sign stripped,
+    // below the 0x7FF9 Perry NaN-box tag band) is already a Number — ToNumber is
+    // identity. Returns before the undefined/null/bool/string/int32/bigint/
+    // pointer tag ladder below. bcryptjs's Blowfish core funnels every `any`-
+    // typed `S[i]` element read (which `js_dyn_index_get` returns as a plain f64)
+    // through this coercion before the Feistel arithmetic, so it was the #1 frame
+    // after the typed-array element-access + dynamic-add fast paths landed.
+    // Canonical / payload NaNs (top16 0x7FF8) and all finite/inf doubles stay on
+    // this path; tagged values (0x7FF9..=0x7FFF) fall through unchanged.
+    if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        return value;
+    }
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {
@@ -599,50 +611,34 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
+/// Spec `ToString` (ECMA-262 §7.1.17) rejects a Symbol with a `TypeError`.
+/// The lenient `js_string_coerce` / `js_jsvalue_to_string` paths instead
+/// produce a `"Symbol(desc)"` descriptive string — correct for `String(sym)`,
+/// `console.log`, etc., but NOT for the abstract ToString operation invoked by
+/// string built-ins on their arguments (`"".padEnd(1, sym)`,
+/// `"".startsWith(sym)`, `String.raw({raw:[sym]})`, `"".normalize(sym)`). Those
+/// call sites invoke this guard *before* coercing so a Symbol argument throws as
+/// the spec requires.
+#[inline]
+pub fn reject_symbol_to_string(value: f64) {
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+    }
+}
+
 /// isNaN(value) -> boolean
 /// Returns true if value is NaN.
 #[no_mangle]
 pub extern "C" fn js_is_nan(value: f64) -> f64 {
-    let jsval = JSValue::from_bits(value.to_bits());
-
-    // isNaN first coerces to number, then checks for NaN
-    let num = if jsval.is_undefined() {
-        f64::NAN
-    } else if jsval.is_null() {
-        0.0
-    } else if jsval.is_bool() {
-        if jsval.as_bool() {
-            1.0
-        } else {
-            0.0
-        }
-    } else if jsval.is_string() {
-        // Parse string as number
-        let ptr = jsval.as_string_ptr();
-        if ptr.is_null() {
-            f64::NAN
-        } else {
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    let trimmed = s.trim();
-                    if trimmed.is_empty() {
-                        0.0
-                    } else {
-                        trimmed.parse::<f64>().unwrap_or(f64::NAN)
-                    }
-                } else {
-                    f64::NAN
-                }
-            }
-        }
-    } else {
-        value
-    };
-
-    // Return NaN-boxed boolean (TAG_TRUE / TAG_FALSE)
+    // `isNaN(x)` is `Number.isNaN(ToNumber(x))`. Delegate to the canonical
+    // ToNumber (`js_number_coerce`), which correctly handles SSO inline short
+    // strings (e.g. `isNaN("16")` → false), heap strings, int32/bigint, Date,
+    // arrays, and object toPrimitive. The previous hand-rolled coercion used
+    // `is_string()` (heap STRING_TAG only), so a 2-char SSO numeric string like
+    // a `content-length: "16"` header fell through to the `else` arm and
+    // returned the raw NaN-boxed bits → `isNaN("16")` wrongly reported `true`,
+    // which made express body-parser's `type-is.hasBody` skip JSON parsing.
+    let num = js_number_coerce(value);
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     if num.is_nan() {
@@ -656,46 +652,11 @@ pub extern "C" fn js_is_nan(value: f64) -> f64 {
 /// Returns true if value is a finite number.
 #[no_mangle]
 pub extern "C" fn js_is_finite(value: f64) -> f64 {
-    let jsval = JSValue::from_bits(value.to_bits());
-
-    // isFinite first coerces to number, then checks for finite
-    let num = if jsval.is_undefined() {
-        f64::NAN
-    } else if jsval.is_null() {
-        0.0
-    } else if jsval.is_bool() {
-        if jsval.as_bool() {
-            1.0
-        } else {
-            0.0
-        }
-    } else if jsval.is_string() {
-        // Parse string as number
-        let ptr = jsval.as_string_ptr();
-        if ptr.is_null() {
-            f64::NAN
-        } else {
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    let trimmed = s.trim();
-                    if trimmed.is_empty() {
-                        0.0
-                    } else {
-                        trimmed.parse::<f64>().unwrap_or(f64::NAN)
-                    }
-                } else {
-                    f64::NAN
-                }
-            }
-        }
-    } else {
-        value
-    };
-
-    // Return NaN-boxed boolean (TAG_TRUE / TAG_FALSE)
+    // `isFinite(x)` is `Number.isFinite(ToNumber(x))`. Delegate to the canonical
+    // ToNumber (`js_number_coerce`) so SSO inline short strings (`isFinite("16")`
+    // → true) and all other types coerce correctly; the old `is_string()`-only
+    // path mishandled SSO strings (same root cause as `js_is_nan`).
+    let num = js_number_coerce(value);
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     if num.is_finite() {

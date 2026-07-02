@@ -523,6 +523,10 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
 /// Used by `Reflect.apply`. `thisArg` flows through `IMPLICIT_THIS` so free
 /// functions reading `this` observe it.
 fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
+    // A concise/object-literal method reads `this` from a baked capture slot,
+    // not IMPLICIT_THIS; rebind to the explicit `Reflect.apply` receiver so it
+    // is honored (no-op for arrows / plain fns / bound fns).
+    let f = crate::closure::rebind_explicit_this(f, this_arg);
     let closure = closure_from(f);
     if closure.is_null() {
         return throw_type_error("Reflect.apply target is not a function");
@@ -1249,7 +1253,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
         // (top 16 bits zero).
         && (target_top16 == 0x7FFD || target_top16 == 0)
-        && !crate::object::object_proto_descriptors_in_use()
         && unsafe { crate::symbol::js_is_symbol(key) } == 0
     {
         let addr = extract_pointer(target.to_bits()) as usize;
@@ -1267,11 +1270,27 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
                     if header.obj_type == crate::gc::GC_TYPE_OBJECT
                         && header._reserved & SLOW_FLAGS == 0
-                        && (*(addr as *const crate::ObjectHeader)).class_id == 0
-                        && crate::object::prototype_chain::object_static_prototype(addr).is_none()
                     {
-                        target_set(target, key, value);
-                        return true;
+                        let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
+                        let fast_safe = if class_id == 0 {
+                            // Plain object: prototype is exactly Object.prototype, and
+                            // Object.prototype doesn't intercept this key (per-key, not
+                            // the coarse process-wide descriptor flag — that made wide
+                            // builds O(n²)).
+                            crate::object::prototype_chain::object_static_prototype(addr).is_none()
+                                && !crate::object::object_proto_may_intercept_key(key)
+                        } else {
+                            // Class instance: the `class_id == 0` guard previously sent
+                            // EVERY wide class-instance build down the O(own-key) slow
+                            // walk (O(n²)). Safe to fast-path when no inherited accessor /
+                            // non-writable anywhere in the prototype chain could intercept
+                            // this key.
+                            !crate::object::class_instance_set_may_intercept(addr, class_id, key)
+                        };
+                        if fast_safe {
+                            target_set(target, key, value);
+                            return true;
+                        }
                     }
                 }
             }
@@ -1676,7 +1695,34 @@ fn is_callable_function(value: f64) -> bool {
 }
 
 fn is_constructor_function(value: f64) -> bool {
-    is_callable_function(value) && !crate::object::builtin_closure_is_non_constructable_value(value)
+    if !is_callable_function(value) {
+        return false;
+    }
+    if crate::object::builtin_closure_is_non_constructable_value(value) {
+        return false;
+    }
+    // #2768: arrow functions have no [[Construct]]. The deep construct path
+    // already rejects an arrow *target* ("Arrow function is not a
+    // constructor"), but `Reflect.construct`'s up-front constructor checks —
+    // for both the target and the `newTarget` operand — must reject them too.
+    // Without this, `Reflect.construct(C, args, arrowFn)` silently proceeded
+    // instead of throwing the spec TypeError (newTarget is never itself
+    // constructed, so the deep path never fires for it).
+    // A POINTER_TAG value is only a closure if `is_closure_ptr` confirms it —
+    // a callable Proxy is also POINTER_TAG but its lower 48 bits are a proxy
+    // id, not a `ClosureHeader*`, so `closure_is_arrow` (which dereferences the
+    // header via `get_valid_func_ptr`) must not run on it. Mirror the guard in
+    // `is_callable_function`.
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) == POINTER_TAG {
+        let raw = (bits & POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(raw)
+            && crate::closure::closure_is_arrow(raw as *const crate::closure::ClosureHeader)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Forward a `[[Call]]` to `target` (the default behavior when a proxy has no

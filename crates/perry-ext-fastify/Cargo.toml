@@ -26,6 +26,14 @@ tokio-tungstenite = { workspace = true }
 serde_json = "1"
 lazy_static = "1.5"
 
+# #cluster — SO_REUSEPORT bind for `cluster.fork()` workers (unix only),
+# mirroring perry-ext-http-server's cluster_bind. The
+# `perry_cluster_worker_listening` symbol it reports to resolves at final link
+# (defined in perry-runtime), like perry-ffi's runtime helpers — no Cargo dep on
+# perry-runtime is needed.
+[target.'cfg(unix)'.dependencies]
+socket2 = "0.6"
+
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
 perry-runtime = { workspace = true, features = ["external-ws-symbols"] }

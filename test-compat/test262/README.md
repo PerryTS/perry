@@ -78,6 +78,17 @@ no harness. Because both runtimes load the *same* assembled script, the
 differential compares the two runtimes' **builtins**, never their
 harnesses.
 
+The Node oracle runs the assembled script through `host-run.cjs`
+(`vm.runInThisContext`) rather than `node case.js` directly. `node file.js`
+evaluates a file as a **CommonJS module**, scoping its top-level
+`var`/`function` declarations to the module wrapper instead of the global
+object — which diverges from both a conforming Test262 host and Perry, and
+breaks any case whose harness intrinsics must be reachable from global
+scope (notably the Annex B `eval-code/indirect` family, where an indirect
+`(0,eval)(...)` runs in global scope and otherwise can't see a
+module-scoped `assert`). `runInThisContext` restores true global-script
+semantics so the oracle agrees with a conforming host (#5346).
+
 Raw CommonJS/JS runs under Perry because Perry feeds user `.js` through
 the native AOT pipeline (the same path `compilePackages` uses; see #668).
 
@@ -99,14 +110,40 @@ runner buckets by Perry-vs-Node **agreement**:
 - `compile-fail` — Perry refused to compile a case Node ran clean. (When
                    Node *also* rejected, Perry's compile rejection is the
                    correct answer and lands in `pass`.)
-- `skip`         — couldn't assemble (missing include) or needs an
-                   unsupported flag / `$262` host API. Excluded from the
-                   parity verdict — never charged against Perry.
+- `skip`         — couldn't assemble (missing include), needs an
+                   unsupported flag / `$262` host API, or *compiled but then*
+                   hit a construct the AOT model categorically can't evaluate
+                   at runtime — a runtime-string `eval()` / `new Function()`,
+                   a runtime-computed dynamic `import()`, or a `.wasm` import
+                   (Perry throws `… cannot run in an ahead-of-time compiled
+                   binary`; see the AOT-eval note below, #5593). Excluded from
+                   the parity verdict — never charged against Perry.
 
 `parity_pct = pass / (pass + diff + runtime-fail + compile-fail)`. The
 report also records `negative_agreements` (how many of the passes are
 both-runtimes-correctly-rejected) so the language-correctness signal and
 the negative-rejection signal stay legible.
+
+### Runtime-string `eval` / `new Function` — a permanent AOT limitation (#5593)
+
+Perry compiles ahead-of-time: there is no interpreter in the produced binary,
+so a `eval()` / `new Function()` whose **source is only known at runtime**
+cannot be evaluated. `PERRY_ALLOW_EVAL=1` (set in the compile env above) makes
+Perry const-fold the cases whose argument is a *constant string* — those run —
+but the rest are compiled to a deferred site that throws
+`eval() cannot run in an ahead-of-time compiled binary (file:line)` if it is
+ever reached. The same deferral covers `new Function(body)`, a runtime-computed
+dynamic `import()`, and a `.wasm` import.
+
+In Test262 this hits a cluster of Annex B cases — `annexB/language/eval-code/
+direct/*` (B.3.3 sloppy block-function hoisting, *probed* via a runtime `eval`)
+and a few `annexB/built-ins/RegExp/*` — roughly 72 cases as of the 2026-06-23
+sweep. These are **out of scope by construction**, not a language-parity gap:
+they require an interpreter Perry deliberately doesn't ship. The runner detects
+the sentinel error in the compiled binary's output and buckets such a case as
+`skip` (excluded from the parity verdict) instead of charging it as a
+`runtime-fail`. This is a deliberate **WONTFIX**: closing it would mean
+embedding a runtime JS interpreter, which is a non-goal for an AOT compiler.
 
 ## Files
 
@@ -116,6 +153,8 @@ the negative-rejection signal stay legible.
 - `pinned-sha.txt` — the Test262 SHA the corpus is pulled from.
 - `preamble.js` — host shims (`print`, `$DONOTEVALUATE`) prepended to
   every non-`raw` assembled case under both runtimes.
+- `host-run.cjs` — Node oracle entry point; runs an assembled case as a
+  global script via `vm.runInThisContext` (see the harness note above, #5346).
 - `report.json` — written by the runner (a generated artifact; not
   committed).
 

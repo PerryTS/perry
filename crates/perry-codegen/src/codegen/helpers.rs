@@ -516,6 +516,13 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
         "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
         "android" => Some("aarch64-unknown-linux-android".to_string()),
+        // #5742: Android x86_64 (emulator / x86_64 devices). Without this arm
+        // `resolve_target_triple` returned None for `--target android-x86_64`,
+        // so codegen fell back to the host triple (e.g. x86_64-pc-windows-msvc)
+        // and emitted COFF objects, which the Android linker rejects with
+        // `unknown file type`. Mirrors the `-unknown-` LLVM-triple form of the
+        // arm64 `android` arm above (cf. harmonyos / harmonyos-simulator).
+        "android-x86_64" => Some("x86_64-unknown-linux-android".to_string()),
         // Wear OS is Android-on-a-watch: same arm64 Android object format.
         "wearos" => Some("aarch64-unknown-linux-android".to_string()),
         "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
@@ -959,22 +966,54 @@ pub(super) fn init_static_fields_late(
     Ok(())
 }
 
-/// Returns true if `stmt` is a top-level `Expr(StaticMethodCall)`
-/// invoking the (`class_name`, `method_name`) pair — the shape HIR
-/// lowering emits at the class-decl position for each
+/// Returns true if `stmt` contains, at any nesting depth (through
+/// if/while/do-while/for/labeled/try/switch bodies), an `Expr(
+/// StaticMethodCall)` invoking the (`class_name`, `method_name`) pair —
+/// the shape HIR lowering emits at the class-decl position for each
 /// `__perry_static_init_*` synthetic method. Used by
 /// `init_static_fields_late` to skip per-(class, block) pairs that
 /// have already been invoked inline. (#2278)
+///
+/// Must recurse: a class declared inside `try { class C { static {...}
+/// } }` (test262 static-init-abrupt.js wraps its whole class this way)
+/// lowers its inline `StaticMethodCall` into the `Try`'s `body`, not at
+/// `hir.init`'s top level. A shallow top-level-only scan missed it, so
+/// this late fallback re-invoked the block a second time — outside the
+/// user's `try`, so a throwing block's second run surfaced as an
+/// uncaught exception instead of staying silently absent.
 fn init_calls_static_block(stmt: &perry_hir::Stmt, class_name: &str, method_name: &str) -> bool {
-    if let perry_hir::Stmt::Expr(perry_hir::Expr::StaticMethodCall {
-        class_name: c,
-        method_name: m,
-        ..
-    }) = stmt
-    {
-        c == class_name && m == method_name
-    } else {
-        false
+    use perry_hir::Stmt;
+    let any_calls = |stmts: &[Stmt]| {
+        stmts
+            .iter()
+            .any(|s| init_calls_static_block(s, class_name, method_name))
+    };
+    match stmt {
+        Stmt::Expr(perry_hir::Expr::StaticMethodCall {
+            class_name: c,
+            method_name: m,
+            ..
+        }) => c == class_name && m == method_name,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => any_calls(then_branch) || else_branch.as_ref().is_some_and(|b| any_calls(b)),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            any_calls(body)
+        }
+        Stmt::Labeled { body, .. } => init_calls_static_block(body, class_name, method_name),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            any_calls(body)
+                || catch.as_ref().is_some_and(|c| any_calls(&c.body))
+                || finally.as_ref().is_some_and(|f| any_calls(f))
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|case| any_calls(&case.body)),
+        _ => false,
     }
 }
 
@@ -1135,4 +1174,27 @@ pub(super) fn emit_namespace_populator(
     crate::expr::emit_root_nanbox_store_on_block(blk, &result, &format!("@{}", ns_name));
     let addr_i64 = blk.ptrtoint(&format!("@{}", ns_name), I64);
     blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+}
+
+#[cfg(test)]
+mod resolve_target_triple_tests {
+    use super::resolve_target_triple;
+
+    #[test]
+    fn android_targets_resolve_to_android_elf_triples() {
+        // #5742: `android-x86_64` must resolve (it previously returned None and
+        // codegen fell back to the host triple, emitting COFF the Android
+        // linker rejects). Both Android arms use the `-unknown-linux-android`
+        // LLVM form so the emitted objects are ELF for the right arch.
+        assert_eq!(
+            resolve_target_triple("android").as_deref(),
+            Some("aarch64-unknown-linux-android")
+        );
+        assert_eq!(
+            resolve_target_triple("android-x86_64").as_deref(),
+            Some("x86_64-unknown-linux-android")
+        );
+        // Unknown targets still fall through to None.
+        assert_eq!(resolve_target_triple("android-mips"), None);
+    }
 }

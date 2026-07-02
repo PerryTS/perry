@@ -156,9 +156,11 @@ pub extern "C" fn perry_ui_image_create_url(_url_ptr: i64, _alt_ptr: i64) -> i64
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_picker_create(label_ptr: i64, on_change: f64, _style: i64) -> i64 {
+pub extern "C" fn perry_ui_picker_create(on_change: f64) -> i64 {
+    // Single `Closure` arg to match the dispatch-table ABI; a 3-arg
+    // signature mis-binds `on_change` on the Windows x64 ABI (issue #5491).
+    // No label is wired from TS, so the picker has no leading text.
     let mut node = NodeData::new(NodeKind::Picker);
-    node.text = cstring_from_header(label_ptr as *const u8);
     node.on_change_closure = Some(on_change);
     tree::register_node(node)
 }
@@ -1702,6 +1704,18 @@ pub extern "C" fn perry_ui_webview_create(
 ) -> i64 {
     0
 }
+
+// BloomView (issue #2395) — stub on this platform, matching the WebView shape
+// above; returns a 0 handle so apps that import BloomView still link and run.
+#[no_mangle]
+pub extern "C" fn perry_ui_bloomview_create(_width: f64, _height: f64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_bloomview_get_hwnd(_handle: i64) -> i64 {
+    0
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_webview_set_user_agent(_handle: i64, _ua_ptr: i64) {}
 #[no_mangle]

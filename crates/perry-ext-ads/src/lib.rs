@@ -12,11 +12,14 @@
 //! export declare function js_ads_rewarded_load(unitId: string): Promise<string>;
 //! export declare function js_ads_rewarded_show(): Promise<string>;
 //!
-//! // Banner — handle-based widget. v1 exposes a perry-ext FFI
-//! // without `perry/ui` integration. The `<AdBanner>` widget glue
-//! // is a follow-up (#867).
+//! // Banner — handle-based widget. The primary banner surface is the
+//! // `perry/ui` `<AdBanner>` widget (it sits in the declarative layout
+//! // tree); this raw FFI is the secondary, handle-based path.
 //! export declare function js_ads_banner_create(unitId: string, sizeKey: string): number;
 //! export declare function js_ads_banner_destroy(handle: number): void;
+//!
+//! // Consent — ATT (iOS) / UMP (Android). Call before loading ads.
+//! export declare function js_ads_request_consent(): Promise<string>;
 //! ```
 //!
 //! The promise-returning entry points each resolve to a JSON
@@ -37,25 +40,25 @@
 //! {"earned": false, "dismissed": false, "error": "no-sdk-linked"}
 //! ```
 //!
-//! # Platform coverage (MVP)
+//! # Platform coverage
 //!
-//! - **iOS / Mac Catalyst**: real impl bridges to the
-//!   Google Mobile Ads SDK (`GADInterstitialAd`,
-//!   `GADRewardedAd`, `GADBannerView`) via SwiftPM + objc2. The
-//!   ATT (App Tracking Transparency) prompt is gated on the
-//!   per-app `NSUserTrackingUsageDescription` Info.plist key —
-//!   wiring is a follow-up.
-//! - **Android**: real impl bridges to the
-//!   `com.google.android.gms:play-services-ads` artifact via
-//!   JNI. The UMP (User Messaging Platform) consent SDK gates
-//!   personalised-ads requests under GDPR — wiring is a
-//!   follow-up.
-//! - **macOS (non-Catalyst) / Linux / Windows / tvOS / watchOS
-//!   / visionOS / gtk4**: no first-party Google Mobile Ads SDK
-//!   exists; these targets always resolve
-//!   `{ error: "unsupported-platform" }`. (For the MVP the
-//!   distinction is moot — every platform returns
-//!   `"no-sdk-linked"` until the real SDK calls land.)
+//! - **iOS / Mac Catalyst** (`target_os = "ios"`): a *supported*
+//!   platform. Default builds resolve `"no-sdk-linked"`; building with
+//!   `--features google-ads` delegates to `ios_real`, which makes live
+//!   objc2 calls into the Google Mobile Ads SDK (`GADInterstitialAd`,
+//!   `GADRewardedAd`) and `ATTrackingManager` for consent. That module
+//!   is COMPILE-UNVERIFIED (needs the SwiftPM xcframework + iOS target)
+//!   — see `ios_real.rs`. The ATT prompt needs the per-app
+//!   `NSUserTrackingUsageDescription` Info.plist key, which the compiler
+//!   emits from `perry.toml [ads].att_usage_description` (#867).
+//! - **Android**: a *supported* platform; resolves `"no-sdk-linked"`
+//!   until the JNI bridge into `com.google.android.gms:play-services-ads`
+//!   (+ UMP consent) lands. The compiler emits the `APPLICATION_ID`
+//!   meta-data from `perry.toml [ads].android_app_id`.
+//! - **macOS (non-Catalyst) / Linux / Windows / tvOS / watchOS /
+//!   visionOS / gtk4**: no first-party Google Mobile Ads SDK exists, so
+//!   every call resolves `{ error: "unsupported-platform" }`. (A
+//!   `perry/ui` app developed/previewed on macOS native lands here.)
 //!
 //! # Configuration
 //!
@@ -132,8 +135,24 @@ fn resolve_rewarded_show_failure(promise: JsPromise, error: &'static str) {
     });
 }
 
+/// Resolve `promise` with a consent-request result. JSON shape:
+/// `{"status": "not-determined", "error": "<slug>"}`.
+///
+/// `status` mirrors what the real ATT (App Tracking Transparency, iOS) /
+/// UMP (User Messaging Platform, Android) flow reports — `"authorized"`,
+/// `"denied"`, `"not-determined"`, `"restricted"`. Until the SDK is
+/// linked it's pinned to `"not-determined"` with an `error` slug so
+/// callers can branch on either field.
+fn resolve_consent_failure(promise: JsPromise, error: &'static str) {
+    spawn_blocking(move || {
+        let json = format!(r#"{{"status":"not-determined","error":"{}"}}"#, error);
+        promise.resolve_string(&json);
+    });
+}
+
 // =====================================================================
-// Apple (iOS + Mac Catalyst)
+// Apple (iOS + Mac Catalyst — `target_os = "ios"` covers device,
+// simulator, and Mac Catalyst)
 // =====================================================================
 //
 // Real SDK integration goes through the Google Mobile Ads SwiftPM
@@ -143,61 +162,97 @@ fn resolve_rewarded_show_failure(promise: JsPromise, error: &'static str) {
 // for the interstitial path,
 // `GADRewardedAd.load(withAdUnitID:request:completionHandler:)`
 // for rewarded, and `GADBannerView` (with `adSize` /
-// `rootViewController`) for the banner widget.
+// `rootViewController`) for the banner widget. ATT consent goes
+// through `ATTrackingManager.requestTrackingAuthorization`.
 //
-// For the MVP we land the module boundary but route every call
-// to the structured failure helper so the crate compiles on
-// `cargo build` without dragging the SwiftPM SDK into the link
-// graph.
+// Two build modes:
+//   - default: route every call to the structured failure helper
+//     (`no-sdk-linked`) so the crate compiles on `cargo build`
+//     without dragging the SwiftPM SDK into the link graph. iOS is a
+//     *supported* platform, so the slug is `no-sdk-linked`, not
+//     `unsupported-platform`.
+//   - `--features google-ads`: delegate to `ios_real`, which makes
+//     real objc2 calls into the GoogleMobileAds framework. That module
+//     is COMPILE-UNVERIFIED here (it needs the iOS target + the
+//     xcframework, neither present in host CI) — see its header.
 
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(all(target_os = "ios", feature = "google-ads"))]
+mod ios_real;
+
+#[cfg(target_os = "ios")]
 mod platform {
     use super::*;
 
-    /// TODO(#867): load a `GADInterstitialAd` against `unit_id` and
-    /// cache it for the next `interstitial_show` call. Completion
-    /// handler should resolve with `{ success: true }` on a
-    /// successful load and `{ success: false, error }` otherwise.
-    pub fn interstitial_load(promise: JsPromise, _unit_id: String) {
-        resolve_load_failure(promise, "no-sdk-linked");
+    pub fn interstitial_load(promise: JsPromise, unit_id: String) {
+        #[cfg(feature = "google-ads")]
+        {
+            super::ios_real::interstitial_load(promise, unit_id);
+        }
+        #[cfg(not(feature = "google-ads"))]
+        {
+            let _ = unit_id;
+            resolve_load_failure(promise, "no-sdk-linked");
+        }
     }
 
-    /// TODO(#867): present the previously-loaded interstitial via
-    /// `present(fromRootViewController:)`. Resolve once the user
-    /// dismisses the ad with
-    /// `{ shown: true, dismissed: true }`, or
-    /// `{ shown: false, dismissed: false, error }` if no ad was
-    /// cached.
     pub fn interstitial_show(promise: JsPromise) {
-        resolve_interstitial_show_failure(promise, "no-sdk-linked");
+        #[cfg(feature = "google-ads")]
+        {
+            super::ios_real::interstitial_show(promise);
+        }
+        #[cfg(not(feature = "google-ads"))]
+        {
+            resolve_interstitial_show_failure(promise, "no-sdk-linked");
+        }
     }
 
-    /// TODO(#867): load a `GADRewardedAd` against `unit_id`.
-    pub fn rewarded_load(promise: JsPromise, _unit_id: String) {
-        resolve_load_failure(promise, "no-sdk-linked");
+    pub fn rewarded_load(promise: JsPromise, unit_id: String) {
+        #[cfg(feature = "google-ads")]
+        {
+            super::ios_real::rewarded_load(promise, unit_id);
+        }
+        #[cfg(not(feature = "google-ads"))]
+        {
+            let _ = unit_id;
+            resolve_load_failure(promise, "no-sdk-linked");
+        }
     }
 
-    /// TODO(#867): present the rewarded ad and resolve once the
-    /// reward delegate fires with `{ earned: true, amount, type }`,
-    /// or `{ earned: false, dismissed: true }` if the user
-    /// dismissed early.
     pub fn rewarded_show(promise: JsPromise) {
-        resolve_rewarded_show_failure(promise, "no-sdk-linked");
+        #[cfg(feature = "google-ads")]
+        {
+            super::ios_real::rewarded_show(promise);
+        }
+        #[cfg(not(feature = "google-ads"))]
+        {
+            resolve_rewarded_show_failure(promise, "no-sdk-linked");
+        }
     }
 
     /// TODO(#867): create a `GADBannerView`, attach it to the root
     /// view controller, register it in the perry-ffi handle table,
-    /// and return the handle.
+    /// and return the handle. (The `perry/ui` `<AdBanner>` widget is
+    /// the primary banner surface; this raw-FFI path is secondary.)
     pub fn banner_create(_unit_id: String, _size_key: String) -> i64 {
         // Placeholder handle. Real impl will call
         // `perry_ffi::register_handle(banner_view)`.
         0
     }
 
-    /// TODO(#867): release the banner via the handle table and
-    /// detach it from the view hierarchy.
     pub fn banner_destroy(_handle: i64) {
         // No-op until real SDK integration lands.
+    }
+
+    /// ATT consent — `ATTrackingManager.requestTrackingAuthorization`.
+    pub fn consent_request(promise: JsPromise) {
+        #[cfg(feature = "google-ads")]
+        {
+            super::ios_real::consent_request(promise);
+        }
+        #[cfg(not(feature = "google-ads"))]
+        {
+            resolve_consent_failure(promise, "no-sdk-linked");
+        }
     }
 }
 
@@ -205,13 +260,14 @@ mod platform {
 // Android
 // =====================================================================
 //
-// Real impl bridges to `com.google.android.gms.ads.*`. The Java/
-// Kotlin side lives in `crates/perry-ui-android/template/.../PerryBridge.kt`
-// (follow-up — the JNI entry points `adsInterstitialLoad` /
-// `adsInterstitialShow` / `adsRewardedLoad` / `adsRewardedShow` /
-// `adsBannerCreate` / `adsBannerDestroy` aren't written yet). The
-// completion side resolves the promise once the Kotlin callback
-// fires.
+// Real impl bridges to `com.google.android.gms.ads.*` via JNI into the
+// Kotlin helpers in
+// `crates/perry-ui-android/template/.../PerryBridge.kt`
+// (`adsInterstitialLoad` / `adsInterstitialShow` / `adsRewardedLoad` /
+// `adsRewardedShow` / `adsRequestConsent`). The completion side
+// resolves the promise once the Kotlin callback fires. The JNI wiring
+// is a follow-up; for now Android is a *supported* platform whose calls
+// resolve `no-sdk-linked`.
 
 #[cfg(target_os = "android")]
 mod platform {
@@ -240,37 +296,43 @@ mod platform {
     pub fn banner_destroy(_handle: i64) {
         // No-op until real SDK integration lands.
     }
+
+    /// UMP consent — `ConsentInformation.requestConsentInfoUpdate`.
+    pub fn consent_request(promise: JsPromise) {
+        resolve_consent_failure(promise, "no-sdk-linked");
+    }
 }
 
 // =====================================================================
-// Other targets — Linux / Windows / tvOS / watchOS / visionOS / gtk4
+// Other targets — macOS (non-Catalyst) / Linux / Windows / tvOS /
+// watchOS / visionOS / gtk4
 // =====================================================================
 //
-// Google Mobile Ads doesn't ship a first-party SDK on any of
-// these. The MVP returns the same `no-sdk-linked` slug as the
-// Apple/Android stubs so callers see one consistent
-// `{ success: false }` shape during development. Once real SDK
-// integration lands on iOS/Android, this branch flips to
-// `unsupported-platform`.
+// Google Mobile Ads ships no first-party SDK on any of these, so every
+// call resolves `unsupported-platform`. This is the honest distinction
+// the MVP deferred: iOS/Android say `no-sdk-linked` (a supported
+// platform whose SDK isn't wired up yet); everything else — including
+// macOS native, where a `perry/ui` app may be developed/previewed —
+// says `unsupported-platform`.
 
-#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 mod platform {
     use super::*;
 
     pub fn interstitial_load(promise: JsPromise, _unit_id: String) {
-        resolve_load_failure(promise, "no-sdk-linked");
+        resolve_load_failure(promise, "unsupported-platform");
     }
 
     pub fn interstitial_show(promise: JsPromise) {
-        resolve_interstitial_show_failure(promise, "no-sdk-linked");
+        resolve_interstitial_show_failure(promise, "unsupported-platform");
     }
 
     pub fn rewarded_load(promise: JsPromise, _unit_id: String) {
-        resolve_load_failure(promise, "no-sdk-linked");
+        resolve_load_failure(promise, "unsupported-platform");
     }
 
     pub fn rewarded_show(promise: JsPromise) {
-        resolve_rewarded_show_failure(promise, "no-sdk-linked");
+        resolve_rewarded_show_failure(promise, "unsupported-platform");
     }
 
     pub fn banner_create(_unit_id: String, _size_key: String) -> i64 {
@@ -278,7 +340,11 @@ mod platform {
     }
 
     pub fn banner_destroy(_handle: i64) {
-        // No-op until real SDK integration lands.
+        // No-op — no SDK on this platform.
+    }
+
+    pub fn consent_request(promise: JsPromise) {
+        resolve_consent_failure(promise, "unsupported-platform");
     }
 }
 
@@ -397,6 +463,23 @@ pub unsafe extern "C" fn js_ads_banner_create(
 #[no_mangle]
 pub extern "C" fn js_ads_banner_destroy(handle: f64) {
     platform::banner_destroy(handle as i64);
+}
+
+/// `js_ads_request_consent()` — request user consent for personalised
+/// ads / tracking. Resolves to a JSON-stringified `AdConsentResult`.
+///
+/// On iOS this drives App Tracking Transparency
+/// (`ATTrackingManager.requestTrackingAuthorization`); on Android the
+/// User Messaging Platform consent form
+/// (`ConsentInformation`/`ConsentForm`). The result `status` is one of
+/// `"authorized"` / `"denied"` / `"not-determined"` / `"restricted"`.
+/// Call this before loading ads so requests honour GDPR / ATT.
+#[no_mangle]
+pub extern "C" fn js_ads_request_consent() -> *mut perry_ffi::Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    platform::consent_request(promise);
+    raw
 }
 
 // No `#[cfg(test)] mod tests` block here: the FFI entry points

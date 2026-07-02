@@ -38,6 +38,13 @@ extern "C" {
     /// dereferenced as a heap object. Defined in
     /// `crates/perry-runtime/src/object/global_fetch.rs`.
     pub fn js_node_setheaders_entries_json(value: f64) -> *mut StringHeader;
+    /// #1781 — materialize ANY string representation (heap
+    /// `STRING_TAG` *or* inline `SHORT_STRING_TAG` SSO) to a real
+    /// `*const StringHeader`, returned as `i64`. SSO bytes are copied
+    /// onto the heap; a heap string returns its existing pointer.
+    /// Returns 0 for non-strings. Defined in
+    /// `crates/perry-runtime/src/value/nanbox.rs::js_get_string_pointer_unified`.
+    pub fn js_get_string_pointer_unified(value: f64) -> i64;
 }
 
 /// Opaque marker for the runtime's Promise struct — pass pointers
@@ -221,9 +228,15 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
     if v.is_undefined() || v.is_null() {
         return None;
     }
-    if v.is_string() {
-        let bits = value.to_bits();
-        let ptr = (bits & PTR_MASK) as *mut StringHeader;
+    // JS string — heap STRING_TAG *or* inline SSO SHORT_STRING_TAG.
+    // #1781: the strict `is_string()` matched STRING_TAG only, so a
+    // short response body (`res.end("hi")`) fell through every branch
+    // to `None` and was silently dropped. Gate on `is_any_string()`
+    // and materialize via `js_get_string_pointer_unified`, which copies
+    // SSO bytes onto the heap (and returns the existing pointer for a
+    // heap string), so the `StringHeader` read works for both reprs.
+    if v.is_any_string() {
+        let ptr = unsafe { js_get_string_pointer_unified(value) } as *mut StringHeader;
         if ptr.is_null() {
             return None;
         }
@@ -397,6 +410,59 @@ mod tests {
         assert_eq!(
             parsed.callback, 0,
             "a host string must not be read as a callback"
+        );
+    }
+
+    /// Encode `bytes` (len ≤ 5) as an inline SSO `SHORT_STRING_TAG`
+    /// NaN-box, mirroring the runtime's `JSValue::try_short_string`:
+    /// tag 0x7FF9, length in bits 40..=47, data little-endian in bits
+    /// 0..=39. This is the exact representation codegen hands the
+    /// `res.write` / `res.end` shim for a short string literal — the
+    /// repr `jsvalue_to_body_bytes` must not drop.
+    fn sso(bytes: &[u8]) -> f64 {
+        assert!(bytes.len() <= 5);
+        let mut payload: u64 = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            payload |= (b as u64) << (i * 8);
+        }
+        let bits = 0x7FF9_0000_0000_0000_u64 | ((bytes.len() as u64) << 40) | payload;
+        f64::from_bits(bits)
+    }
+
+    /// A short response body (`res.end("hi")`) arrives as an inline SSO
+    /// value, not a `STRING_TAG` heap pointer. Gating on the strict
+    /// `is_string()` (STRING_TAG only) makes the SSO value match no branch,
+    /// so `jsvalue_to_body_bytes` silently drops the body (returns `None`)
+    /// and the wire response has an empty body. It must convert to its
+    /// UTF-8 bytes, including the empty string and the 5-byte SSO boundary.
+    #[test]
+    fn body_bytes_converts_sso_short_string() {
+        assert_eq!(
+            jsvalue_to_body_bytes(sso(b"hi")).as_deref(),
+            Some(&b"hi"[..]),
+            "SSO short body must convert to its bytes, not be dropped"
+        );
+        assert_eq!(
+            jsvalue_to_body_bytes(sso(b"")).as_deref(),
+            Some(&b""[..]),
+            "empty SSO body should yield empty bytes, not None"
+        );
+        assert_eq!(
+            jsvalue_to_body_bytes(sso(b"hello")).as_deref(),
+            Some(&b"hello"[..]),
+            "the 5-byte SSO boundary must convert"
+        );
+    }
+
+    /// A heap `STRING_TAG` body (length > 5) still converts — widening the
+    /// string branch to match SSO must not regress the long-string path
+    /// that already worked.
+    #[test]
+    fn body_bytes_converts_heap_string() {
+        let v = JsValue::from_string_ptr(perry_ffi::alloc_string("longer-than-sso").as_raw());
+        assert_eq!(
+            jsvalue_to_body_bytes(f64::from_bits(v.bits())).as_deref(),
+            Some(&b"longer-than-sso"[..])
         );
     }
 

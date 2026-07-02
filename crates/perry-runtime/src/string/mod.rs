@@ -43,9 +43,9 @@ mod tests;
 // Explicit named re-exports — preserve the original `crate::string::*`
 // surface 1:1. NO glob re-exports.
 pub use alloc::{
-    js_string_addref, js_string_builder_new, js_string_from_bytes, js_string_from_bytes_longlived,
-    js_string_from_bytes_with_capacity, js_string_from_wtf8_bytes, js_string_length,
-    js_string_materialize_to_heap, js_string_new_sso,
+    js_string_addref, js_string_addref_if_heap_string, js_string_builder_new, js_string_from_bytes,
+    js_string_from_bytes_longlived, js_string_from_bytes_with_capacity, js_string_from_wtf8_bytes,
+    js_string_length, js_string_materialize_to_heap, js_string_new_sso,
 };
 pub use append::js_string_append;
 pub use base64_codec::{js_atob, js_btoa};

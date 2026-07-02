@@ -46,6 +46,51 @@ Use `--output-type` to change what's produced:
 | `executable` | Standalone binary (default) |
 | `dylib` | Shared library (`.dylib`/`.so`) for [plugins](../plugins/overview.md) |
 
+## Embedding Assets
+
+Bake static files (an SPA `dist/`, images, JSON, fonts, …) into the standalone
+executable so it runs with no external files on disk (#5731).
+
+| Flag | Description |
+|------|-------------|
+| `--embed <pattern>` | Embed a file, directory, or `*`/`**` glob (relative to the project root). Repeatable. Merged with `perry.embed` (package.json) and `[compile] embed` (perry.toml). |
+
+```bash
+vite build
+perry compile server.ts --embed "./dist/**" -o myapp
+./myapp   # serves dist/ from memory — no dist/ folder needed
+```
+
+Embedded files are reachable at runtime three ways:
+
+```ts
+import { embeddedFiles, readEmbedded, isStandaloneExecutable } from "perry";
+import { readFileSync } from "fs";
+
+for (const f of embeddedFiles()) {
+  // f.name (e.g. "dist/index.html"), f.size, f.type (MIME)
+  app.get("/" + f.name, (_, reply) => reply.type(f.type).send(readEmbedded(f.name)));
+}
+
+// or via node:fs at the `$perryfs/<path>` virtual path:
+const html = readFileSync("$perryfs/dist/index.html", "utf8");
+```
+
+`embeddedFiles()` is a function (not a bare value like Bun's `embeddedFiles`) so
+that array methods dispatch on its result. `readEmbedded(path)` and `node:fs`
+accept either the `$perryfs/<path>` virtual path or the embed-relative key.
+
+> **Note**
+> `node:fs` consults the embedded registry *before* disk, and a bare
+> embed-relative key matches too — so `readFileSync("dist/index.html")` returns
+> the **embedded** bytes even if a `dist/index.html` exists on disk next to the
+> binary. Read a real on-disk file by absolute path, and use the explicit
+> `$perryfs/<path>` form when you specifically mean the embedded copy.
+>
+> Embedding currently requires a Unix-like host toolchain (macOS/Linux); on a
+> Windows host `--embed` errors out. Cross-target / Windows embedding is a
+> tracked follow-up.
+
 ## Debug Flags
 
 | Flag | Description |
@@ -112,6 +157,10 @@ version = "1.0.0"
 
 [build]
 out_dir = "build"
+
+[compile]
+# Embed static assets into the standalone executable (same as repeated --embed).
+embed = ["./dist/**"]
 
 [app]
 name = "My App"

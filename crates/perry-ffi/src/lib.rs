@@ -46,11 +46,11 @@
 
 mod async_runtime;
 pub use async_runtime::{
-    nanbox_string_bits, spawn_blocking, spawn_blocking_with_reactor, JsNativeAsyncCompletion,
-    JsPromise, PERRY_NATIVE_ASYNC_ALREADY_COMPLETED, PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
-    PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT, PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS,
-    PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK, PERRY_NATIVE_ASYNC_THREAD_MAIN,
-    PERRY_NATIVE_ASYNC_WRONG_THREAD,
+    nanbox_string_bits, spawn_async, spawn_blocking, spawn_blocking_with_reactor,
+    JsNativeAsyncCompletion, JsPromise, PERRY_NATIVE_ASYNC_ALREADY_COMPLETED,
+    PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL, PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
+    PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS, PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK,
+    PERRY_NATIVE_ASYNC_THREAD_MAIN, PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 
 mod types;
@@ -63,10 +63,10 @@ mod handle;
 #[allow(deprecated)]
 pub use handle::gc_register_root_scanner;
 pub use handle::{
-    drop_handle, gc_register_mutable_root_scanner, gc_register_mutable_root_scanner_named,
-    get_handle, get_handle_mut, handle_exists, iter_handle_ids_of, iter_handles_of,
-    iter_handles_of_mut, register_handle, take_handle, with_handle, with_handle_mut,
-    GcMutableRootScanner, GcRootVisitor, Handle, INVALID_HANDLE,
+    drain_quarantined_handles, drop_handle, drop_handle_until, gc_register_mutable_root_scanner,
+    gc_register_mutable_root_scanner_named, get_handle, get_handle_mut, handle_exists,
+    iter_handle_ids_of, iter_handles_of, iter_handles_of_mut, register_handle, take_handle,
+    with_handle, with_handle_mut, GcMutableRootScanner, GcRootVisitor, Handle, INVALID_HANDLE,
 };
 
 mod jsvalue;

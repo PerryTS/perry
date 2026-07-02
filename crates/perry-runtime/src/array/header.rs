@@ -690,21 +690,35 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
                 as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_OBJECT
-            // Guard out registered typed arrays / buffers that (theoretically)
-            // carry a plain-object GC tag — those have their own delegation arms
-            // in the callers and must not be materialized as array-likes.
-            && crate::typedarray::lookup_typed_array_kind(raw_addr).is_none()
-            && !crate::buffer::is_registered_buffer(raw_addr)
-        {
-            // Generic array-like object receiver
-            // (`Array.prototype.<m>.call({length, 0:…}, …)`): materialize
-            // `length` + indexed keys into a real array and operate on that.
-            return unsafe {
-                crate::array::js_array_from_arraylike(
-                    raw_addr as *const crate::object::ObjectHeader,
-                )
-            } as *const ArrayHeader;
+        // A genuine `Array` is GC_TYPE_ARRAY and skips this whole block (one
+        // compare), keeping the hot `[1,2,3].map(...)` path cheap. Everything
+        // else — generic array-like objects, typed arrays, buffers — resolves
+        // its registry membership once here.
+        if obj_type != crate::gc::GC_TYPE_ARRAY {
+            let is_typed_array = crate::typedarray::lookup_typed_array_kind(raw_addr).is_some();
+            let is_buffer = crate::buffer::is_registered_buffer(raw_addr);
+            if obj_type == crate::gc::GC_TYPE_OBJECT && !is_typed_array && !is_buffer {
+                // Generic array-like object receiver
+                // (`Array.prototype.<m>.call({length, 0:…}, …)`): materialize
+                // `length` + indexed keys into a real array and operate on that.
+                return unsafe {
+                    crate::array::js_array_from_arraylike(
+                        raw_addr as *const crate::object::ObjectHeader,
+                    )
+                } as *const ArrayHeader;
+            }
+            // #5484: a registered typed array / buffer is a valid receiver
+            // regardless of `clean_arr_ptr`'s macOS 2 TB heap-window heuristic.
+            // Typed arrays are old-arena allocations (`arena_alloc_gc_old`) that
+            // can land BELOW that floor, where `clean_arr_ptr` would null them —
+            // yet `clean_ta_ptr` (4 KB floor) accepts the same address, so
+            // `.length`/index access worked while `reduce`/`forEach`/`map`/
+            // `join`/`indexOf` (which funnel through here) silently saw an empty
+            // array. The registry membership IS the liveness check; return the
+            // raw address so the caller's typed-array / buffer dispatch fires.
+            if is_typed_array || is_buffer {
+                return raw_addr as *const ArrayHeader;
+            }
         }
     }
     // Real array / lazy array / typed array / null / garbage: existing path.

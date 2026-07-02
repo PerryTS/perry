@@ -497,6 +497,43 @@ pub extern "C" fn js_object_set_field_by_name(
                 crate::array::js_array_set_f64_extend(arr, index, value);
                 return;
             }
+            // Own-accessor short-circuit — an Array can carry a named accessor
+            // property installed via `Object.defineProperty(arr, k, {get,set})`.
+            // A `[[Set]]` on such a property must invoke the setter (a
+            // getter-only accessor is read-only), exactly as the generic-object
+            // path below does. The array branch otherwise dropped the write at
+            // the writable gate (an accessor has no `[[Writable]]`) and never
+            // ran the setter (test262 Object/defineProperty + defineProperties
+            // accessor-on-Array cases, e.g. 15.2.3.6-4-278).
+            //
+            // Gated on the per-array `OBJ_FLAG_ARRAY_DESCRIPTORS` flag (the
+            // ArrayHeader analogue of `object_has_descriptors` — the ObjectHeader
+            // `OBJ_FLAG_HAS_DESCRIPTORS` is never set for an ArrayHeader). The
+            // flag is set unconditionally by `define_array_property` whenever any
+            // descriptor is installed on the array and travels with it across
+            // evacuation; `ACCESSOR_DESCRIPTORS` is keyed by raw address, so a
+            // fresh array reusing a freed address (its `_reserved` zeroed at
+            // allocation) skips this lookup and can't fire a previous tenant's
+            // stale accessor.
+            if ACCESSORS_IN_USE.with(|c| c.get())
+                && (*gc_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            {
+                if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                    if acc.set != 0 {
+                        let closure = (acc.set & crate::value::POINTER_MASK)
+                            as *const crate::closure::ClosureHeader;
+                        if !closure.is_null() {
+                            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                            let previous_this = super::js_implicit_this_set(receiver);
+                            crate::closure::js_closure_call1(closure, value);
+                            super::js_implicit_this_set(previous_this);
+                        }
+                    } else {
+                        crate::error::throw_immutable_write(0, name);
+                    }
+                    return;
+                }
+            }
             if let Some(attrs) = super::get_property_attrs(obj as usize, name) {
                 if !attrs.writable() {
                     return;
@@ -580,7 +617,8 @@ pub extern "C" fn js_object_set_field_by_name(
         // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
         // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
         // Without this check, (*obj).keys_array reads capture[0] → corruption/crash.
-        let type_tag_at_12 = *((obj as *const u8).add(12) as *const u32);
+        let type_tag_at_12 =
+            *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
             if !key.is_null() {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -1076,8 +1114,19 @@ pub extern "C" fn js_object_set_field_by_name(
                 new_keys as usize,
                 new_index as u32,
             );
+            // The sidecar is keyed on the OBJECT pointer (see
+            // `keys_index_lookup`, which probes `obj as usize`), NOT the
+            // keys-array pointer — shape-sharing clones the keys array on
+            // every insert, so a keys-keyed entry would be orphaned each
+            // iteration. Previously this inline-slot append registered
+            // under `new_keys as usize`, so the obj-keyed lookup never
+            // found it and rebuilt the full O(key_count) index on every
+            // write — turning a wide build that stays on the inline-slot
+            // path (e.g. a class instance whose pre-sized inline capacity
+            // keeps appends below the overflow threshold) into O(n²). Use
+            // the object address to match the lookup + the overflow path.
             keys_index_insert(
-                new_keys as usize,
+                obj as usize,
                 (new_index + 1) as u32,
                 key_hash,
                 new_index as u32,
@@ -1296,6 +1345,47 @@ pub extern "C" fn js_object_set_field_by_name_nonenum(
                 obj as usize,
                 name.to_string(),
                 crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
+    }
+}
+
+/// Set `obj[key] = value` as a non-configurable (but writable + enumerable)
+/// own data property. Used for `globalThis`'s reflection of a Script's
+/// top-level `function`/`var` declarations: GlobalDeclarationInstantiation's
+/// `CreateGlobalFunctionBinding`/`CreateGlobalVarBinding` call with `D = false`
+/// (unlike sloppy-eval's Annex B.3.3.3 path, which uses `D = true` and already
+/// has its own `Object.defineProperty` HIR synthesis in
+/// `global_eval_hoist.rs`) — an ordinary assignment would instead create a
+/// configurable property. Called once at program start before any user
+/// statement runs, so there's no pre-existing descriptor to preserve or
+/// `CanDeclareGlobalFunction`/`CanDeclareGlobalVar` extensibility check to
+/// replicate here (test262 `language/global-code/decl-func.js`).
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_name_nonconfigurable(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    js_object_set_field_by_name(obj, key, value);
+    let bits = obj as u64;
+    if (bits >> 48) == 0x7FFE
+        || crate::value::addr_class::is_handle_band(obj as usize)
+        || key.is_null()
+    {
+        return;
+    }
+    unsafe {
+        if !crate::object::is_valid_obj_ptr(obj as *const u8) {
+            return;
+        }
+        let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key).byte_len as usize;
+        if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            crate::object::set_property_attrs(
+                obj as usize,
+                name.to_string(),
+                crate::object::PropertyAttrs::new(true, true, false),
             );
         }
     }

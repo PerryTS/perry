@@ -328,6 +328,8 @@ pub fn synthesize_class_captures(
                 init: Some(Expr::ClassCaptureValue {
                     class_name: name.to_string(),
                     index: index as u32,
+                    fallback: None,
+                    prefer_fallback: false,
                 }),
             });
         }
@@ -369,6 +371,8 @@ pub fn synthesize_class_captures(
                 init: Some(Expr::ClassCaptureValue {
                     class_name: name.to_string(),
                     index: index as u32,
+                    fallback: None,
+                    prefer_fallback: false,
                 }),
             });
         }
@@ -465,8 +469,29 @@ pub fn synthesize_class_captures(
     };
     let mut ctor_id_map: std::collections::HashMap<LocalId, LocalId> =
         std::collections::HashMap::new();
+    // #5437 (cross-module member-`new`): recover each capture from the
+    // class's decl-site snapshot at ctor entry. A SAME-module bare-`new
+    // C(...)` / inline construct appends the live cap arg, so the param
+    // holds the correct value and — because the snapshot for this class was
+    // registered with that same value at decl-time —
+    // `js_class_capture_value_or` returns the identical value (no behavior
+    // change). But a CROSS-MODULE `new ns.C(...)` (Next's `new
+    // w.AppRouteRouteModule(...)`, where the class lives in a different
+    // compiled module) cannot resolve the class statically, so it routes to
+    // the runtime construct path (`construct_registered_class_ref`) which
+    // supplies NO cap args — the param is then garbage/undefined. Rebinding
+    // the param FROM the class's own decl-site snapshot (the ctor body is
+    // compiled in the class's home module, where `class_name` → its real
+    // `class_id`) recovers the captured value before EITHER the user ctor
+    // body reads it (`this.methods = r_(e)` — `r_` is remapped to this param)
+    // OR the `this.__perry_cap_*` field is stashed from it. This generalizes
+    // the W6 inline-construct snapshot fix
+    // (`inline_constructor_param_values_with_class`) — which only covered the
+    // statically-inlined construct — to EVERY construction path, including
+    // the runtime cross-module one.
+    let mut rebind_stmts: Vec<Stmt> = Vec::with_capacity(captures_vec.len());
     let mut assignment_stmts: Vec<Stmt> = Vec::with_capacity(captures_vec.len());
-    for &outer_id in &captures_vec {
+    for (index, &outer_id) in captures_vec.iter().enumerate() {
         let fresh_param_id = ctx.fresh_local();
         ctor_id_map.insert(outer_id, fresh_param_id);
         let ty = captured_outer_types
@@ -482,23 +507,50 @@ pub fn synthesize_class_captures(
             is_rest: false,
             arguments_object: None,
         });
+        // param = js_param_or_class_capture_value(param, class_id, slot)
+        // — PARAM-FIRST: the live `new`-site cap arg wins whenever present; the
+        // decl-site snapshot is only used when the param is `undefined` (the
+        // cross-module construct path drops the cap arg → undefined). This
+        // avoids overriding a SAME-module `new C(...)`'s current (possibly
+        // mutated) outer with the stale decl-site snapshot.
+        rebind_stmts.push(Stmt::Expr(Expr::LocalSet(
+            fresh_param_id,
+            Box::new(Expr::ClassCaptureValue {
+                class_name: name.to_string(),
+                index: index as u32,
+                fallback: Some(Box::new(Expr::LocalGet(fresh_param_id))),
+                prefer_fallback: true,
+            }),
+        )));
         assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
             object: Box::new(Expr::This),
             property: format!("__perry_cap_{}", outer_id),
             value: Box::new(Expr::LocalGet(fresh_param_id)),
         }));
     }
-    // Rewrite user-written ctor body BEFORE inserting the assignment
+    // Rewrite user-written ctor body BEFORE inserting the rebind + assignment
     // stmts (which already reference the fresh ids directly).
     crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
     append_self_sites(&mut ctor.body, &ctor_id_map);
-    let super_pos = ctor
-        .body
-        .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
-    let insert_at = super_pos.map(|p| p + 1).unwrap_or(0);
-    for (i, stmt) in assignment_stmts.into_iter().enumerate() {
-        ctor.body.insert(insert_at + i, stmt);
+    // Finding #2: the param REBINDS (`param = param-or-snapshot`) go at
+    // FUNCTION ENTRY (index 0), BEFORE any pre-`super()` user code — a derived
+    // ctor may read a captured outer before calling `super()`, and that read
+    // must already see the recovered value. Only the `this.__perry_cap_* =
+    // param` field STASHES must wait until after `super()` (no `this` exists
+    // before super) AND after all user stmts (see comment below).
+    for (i, stmt) in rebind_stmts.into_iter().enumerate() {
+        ctor.body.insert(i, stmt);
+    }
+    // The field STASHES (`this.__perry_cap_* = param`) must come AFTER
+    // `super()` (no `this` exists before super in derived classes) AND after
+    // ALL user body stmts — user code may mutate the outer-local after
+    // `super()` (e.g. `++called` in the TemporalHelpers sub-check pattern).
+    // Inserting immediately after `super()` captured the pre-mutation value.
+    // Insert stashes before each explicit `return` so they run on every exit
+    // path, then append at the end for the fall-through path.
+    insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
+    for stmt in assignment_stmts {
+        ctor.body.push(stmt);
     }
     *constructor = Some(ctor);
 
@@ -523,6 +575,73 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Recursively insert `stashes` immediately before every `Stmt::Return` in
+/// `body` so that cap-field stash assignments run on EVERY early-exit path,
+/// not just the fall-through.  Does not descend into nested function
+/// expressions (closures defined inside the constructor) — only direct
+/// control-flow of the constructor body itself.
+fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
+    let mut i = 0;
+    while i < body.len() {
+        // Check via shared ref first to decide what to do.
+        let is_return = matches!(body[i], Stmt::Return(_));
+        if is_return {
+            for (j, s) in stashes.iter().enumerate() {
+                body.insert(i + j, s.clone());
+            }
+            i += stashes.len() + 1;
+            continue;
+        }
+        // Recurse into nested control-flow via mutable ref.
+        match &mut body[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                insert_stashes_before_returns(then_branch, stashes);
+                if let Some(eb) = else_branch {
+                    insert_stashes_before_returns(eb, stashes);
+                }
+            }
+            Stmt::While { body: wb, .. } | Stmt::DoWhile { body: wb, .. } => {
+                insert_stashes_before_returns(wb, stashes);
+            }
+            Stmt::For { body: fb, .. } => {
+                insert_stashes_before_returns(fb, stashes);
+            }
+            Stmt::Labeled { body: lb, .. } => match lb.as_mut() {
+                Stmt::While { body: wb, .. }
+                | Stmt::DoWhile { body: wb, .. }
+                | Stmt::For { body: wb, .. } => {
+                    insert_stashes_before_returns(wb, stashes);
+                }
+                _ => {}
+            },
+            Stmt::Try {
+                body: tb,
+                catch,
+                finally,
+            } => {
+                insert_stashes_before_returns(tb, stashes);
+                if let Some(c) = catch {
+                    insert_stashes_before_returns(&mut c.body, stashes);
+                }
+                if let Some(f) = finally {
+                    insert_stashes_before_returns(f, stashes);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    insert_stashes_before_returns(&mut case.body, stashes);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
 
 /// Append `cap_args` (the `.1` ids) to every `new <class_name>(…)` site in

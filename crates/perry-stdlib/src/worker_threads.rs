@@ -21,10 +21,17 @@ use perry_runtime::thread::{
 };
 use perry_runtime::value::JSValue;
 
+mod channel_pump;
 mod direct_message;
 mod parent_port;
 mod worker_options;
 mod worker_surface;
+
+// Re-export the channel-pump entry points so `crate::worker_threads::*`
+// (and the crate-root re-export in lib.rs) keep resolving them.
+pub use channel_pump::{
+    js_worker_threads_channels_has_pending, js_worker_threads_channels_process_pending,
+};
 
 use worker_options::{apply_worker_env, restore_worker_env, WorkerOptions, WorkerResourceLimits};
 use worker_surface::{
@@ -52,6 +59,11 @@ const PARENT_PORT_HANDLE: i64 = 1;
 thread_local! {
     /// Callback closure for 'message' events
     static MESSAGE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
+    /// Web-style `parentPort.addEventListener("message", fn)` listeners. These
+    /// receive a `MessageEvent` wrapper (with `.data`) rather than the raw
+    /// payload that the Node-style `MESSAGE_CALLBACK` listener gets. Stored as
+    /// raw closure pointers (i64), like `MESSAGE_CALLBACK`.
+    static MESSAGE_EVENT_CALLBACKS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
     /// Callback closure for 'close' events
     static CLOSE_CALLBACK: RefCell<Option<i64>> = const { RefCell::new(None) };
     /// Queue of pending messages (raw JSON strings) from stdin
@@ -163,6 +175,10 @@ struct WorkerRecord {
 struct WorkerListener {
     callback_bits: u64,
     once: bool,
+    /// True for listeners registered via the Web-style `addEventListener`,
+    /// which receive a `MessageEvent` wrapper instead of the raw payload that
+    /// the Node-style `on`/`once` listeners receive.
+    web_event: bool,
 }
 
 enum WorkerEvent {
@@ -865,14 +881,40 @@ fn push_parent_event(event: WorkerEvent) {
 }
 
 extern "C" fn worker_on(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
-    worker_add_listener(captured_worker_id(closure), event, callback, false)
+    worker_add_listener(captured_worker_id(closure), event, callback, false, false)
 }
 
 extern "C" fn worker_once(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
-    worker_add_listener(captured_worker_id(closure), event, callback, true)
+    worker_add_listener(captured_worker_id(closure), event, callback, true, false)
 }
 
-fn worker_add_listener(worker_id: u64, event: f64, callback: f64, once: bool) -> f64 {
+/// `worker.addEventListener(type, listener)` — Web-style listener registration
+/// on the main-thread Worker handle. Unlike `on`, the listener receives a
+/// `MessageEvent` (with `.data`) for "message" events.
+extern "C" fn worker_add_event_listener(
+    closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    worker_add_listener(captured_worker_id(closure), event, callback, false, true)
+}
+
+/// `worker.removeEventListener(type, listener)`.
+extern "C" fn worker_remove_event_listener(
+    closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    worker_off(closure, event, callback)
+}
+
+fn worker_add_listener(
+    worker_id: u64,
+    event: f64,
+    callback: f64,
+    once: bool,
+    web_event: bool,
+) -> f64 {
     ensure_worker_gc_scanner();
     let Some(event) = event_name(event) else {
         return js_undefined();
@@ -886,6 +928,7 @@ fn worker_add_listener(worker_id: u64, event: f64, callback: f64, once: bool) ->
             .push(WorkerListener {
                 callback_bits: closure_arg_bits(callback),
                 once,
+                web_event,
             });
     }
     js_undefined()
@@ -1019,17 +1062,26 @@ pub extern "C" fn js_worker_threads_worker_start_heap_profile(receiver: i64) -> 
 fn worker_terminate_by_id(worker_id: u64) -> f64 {
     let promise = unsafe { crate::common::async_bridge::js_promise_new_for_native_resolution() };
     let promise_ptr = promise as usize;
-    let found = {
+    let resolved_now = {
         let mut workers = WORKERS.lock().unwrap();
-        if let Some(worker) = workers.get_mut(&worker_id) {
-            worker.terminate_promise = Some(promise_ptr);
-            let _ = worker.sender.send(WorkerCommand::Terminate);
-            true
-        } else {
-            false
+        match workers.get_mut(&worker_id) {
+            // The worker already exited (its entry returned and it pushed an
+            // Exit event) — there is no live thread to receive `Terminate`, so
+            // no further Exit event will arrive to settle the promise. Resolve
+            // it immediately. `terminate()` on an already-finished worker is a
+            // no-op in Node and resolves at once. Without this, a worker pool
+            // whose workers run-and-exit (no `parentPort` message loop) would
+            // hang forever on `Promise.all(workers.map(w => w.terminate()))`.
+            Some(worker) if !worker.alive => true,
+            Some(worker) => {
+                worker.terminate_promise = Some(promise_ptr);
+                let _ = worker.sender.send(WorkerCommand::Terminate);
+                false
+            }
+            None => true,
         }
     };
-    if !found {
+    if resolved_now {
         perry_runtime::js_promise_resolve(promise, 1.0);
     }
     perry_runtime::value::js_nanbox_pointer(promise as i64)
@@ -1171,229 +1223,6 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
     set_object_field(obj, "port1", object_value(message_port_object(id1)));
     set_object_field(obj, "port2", object_value(message_port_object(id2)));
     object_value(obj)
-}
-
-/// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
-/// firing `close` events for closed ports. Called from the event-loop pump.
-/// Returns the number of messages/events dispatched (#3157).
-#[no_mangle]
-pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
-    let mut dispatched = 0;
-
-    // Snapshot deliverable (port_id, callback, message) tuples, then invoke the
-    // callbacks OUTSIDE the MESSAGE_PORTS borrow — a listener may re-enter
-    // postMessage / close, which needs to borrow MESSAGE_PORTS again.
-    struct MessageDispatch {
-        target_bits: u64,
-        raw_cb: Option<u64>,
-        event_cbs: Vec<u64>,
-        handler_cb: Option<u64>,
-        msg: String,
-    }
-
-    loop {
-        let candidates: Vec<(u64, u64)> = MESSAGE_PORTS.with(|ports| {
-            ports
-                .borrow()
-                .iter()
-                .filter_map(|(port_id, state)| {
-                    (!state.closed && !state.inbox.is_empty())
-                        .then_some((*port_id, state.object_bits))
-                })
-                .collect()
-        });
-        let mut next: Option<MessageDispatch> = None;
-        for (port_id, target_bits) in candidates {
-            let handler_cb = object_event_handler(target_bits, "onmessage");
-            next = MESSAGE_PORTS.with(|ports| {
-                let mut ports = ports.borrow_mut();
-                let state = ports.get_mut(&port_id)?;
-                let has_event_target = state.started
-                    && (state.message_cb.is_some() || !state.message_event_cbs.is_empty());
-                if state.closed || (!has_event_target && handler_cb.is_none()) {
-                    return None;
-                }
-                state.inbox.pop_front().map(|msg| MessageDispatch {
-                    target_bits: state.object_bits,
-                    raw_cb: state.message_cb,
-                    event_cbs: state.message_event_cbs.clone(),
-                    handler_cb,
-                    msg,
-                })
-            });
-            if next.is_some() {
-                break;
-            }
-        }
-        match next {
-            Some(dispatch) => {
-                let value = deserialize_message(&dispatch.msg);
-                if let Some(cb_bits) = dispatch.raw_cb {
-                    call_callback1(cb_bits, dispatch.target_bits, value);
-                }
-                if !dispatch.event_cbs.is_empty() || dispatch.handler_cb.is_some() {
-                    let event = event_object("message", dispatch.target_bits, Some(value));
-                    for cb_bits in dispatch.event_cbs {
-                        call_callback1(cb_bits, dispatch.target_bits, event);
-                    }
-                    if let Some(cb_bits) = dispatch.handler_cb {
-                        call_callback1(cb_bits, dispatch.target_bits, event);
-                    }
-                }
-                dispatched += 1;
-            }
-            None => break,
-        }
-    }
-
-    struct BroadcastDispatch {
-        target_bits: u64,
-        event_cbs: Vec<u64>,
-        handler_cb: Option<u64>,
-        msg: String,
-    }
-
-    loop {
-        let candidates: Vec<(u64, u64)> = BROADCAST_CHANNELS.with(|channels| {
-            channels
-                .borrow()
-                .iter()
-                .filter_map(|(channel_id, state)| {
-                    (!state.closed && !state.inbox.is_empty())
-                        .then_some((*channel_id, state.object_bits))
-                })
-                .collect()
-        });
-        let mut next: Option<BroadcastDispatch> = None;
-        for (channel_id, target_bits) in candidates {
-            let handler_cb = object_event_handler(target_bits, "onmessage");
-            next = BROADCAST_CHANNELS.with(|channels| {
-                let mut channels = channels.borrow_mut();
-                let state = channels.get_mut(&channel_id)?;
-                if state.closed || (state.message_event_cbs.is_empty() && handler_cb.is_none()) {
-                    return None;
-                }
-                state.inbox.pop_front().map(|msg| BroadcastDispatch {
-                    target_bits: state.object_bits,
-                    event_cbs: state.message_event_cbs.clone(),
-                    handler_cb,
-                    msg,
-                })
-            });
-            if next.is_some() {
-                break;
-            }
-        }
-        match next {
-            Some(dispatch) => {
-                let value = deserialize_message(&dispatch.msg);
-                let event = event_object("message", dispatch.target_bits, Some(value));
-                if let Some(cb_bits) = dispatch.handler_cb {
-                    call_callback1(cb_bits, dispatch.target_bits, event);
-                }
-                for cb_bits in dispatch.event_cbs {
-                    call_callback1(cb_bits, dispatch.target_bits, event);
-                }
-                dispatched += 1;
-            }
-            None => break,
-        }
-    }
-
-    // Fire `close` callbacks once for newly-closed ports.
-    struct CloseDispatch {
-        target_bits: u64,
-        raw_cb: Option<u64>,
-        event_cbs: Vec<u64>,
-    }
-
-    let close_events: Vec<CloseDispatch> = MESSAGE_PORTS.with(|ports| {
-        let mut events = Vec::new();
-        for state in ports.borrow_mut().values_mut() {
-            if state.close_pending {
-                state.close_pending = false;
-                events.push(CloseDispatch {
-                    target_bits: state.object_bits,
-                    raw_cb: state.close_cb,
-                    event_cbs: state.close_event_cbs.clone(),
-                });
-            }
-        }
-        events
-    });
-    for event in close_events {
-        if let Some(cb_bits) = event.raw_cb {
-            call_callback0(cb_bits, event.target_bits);
-        }
-        if !event.event_cbs.is_empty() {
-            let close_event = event_object("close", event.target_bits, None);
-            for cb_bits in event.event_cbs {
-                call_callback1(cb_bits, event.target_bits, close_event);
-            }
-        }
-        dispatched += 1;
-    }
-
-    dispatched
-}
-
-/// Keep the event loop alive while any MessageChannel port still has a started
-/// `message` listener with queued or potentially-incoming messages (#3157).
-#[no_mangle]
-pub extern "C" fn js_worker_threads_channels_has_pending() -> i32 {
-    let pending_without_onmessage = MESSAGE_PORTS.with(|ports| {
-        ports.borrow().values().any(|state| {
-            let has_event_target = state.started
-                && (state.message_cb.is_some() || !state.message_event_cbs.is_empty());
-            (!state.closed && !state.inbox.is_empty() && has_event_target) || state.close_pending
-        })
-    });
-    if pending_without_onmessage {
-        return 1;
-    }
-
-    let onmessage_targets: Vec<u64> = MESSAGE_PORTS.with(|ports| {
-        ports
-            .borrow()
-            .values()
-            .filter_map(|state| {
-                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
-            })
-            .collect()
-    });
-    if onmessage_targets
-        .into_iter()
-        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
-    {
-        return 1;
-    }
-
-    let broadcast_pending = BROADCAST_CHANNELS.with(|channels| {
-        channels.borrow().values().any(|state| {
-            !state.closed && !state.inbox.is_empty() && !state.message_event_cbs.is_empty()
-        })
-    });
-    if broadcast_pending {
-        return 1;
-    }
-
-    let broadcast_onmessage_targets: Vec<u64> = BROADCAST_CHANNELS.with(|channels| {
-        channels
-            .borrow()
-            .values()
-            .filter_map(|state| {
-                (!state.closed && !state.inbox.is_empty()).then_some(state.object_bits)
-            })
-            .collect()
-    });
-    if broadcast_onmessage_targets
-        .into_iter()
-        .any(|target_bits| object_event_handler(target_bits, "onmessage").is_some())
-    {
-        1
-    } else {
-        0
-    }
 }
 
 extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) -> f64 {
@@ -1593,17 +1422,19 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         let mut exit_code = 0;
         let result = catch_unwind(AssertUnwindSafe(|| {
             entry();
-            if MESSAGE_CALLBACK.with(|cb| cb.borrow().is_none()) {
+            // Keep the worker thread alive to service main→worker messages only
+            // if it registered a `message` consumer (Node-style `on` OR
+            // Web-style `addEventListener`). Otherwise the worker is done once
+            // its entry returns.
+            let has_message_consumer = MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
+                || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty());
+            if !has_message_consumer {
                 return;
             }
             loop {
                 match rx.recv() {
                     Ok(WorkerCommand::Message(message)) => {
-                        if let Some(callback_ptr) = MESSAGE_CALLBACK.with(|cb| *cb.borrow()) {
-                            let bits = unsafe { deserialize_nanbox_on_current_thread(&message) };
-                            let closure = callback_ptr as *const ClosureHeader;
-                            perry_runtime::closure::js_closure_call1(closure, f64::from_bits(bits));
-                        }
+                        deliver_parent_port_message(&message);
                     }
                     Ok(WorkerCommand::DirectMessage {
                         message,
@@ -1796,6 +1627,102 @@ pub extern "C" fn js_worker_threads_on(event_ptr: i64, callback: i64) -> f64 {
     js_undefined()
 }
 
+/// Deliver one main→worker message to the in-worker `parentPort` listeners.
+/// Fires the Node-style `MESSAGE_CALLBACK` with the raw payload AND any
+/// Web-style `addEventListener("message", fn)` listeners with a `MessageEvent`.
+/// Runs on the worker's own thread (its arena), so the value is deserialized
+/// here and any event wrapper is allocated in this thread's arena.
+fn deliver_parent_port_message(message: &SerializedValue) {
+    let bits = unsafe { deserialize_nanbox_on_current_thread(message) };
+    let value = f64::from_bits(bits);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
+
+    if let Some(callback_ptr) = MESSAGE_CALLBACK.with(|cb| *cb.borrow()) {
+        let closure = callback_ptr as *const ClosureHeader;
+        perry_runtime::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
+    }
+
+    // Root the listener closures BEFORE allocating the `MessageEvent`: that
+    // allocation can trigger a moving GC, which rewrites the canonical
+    // `MESSAGE_EVENT_CALLBACKS` storage via the registered root scanner but
+    // would leave a plain `clone()` of the raw pointers stale.
+    let event_cbs = MESSAGE_EVENT_CALLBACKS.with(|cbs| {
+        cbs.borrow()
+            .iter()
+            .map(|&callback_ptr| {
+                scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(callback_ptr))
+            })
+            .collect::<Vec<_>>()
+    });
+    if !event_cbs.is_empty() {
+        let event = event_object("message", 0, Some(value_h.get_nanbox_f64()));
+        let event_h = scope.root_nanbox_f64(event);
+        for callback_h in event_cbs {
+            let callback_ptr =
+                perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
+            let closure = callback_ptr as *const ClosureHeader;
+            perry_runtime::closure::js_closure_call1(closure, event_h.get_nanbox_f64());
+        }
+    }
+}
+
+/// `parentPort.addEventListener("message", fn)` / `removeEventListener`.
+/// Web-style registration on the in-worker parent port. `add` adds the
+/// listener; otherwise removes it.
+fn parent_port_event_listener(event_ptr: i64, callback: i64, add: bool) -> f64 {
+    let event_name = string_value_to_string(f64::from_bits(event_ptr as u64)).unwrap_or_default();
+    if event_name != "message" || callback == 0 {
+        return js_undefined();
+    }
+    MESSAGE_EVENT_CALLBACKS.with(|cbs| {
+        let mut cbs = cbs.borrow_mut();
+        if add {
+            if !cbs.contains(&callback) {
+                cbs.push(callback);
+            }
+        } else {
+            cbs.retain(|c| *c != callback);
+        }
+    });
+    js_undefined()
+}
+
+/// `parentPort.addEventListener("message", fn)` — called from parent_port.rs.
+/// Registers the worker-side GC scanner for the listener closures.
+pub(super) fn js_worker_threads_parent_port_event_add(event_ptr: i64, callback: i64) -> f64 {
+    ensure_parent_port_event_gc_scanner();
+    parent_port_event_listener(event_ptr, callback, true)
+}
+
+/// `parentPort.removeEventListener("message", fn)` — called from parent_port.rs.
+pub(super) fn js_worker_threads_parent_port_event_remove(event_ptr: i64, callback: i64) -> f64 {
+    parent_port_event_listener(event_ptr, callback, false)
+}
+
+static PARENT_PORT_EVENT_GC_REGISTERED: Once = Once::new();
+
+fn ensure_parent_port_event_gc_scanner() {
+    PARENT_PORT_EVENT_GC_REGISTERED.call_once(|| {
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:worker_threads:parentPortEventListeners",
+            scan_parent_port_event_roots_mut,
+        );
+    });
+}
+
+fn scan_parent_port_event_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    MESSAGE_EVENT_CALLBACKS.with(|cbs| {
+        for cb in cbs.borrow_mut().iter_mut() {
+            // Stored as a raw closure pointer (i64). Box it into a NaN-boxed
+            // pointer slot so the GC can visit + relocate it, then unbox.
+            let mut boxed = perry_runtime::value::js_nanbox_pointer(*cb).to_bits();
+            visitor.visit_nanbox_u64_slot(&mut boxed);
+            *cb = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(boxed));
+        }
+    });
+}
+
 /// Start the background stdin reader thread
 fn start_stdin_reader() {
     let already_started = STDIN_READER_STARTED.with(|s| {
@@ -1935,7 +1862,9 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
 }
 
 fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
-    let callbacks: Vec<u64> = {
+    // Collect (callback, web_event) pairs, then invoke OUTSIDE the WORKERS lock —
+    // a listener may re-enter postMessage / terminate, which needs the lock again.
+    let callbacks: Vec<(u64, bool)> = {
         let mut workers = WORKERS.lock().unwrap();
         let Some(worker) = workers.get_mut(&worker_id) else {
             return;
@@ -1945,20 +1874,51 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         };
         let callbacks = listeners
             .iter()
-            .map(|listener| listener.callback_bits)
+            .map(|listener| (listener.callback_bits, listener.web_event))
             .collect::<Vec<_>>();
         listeners.retain(|listener| !listener.once);
         callbacks
     };
 
-    for callback_bits in callbacks {
-        let closure_ptr =
-            perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(callback_bits));
+    // Web-style `addEventListener` listeners receive a `MessageEvent` wrapper
+    // (with `.data`) for "message" events; Node-style `on` listeners receive the
+    // raw payload. Lazily build the event object only if a web listener exists.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    // Root the callbacks BEFORE allocating the `MessageEvent` (or any value the
+    // listeners are called with): the allocation can trigger a moving GC, which
+    // rewrites the canonical `WorkerListener.callback_bits` via the worker root
+    // scanner but would leave this snapshot's raw bits stale.
+    let callbacks = callbacks
+        .into_iter()
+        .map(|(callback_bits, web_event)| {
+            (
+                scope.root_nanbox_f64(f64::from_bits(callback_bits)),
+                web_event,
+            )
+        })
+        .collect::<Vec<_>>();
+    let arg_handle = arg.map(|a| scope.root_nanbox_f64(a));
+    let needs_event = event == "message" && callbacks.iter().any(|(_, web)| *web);
+    let event_handle = if needs_event {
+        let data = arg_handle.as_ref().map(|h| h.get_nanbox_f64());
+        let ev = event_object("message", 0, data);
+        Some(scope.root_nanbox_f64(ev))
+    } else {
+        None
+    };
+
+    for (callback_h, web_event) in callbacks {
+        let closure_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
         if closure_ptr == 0 {
             continue;
         }
         let closure = closure_ptr as *const ClosureHeader;
-        if let Some(arg) = arg {
+        let call_arg = if web_event && event == "message" {
+            event_handle.as_ref().map(|h| h.get_nanbox_f64())
+        } else {
+            arg_handle.as_ref().map(|h| h.get_nanbox_f64())
+        };
+        if let Some(arg) = call_arg {
             perry_runtime::closure::js_closure_call1(closure, arg);
         } else {
             perry_runtime::closure::js_closure_call0(closure);
@@ -1992,6 +1952,12 @@ static KEEP_WT_WORKER_ON: extern "C" fn(i64, f64, i64) -> f64 = js_worker_thread
 static KEEP_WT_WORKER_ONCE: extern "C" fn(i64, f64, i64) -> f64 = js_worker_threads_worker_once;
 #[used]
 static KEEP_WT_WORKER_OFF: extern "C" fn(i64, f64, i64) -> f64 = js_worker_threads_worker_off;
+#[used]
+static KEEP_WT_WORKER_ADD_EVENT_LISTENER: extern "C" fn(i64, f64, i64) -> f64 =
+    worker_surface::js_worker_threads_worker_add_event_listener;
+#[used]
+static KEEP_WT_WORKER_REMOVE_EVENT_LISTENER: extern "C" fn(i64, f64, i64) -> f64 =
+    worker_surface::js_worker_threads_worker_remove_event_listener;
 #[used]
 static KEEP_WT_WORKER_TERMINATE: extern "C" fn(i64) -> f64 = js_worker_threads_worker_terminate;
 #[used]

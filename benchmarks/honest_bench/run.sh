@@ -15,7 +15,8 @@
 #   HONEST_BENCH_MEASURED=20
 #   HONEST_BENCH_SKIP_BUILD=1            — skip (re)building the toolchains
 #   HONEST_BENCH_ONLY=3                  — comma-separated workload ids to run
-#                                          (1=json, 3=image_convolution; 2 TBD)
+#                                          (1=json, 3=image_convolution,
+#                                           4=http_fastify; 2 TBD)
 #   HONEST_BENCH_REFRESH_EXPECTED=1      — rebuild results/expected.json from
 #                                          a fresh Bun run (output semantics
 #                                          intentionally changed)
@@ -94,6 +95,21 @@ if [[ -z "${HONEST_BENCH_SKIP_BUILD:-}" ]]; then
   echo "--- building Perry json_pipeline"
   (cd "$PERRY_ROOT" && target/release/perry "$ROOT/workloads/1_json_pipeline/perry/json_pipeline.ts" \
         -o "$ROOT/workloads/1_json_pipeline/perry/json_pipeline" 2>&1 | tail -2)
+
+  # Workload 4 (http_fastify) is opt-in — only build it when selected, since it
+  # compiles three Perry kernels and needs a one-time npm install of fastify.
+  if [[ ",${HONEST_BENCH_ONLY:-1,3}," == *,4,* ]]; then
+    HTTP_KERNEL_DIR="$ROOT/workloads/4_http_fastify"
+    for kernel in minimal text parametric; do
+      echo "--- building Perry http_fastify/$kernel"
+      (cd "$PERRY_ROOT" && target/release/perry "$HTTP_KERNEL_DIR/perry/$kernel.ts" \
+            -o "$HTTP_KERNEL_DIR/perry/$kernel" 2>&1 | tail -2)
+    done
+    if [[ ! -d "$HTTP_KERNEL_DIR/node/node_modules" ]]; then
+      echo "--- npm install fastify (http_fastify/node, one-time)"
+      (cd "$HTTP_KERNEL_DIR/node" && npm install --no-audit --no-fund --silent)
+    fi
+  fi
 fi
 
 # ------------------------------ 3. fixtures -----------------------------------
@@ -205,6 +221,35 @@ if [[ ",$ONLY," == *,1,* ]]; then
   run_one json_pipeline_full perry "$ROOT/workloads/1_json_pipeline/perry/json_pipeline"                 "$FULL_IN" "/tmp/out_perry.json"
   run_one json_pipeline_full node  "node" $NODE_FLAGS "$NODE_JSON" "$FULL_IN" "/tmp/out_node.json"
   run_one json_pipeline_full bun   "bun" "run" "$NODE_JSON" "$FULL_IN" "/tmp/out_bun.json"
+fi
+
+if [[ ",$ONLY," == *,4,* ]]; then
+  HTTP_KERNEL_DIR="$ROOT/workloads/4_http_fastify"
+  NODE_KERNEL_DIR="$HTTP_KERNEL_DIR/node"
+  # <workload> <language> <route> then the run-cmd — the harness splits the
+  # run-cmd from the route on the trailing `--`.
+  run_http() {
+    local workload="$1" lang="$2" route="$3"; shift 3
+    echo "--- running $workload / $lang"
+    # Tolerate a harness exit (e.g. a kernel that SIGSEGVs under load, or never
+    # starts listening) so one bad kernel doesn't abort the whole suite under
+    # this script's `set -e` — matching the "record the failure, don't abort"
+    # contract in the header. Already-collected rows survive and finalize runs.
+    bash "$ROOT/harness/run_http_bench.sh" "$workload" "$lang" "$@" -- "$route" >> "$RESULTS.rows" \
+      || echo "--- WARNING: $workload / $lang harness exited nonzero; continuing" >&2
+  }
+  for kernel in minimal text parametric; do
+    echo "=== workload 4: http_fastify / $kernel ==="
+    case "$kernel" in
+      parametric) route="/users/u1" ;;
+      *)          route="/" ;;
+    esac
+    run_http "http_fastify_$kernel" perry "$route" "$HTTP_KERNEL_DIR/perry/$kernel"
+    # node resolves `--import tsx` + fastify relative to cwd, so cd into the
+    # kernel dir before exec.
+    run_http "http_fastify_$kernel" node  "$route" \
+      bash -c "cd '$NODE_KERNEL_DIR' && exec node --import tsx ./$kernel.ts"
+  done
 fi
 
 # ------------------------------ 5. finalize -----------------------------------

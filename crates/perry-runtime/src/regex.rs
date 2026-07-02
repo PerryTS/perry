@@ -29,6 +29,8 @@ type CompiledRegex = regex::Regex;
 type CompiledRegex = ();
 
 #[cfg(feature = "regex-engine")]
+mod class_range_validate;
+#[cfg(feature = "regex-engine")]
 mod compile;
 mod escape;
 #[cfg(feature = "regex-engine")]
@@ -41,6 +43,8 @@ mod match_all;
 mod replace_expand;
 mod replace_fn;
 #[cfg(feature = "regex-engine")]
+use class_range_validate::has_out_of_order_double_dash_class_range;
+#[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
 #[cfg(feature = "regex-engine")]
@@ -49,7 +53,10 @@ use exec_array::{
     set_exec_array_indices_fancy, set_exec_array_metadata,
 };
 #[cfg(feature = "regex-engine")]
-use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
+use grammar::{
+    has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape,
+    has_unicode_forbidden_pattern, js_regex_to_rust,
+};
 #[cfg(feature = "regex-engine")]
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
@@ -72,6 +79,14 @@ pub use replace_fn::{
     js_string_replace_all_string, js_string_replace_all_string_fn, js_string_replace_string,
     js_string_replace_string_fn,
 };
+#[cfg(feature = "regex-engine")]
+mod exec;
+#[cfg(feature = "regex-engine")]
+mod match_string;
+#[cfg(feature = "regex-engine")]
+pub use exec::js_regexp_exec;
+#[cfg(feature = "regex-engine")]
+pub use match_string::{js_string_match, js_string_match_value, js_string_search_value};
 
 thread_local! {
     /// Last exec result metadata: (index, groups_object_ptr)
@@ -109,7 +124,72 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     if ptr.is_null() || (ptr as usize) < 0x1000 {
         return false;
     }
+    // Wall 18: check the header-resident magic FIRST so identity survives a
+    // duplicate-runtime thread-local split (see `RegExpHeader.magic`). A
+    // RegExp is a `gc_malloc(GC_TYPE_OBJECT)` allocation, so it always carries
+    // a preceding GcHeader; only read the magic field when the GC header says
+    // this is an object of sufficient size to actually contain it.
+    if regex_header_has_magic(ptr as *const RegExpHeader) {
+        return true;
+    }
     REGEX_POINTERS.with(|s| s.borrow().contains(&(ptr as usize)))
+}
+
+/// Bounds-checked read of `RegExpHeader.magic`. Confirms the preceding
+/// `GcHeader` exists, is a `GC_TYPE_OBJECT`, and the allocation is large enough
+/// to hold a full `RegExpHeader` before dereferencing the `magic` field.
+/// Returns true iff the field equals [`REGEXP_MAGIC`]. Immune to which linked
+/// `perry-runtime` copy's thread-locals are live.
+///
+/// SAFETY: this is called from `is_regex_pointer` / `is_registered_regex` with
+/// ARBITRARY payloads — including small-handle-band ids (`< 0x100000`), null,
+/// NaN-box tag remnants, and small-buffer slab addresses that carry NO
+/// `GcHeader`. Dereferencing `addr - GC_HEADER_SIZE` directly SIGSEGVs on those
+/// (regression caught by `object_to_string_rejects_handle_band_ids`). Route the
+/// header read through [`addr_class::try_read_gc_header`], which magnitude-
+/// classifies FIRST (rejecting the handle band + implausible heap addresses +
+/// slab addresses) and only then touches memory.
+#[inline]
+pub(crate) fn regex_header_has_magic(re: *const RegExpHeader) -> bool {
+    let addr = re as usize;
+    unsafe {
+        let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return false;
+        };
+        if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+            return false;
+        }
+        // `size` in the GcHeader covers the GcHeader + payload. Require enough
+        // payload to reach the `magic` field.
+        if (gc.size as usize) < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<RegExpHeader>() {
+            return false;
+        }
+        (*re).magic == REGEXP_MAGIC
+    }
+}
+
+/// The GC-VISIBLE slots of a `RegExpHeader`. Only three fields can hold a
+/// heap reference the collector must mark/relocate:
+///   * `pattern_ptr` — the original-source `StringHeader`,
+///   * `flags_ptr`   — the flags `StringHeader`,
+///   * `last_index`  — a writable JSValue (`re.lastIndex = …`) that may be a
+///     NaN-boxed heap pointer.
+/// `regex_ptr`/`fancy_ptr` point to OFF-heap leaked Rust allocations and the
+/// bool/`magic` fields are never heap refs, so they must NOT be scanned.
+///
+/// `pattern_ptr` and `flags_ptr` are consecutive equal-width fields, so under
+/// `#[repr(C)]` they are adjacent and form a 2-slot contiguous range; the
+/// returned tuple is `(range_start, range_slot_count, last_index_slot)`. Offsets
+/// are taken from the actual struct via `addr_of_mut!` (no hardcoded layout).
+#[inline]
+pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usize, *mut u64) {
+    let pattern = std::ptr::addr_of_mut!((*re).pattern_ptr) as *mut u64;
+    let flags = std::ptr::addr_of_mut!((*re).flags_ptr) as *mut u64;
+    let last_index = std::ptr::addr_of_mut!((*re).last_index) as *mut u64;
+    // `pattern_ptr` then `flags_ptr` must be adjacent for the 2-slot range to be
+    // exact; assert so a future field reorder is caught in debug builds.
+    debug_assert_eq!(flags as usize - pattern as usize, 8);
+    (pattern, 2, last_index)
 }
 
 #[cfg(feature = "regex-engine")]
@@ -239,7 +319,35 @@ pub struct RegExpHeader {
     /// raw NaN-boxed bits; `exec`/`test` apply `ToLength` on read to derive the
     /// match offset. Initialized to the number `0`.
     pub last_index: u64,
+    /// Wall 18 (nestjs / get-intrinsic): self-identifying sentinel.
+    ///
+    /// `is_valid_regex_ptr` / `is_regex_pointer` / `is_registered_regex` used to
+    /// rely SOLELY on the `REGEX_POINTERS` thread-local set. That breaks when a
+    /// statically-linked app pulls a second copy of `perry-runtime` (every
+    /// `perry-ext-*` archive bundles its own — the link emits duplicate-symbol
+    /// warnings): `js_regexp_new` inserts into copy-A's thread-local while the
+    /// `.source`/`.flags`/dynamic-`.replace` reader resolves to copy-B's
+    /// (empty) thread-local, so a perfectly valid regex reports `.source ===
+    /// "(?:)"`, `is_regex_pointer === false`, and `str.replace(re, fn)` (via a
+    /// `function-bind` bound `String.prototype.replace`) treats `re` as a plain
+    /// string pattern → never matches → get-intrinsic's `stringToPath` returns
+    /// `[]` → `intrinsic %% does not exist!` → express adapter load `exit(1)`.
+    ///
+    /// Storing the marker (and the fancy-regex Arc) ON the heap header makes
+    /// identity + fancy-fallback resolution independent of WHICH runtime copy's
+    /// thread-locals are live. Set to `REGEXP_MAGIC` by `js_regexp_new`.
+    pub magic: u64,
+    /// Leaked `Arc<fancy_regex::Regex>` (as a raw pointer) for patterns the
+    /// `regex` crate can't compile (lookahead/lookbehind/backrefs), or null.
+    /// Header-resident twin of the `FANCY_CACHE` thread-local so the fancy
+    /// fallback survives the duplicate-runtime split described above.
+    pub fancy_ptr: *const (),
 }
+
+/// Self-identifying sentinel stamped into every `RegExpHeader.magic` by
+/// `js_regexp_new`. ASCII `"PRYREGEX"` little-endian — distinctive enough that
+/// a random heap object is astronomically unlikely to collide.
+pub const REGEXP_MAGIC: u64 = 0x5845_4745_5259_5250;
 
 /// `ToLength(Get(R, "lastIndex"))` → a non-negative integer match offset. The
 /// stored value may be any JSValue (e.g. `re.lastIndex = { valueOf() {…} }`), so
@@ -258,15 +366,36 @@ pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
 
 #[cfg(feature = "regex-engine")]
 #[inline]
-fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
+pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
     unsafe {
         (*re).last_index = crate::value::JSValue::number(n as f64).bits();
     }
 }
 
+/// Spec `Set(R, "lastIndex", n, true)` — the lastIndex updates in
+/// RegExpBuiltinExec (steps 14/18) are performed with the *Throw* flag set.
+/// A user can make `lastIndex` non-writable
+/// (`Object.defineProperty(re, "lastIndex", { writable: false })`); the
+/// throwing setter then raises a `TypeError` rather than silently dropping the
+/// write (test262 prototype/{exec,test}/y-fail-lastindex-no-write). When
+/// `lastIndex` is writable (the default) this just stores the number.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn set_last_index_throwing(re: *mut RegExpHeader, n: usize) {
+    let writable = crate::object::get_property_attrs(re as usize, "lastIndex")
+        .map(|a| a.writable())
+        .unwrap_or(true);
+    if !writable {
+        let message = b"Cannot assign to read only property 'lastIndex' of object";
+        let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+        let err = crate::error::js_typeerror_new(msg);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    store_last_index_number(re, n);
+}
+
 /// Check if a pointer is valid (not null and not a small invalid value from bad NaN-unboxing)
 #[inline]
-fn is_valid_ptr<T>(p: *const T) -> bool {
+pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {
     !p.is_null() && (p as usize) >= 0x1000
 }
 
@@ -277,9 +406,13 @@ fn is_valid_ptr<T>(p: *const T) -> bool {
 /// NaN-boxes it as a regex; subsequent `.exec()` / `.test()` calls would
 /// read garbage from that object if we didn't gate them on this check.
 #[inline]
-fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
+pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
     if !is_valid_ptr(p) {
         return false;
+    }
+    // Wall 18: header magic first (duplicate-runtime thread-local resilient).
+    if regex_header_has_magic(p) {
+        return true;
     }
     REGEX_POINTERS.with(|s| s.borrow().contains(&(p as usize)))
 }
@@ -290,11 +423,15 @@ fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
 /// with no enumerable string keys). Registry-gated so a generic object
 /// is never mis-read as a RegExpHeader.
 pub fn is_registered_regex(addr: usize) -> bool {
+    // Wall 18: header magic first (duplicate-runtime thread-local resilient).
+    if regex_header_has_magic(addr as *const RegExpHeader) {
+        return true;
+    }
     REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
 }
 
 /// Internal helper: Get string data from StringHeader
-fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
+pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
     unsafe {
         let len = (*s).byte_len as usize;
         let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
@@ -425,19 +562,75 @@ pub extern "C" fn js_regexp_new(
     // ALSO rejects it — otherwise it is a valid JS pattern we route through
     // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
     // the regex crate fails but fancy-regex succeeds; check both here.
+    //
+    // PERF (#5777 follow-up): the ENTIRE validation block is gated on a
+    // REGEX_CACHE miss. Regex validity is a pure function of (pattern, flags):
+    // an invalid pattern throws here BEFORE `get_or_compile_regex` can ever
+    // cache it, and both writers of REGEX_CACHE — this function and
+    // `regex/compile.rs` (`RegExp.prototype.compile`) — run these exact checks
+    // first, so any entry already in the cache is provably valid and
+    // re-validating it can only burn CPU. #5777 already skipped the expensive
+    // both-engines recompile on a hit; this extends the skip to the "cheap"
+    // JS-syntax checks too, which are not actually cheap:
+    // `has_invalid_repeated_quantifier` does a
+    // `pattern.chars().collect::<Vec<char>>()` (a ~51 KB allocation for a
+    // 12,807-char pattern) plus an O(n) scan on EVERY `new RegExp(...)`. The
+    // common `string-width`/`emoji-regex` npm packages construct a fresh
+    // ~12,807-char `/…/g` literal on every measurement and a layout pass can
+    // call them thousands of times, so this re-validation — not the
+    // already-cached compile — became the top hot frame in profiles.
     {
-        if has_invalid_repeated_quantifier(pattern_str) {
-            throw_regexp_syntax_error(&format!(
-                "Invalid regular expression: /{}/: invalid pattern",
-                pattern_str
-            ));
-        }
-        let translated = js_regex_to_rust(pattern_str);
-        if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
-            throw_regexp_syntax_error(&format!(
-                "Invalid regular expression: /{}/: invalid pattern",
-                pattern_str
-            ));
+        let in_cache = REGEX_CACHE.with(|c| {
+            c.borrow()
+                .contains_key(&(pattern_str.to_string(), flags_str.to_string()))
+        });
+        if !in_cache {
+            if has_invalid_repeated_quantifier(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // `--` is the real ClassSetExpression subtraction operator under
+            // the `v` flag (UTS #51) — `[a--z]` there means "a minus z", not
+            // a malformed range — so only legacy/`u`-mode patterns are
+            // subject to the doubled-hyphen range-order check.
+            if !flags_str.contains('v') && has_out_of_order_double_dash_class_range(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // Annex B.1.4 legacy escapes (`\1` non-backref octal, `\0DD`, `\8`/`\9`,
+            // `\c` without a control letter) are accepted in sloppy patterns but are
+            // a hard SyntaxError under the `/u` (and `/v`) flag — `js_regex_to_rust`
+            // would otherwise silently relax them. (test262 RegExp/
+            // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
+            if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // The remaining Annex B.1.4 leniencies (lone `]`/`}`, incomplete `{`
+            // quantifiers, `\d`-style range endpoints, quantified lookarounds, and
+            // forbidden IdentityEscapes) are likewise hard errors under `/u`. Gated
+            // on `u` specifically — `/v`'s ClassSetExpression grammar differs.
+            if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // The expensive part of validation: compile the pattern with both
+            // engines just to confirm it is well-formed.
+            let translated = js_regex_to_rust(pattern_str);
+            if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
         }
     }
 
@@ -479,6 +672,25 @@ pub extern "C" fn js_regexp_new(
         (*ptr).unicode = unicode;
         (*ptr).has_indices = has_indices;
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
+        // Wall 18: self-identifying marker so identity checks survive a
+        // duplicate-runtime thread-local split.
+        (*ptr).magic = REGEXP_MAGIC;
+        // Header-resident fancy-regex fallback (lookahead/lookbehind/backrefs)
+        // so `.replace(re, fn)` etc. don't depend on the (possibly other-copy)
+        // FANCY_CACHE thread-local. `get_or_compile_regex` above already
+        // populated FANCY_CACHE on THIS thread when the std `regex` crate
+        // rejected the pattern; clone that Arc onto the header (leaked so the
+        // raw pointer stays valid for the header's lifetime — RegExp headers
+        // and their compiled programs live for the process today).
+        (*ptr).fancy_ptr = FANCY_CACHE.with(|fc| {
+            match fc
+                .borrow()
+                .get(&(pattern_str.to_string(), flags_str.to_string()))
+            {
+                Some(arc) => Arc::into_raw(arc.clone()) as *const (),
+                None => std::ptr::null(),
+            }
+        });
 
         // Record the pointer so that js_string_split can detect
         // `s.split(regex)` without a dedicated runtime decl.
@@ -558,6 +770,76 @@ pub extern "C" fn js_regexp_construct(pattern: f64, flags: f64) -> *mut RegExpHe
     js_regexp_new(pat_ptr, flags_ptr)
 }
 
+/// `RegExp(...)` invoked as a *function* (not `new`). ECMA-262 22.2.4.1 step 2:
+/// when `NewTarget` is undefined, `pattern` is a RegExp and `flags` is
+/// `undefined`, and `pattern.constructor` is the `RegExp` intrinsic, the call
+/// returns `pattern` **unchanged** (object identity) instead of constructing a
+/// copy. So `var r = /x/i; RegExp(r) === r` is `true`, and a property added to
+/// `r` is visible through the returned reference (test262
+/// `built-ins/RegExp/S15.10.3.1_A1_T*`, #5586).
+///
+/// Perry models no user-visible RegExp subclassing, so a registered RegExp's
+/// `constructor` resolves through `RegExp.prototype` to the intrinsic `RegExp`
+/// and the `SameValue` check holds — *unless* user code has installed an own
+/// `constructor` property (e.g. `re.constructor = null`), which makes the
+/// `SameValue` check fail and forces a fresh copy
+/// (`built-ins/RegExp/call_with_regexp_not_same_constructor.js`). Every other
+/// shape (string/object/undefined pattern, or any non-`undefined` flags —
+/// which forces a fresh copy with the new flags) likewise falls through to the
+/// general [`js_regexp_construct`] path.
+#[cfg(feature = "regex-engine")]
+#[no_mangle]
+pub extern "C" fn js_regexp_construct_call(pattern: f64, flags: f64) -> *mut RegExpHeader {
+    let pv = crate::value::JSValue::from_bits(pattern.to_bits());
+    let fv = crate::value::JSValue::from_bits(flags.to_bits());
+    if fv.is_undefined() && pv.is_pointer() {
+        let addr = pv.as_pointer::<u8>() as usize;
+        if is_registered_regex(addr)
+            // IsRegExp(pattern): the shortcut is gated on `IsRegExp`, which first
+            // consults `pattern[@@match]` — a registered RegExp with an own
+            // `re[Symbol.match] = false` is NOT regexp-like and must copy
+            // (`built-ins/RegExp/call_with_regexp_match_falsy.js`). Only when
+            // `@@match` is absent does it fall back to the [[RegExpMatcher]] slot
+            // (which every registered RegExp has).
+            && regexp_pattern_is_regexp_like(pattern)
+            // SameValue(RegExp, pattern.constructor): the identity shortcut only
+            // applies while `constructor` is still the inherited intrinsic. An
+            // own `constructor` override (the only way it can differ here) must
+            // copy instead.
+            && crate::object::exotic_expando::value_lookup(
+                crate::object::exotic_expando::ExoticKind::RegExp,
+                addr,
+                "constructor",
+            )
+            .is_none()
+        {
+            return pv.as_pointer::<RegExpHeader>() as *mut RegExpHeader;
+        }
+    }
+    js_regexp_construct(pattern, flags)
+}
+
+/// `IsRegExp(pattern)` for an already-registered RegExp header: consult an own
+/// `pattern[@@match]` override (decisive via `ToBoolean`) and only fall back to
+/// the [[RegExpMatcher]] slot — which a registered RegExp always has — when no
+/// `@@match` property is present. Used to gate the `RegExp(re)` identity
+/// shortcut so `re[Symbol.match] = false` correctly forces a fresh copy.
+#[cfg(feature = "regex-engine")]
+fn regexp_pattern_is_regexp_like(pattern: f64) -> bool {
+    let match_sym = crate::symbol::well_known_symbol("match");
+    if match_sym.is_null() {
+        return true;
+    }
+    let sym_val = f64::from_bits(crate::value::JSValue::pointer(match_sym as *const u8).bits());
+    let m = unsafe { crate::symbol::js_object_get_symbol_property(pattern, sym_val) };
+    if crate::value::JSValue::from_bits(m.to_bits()).is_undefined() {
+        // No own/inherited @@match override → registered RegExp ([[RegExpMatcher]]).
+        true
+    } else {
+        crate::value::js_is_truthy(m) != 0
+    }
+}
+
 /// Test if a string matches the regex pattern
 /// regex.test(string) -> boolean
 #[cfg(feature = "regex-engine")]
@@ -599,8 +881,20 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
 /// registered at compile-time because the `regex` crate rejected the
 /// pattern (backreferences, lookbehind, etc.).
 #[cfg(feature = "regex-engine")]
-fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
+pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
     unsafe {
+        // Wall 18: header-resident fancy Arc first (duplicate-runtime
+        // thread-local resilient). `fancy_ptr` is a leaked `Arc` raw pointer; to
+        // hand back an owned `Arc` clone WITHOUT consuming the header's
+        // reference, reconstruct, clone, then `mem::forget` the reconstructed
+        // one so the header's strong count is preserved.
+        if regex_header_has_magic(re) && !(*re).fancy_ptr.is_null() {
+            let raw = (*re).fancy_ptr as *const fancy_regex::Regex;
+            let arc = Arc::from_raw(raw);
+            let cloned = arc.clone();
+            std::mem::forget(arc);
+            return Some(cloned);
+        }
         let pat = string_as_str((*re).pattern_ptr);
         let flags_str = string_as_str((*re).flags_ptr);
         FANCY_CACHE.with(|fc| {
@@ -608,322 +902,6 @@ fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>
                 .get(&(pat.to_string(), flags_str.to_string()))
                 .cloned()
         })
-    }
-}
-
-/// Coerce a `String.prototype.search`/`match` argument into a RegExp
-/// (ECMA-262 §22.1.3.12 / §22.1.3.20 → `RegExpCreate`). A RegExp value passes
-/// through unchanged; anything else builds a fresh regex whose source pattern
-/// is `ToString(arg)` (running user `toString`/`valueOf`, which may throw),
-/// with `undefined` mapped to the empty pattern (the `/(?:)/` regex that
-/// matches at index 0). Flags default to none.
-#[cfg(feature = "regex-engine")]
-fn coerce_search_arg_to_regex(arg: f64) -> *const RegExpHeader {
-    let jv = crate::value::JSValue::from_bits(arg.to_bits());
-    if jv.is_pointer() {
-        let p = crate::value::js_nanbox_get_pointer(arg) as *const u8;
-        if is_regex_pointer(p) {
-            return p as *const RegExpHeader;
-        }
-    }
-    // `undefined` → empty pattern. Build a real empty `StringHeader` (NOT a
-    // null pointer): the resulting RegExp header's `pattern_ptr` is later
-    // dereferenced by `js_string_match`'s `lookup_fancy_regex`
-    // (`string_as_str((*re).pattern_ptr)`), which would SIGSEGV on null.
-    let src: *const StringHeader = if jv.is_undefined() {
-        crate::string::js_string_from_str("") as *const StringHeader
-    } else {
-        crate::builtins::js_string_coerce(arg) as *const StringHeader
-    };
-    // `flags` may be read the same way; pass an empty header rather than null.
-    let flags = crate::string::js_string_from_str("") as *const StringHeader;
-    js_regexp_new(src, flags)
-}
-
-/// `String.prototype.search(regexp)` (ECMA-262 §22.1.3.12) with full argument
-/// coercion: a non-RegExp arg is turned into `RegExpCreate(ToString(arg))`
-/// (so `"x".search("pat")`, `.search(undefined)`, and `.search({toString})`
-/// all work). `s` is the already-`ToString`-coerced `this`.
-#[cfg(feature = "regex-engine")]
-#[no_mangle]
-pub extern "C" fn js_string_search_value(s: *const StringHeader, arg: f64) -> i32 {
-    // Root the receiver across the (possibly allocating / GC-triggering)
-    // argument coercion so a moving collector can't dangle `s`.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_string_ptr(s);
-    let re = coerce_search_arg_to_regex(arg);
-    let s = s_handle.get_raw_const_ptr::<StringHeader>();
-    js_string_search_regex(s, re)
-}
-
-/// `String.prototype.match(regexp)` (ECMA-262 §22.1.3.11) with full argument
-/// coercion (see [`js_string_search_value`]). Returns the match array pointer,
-/// or null on no match.
-#[cfg(feature = "regex-engine")]
-#[no_mangle]
-pub extern "C" fn js_string_match_value(s: *const StringHeader, arg: f64) -> *mut ArrayHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_string_ptr(s);
-    let re = coerce_search_arg_to_regex(arg);
-    let s = s_handle.get_raw_const_ptr::<StringHeader>();
-    js_string_match(s, re)
-}
-
-/// Find matches in a string
-/// string.match(regex) -> string[] | null (returns array pointer, null if no match)
-#[cfg(feature = "regex-engine")]
-#[no_mangle]
-pub extern "C" fn js_string_match(
-    s: *const StringHeader,
-    re: *const RegExpHeader,
-) -> *mut ArrayHeader {
-    if !is_valid_ptr(s) || !is_valid_regex_ptr(re) {
-        return ptr::null_mut();
-    }
-
-    let str_data = string_as_str(s);
-
-    unsafe {
-        let regex = &*(*re).regex_ptr;
-        let global = (*re).global;
-
-        // If this regex couldn't be compiled by the `regex` crate (e.g.
-        // backreferences like `(\w)\1*`, used by date-fns' format token
-        // regex), `get_or_compile_regex` substituted a never-match
-        // `[^\s\S]` placeholder and stashed the real pattern in
-        // `FANCY_CACHE`. Route through fancy-regex so `.match()` returns
-        // real results instead of always-null.
-        if let Some(fre) = lookup_fancy_regex(re) {
-            if global {
-                // Collect all non-overlapping matches via fancy-regex's
-                // find_iter. Mirrors the `regex` crate global path below.
-                let mut matches: Vec<String> = Vec::new();
-                let mut iter = fre.find_iter(str_data);
-                while let Some(Ok(m)) = iter.next() {
-                    matches.push(m.as_str().to_string());
-                }
-                if matches.is_empty() {
-                    return ptr::null_mut();
-                }
-                let arr = crate::array::js_array_alloc(matches.len() as u32);
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let arr_handle = scope.root_raw_mut_ptr(arr);
-                (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
-                for (i, m) in matches.iter().enumerate() {
-                    let str_ptr = js_string_from_str(m);
-                    let nanboxed = js_nanbox_string(str_ptr as i64);
-                    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                    // GC_STORE_AUDIT(BARRIERED): regex match array slot uses the shared array slot-store helper.
-                    crate::array::store_array_slot(arr, i, nanboxed.to_bits());
-                }
-                return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            } else {
-                // Non-global: first match + capture groups (parallels the
-                // standard-regex non-global branch below).
-                match fre.captures(str_data) {
-                    Ok(Some(caps)) => {
-                        let arr = crate::array::js_array_alloc(caps.len() as u32);
-                        let scope = crate::gc::RuntimeHandleScope::new();
-                        let arr_handle = scope.root_raw_mut_ptr(arr);
-                        (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-                        for i in 0..caps.len() {
-                            if let Some(m) = caps.get(i) {
-                                let str_ptr = js_string_from_str(m.as_str());
-                                let nanboxed = js_nanbox_string(str_ptr as i64);
-                                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                                // GC_STORE_AUDIT(BARRIERED): regex capture array slot uses the shared array slot-store helper.
-                                crate::array::store_array_slot(arr, i, nanboxed.to_bits());
-                            } else {
-                                let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-                                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                                // GC_STORE_AUDIT(BARRIERED): regex unmatched capture slot uses the shared array slot-store helper.
-                                crate::array::store_array_slot(arr, i, undefined.to_bits());
-                            }
-                        }
-                        // Attach .index / .input as real own properties.
-                        let match_char_offset = caps
-                            .get(0)
-                            .map(|m| str_data[..m.start()].chars().count())
-                            .unwrap_or(0);
-                        set_exec_array_metadata(
-                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            str_data,
-                            match_char_offset as f64,
-                        );
-                        // Extract named-capture groups through the fancy path
-                        // (fancy-regex exposes `capture_names()` just like the
-                        // `regex` crate), so `s.match(/(?<=x)(?<y>\d+)/).groups`
-                        // works for lookbehind+named patterns.
-                        let groups_obj = build_fancy_groups(&fre, &caps, &scope);
-                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
-                        set_exec_array_groups(
-                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            groups_obj,
-                        );
-                        // Build `indices` if the `d` flag (hasIndices) is set —
-                        // non-global `String.prototype.match` delegates to
-                        // RegExpExec, so it carries the same `indices` as exec().
-                        if (*re).has_indices {
-                            set_exec_array_indices_fancy(
-                                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                                str_data,
-                                0,
-                                &fre,
-                                &caps,
-                            );
-                        }
-                        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                    }
-                    _ => {
-                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                        return ptr::null_mut();
-                    }
-                }
-            }
-        }
-
-        if global {
-            // Global flag: return all matches
-            let matches: Vec<&str> = regex.find_iter(str_data).map(|m| m.as_str()).collect();
-
-            if matches.is_empty() {
-                return ptr::null_mut();
-            }
-
-            // Create array of string pointers
-            let arr = crate::array::js_array_alloc(matches.len() as u32);
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let arr_handle = scope.root_raw_mut_ptr(arr);
-            (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = matches.len() as u32;
-
-            for (i, m) in matches.iter().enumerate() {
-                let str_ptr = js_string_from_str(m);
-                let nanboxed = js_nanbox_string(str_ptr as i64);
-                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                // GC_STORE_AUDIT(BARRIERED): regex global match array slot uses the shared array slot-store helper.
-                crate::array::store_array_slot(arr, i, nanboxed.to_bits());
-            }
-
-            arr_handle.get_raw_mut_ptr::<ArrayHeader>()
-        } else {
-            // Non-global: return first match only (or with capture groups)
-            match regex.captures(str_data) {
-                Some(caps) => {
-                    // Return array with full match and capture groups
-                    let arr = crate::array::js_array_alloc(caps.len() as u32);
-                    let scope = crate::gc::RuntimeHandleScope::new();
-                    let arr_handle = scope.root_raw_mut_ptr(arr);
-                    (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-
-                    for (i, cap) in caps.iter().enumerate() {
-                        if let Some(m) = cap {
-                            let str_ptr = js_string_from_str(m.as_str());
-                            let nanboxed = js_nanbox_string(str_ptr as i64);
-                            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                            // GC_STORE_AUDIT(BARRIERED): regex capture array slot uses the shared array slot-store helper.
-                            crate::array::store_array_slot(arr, i, nanboxed.to_bits());
-                        } else {
-                            // Undefined capture group - store as undefined (TAG_UNDEFINED = 0x7FFC_0000_0000_0001)
-                            let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-                            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                            // GC_STORE_AUDIT(BARRIERED): regex unmatched capture slot uses the shared array slot-store helper.
-                            crate::array::store_array_slot(arr, i, undefined.to_bits());
-                        }
-                    }
-
-                    // Attach .index / .input as real own properties (mirrors
-                    // js_regexp_exec) so they survive aliasing and a later match
-                    // on another regex, instead of a most-recent-match thread-local.
-                    let match_char_offset = caps
-                        .get(0)
-                        .map(|m| str_data[..m.start()].chars().count())
-                        .unwrap_or(0);
-                    set_exec_array_metadata(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        str_data,
-                        match_char_offset as f64,
-                    );
-
-                    // Build groups object for named captures (same shape as
-                    // `regex.exec(str)` does in `js_regexp_exec`). Stored in
-                    // `LAST_EXEC_GROUPS` thread-local so the HIR fold for
-                    // `result.groups` (extended in lower.rs::is_regex_exec_init
-                    // to also recognize `str.match(regex)` results) reads it
-                    // via the existing `Expr::RegExpExecGroups` codegen path.
-                    // Same caveats as exec()'s thread-local: only the most
-                    // recent match's groups are stashed, so `m1.groups` after
-                    // an intervening `m2 = ...match(...)` reads m2's groups —
-                    // acceptable for the common inline `m.groups.x` pattern.
-                    let group_names: Vec<(&str, Option<regex::Match>)> = regex
-                        .capture_names()
-                        .enumerate()
-                        .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-                        .collect();
-                    if !group_names.is_empty() {
-                        // Use the by-name setter (and a plain `js_object_alloc`)
-                        // so each match's groups object grows its own shape from
-                        // its own keys. Pre-fix this took the
-                        // `js_object_alloc_with_shape(shape_id=const, ...)` path
-                        // — every match's groups object collapsed to the same
-                        // interned shape, so a later match with different named
-                        // captures inherited the prior call's key names (e.g.
-                        // `.match(/(?<year>...)/)` followed by
-                        // `.match(/(?<id>...)/)` made the second result expose
-                        // `.year` instead of `.id`).
-                        let groups_obj = crate::object::js_object_alloc(0, 0);
-                        let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-                        for (name, m) in &group_names {
-                            let val = if let Some(m) = m {
-                                let str_ptr = js_string_from_str(m.as_str());
-                                js_nanbox_string(str_ptr as i64)
-                            } else {
-                                f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
-                            };
-                            let key_ptr = crate::string::js_string_from_bytes(
-                                name.as_ptr(),
-                                name.len() as u32,
-                            );
-                            let groups_obj =
-                                groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                            crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
-                        }
-                        LAST_EXEC_GROUPS.with(|g| {
-                            *g.borrow_mut() =
-                                groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
-                        });
-                        set_exec_array_groups(
-                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-                        );
-                    } else {
-                        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                        set_exec_array_groups(
-                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            ptr::null_mut(),
-                        );
-                    }
-
-                    // Build `indices` if the `d` flag (hasIndices) is set —
-                    // non-global `String.prototype.match` delegates to
-                    // RegExpExec, so it carries the same `indices` as exec().
-                    if (*re).has_indices {
-                        set_exec_array_indices(
-                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            str_data,
-                            0,
-                            &caps,
-                            regex,
-                        );
-                    }
-
-                    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
-                }
-                None => {
-                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                    ptr::null_mut()
-                }
-            }
-        }
     }
 }
 
@@ -1317,268 +1295,6 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
     }
 }
 
-/// regex.exec(string) -> match array (like string.match) with thread-local index/groups
-/// For global regexes, starts matching at lastIndex and updates it.
-/// Returns *mut ArrayHeader (null for no match). Stores .index and .groups
-/// in thread-locals, retrieved via js_regexp_exec_get_index / js_regexp_exec_get_groups.
-#[cfg(feature = "regex-engine")]
-#[no_mangle]
-pub extern "C" fn js_regexp_exec(
-    re: *mut RegExpHeader,
-    s: *const StringHeader,
-) -> *mut crate::array::ArrayHeader {
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    // #854: POINTER_TAG / POINTER_MASK kept co-located with the NaN-box
-    // tag contract even when this exec helper only reads TAG_UNDEFINED.
-    // Codegen and sibling helpers in regex.rs use the same values.
-    #[allow(dead_code)]
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    #[allow(dead_code)]
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-
-    if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {
-        LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
-        LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-        return ptr::null_mut();
-    }
-
-    let str_data = string_as_str(s);
-
-    unsafe {
-        let regex = &*(*re).regex_ptr;
-        let global = (*re).global;
-        let sticky = (*re).sticky;
-        // Per spec RegExpBuiltinExec, `lastIndex` drives the search start for
-        // BOTH global and sticky regexes (and lastIndex is reset/updated for
-        // either). A sticky match must additionally *anchor* at lastIndex.
-        let use_last_index = global || sticky;
-        // Spec: for non-global/non-sticky, lastIndex is treated as 0 and NOT
-        // read (so a `valueOf`-bearing lastIndex isn't observed). Only consult
-        // (and ToLength-coerce) it when stateful.
-        let last_index = if use_last_index {
-            regex_last_index_offset(re)
-        } else {
-            0
-        };
-
-        let search_start_byte = if use_last_index && last_index > 0 {
-            let mut byte_off = 0;
-            let mut char_count = 0;
-            for ch in str_data.chars() {
-                if char_count >= last_index {
-                    break;
-                }
-                byte_off += ch.len_utf8();
-                char_count += 1;
-            }
-            byte_off
-        } else {
-            0
-        };
-
-        if search_start_byte > str_data.len() {
-            if use_last_index {
-                store_last_index_number(re, 0);
-            }
-            LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
-            LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-            return ptr::null_mut();
-        }
-
-        let search_str = &str_data[search_start_byte..];
-
-        // Check if this regex has a fancy-regex fallback (lookbehind/lookahead).
-        let fancy_captures = FANCY_CACHE.with(|fc| {
-            let fc = fc.borrow();
-            let pat = string_as_str((*re).pattern_ptr);
-            let flags_str = string_as_str((*re).flags_ptr);
-            if let Some(fre) = fc.get(&(pat.to_string(), flags_str.to_string())) {
-                if let Ok(Some(caps)) = fre.captures(search_str) {
-                    let full = caps.get(0).unwrap();
-                    // Sticky (`y`) requires the match to start exactly at
-                    // lastIndex — i.e. offset 0 of the sliced search string.
-                    if sticky && full.start() != 0 {
-                        return Some(ptr::null_mut());
-                    }
-                    let match_byte_offset = full.start() + search_start_byte;
-                    let match_char_offset = str_data[..match_byte_offset].chars().count();
-                    let arr = crate::array::js_array_alloc(caps.len() as u32);
-                    let scope = crate::gc::RuntimeHandleScope::new();
-                    let arr_handle = scope.root_raw_mut_ptr(arr);
-                    (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-                    for i in 0..caps.len() {
-                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                        if let Some(m) = caps.get(i) {
-                            let str_ptr = js_string_from_str(m.as_str());
-                            let nanboxed = js_nanbox_string(str_ptr as i64);
-                            // GC_STORE_AUDIT(BARRIERED): regex exec fancy capture slot uses the shared array slot-store helper.
-                            crate::array::store_array_slot(arr, i, nanboxed.to_bits());
-                        } else {
-                            let undefined = f64::from_bits(TAG_UNDEFINED);
-                            // GC_STORE_AUDIT(BARRIERED): regex exec fancy unmatched capture slot uses the shared array slot-store helper.
-                            crate::array::store_array_slot(arr, i, undefined.to_bits());
-                        }
-                    }
-                    if use_last_index {
-                        let match_str = full.as_str();
-                        store_last_index_number(re, match_char_offset + match_str.chars().count());
-                    }
-                    set_exec_array_metadata(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        str_data,
-                        match_char_offset as f64,
-                    );
-                    LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
-                    // Extract named-capture groups through the fancy path so
-                    // `/(?<=x)(?<y>\d+)/.exec(s).groups` works for patterns the
-                    // `regex` crate can't compile.
-                    let groups_obj = build_fancy_groups(fre, &caps, &scope);
-                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
-                    set_exec_array_groups(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), groups_obj);
-                    // Build indices array if `d` flag (hasIndices) is set
-                    if (*re).has_indices {
-                        set_exec_array_indices_fancy(
-                            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                            str_data,
-                            search_start_byte,
-                            fre,
-                            &caps,
-                        );
-                    }
-                    return Some(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
-                }
-                return Some(ptr::null_mut()); // fancy-regex tried but no match
-            }
-            None // no fancy fallback — use standard regex
-        });
-        if let Some(result) = fancy_captures {
-            if result.is_null() {
-                if use_last_index {
-                    store_last_index_number(re, 0);
-                }
-                LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
-                LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                return ptr::null_mut();
-            }
-            return result;
-        }
-
-        let standard_caps = regex.captures(search_str).filter(|caps| {
-            // Sticky (`y`) requires the match to start at lastIndex (offset 0 of
-            // the slice); a leftmost match further in does not count.
-            !sticky || caps.get(0).map(|m| m.start() == 0).unwrap_or(false)
-        });
-        match standard_caps {
-            Some(caps) => {
-                let match_byte_offset = caps.get(0).unwrap().start() + search_start_byte;
-                let match_char_offset = str_data[..match_byte_offset].chars().count();
-
-                if use_last_index {
-                    let match_end_byte = caps.get(0).unwrap().end() + search_start_byte;
-                    let match_end_char = str_data[..match_end_byte].chars().count();
-                    store_last_index_number(re, match_end_char);
-                }
-
-                // Create match array: [fullMatch, group1, group2, ...]
-                let arr = crate::array::js_array_alloc(caps.len() as u32);
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let arr_handle = scope.root_raw_mut_ptr(arr);
-                (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = caps.len() as u32;
-
-                for (i, cap) in caps.iter().enumerate() {
-                    if let Some(m) = cap {
-                        let str_ptr = js_string_from_str(m.as_str());
-                        let nanboxed = js_nanbox_string(str_ptr as i64);
-                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                        // GC_STORE_AUDIT(BARRIERED): regex exec capture slot uses the shared array slot-store helper.
-                        crate::array::store_array_slot(arr, i, nanboxed.to_bits());
-                    } else {
-                        let undefined = f64::from_bits(TAG_UNDEFINED);
-                        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                        // GC_STORE_AUDIT(BARRIERED): regex exec unmatched capture slot uses the shared array slot-store helper.
-                        crate::array::store_array_slot(arr, i, undefined.to_bits());
-                    }
-                }
-
-                // Store .index in thread-local
-                LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = match_char_offset as f64);
-                set_exec_array_metadata(
-                    arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                    str_data,
-                    match_char_offset as f64,
-                );
-
-                // Build groups object if named captures exist
-                let group_names: Vec<(&str, Option<regex::Match>)> = regex
-                    .capture_names()
-                    .enumerate()
-                    .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-                    .collect();
-
-                if !group_names.is_empty() {
-                    // Allocate a fresh per-result object (and shape) via
-                    // `js_object_alloc(0, 0)` + by-name setters, NOT a shared
-                    // `js_object_alloc_with_shape(const_id)`. A fixed interned
-                    // shape id makes a later match with different named captures
-                    // inherit the prior call's key names (e.g. `(?<x>…)` then
-                    // `(?<z>…)` exposing `.x` on the second result). This mirrors
-                    // the fix already applied to the `js_string_match` path.
-                    let groups_obj = crate::object::js_object_alloc(0, 0);
-                    let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-                    for (name, m) in &group_names {
-                        let val = if let Some(m) = m {
-                            let str_ptr = js_string_from_str(m.as_str());
-                            js_nanbox_string(str_ptr as i64)
-                        } else {
-                            f64::from_bits(TAG_UNDEFINED)
-                        };
-                        let key_ptr =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        let groups_obj =
-                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                        crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
-                    }
-                    LAST_EXEC_GROUPS.with(|g| {
-                        *g.borrow_mut() =
-                            groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()
-                    });
-                    set_exec_array_groups(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-                    );
-                } else {
-                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                    set_exec_array_groups(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        ptr::null_mut(),
-                    );
-                }
-
-                // Build indices array if `d` flag (hasIndices) is set
-                if (*re).has_indices {
-                    set_exec_array_indices(
-                        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        str_data,
-                        search_start_byte,
-                        &caps,
-                        regex,
-                    );
-                }
-
-                arr_handle.get_raw_mut_ptr::<ArrayHeader>()
-            }
-            None => {
-                if use_last_index {
-                    store_last_index_number(re, 0);
-                }
-                LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
-                LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-                ptr::null_mut()
-            }
-        }
-    }
-}
-
 /// Dynamic-receiver dispatch for `regex.test(str)` / `regex.exec(str)` when
 /// codegen couldn't prove the receiver is a RegExp (e.g. hono's RegExpRouter
 /// does `buildWildcardRegExp(k).test(path)`, where the receiver is the result
@@ -1803,311 +1519,4 @@ pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
 }
 
 #[cfg(all(test, feature = "regex-engine"))]
-mod tests {
-    use super::*;
-    use crate::string::js_string_from_bytes;
-
-    fn make_string(s: &str) -> *mut StringHeader {
-        js_string_from_bytes(s.as_ptr(), s.len() as u32)
-    }
-
-    #[test]
-    fn js_replacement_expands_special_patterns() {
-        let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
-        let subj = "John Smith";
-        let caps = re.captures(subj).unwrap();
-        assert_eq!(
-            expand_js_replacement("$2 $1", &caps, subj, false),
-            "Smith John"
-        );
-        assert_eq!(
-            expand_js_replacement("[$&]", &caps, subj, false),
-            "[John Smith]"
-        );
-
-        // $` (before) / $' (after) with a mid-string single-char match.
-        let re2 = regex::Regex::new("b").unwrap();
-        let s2 = "abc";
-        let c2 = re2.captures(s2).unwrap();
-        assert_eq!(expand_js_replacement("$`", &c2, s2, false), "a");
-        assert_eq!(expand_js_replacement("$'", &c2, s2, false), "c");
-        assert_eq!(expand_js_replacement("$&", &c2, s2, false), "b");
-        assert_eq!(expand_js_replacement("$$", &c2, s2, false), "$"); // escaped literal
-        assert_eq!(expand_js_replacement("$z", &c2, s2, false), "$z"); // invalid → literal
-        assert_eq!(expand_js_replacement("end$", &c2, s2, false), "end$"); // trailing $
-
-        // Numbered groups: two-digit-then-one-digit fallback + unmatched → "".
-        let re3 = regex::Regex::new(r"(a)(x)?(b)").unwrap();
-        let s3 = "ab";
-        let c3 = re3.captures(s3).unwrap();
-        assert_eq!(expand_js_replacement("$1$2$3", &c3, s3, false), "ab"); // $2 unmatched → ""
-        assert_eq!(expand_js_replacement("$10", &c3, s3, false), "a0"); // no group 10 → $1 then '0'
-    }
-
-    #[test]
-    fn js_replacement_named_group_gate() {
-        // No named groups in the regex → `$<name>` is emitted literally (#2421).
-        let re = regex::Regex::new("n").unwrap();
-        let subj = "end";
-        let caps = re.captures(subj).unwrap();
-        assert_eq!(
-            expand_js_replacement("$<bad>", &caps, subj, false),
-            "$<bad>"
-        );
-        assert_eq!(
-            expand_js_replacement("[$<bad>]", &caps, subj, false),
-            "[$<bad>]"
-        );
-
-        // Named groups present: known name substitutes, unknown name → "".
-        let re2 = regex::Regex::new(r"(?<first>\w+)\s(?<last>\w+)").unwrap();
-        let subj2 = "John Smith";
-        let caps2 = re2.captures(subj2).unwrap();
-        assert_eq!(
-            expand_js_replacement("$<last>, $<first>", &caps2, subj2, true),
-            "Smith, John"
-        );
-        assert_eq!(
-            expand_js_replacement("[$<missing>]", &caps2, subj2, true),
-            "[]"
-        );
-    }
-
-    // ---- #4797: fancy-regex fallback wired through every operation ----
-
-    #[test]
-    fn fancy_backreference_match() {
-        // `(\w)\1` needs backreferences → fancy-regex fallback.
-        let re = js_regexp_new(make_string(r"(\w)\1"), make_string(""));
-        let result = js_string_match(make_string("hello"), re);
-        assert!(!result.is_null());
-        unsafe {
-            let v = crate::array::js_array_get_f64(result, 0);
-            let sp = crate::value::js_get_string_pointer_unified(v) as *const StringHeader;
-            assert_eq!(string_as_str(sp), "ll");
-        }
-    }
-
-    #[test]
-    fn fancy_lookbehind_search() {
-        let re = js_regexp_new(make_string(r"(?<==)\w+"), make_string(""));
-        assert_eq!(js_string_search_regex(make_string("foo=bar"), re), 4);
-        // No match → -1.
-        let re2 = js_regexp_new(make_string(r"(?<==)\w+"), make_string(""));
-        assert_eq!(js_string_search_regex(make_string("nomatch"), re2), -1);
-    }
-
-    #[test]
-    fn fancy_lookbehind_split() {
-        // Zero-width lookbehind split: "a1b2c3" → ["a1","b2","c3",""].
-        let re = js_regexp_new(make_string(r"(?<=\d)"), make_string(""));
-        let arr = js_string_split_regex(make_string("a1b2c3"), re);
-        unsafe {
-            assert_eq!((*arr).length, 4);
-            let first = crate::array::js_array_get_f64(arr, 0);
-            let sp = crate::value::js_get_string_pointer_unified(first) as *const StringHeader;
-            assert_eq!(string_as_str(sp), "a1");
-        }
-    }
-
-    #[test]
-    fn fancy_lookbehind_replace_string() {
-        // `$&` substitution under a lookbehind pattern the regex crate rejects.
-        let re = js_regexp_new(make_string(r"(?<=\$)\d+"), make_string("g"));
-        let out = js_string_replace_regex(make_string("$5 and $10"), re, make_string("[$&]"));
-        assert_eq!(string_as_str(out), "$[5] and $[10]");
-    }
-
-    #[test]
-    fn fancy_named_group_replace() {
-        // `$<n>` named-group substitution through the fancy fallback.
-        let re = js_regexp_new(make_string(r"(?<=\$)(?<n>\d+)"), make_string("g"));
-        let out =
-            js_string_replace_regex_named(make_string("$5 and $10"), re, make_string("[$<n>]"));
-        assert_eq!(string_as_str(out), "$[5] and $[10]");
-    }
-
-    #[test]
-    fn fancy_lookbehind_exec_index() {
-        // exec() through the fancy path reports the char index of the match.
-        let re = js_regexp_new(make_string(r"(?<=\$)\d+"), make_string(""));
-        let result = js_regexp_exec(re, make_string("price: $42"));
-        assert!(!result.is_null());
-        assert_eq!(js_regexp_exec_get_index(), 8.0);
-        unsafe {
-            let v = crate::array::js_array_get_f64(result, 0);
-            let sp = crate::value::js_get_string_pointer_unified(v) as *const StringHeader;
-            assert_eq!(string_as_str(sp), "42");
-        }
-    }
-
-    #[test]
-    fn test_regexp_test_basic() {
-        let pattern = make_string("hello");
-        let flags = make_string("");
-        let re = js_regexp_new(pattern, flags);
-
-        let test_str = make_string("hello world");
-        assert!(js_regexp_test(re, test_str) != 0);
-
-        let test_str2 = make_string("goodbye world");
-        assert!(js_regexp_test(re, test_str2) == 0);
-    }
-
-    #[test]
-    fn test_regexp_test_case_insensitive() {
-        let pattern = make_string("hello");
-        let flags = make_string("i");
-        let re = js_regexp_new(pattern, flags);
-
-        let test_str = make_string("HELLO World");
-        assert!(js_regexp_test(re, test_str) != 0);
-    }
-
-    #[test]
-    fn test_string_match() {
-        let pattern = make_string(r"\w+");
-        let flags = make_string("");
-        let re = js_regexp_new(pattern, flags);
-
-        let test_str = make_string("hello world");
-        let result = js_string_match(test_str, re);
-        assert!(!result.is_null());
-
-        unsafe {
-            assert_eq!((*result).length, 1); // One match (first word)
-        }
-    }
-
-    #[test]
-    fn test_string_match_global() {
-        let pattern = make_string(r"\w+");
-        let flags = make_string("g");
-        let re = js_regexp_new(pattern, flags);
-
-        let test_str = make_string("hello world");
-        let result = js_string_match(test_str, re);
-        assert!(!result.is_null());
-
-        unsafe {
-            assert_eq!((*result).length, 2); // Two matches (hello, world)
-        }
-    }
-
-    #[test]
-    fn test_string_replace() {
-        let pattern = make_string("world");
-        let flags = make_string("");
-        let re = js_regexp_new(pattern, flags);
-
-        let test_str = make_string("hello world");
-        let replacement = make_string("universe");
-        let result = js_string_replace_regex(test_str, re, replacement);
-
-        assert_eq!(string_as_str(result), "hello universe");
-    }
-
-    #[test]
-    fn test_string_replace_global() {
-        let pattern = make_string("o");
-        let flags = make_string("g");
-        let re = js_regexp_new(pattern, flags);
-
-        let test_str = make_string("hello world");
-        let replacement = make_string("0");
-        let result = js_string_replace_regex(test_str, re, replacement);
-
-        assert_eq!(string_as_str(result), "hell0 w0rld");
-    }
-
-    #[test]
-    fn escaped_hyphen_in_class_stays_literal() {
-        // #4425: `\-` inside a character class is always a literal hyphen. The
-        // Rust `regex` crate reads a bare `-` flanked by members as a range
-        // operator, so the escape must be preserved or `[a\- ]` translates to
-        // the invalid range `[a- ]`.
-        assert_eq!(js_regex_to_rust(r"[a\- ]"), r"[a\- ]");
-        assert_eq!(js_regex_to_rust(r"[:\- ]"), r"[:\- ]");
-        assert_eq!(js_regex_to_rust(r"[\-]"), r"[\-]");
-        // Outside a class a hyphen carries no range meaning, so it stays bare.
-        assert_eq!(js_regex_to_rust(r"a\-b"), "a-b");
-
-        // The patterns that crashed `marked` at module-init must now compile.
-        for pat in [r"[a\- ]", r"[:\- ]", r" {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n"] {
-            let flags = make_string("");
-            let re = js_regexp_new(make_string(pat), flags);
-            assert!(!re.is_null(), "pattern failed to construct: {pat}");
-        }
-    }
-
-    #[test]
-    fn surrogate_pairs_fold_to_astral_scalars() {
-        // High escape + low class → contiguous astral range.
-        assert_eq!(
-            js_regex_to_rust(r"\uD800[\uDC00-\uDC0B]"),
-            r"[\x{10000}-\x{1000b}]"
-        );
-        // Two consecutive surrogate escapes → single astral scalar.
-        assert_eq!(js_regex_to_rust(r"\uD83D\uDE00"), r"\x{1f600}");
-        // High class + full low class → coalesced astral block.
-        assert_eq!(
-            js_regex_to_rust(r"[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]"),
-            r"[\x{13000}-\x{133ff}\x{17000}-\x{183ff}]"
-        );
-        // Non-surrogate escapes and ordinary classes are untouched.
-        assert_eq!(js_regex_to_rust(r"[ˁ\xAA]"), r"[ˁ\xAA]");
-        assert_eq!(js_regex_to_rust(r"[A-Za-z]"), r"[A-Za-z]");
-        // A lone high surrogate (no following low unit) is left as-is.
-        assert_eq!(js_regex_to_rust(r"\uD800x"), r"\uD800x");
-
-        // The Test262 `nativeFunctionMatcher.js` ID regexes must now compile.
-        let pat = r"(?:[A-Za-z\xAA]|\uD800[\uDC00-\uDC0B\uDC0D-\uDC26]|\uD801[\uDC00-\uDC9D])";
-        let flags = make_string("");
-        let re = js_regexp_new(make_string(pat), flags);
-        assert!(!re.is_null(), "ID_Start-shaped pattern failed to construct");
-    }
-
-    /// `@colors/colors` (a winston dep) builds the escape regex
-    /// `escapeStringRegexp = s => s.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')`
-    /// and then `new RegExp(escapeStringRegexp(ansiStyles[k].close), 'g')` where
-    /// `close` is e.g. `"\x1b[0m"`. Node escapes the literal `[` to `\[`, giving
-    /// the valid pattern `\x1b\[0m`. Perry must do the same: the char-class
-    /// `[|\\{}()[\]^$+*?.]` contains a *literal* `[` (legal in a JS class but not
-    /// in the Rust `regex` crate) and an escaped `\]`. If the class compiles
-    /// empty or the `[` isn't a member, `escapeStringRegexp` returns its input
-    /// unchanged, the bare `[0m` reaches `new RegExp`, and you get
-    /// `SyntaxError: Invalid regular expression: /[0m/`. This pins the whole
-    /// build + match + `$&`-expand path against that regression.
-    #[test]
-    fn colors_escape_string_regexp_char_class() {
-        let pat = r"[|\\{}()[\]^$+*?.]";
-        // Source is preserved verbatim (no empty `(?:)`).
-        let re = js_regexp_new(make_string(pat), make_string("g"));
-        assert!(
-            !re.is_null(),
-            "@colors char-class pattern failed to construct"
-        );
-        let src = js_regexp_get_source(re);
-        assert_eq!(string_as_str(src), pat, "source must round-trip the class");
-
-        // The literal `[` is a member of the class.
-        assert!(
-            js_regexp_test(re, make_string("[")) != 0,
-            "`[` must match the class"
-        );
-
-        // `escapeStringRegexp("\x1b[0m")` → `"\x1b\\[0m"` (only `[` is escaped;
-        // ESC and the digits/`m` are not operators). `$&` → the matched char.
-        let out = js_string_replace_regex_named(make_string("\u{1b}[0m"), re, make_string(r"\$&"));
-        assert_eq!(
-            string_as_str(out),
-            "\u{1b}\\[0m",
-            "the `[` must be escaped so `new RegExp(out)` is valid"
-        );
-
-        // And the escaped output is itself a constructible pattern (what
-        // @colors then feeds to `new RegExp(..., 'g')`).
-        let re2 = js_regexp_new(out, make_string("g"));
-        assert!(!re2.is_null(), "escaped output `\\x1b\\[0m` must construct");
-    }
-}
+mod tests;

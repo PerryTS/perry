@@ -52,6 +52,27 @@ pub fn max_local_id(module: &Module) -> LocalId {
             }
             max_in_stmts(&ctor.body, &mut max_id);
         }
+        // Accessors and statics hold call sites too (see the matching
+        // detection scans + phase-3 rewrite). Cover them so the fresh-id
+        // seed never collides with a local already living in those bodies.
+        for (_, getter) in &c.getters {
+            for p in &getter.params {
+                max_id = max_id.max(p.id);
+            }
+            max_in_stmts(&getter.body, &mut max_id);
+        }
+        for (_, setter) in &c.setters {
+            for p in &setter.params {
+                max_id = max_id.max(p.id);
+            }
+            max_in_stmts(&setter.body, &mut max_id);
+        }
+        for m in &c.static_methods {
+            for p in &m.params {
+                max_id = max_id.max(p.id);
+            }
+            max_in_stmts(&m.body, &mut max_id);
+        }
     }
     max_id
 }

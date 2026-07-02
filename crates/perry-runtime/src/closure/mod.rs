@@ -9,6 +9,7 @@ mod alloc;
 mod dispatch;
 mod dynamic_props;
 mod registry;
+mod unbox;
 mod v8_stubs;
 
 #[cfg(test)]
@@ -22,7 +23,7 @@ pub use alloc::{
     js_closure_get_func, js_closure_set_capture_bits, js_closure_set_capture_f64,
     js_closure_set_capture_ptr, note_closure_capture_slot, rebuild_closure_layout_and_barriers,
     scan_singleton_closure_roots_mut, ClosureHeader, CLOSURE_ALLOC_COUNT,
-    CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
+    CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS, CLOSURE_TYPE_TAG_OFFSET,
 };
 
 pub use registry::{
@@ -36,7 +37,7 @@ pub use registry::{
     js_register_closure_strict_function, js_register_closure_synthetic_arguments,
     lookup_closure_arity, lookup_closure_length, lookup_closure_rest, lookup_closure_rest_full,
     real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
-    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC,
+    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
 };
 
 pub use dispatch::{
@@ -48,9 +49,10 @@ pub use dispatch::{
     js_function_bind, js_native_call_value, throw_not_callable,
 };
 pub(crate) use dispatch::{
-    coerce_call_this, reify_function_method_value, reset_throw_not_callable_counter,
-    resolve_call2_direct,
+    coerce_call_this, rebind_explicit_this, reify_function_method_value,
+    reset_throw_not_callable_counter, resolve_call2_direct,
 };
+pub use unbox::js_closure_unbox_callee_checked;
 
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;

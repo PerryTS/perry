@@ -138,8 +138,14 @@ pub extern "C" fn js_array_splice(
         // Insert new items
         if items_count > 0 && !items.is_null() {
             for i in 0..items_count as usize {
+                let item = *items.add(i);
+                // A uniquely-owned string spliced in now aliases the array slot —
+                // demote it to shared so a later `s += x` doesn't mutate it in
+                // place. No-op for SSO / non-string. (This insert path doesn't
+                // funnel through `note_array_slot`.)
+                crate::string::js_string_addref_if_heap_string(item);
                 // GC_STORE_AUDIT(BARRIERED): splice inserted item writes are followed by layout/barrier rebuild.
-                ptr::write(elements_ptr.add(start_idx as usize + i), *items.add(i));
+                ptr::write(elements_ptr.add(start_idx as usize + i), item);
             }
         }
 
@@ -249,24 +255,47 @@ pub extern "C" fn js_array_slice(
         let is_plain = crate::array::species::species_result_is_plain_array(result_box);
         let result = crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
 
-        // Copy elements
+        // Copy elements — use spec-generic Get when the source is exotic
+        // (has Array.prototype or Object.prototype indexed properties) so
+        // inherited indices appear in the result just as [[Get]] would return
+        // them (ECMA-262 §23.1.3.25 step 8b "If HasProperty(O, from)…").
         let src_elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let src_exotic = crate::array::array_iteration_is_exotic(arr);
         if is_plain {
             (*result).length = slice_len;
             let dst_elements =
                 (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in 0..slice_len as usize {
-                // GC_STORE_AUDIT(BARRIERED): slice result init is followed by layout/barrier rebuild.
-                ptr::write(
-                    dst_elements.add(i),
-                    ptr::read(src_elements.add(start_idx as usize + i)),
-                );
+                let src_idx = start_idx as usize + i;
+                let v = if src_exotic {
+                    if crate::array::array_spec_has_index(arr, src_idx as u32) {
+                        crate::array::array_spec_get(arr, src_idx as u32)
+                    } else {
+                        f64::from_bits(crate::value::TAG_HOLE)
+                    }
+                } else {
+                    // GC_STORE_AUDIT(BARRIERED): slice result init is followed by layout/barrier rebuild.
+                    ptr::read(src_elements.add(src_idx))
+                };
+                ptr::write(dst_elements.add(i), v);
             }
             rebuild_array_layout(result);
         } else {
             // Custom species container: CreateDataPropertyOrThrow per element.
             for i in 0..slice_len as usize {
-                let v = ptr::read(src_elements.add(start_idx as usize + i));
+                let src_idx = start_idx as usize + i;
+                let v = if src_exotic {
+                    if !crate::array::array_spec_has_index(arr, src_idx as u32) {
+                        continue; // absent slot → no property created in result
+                    }
+                    crate::array::array_spec_get(arr, src_idx as u32)
+                } else {
+                    let v = ptr::read(src_elements.add(src_idx));
+                    if v.to_bits() == crate::value::TAG_HOLE {
+                        continue; // hole → no property created in result
+                    }
+                    v
+                };
                 crate::array::species::species_result_set(result_box, i, v);
             }
         }

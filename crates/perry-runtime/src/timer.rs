@@ -1121,6 +1121,12 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     // NOTE: Do NOT call gc_check_trigger() here — same reason as interval
     // tick: register-held values get swept by conservative scanner.
 
+    // #input: dispatch buffered keyboard input on `process.stdin` here, at the
+    // same safe event-loop point as timer callbacks. The reader thread
+    // `js_notify_main_thread()`s on each keypress, so the loop ticks promptly;
+    // this is a cheap empty-buffer check when there's no input.
+    crate::os::pump_process_stdin();
+
     fired
 }
 

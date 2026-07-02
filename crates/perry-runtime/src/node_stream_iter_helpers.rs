@@ -340,19 +340,66 @@ pub(super) fn extend_with_array(
 
 pub(super) extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 {
     let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let mut out = crate::array::js_array_alloc(0);
-    if !arr.is_null() {
-        out = extend_with_array(out, arr);
+    // An already-errored stream rejects immediately (matches the error-first
+    // check `settle_consuming` used).
+    if let Some(err) = readable_hidden_error(this) {
+        return rejected_promise(err);
     }
-    let result = settle_consuming(this, opts, box_pointer(out as *const u8));
-    if readable_hidden_error(this).is_none() {
-        mark_stream_ended(this);
-        clear_readable_buffer(this);
-        destroy_stream(this, f64::from_bits(TAG_UNDEFINED));
+    // An already-aborted signal rejects before consuming anything.
+    if let Some(sig) = effective_signal(this, opts) {
+        if signal_is_aborted(sig) {
+            return rejected_promise(abort_error());
+        }
     }
+    // Consume the stream TRULY ASYNCHRONOUSLY through its `[Symbol.asyncIterator]`
+    // (the same pending-promise iterator `for await` uses): `js_array_from_async`
+    // drives `.next()` via a then-chain that accumulates each chunk and resolves
+    // when the stream ends. This replaces the previous snapshot + block-drain
+    // path, which spun the event loop synchronously — re-entering unrelated
+    // macrotasks (the React #327 hazard) and returning an empty array for a
+    // live (socket/`setImmediate`-fed) source whose data had not buffered yet.
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let result = crate::promise::js_array_from_async(this, undefined, undefined);
+    // Abort after consumption starts: a signal that fires later rejects the
+    // result and cancels the stream (terminating the internal `from_async`
+    // iterator), instead of leaving the promise pending forever.
+    register_to_array_abort(this, opts, result);
     result
+}
+
+/// Wire a late-abort listener for `toArray`: on abort, reject `result` and
+/// destroy the stream so the internal `js_array_from_async` consumer stops.
+fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
+    let Some(sig) = effective_signal(stream, opts) else {
+        return;
+    };
+    let Some(sig_obj) = object_ptr_from_value(sig) else {
+        return;
+    };
+    let abort_cl = js_closure_alloc(ns_to_array_abort as *const u8, 2);
+    js_closure_set_capture_ptr(abort_cl, 0, result.to_bits() as i64);
+    js_closure_set_capture_f64(abort_cl, 1, stream);
+    crate::url::js_abort_signal_add_listener(
+        sig_obj,
+        string_value(b"abort"),
+        box_pointer(abort_cl as *const u8),
+    );
+}
+
+/// Abort-listener body for `toArray`: cancel the live stream (terminating the
+/// internal `from_async` iterator that drives it) and reject the result with an
+/// AbortError. A no-op if the result already settled.
+pub(super) extern "C" fn ns_to_array_abort(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let result = promise_from_capture(closure, 0);
+    let stream = js_closure_get_capture_f64(closure, 1);
+    destroy_stream(stream, abort_error());
+    if !result.is_null() {
+        crate::promise::js_promise_reject(result, abort_error());
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 pub(super) extern "C" fn ns_iter_map(closure: *const ClosureHeader, mapper: f64, opts: f64) -> f64 {
@@ -418,48 +465,353 @@ pub(super) extern "C" fn ns_iter_filter(
     result
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Truly-async consuming helpers (forEach / reduce / find / some /
+// every). Like `toArray`, these drive the stream's
+// `[Symbol.asyncIterator]().next()` via a then-chain — suspending on a
+// pending promise and awaiting each (possibly-async) callback through
+// `.then`, instead of block-draining the event loop with
+// `settle_result`/`prepare_readable_for_iteration`. Block-draining ran
+// unrelated macrotasks (timers/setImmediate — the React #327 re-entrancy
+// hazard) and returned wrong results for live sources whose data hadn't
+// buffered yet. A synchronous source (`Readable.from([...])`) still works:
+// its iterator yields the buffered chunks through resolved promises.
+// ─────────────────────────────────────────────────────────────────
+
+const CONSUME_OP_FOR_EACH: f64 = 0.0;
+const CONSUME_OP_REDUCE: f64 = 1.0;
+const CONSUME_OP_FIND: f64 = 2.0;
+const CONSUME_OP_SOME: f64 = 3.0;
+const CONSUME_OP_EVERY: f64 = 4.0;
+
+// Capture-slot layout for the `consume_on_next` state closure.
+const SC_RESULT: u32 = 0; // result promise (ptr)
+const SC_ITER: u32 = 1; // async iterator (f64)
+const SC_CB: u32 = 2; // user callback (f64)
+const SC_OP: u32 = 3; // operation code (f64)
+const SC_ACC: u32 = 4; // accumulator / found / boolean result (f64)
+const SC_REJECT: u32 = 5; // reject closure (ptr)
+const SC_ON_CB: u32 = 6; // on-callback-result closure (ptr)
+const SC_CUR: u32 = 7; // current element (f64) — find returns it
+const SC_HAS_ACC: u32 = 8; // reduce: an accumulator exists yet (f64 bool)
+
+#[inline]
+fn bool_bits(b: bool) -> f64 {
+    f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE })
+}
+
+#[inline]
+fn consume_op_default(op: f64) -> f64 {
+    if op == CONSUME_OP_SOME {
+        f64::from_bits(TAG_FALSE)
+    } else if op == CONSUME_OP_EVERY {
+        f64::from_bits(TAG_TRUE)
+    } else {
+        f64::from_bits(TAG_UNDEFINED) // forEach / find / reduce
+    }
+}
+
+/// Read `{ value, done }` off an iterator-result object. A non-object
+/// (malformed / undefined) result is treated as `done`.
+fn consume_read_iter_result(iter_result: f64) -> (bool, f64) {
+    let Some(obj) = object_ptr_from_value(iter_result) else {
+        return (true, f64::from_bits(TAG_UNDEFINED));
+    };
+    let done = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"done"));
+    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"value"));
+    (crate::value::js_is_truthy(done) != 0, value)
+}
+
+/// Pull the next element: `iterator.next()` → `.then(on_next, reject)`.
+/// Always routed through a promise so each step runs on a microtask (no
+/// synchronous recursion, no block-drain).
+fn consume_drive_next(iter: f64, on_next: *const ClosureHeader, reject: *const ClosureHeader) {
+    let next_result = unsafe {
+        crate::object::js_native_call_method(
+            iter,
+            b"next".as_ptr() as *const i8,
+            4,
+            std::ptr::null(),
+            0,
+        )
+    };
+    let promise = if crate::promise::js_value_is_promise(next_result) != 0 {
+        crate::value::js_nanbox_get_pointer(next_result) as *mut crate::promise::Promise
+    } else {
+        crate::promise::js_promise_resolved(next_result)
+    };
+    crate::promise::js_promise_then(promise, on_next, reject);
+}
+
+/// Close the async iterator driving a consuming helper, releasing the
+/// persistent stream `data`/`end`/`error` listeners and any buffered queue. A
+/// no-op once the iterator is done. Every early settle path
+/// (`consume_resolve` / `consume_reject_state`) routes through this so a
+/// short-circuit, callback throw, rejection, or abort never leaks a live
+/// stream's listeners after the helper promise settles.
+fn consume_close_iter(state: *const ClosureHeader) {
+    if state.is_null() {
+        return;
+    }
+    let iter = js_closure_get_capture_f64(state, SC_ITER);
+    if object_ptr_from_value(iter).is_none() {
+        return;
+    }
+    let _ = unsafe {
+        crate::object::js_native_call_method(
+            iter,
+            b"return".as_ptr() as *const i8,
+            6,
+            std::ptr::null(),
+            0,
+        )
+    };
+}
+
+fn consume_resolve(state: *const ClosureHeader, value: f64) {
+    consume_close_iter(state);
+    let result = js_closure_get_capture_ptr(state, SC_RESULT) as *mut crate::promise::Promise;
+    if !result.is_null() {
+        crate::promise::js_promise_resolve(result, value);
+    }
+}
+
+fn consume_reject_state(state: *const ClosureHeader, reason: f64) {
+    consume_close_iter(state);
+    let result = js_closure_get_capture_ptr(state, SC_RESULT) as *mut crate::promise::Promise;
+    if !result.is_null() {
+        crate::promise::js_promise_reject(result, reason);
+    }
+}
+
+fn consume_finalize(state: *const ClosureHeader) {
+    let op = js_closure_get_capture_f64(state, SC_OP);
+    if op == CONSUME_OP_REDUCE
+        && crate::value::js_is_truthy(js_closure_get_capture_f64(state, SC_HAS_ACC)) == 0
+    {
+        // reduce over an empty stream with no initial value rejects.
+        consume_reject_state(state, reduce_missing_initial_error());
+        return;
+    }
+    consume_resolve(state, js_closure_get_capture_f64(state, SC_ACC));
+}
+
+/// `.then` fulfilment for `iterator.next()`: read the iter-result, then
+/// either finalize (done) or invoke the user callback and await its result.
+extern "C" fn consume_on_next(state: *const ClosureHeader, iter_result: f64) -> f64 {
+    if state.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let (done, value) = consume_read_iter_result(iter_result);
+    if done {
+        consume_finalize(state);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    js_closure_set_capture_f64(state as *mut ClosureHeader, SC_CUR, value);
+
+    let iter = js_closure_get_capture_f64(state, SC_ITER);
+    let reject = js_closure_get_capture_ptr(state, SC_REJECT) as *const ClosureHeader;
+    let cb = callback_closure(js_closure_get_capture_f64(state, SC_CB));
+    if cb.is_null() {
+        // No callback: still consume to the end (matches the old skip-loop,
+        // which yielded the op default / accumulated nothing).
+        consume_drive_next(iter, state, reject);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    let op = js_closure_get_capture_f64(state, SC_OP);
+    let cb_result = if op == CONSUME_OP_REDUCE {
+        if crate::value::js_is_truthy(js_closure_get_capture_f64(state, SC_HAS_ACC)) == 0 {
+            // First element seeds the accumulator (no callback call).
+            js_closure_set_capture_f64(state as *mut ClosureHeader, SC_ACC, value);
+            js_closure_set_capture_f64(state as *mut ClosureHeader, SC_HAS_ACC, bool_bits(true));
+            consume_drive_next(iter, state, reject);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let acc = js_closure_get_capture_f64(state, SC_ACC);
+        catch_pipeline_throw(|| crate::closure::js_closure_call2(cb, acc, value))
+    } else {
+        catch_pipeline_throw(|| crate::closure::js_closure_call1(cb, value))
+    };
+
+    match cb_result {
+        Ok(result) => {
+            // Await the (possibly-promise) callback result, then continue.
+            let on_cb = js_closure_get_capture_ptr(state, SC_ON_CB) as *const ClosureHeader;
+            let p = crate::promise::js_promise_resolved(result);
+            crate::promise::js_promise_then(p, on_cb, reject);
+        }
+        Err(err) => {
+            // Callback threw: close the iterator before rejecting so the live
+            // stream's listeners are released.
+            consume_reject_state(state, err);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `.then` fulfilment for the awaited callback result: update the
+/// accumulator / short-circuit, then pull the next element.
+extern "C" fn consume_on_cb(closure: *const ClosureHeader, cb_result: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let state = js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader;
+    if state.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let op = js_closure_get_capture_f64(state, SC_OP);
+    let truthy = crate::value::js_is_truthy(cb_result) != 0;
+    let short_circuit = if op == CONSUME_OP_REDUCE {
+        js_closure_set_capture_f64(state as *mut ClosureHeader, SC_ACC, cb_result);
+        None
+    } else if op == CONSUME_OP_FIND {
+        truthy.then(|| js_closure_get_capture_f64(state, SC_CUR))
+    } else if op == CONSUME_OP_SOME {
+        truthy.then(|| f64::from_bits(TAG_TRUE))
+    } else if op == CONSUME_OP_EVERY {
+        (!truthy).then(|| f64::from_bits(TAG_FALSE))
+    } else {
+        None // forEach ignores the result
+    };
+
+    if let Some(value) = short_circuit {
+        consume_resolve(state, value);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    let iter = js_closure_get_capture_f64(state, SC_ITER);
+    let reject = js_closure_get_capture_ptr(state, SC_REJECT) as *const ClosureHeader;
+    consume_drive_next(iter, state, reject);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn consume_reject(closure: *const ClosureHeader, reason: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    // Capture slot 0 is the consume state (not the bare result promise) so the
+    // iterator is closed before the rejection settles.
+    let state = js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader;
+    if state.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    consume_reject_state(state, reason);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+pub(super) fn register_consume_arities() {
+    crate::closure::js_register_closure_arity(consume_on_next as *const u8, 1);
+    crate::closure::js_register_closure_arity(consume_on_cb as *const u8, 1);
+    crate::closure::js_register_closure_arity(consume_reject as *const u8, 1);
+    // Abort listeners are dispatched via `js_closure_call0` (0 args).
+    crate::closure::js_register_closure_arity(ns_consume_abort as *const u8, 0);
+    crate::closure::js_register_closure_arity(ns_to_array_abort as *const u8, 0);
+}
+
+/// Drive a consuming helper truly-asynchronously over the stream's async
+/// iterator. `initial`/`has_initial` apply to `reduce`.
+fn consume_stream(stream: f64, callback: f64, op: f64, initial: f64, opts: f64) -> f64 {
+    // Already-errored stream / already-aborted signal reject up front.
+    if let Some(err) = readable_hidden_error(stream) {
+        return rejected_promise(err);
+    }
+    if let Some(sig) = effective_signal(stream, opts) {
+        if signal_is_aborted(sig) {
+            return rejected_promise(abort_error());
+        }
+    }
+
+    let has_initial = op == CONSUME_OP_REDUCE && initial.to_bits() != TAG_UNDEFINED;
+    let acc = if op == CONSUME_OP_REDUCE {
+        initial
+    } else {
+        consume_op_default(op)
+    };
+
+    let Some(iter) = crate::array::call_symbol_async_iterator_for_flat_map(stream) else {
+        // Not async-iterable (shouldn't happen for a readable): empty result.
+        if op == CONSUME_OP_REDUCE && !has_initial {
+            return rejected_promise(reduce_missing_initial_error());
+        }
+        return resolved_promise(acc);
+    };
+
+    let result = crate::promise::js_promise_new();
+    let state = js_closure_alloc(consume_on_next as *const u8, 9);
+    let on_cb = js_closure_alloc(consume_on_cb as *const u8, 1);
+    let reject = js_closure_alloc(consume_reject as *const u8, 1);
+
+    js_closure_set_capture_ptr(reject, 0, state as i64);
+    js_closure_set_capture_ptr(on_cb, 0, state as i64);
+
+    js_closure_set_capture_ptr(state, SC_RESULT, result as i64);
+    js_closure_set_capture_f64(state, SC_ITER, iter);
+    js_closure_set_capture_f64(state, SC_CB, callback);
+    js_closure_set_capture_f64(state, SC_OP, op);
+    js_closure_set_capture_f64(state, SC_ACC, acc);
+    js_closure_set_capture_ptr(state, SC_REJECT, reject as i64);
+    js_closure_set_capture_ptr(state, SC_ON_CB, on_cb as i64);
+    js_closure_set_capture_f64(state, SC_CUR, f64::from_bits(TAG_UNDEFINED));
+    js_closure_set_capture_f64(state, SC_HAS_ACC, bool_bits(has_initial));
+
+    // Abort after consumption starts: a per-call (or inherited) signal that
+    // fires mid-stream rejects the result and closes the iterator, instead of
+    // leaving the promise pending forever. An already-aborted signal was
+    // rejected up front (above), so the listener only handles later aborts.
+    register_consume_abort(stream, opts, state);
+
+    consume_drive_next(iter, state, reject);
+    box_pointer(result as *const u8)
+}
+
+/// Register an abort listener for a consuming helper: when the governing signal
+/// fires, close the iterator (releasing the stream listeners) and reject the
+/// result with an AbortError. No-op when there is no signal.
+fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
+    let Some(sig) = effective_signal(stream, opts) else {
+        return;
+    };
+    let Some(sig_obj) = object_ptr_from_value(sig) else {
+        return;
+    };
+    let abort_cl = js_closure_alloc(ns_consume_abort as *const u8, 1);
+    js_closure_set_capture_ptr(abort_cl, 0, state as i64);
+    crate::url::js_abort_signal_add_listener(
+        sig_obj,
+        string_value(b"abort"),
+        box_pointer(abort_cl as *const u8),
+    );
+}
+
+/// Abort-listener body for a consuming helper (`forEach`/`reduce`/`find`/
+/// `some`/`every`): close the iterator and reject the result with an
+/// AbortError. A no-op if the result already settled.
+pub(super) extern "C" fn ns_consume_abort(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let state = js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader;
+    if state.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    consume_reject_state(state, abort_error());
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 pub(super) extern "C" fn ns_iter_reduce(
     closure: *const ClosureHeader,
     reducer: f64,
     initial: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(reducer);
-    let len = if arr.is_null() {
-        0
-    } else {
-        crate::array::js_array_length(arr)
-    };
-    let has_initial = initial.to_bits() != TAG_UNDEFINED;
-    let (mut acc, start) = if has_initial {
-        (initial, 0)
-    } else if len > 0 {
-        (crate::array::js_array_get_f64(arr, 0), 1)
-    } else {
-        if readable_hidden_error(this).is_some() {
-            return settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED));
-        }
-        if let Some(sig) = effective_signal(this, opts) {
-            if signal_is_aborted(sig) {
-                return rejected_promise(abort_error());
-            }
-        }
-        return rejected_promise(reduce_missing_initial_error());
-    };
-    if readable_hidden_error(this).is_none() && !cb.is_null() {
-        for i in start..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            // Node's stream reducer is (accumulator, current) — no index.
-            match settle_result(crate::closure::js_closure_call2(cb, acc, el)) {
-                Ok(value) => acc = value,
-                Err(err) => return rejected_promise(err),
-            }
-        }
-    }
-    settle_consuming(this, opts, acc)
+    consume_stream(
+        this_value(closure),
+        reducer,
+        CONSUME_OP_REDUCE,
+        initial,
+        opts,
+    )
 }
 
 pub(super) extern "C" fn ns_iter_for_each(
@@ -467,20 +819,13 @@ pub(super) extern "C" fn ns_iter_for_each(
     action: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(action);
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            if let Err(err) = call_settled_result(cb, el) {
-                return rejected_promise(err);
-            }
-        }
-    }
-    settle_consuming(this, opts, f64::from_bits(TAG_UNDEFINED))
+    consume_stream(
+        this_value(closure),
+        action,
+        CONSUME_OP_FOR_EACH,
+        f64::from_bits(TAG_UNDEFINED),
+        opts,
+    )
 }
 
 pub(super) extern "C" fn ns_iter_find(
@@ -488,26 +833,13 @@ pub(super) extern "C" fn ns_iter_find(
     predicate: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(predicate);
-    let mut found = f64::from_bits(TAG_UNDEFINED);
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            match call_settled_result(cb, el) {
-                Ok(value) if crate::value::js_is_truthy(value) != 0 => {
-                    found = el;
-                    break;
-                }
-                Ok(_) => {}
-                Err(err) => return rejected_promise(err),
-            }
-        }
-    }
-    settle_consuming(this, opts, found)
+    consume_stream(
+        this_value(closure),
+        predicate,
+        CONSUME_OP_FIND,
+        f64::from_bits(TAG_UNDEFINED),
+        opts,
+    )
 }
 
 pub(super) extern "C" fn ns_iter_some(
@@ -515,26 +847,13 @@ pub(super) extern "C" fn ns_iter_some(
     predicate: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(predicate);
-    let mut result = f64::from_bits(TAG_FALSE);
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            match call_settled_result(cb, el) {
-                Ok(value) if crate::value::js_is_truthy(value) != 0 => {
-                    result = f64::from_bits(TAG_TRUE);
-                    break;
-                }
-                Ok(_) => {}
-                Err(err) => return rejected_promise(err),
-            }
-        }
-    }
-    settle_consuming(this, opts, result)
+    consume_stream(
+        this_value(closure),
+        predicate,
+        CONSUME_OP_SOME,
+        f64::from_bits(TAG_UNDEFINED),
+        opts,
+    )
 }
 
 pub(super) extern "C" fn ns_iter_every(
@@ -542,26 +861,13 @@ pub(super) extern "C" fn ns_iter_every(
     predicate: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
-    prepare_readable_for_iteration(this);
-    let arr = readable_chunks_array(this);
-    let cb = callback_closure(predicate);
-    let mut result = f64::from_bits(TAG_TRUE);
-    if readable_hidden_error(this).is_none() && !arr.is_null() && !cb.is_null() {
-        let len = crate::array::js_array_length(arr);
-        for i in 0..len {
-            let el = crate::array::js_array_get_f64(arr, i);
-            match call_settled_result(cb, el) {
-                Ok(value) if crate::value::js_is_truthy(value) == 0 => {
-                    result = f64::from_bits(TAG_FALSE);
-                    break;
-                }
-                Ok(_) => {}
-                Err(err) => return rejected_promise(err),
-            }
-        }
-    }
-    settle_consuming(this, opts, result)
+    consume_stream(
+        this_value(closure),
+        predicate,
+        CONSUME_OP_EVERY,
+        f64::from_bits(TAG_UNDEFINED),
+        opts,
+    )
 }
 
 pub(super) extern "C" fn ns_iter_flat_map(

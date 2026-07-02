@@ -136,6 +136,22 @@ pub extern "C" fn perry_ui_webview_create(
         widgets::webview::create(url_ptr as *const u8, width, height, ephemeral)
     })
 }
+
+/// Create a BloomView render-surface host (issue #2395).
+#[no_mangle]
+pub extern "C" fn perry_ui_bloomview_create(width: f64, height: f64) -> i64 {
+    catch_panic("perry_ui_bloomview_create", || {
+        widgets::bloomview::create(width, height)
+    })
+}
+
+/// Return the BloomView's native handle token (issue #2395).
+#[no_mangle]
+pub extern "C" fn perry_ui_bloomview_get_hwnd(handle: i64) -> i64 {
+    catch_panic("perry_ui_bloomview_get_hwnd", || {
+        widgets::bloomview::get_native_handle(handle)
+    })
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_webview_set_user_agent(handle: i64, ua_ptr: i64) {
     catch_panic_void("perry_ui_webview_set_user_agent", || {

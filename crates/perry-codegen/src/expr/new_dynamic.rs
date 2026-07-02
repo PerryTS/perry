@@ -50,7 +50,9 @@ use super::{
 /// A `new` callee that is a primitive literal — never a constructor, so
 /// `new <it>(…)` is a `TypeError`. Covers number / bool / null / undefined /
 /// string / bigint literals (the cases the runtime construct path can't always
-/// tag-reject, notably `f64` numbers).
+/// tag-reject, notably `f64` numbers) and regex literals (`new /z/()` is a
+/// TypeError: a RegExp instance has no [[Construct]] internal method,
+/// test262 S15.10.7_A2_T1 / S15.10.7_A2_T2).
 fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
     matches!(
         callee,
@@ -62,6 +64,7 @@ fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
             | Expr::String(_)
             | Expr::WtfString(_)
             | Expr::BigInt(_)
+            | Expr::RegExp { .. }
     )
 }
 
@@ -139,6 +142,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_new_function_construct_apply",
                 &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
             );
+            // Write-back: when the callee is a statically-known user class,
+            // propagate constructor mutations (e.g. `++called`) back to the
+            // outer captured locals. The runtime construction path stores
+            // mutations to `inst.__perry_cap_*` but cannot reach the caller's
+            // outer alloca slots directly.
+            // Also handles `LocalGet(id)` where the local was assigned a
+            // ClassRef (e.g. `const ctor = C; new (ctor as any)(...args)`).
+            let class_name: Option<String> = match callee.as_ref() {
+                Expr::ClassRef(cn) => Some(cn.clone()),
+                Expr::LocalGet(id) => ctx
+                    .local_id_to_name
+                    .get(id)
+                    .and_then(|name| ctx.local_class_aliases.get(name))
+                    .cloned(),
+                _ => None,
+            };
+            if let Some(cn) = class_name {
+                if let Some(class) = ctx.classes.get(cn.as_str()).copied() {
+                    let bits = ctx.block().bitcast_double_to_i64(&result);
+                    let inst_handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle, &[]);
+                }
+            }
             Ok(result)
         }
 
@@ -212,8 +238,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
 
             // Case 1 + 2: callee is statically a class.
+            //
+            // #5437: this is a NewDynamic-routed construct (`new (Foo)()`,
+            // `new ns.Foo()` for a namespace import) — the bare-`ast::Expr::Ident`
+            // HIR arm that appends class captures was NOT taken, so the captures
+            // are absent from `args`. Route to `lower_new_member_captured` so a
+            // function-nested capturing class fills its `__perry_cap_*` ctor
+            // params from the decl-site snapshot. No-op for non-capturing
+            // classes (no cap params to fill).
             if let Some(name) = try_static_class_name(callee.as_ref(), ctx) {
-                return lower_new(ctx, name, args);
+                return crate::lower_call::lower_new_member_captured(ctx, name, args);
             }
 
             // date-fns `constructFrom(date, value)`:
@@ -511,6 +545,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // when it sees the original literal — read it back here and
             // dispatch to `lower_new` instead of the empty-object
             // fallback.
+            //
+            // #5437: this is a MEMBER-callee construct — the class's
+            // captures are NOT appended at this `new` site (the captured
+            // enclosing local is out of scope here), so route to
+            // `lower_new_member_captured` which fills the synthesized
+            // `__perry_cap_*` ctor params from the class's decl-site capture
+            // snapshot instead of binding them to `undefined`.
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if let Expr::LocalGet(obj_id) = object.as_ref() {
                     if let Some(class_name) = ctx
@@ -519,7 +560,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .and_then(|f| f.get(property))
                         .cloned()
                     {
-                        return lower_new(ctx, &class_name, args);
+                        return crate::lower_call::lower_new_member_captured(
+                            ctx,
+                            &class_name,
+                            args,
+                        );
                     }
                 }
             }

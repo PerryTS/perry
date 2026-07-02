@@ -9,6 +9,16 @@ thread_local! {
     /// thread-local avoids threading a bool through ~14 recursive call sites).
     /// Read by the `yield*` arms to pick the async vs sync delegation protocol.
     static LINEARIZE_IS_ASYNC_GEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// `yield *` delegation suspend-state intervals collected while linearizing an
+    /// async generator. After linearization the `.return()` closure consults these
+    /// so that `gen.return(v)` while suspended inside a `yield *` forwards to the
+    /// delegated iterator's `return` method (spec `yield *` step 6.c) instead of
+    /// completing the outer generator directly. Same thread-local rationale as
+    /// `LINEARIZE_IS_ASYNC_GEN` (avoids threading a sink through every recursive
+    /// `linearize_body` call site).
+    static LINEARIZE_DELEGATIONS: std::cell::RefCell<Vec<DelegationRoute>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 pub(crate) fn set_linearize_async_generator(v: bool) {
@@ -17,6 +27,40 @@ pub(crate) fn set_linearize_async_generator(v: bool) {
 
 fn linearize_async_generator() -> bool {
     LINEARIZE_IS_ASYNC_GEN.with(|c| c.get())
+}
+
+/// Clear any `yield *` delegation routes left over from a previous generator.
+pub(crate) fn reset_delegation_routes() {
+    LINEARIZE_DELEGATIONS.with(|c| c.borrow_mut().clear());
+}
+
+/// Drain the `yield *` delegation routes collected during the last linearization.
+pub(crate) fn take_delegation_routes() -> Vec<DelegationRoute> {
+    LINEARIZE_DELEGATIONS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// One `yield *` delegation region in an async generator. The outer generator is
+/// "suspended inside this `yield *`" whenever its state id is in
+/// `(suspend_state_lo, suspend_state_hi]` — the same exclusive-lower/inclusive-
+/// upper convention as [`FinallyRoute`]. `iter_id` is the captured delegated
+/// iterator (the `this` for its `return`/`throw` methods).
+#[derive(Clone)]
+pub struct DelegationRoute {
+    pub suspend_state_lo: u32,
+    pub suspend_state_hi: u32,
+    pub iter_id: LocalId,
+    /// The drive loop's iter-result local (`__del_result`). `gen.throw(e)`
+    /// forwards into the delegated iterator's `throw`, stores the awaited
+    /// result here, then re-drives the state machine so the loop's condition
+    /// state observes `__del_result.done` (spec `yield *` step 6.b.ii.5-7).
+    pub result_id: LocalId,
+    /// The drive loop's condition-check state — where `gen.throw(e)` re-enters
+    /// the dispatch loop after writing `result_id`, so a `done` inner result
+    /// resumes the outer body after the `yield *` and a not-`done` result
+    /// re-yields. This is the `while` loop's `cond_state`, which the linearizer
+    /// emits as `suspend_state_lo + 1` (the non-empty pre-loop state always
+    /// takes `suspend_state_lo`).
+    pub resume_state: u32,
 }
 
 /// Resolve a `yield*` operand into its iterator. An async generator delegates
@@ -42,6 +86,50 @@ fn delegate_await(call: Expr) -> Expr {
     } else {
         call
     }
+}
+
+/// Spec `yield *` in an **async** generator awaits each delegated
+/// `next()`/`return()`/`throw()` result and then requires it to be an Object —
+/// `If Type(innerResult) is not Object, throw a TypeError exception`
+/// (AsyncGeneratorYield delegation; also enforced by the
+/// `%AsyncFromSyncIteratorPrototype%` wrapper for a wrapped sync iterator).
+/// Returns the guard statement (empty for sync generators, where
+/// `IteratorComplete`/`IteratorValue` read `.done`/`.value` off a primitive via
+/// `GetV` and never throw). `result_id` holds the just-awaited iter-result.
+fn delegate_result_object_check(result_id: LocalId) -> Vec<Stmt> {
+    if !linearize_async_generator() {
+        return Vec::new();
+    }
+    // not Object  <=>  result === null
+    //                  || (typeof result !== "object" && typeof result !== "function")
+    let not_object = Expr::Logical {
+        op: LogicalOp::Or,
+        left: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(result_id)),
+            right: Box::new(Expr::Null),
+        }),
+        right: Box::new(Expr::Logical {
+            op: LogicalOp::And,
+            left: Box::new(Expr::Compare {
+                op: CompareOp::Ne,
+                left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
+                right: Box::new(Expr::String("object".to_string())),
+            }),
+            right: Box::new(Expr::Compare {
+                op: CompareOp::Ne,
+                left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
+                right: Box::new(Expr::String("function".to_string())),
+            }),
+        }),
+    };
+    vec![Stmt::If {
+        condition: not_object,
+        then_branch: vec![Stmt::Throw(Expr::TypeErrorNew(Box::new(Expr::String(
+            "Iterator result is not an object".to_string(),
+        ))))],
+        else_branch: None,
+    }]
 }
 
 /// Invoke the captured delegated `[[NextMethod]]` (`del_next_id`) with `this` =
@@ -101,8 +189,11 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
 /// Emit the common `yield *` delegation prelude + driving loop into `current`
 /// and linearize it. Shared by all three desugar positions (statement-level
 /// `yield* e`, `return yield* e`, `let x = yield* e`). Returns the local id
-/// holding the delegated iterator's most-recent result object (`{value, done}`),
-/// whose `.value` the caller uses for the completion value.
+/// holding the delegated iterator's completion value — spec
+/// `IteratorValue(innerResult)` read once from the final `{value, done: true}`
+/// result. The read happens unconditionally even at statement level (where the
+/// value is discarded), because a `value` getter that throws must still fire and
+/// reject the generator (test262 yield-star-next-call-value-get-abrupt).
 #[allow(clippy::too_many_arguments)]
 fn emit_yield_star_loop(
     inner: &Expr,
@@ -144,10 +235,13 @@ fn emit_yield_star_loop(
             Expr::Undefined,
         ))),
     )));
+    // Async `yield *`: the awaited iter-result must be an Object or `next()`
+    // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
+    current.extend(delegate_result_object_check(del_result_id));
 
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
-    let while_body = vec![
+    let mut while_body = vec![
         // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
         // Unlike a plain `yield x` (which is `AsyncGeneratorYield(? Await(x))` and
         // is handled by the #4777 await pass), the DELEGATED value is NOT awaited:
@@ -171,6 +265,8 @@ fn emit_yield_star_loop(
             ))),
         )),
     ];
+    // Same Object-check on the in-loop pull (async generators only).
+    while_body.extend(delegate_result_object_check(del_result_id));
     let while_stmt = Stmt::While {
         condition: Expr::Unary {
             op: UnaryOp::Not,
@@ -182,6 +278,12 @@ fn emit_yield_star_loop(
         body: while_body,
     };
 
+    // Record the suspend-state interval of the drive loop's single re-yield so
+    // an async `gen.return(v)` issued while suspended here forwards into the
+    // delegated iterator's `return` (spec `yield *` step 6.c) rather than
+    // completing the outer generator outright. The loop's only suspendable state
+    // is the inner `yield`, whose resume state lands in `(lo, hi]`.
+    let deleg_lo = *state_num;
     linearize_body(
         &[while_stmt],
         states,
@@ -193,8 +295,37 @@ fn emit_yield_star_loop(
         catches,
         finallys,
     );
+    if linearize_async_generator() {
+        let deleg_hi = *state_num;
+        LINEARIZE_DELEGATIONS.with(|c| {
+            c.borrow_mut().push(DelegationRoute {
+                suspend_state_lo: deleg_lo,
+                suspend_state_hi: deleg_hi,
+                iter_id: del_iter_id,
+                result_id: del_result_id,
+                // `current` always holds the iterator-setup prelude pushed above,
+                // so the `while` linearizer emits a non-empty pre-loop state at
+                // `deleg_lo` and the condition state at `deleg_lo + 1`.
+                resume_state: deleg_lo + 1,
+            })
+        });
+    }
 
-    del_result_id
+    // Spec step 6.a.vi: `If done is true, then Return ? IteratorValue(innerResult)`.
+    // Read the final result's `.value` exactly once into a dedicated local. This
+    // runs on the loop-exit (done) path, so a throwing `value` getter rejects the
+    // generator here regardless of position — including bare statement-level
+    // `yield* e`, where the value is otherwise discarded.
+    let del_value_id = alloc_local(next_local_id);
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_value_id,
+        Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(del_result_id)),
+            property: "value".to_string(),
+        }),
+    )));
+
+    del_value_id
 }
 
 pub struct State {
@@ -348,7 +479,7 @@ pub fn linearize_body(
                 value: Some(inner),
                 delegate: true,
             })) => {
-                let del_result_id = emit_yield_star_loop(
+                let del_value_id = emit_yield_star_loop(
                     inner,
                     states,
                     current,
@@ -360,15 +491,12 @@ pub fn linearize_body(
                     finallys,
                 );
 
-                // After the loop, the iterator's final `value` (from
-                // {value, done:true}) is the value of `yield* inner`, which is
+                // The iterator's final `value` (read once by `emit_yield_star_loop`
+                // as spec `IteratorValue`) is the value of `yield* inner`, which is
                 // exactly what `return yield* inner` returns. Wrap it as the
                 // generator's terminal {value, done:true} and flush a Done state.
                 current.push(Stmt::Return(Some(make_iter_result(
-                    Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_result_id)),
-                        property: "value".to_string(),
-                    },
+                    Expr::LocalGet(del_value_id),
                     true,
                 ))));
                 let cont_state = *state_num;
@@ -1066,7 +1194,7 @@ pub fn linearize_body(
                 ty,
                 name,
             } => {
-                let del_result_id = emit_yield_star_loop(
+                let del_value_id = emit_yield_star_loop(
                     inner,
                     states,
                     current,
@@ -1078,14 +1206,11 @@ pub fn linearize_body(
                     finallys,
                 );
 
-                // After the loop, the iterator's final `value` (from
-                // {value, done:true}) becomes the value of `yield* expr`.
+                // The iterator's final `value` (read once by `emit_yield_star_loop`
+                // as spec `IteratorValue`) becomes the value of `yield* expr`.
                 current.push(Stmt::Let {
                     id: *id,
-                    init: Some(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_result_id)),
-                        property: "value".to_string(),
-                    }),
+                    init: Some(Expr::LocalGet(del_value_id)),
                     mutable: *mutable,
                     ty: ty.clone(),
                     name: name.clone(),

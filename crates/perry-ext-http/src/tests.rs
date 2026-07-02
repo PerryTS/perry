@@ -88,6 +88,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         body: Vec::new(),
         listeners: incoming_listeners,
         encoding: None,
+        pipes: Vec::new(),
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();
@@ -103,6 +104,100 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     }
     drop_handle(request_handle);
     drop_handle(incoming_handle);
+}
+
+/// The streamed-response drain (`ResponseHead` → N×`ResponseChunk` →
+/// `ResponseEnd`) must reassemble a body byte-identically no matter how the
+/// transport split it into chunks. The chunk carrier (`Bytes`) delivers to
+/// the drain as `&[u8]`, so this pins the reassembly contract a carrier-type
+/// change must preserve — a future refactor that corrupted a chunk,
+/// reordered chunks, or mishandled a boundary would fail here.
+///
+/// Drives the buffering branch (no `'data'` listener registered): each
+/// chunk is appended to `IncomingMessageHandle::body`, and `ResponseEnd`
+/// leaves the unconsumed body on the handle. Reading it back is the
+/// reassembly assertion. This branch never calls a JS closure, so it needs
+/// no live codegen — only the handle registry the other tests already use.
+fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
+    let request_handle = register_handle(ClientRequestHandle {
+        method: "GET".to_string(),
+        url: "http://localhost/".to_string(),
+        headers: HashMap::new(),
+        body: Vec::new(),
+        response_callback: 0,
+        listeners: HashMap::new(),
+        timeout_ms: None,
+        ended: false,
+        flushed_early: false,
+        pending_write_callbacks: Vec::new(),
+        end_callback: 0,
+        completed: false,
+        timeout_fired: false,
+        close_emitted: false,
+        agent_handle: 0,
+        tls: crate::tls_client::TlsOptions::default(),
+        incoming_handle: 0,
+        expects_continue: false,
+        continue_body_tx: None,
+    });
+
+    unsafe {
+        // Head: allocates the IncomingMessage and stores its handle on the
+        // request, so the following chunk/end events route to it.
+        client_events::handle_response_head_event(
+            request_handle,
+            200,
+            "OK".to_string(),
+            Vec::new(),
+        );
+        // Each production chunk is a refcounted `Bytes` (reqwest's
+        // `response.chunk()` shape) — build the input the same way so the
+        // test exercises the actual carrier type the drain receives.
+        for c in chunks {
+            client_events::handle_response_chunk_event(request_handle, Bytes::copy_from_slice(c));
+        }
+        client_events::handle_response_end_event(request_handle);
+    }
+
+    let incoming_handle = get_handle::<ClientRequestHandle>(request_handle)
+        .expect("request handle should remain live")
+        .incoming_handle;
+    let body = get_handle::<IncomingMessageHandle>(incoming_handle)
+        .expect("incoming message handle should remain live")
+        .body
+        .clone();
+
+    drop_handle(incoming_handle);
+    drop_handle(request_handle);
+    body
+}
+
+#[test]
+fn streamed_response_reassembles_chunks_byte_identically() {
+    let _guard = GcTestGuard::new();
+
+    // Empty body — zero chunks then end.
+    assert_eq!(drain_streamed_body(&[]), Vec::<u8>::new());
+
+    // Single chunk delivered whole.
+    assert_eq!(drain_streamed_body(&[b"hello world"]), b"hello world");
+
+    // Multi-chunk: the reassembled body is the in-order concatenation,
+    // independent of the (arbitrary) chunk boundaries the transport chose.
+    assert_eq!(drain_streamed_body(&[b"foo", b"bar", b"baz"]), b"foobarbaz");
+
+    // Boundary-shift: the SAME bytes split differently must reassemble to
+    // the same body — the property the streaming path actually guarantees.
+    let payload: &[u8] = b"the quick brown fox jumps over the lazy dog";
+    let split_a = drain_streamed_body(&[&payload[..10], &payload[10..25], &payload[25..]]);
+    let split_b = drain_streamed_body(&[&payload[..1], &payload[1..2], &payload[2..]]);
+    assert_eq!(split_a, payload);
+    assert_eq!(split_b, payload);
+
+    // Binary payload with embedded NULs and high bytes — the carrier is
+    // bytes, not a string, so nothing is lost or re-encoded.
+    let bin: &[u8] = &[0x00, 0xFF, 0x10, 0x00, 0x80, 0x7F, 0xC3, 0x28];
+    assert_eq!(drain_streamed_body(&[&bin[..3], &bin[3..]]), bin);
 }
 
 #[test]

@@ -378,6 +378,12 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                                 args,
                             });
                         }
+                        if let Some(spread_args) = spread_args.clone() {
+                            return Ok(Expr::SuperMethodCallSpread {
+                                method: ident.sym.to_string(),
+                                args: spread_args,
+                            });
+                        }
                         return Ok(Expr::SuperMethodCall {
                             method: ident.sym.to_string(),
                             args,
@@ -400,6 +406,12 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         // receiver binding (test262 super/prop-expr-cls-ref-this).
                         if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
                             if let Some(method) = s.value.as_str() {
+                                if let Some(spread_args) = spread_args.clone() {
+                                    return Ok(Expr::SuperMethodCallSpread {
+                                        method: method.to_string(),
+                                        args: spread_args,
+                                    });
+                                }
                                 return Ok(Expr::SuperMethodCall {
                                     method: method.to_string(),
                                     args,

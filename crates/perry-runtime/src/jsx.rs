@@ -307,7 +307,11 @@ fn is_valid_closure(ptr: *const ClosureHeader) -> bool {
     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
         return false;
     }
-    let tag = unsafe { std::ptr::read_volatile((ptr as *const u8).add(12) as *const u32) };
+    let tag = unsafe {
+        std::ptr::read_volatile(
+            (ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+        )
+    };
     tag == CLOSURE_MAGIC
 }
 

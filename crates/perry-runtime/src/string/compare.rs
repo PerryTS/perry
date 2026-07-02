@@ -196,6 +196,9 @@ pub extern "C" fn js_string_search_value_to_string(
     if string_search_is_regexp(value) {
         throw_regexp_search_type_error(method_id);
     }
+    // ToString(searchString): a Symbol throws a TypeError (§7.1.17) rather than
+    // stringifying to "Symbol(...)".
+    crate::builtins::reject_symbol_to_string(value);
     crate::value::js_jsvalue_to_string(value)
 }
 
@@ -405,6 +408,9 @@ pub extern "C" fn js_string_normalize(
     let form_owned: String = if form_jsval.is_undefined() {
         "NFC".to_string()
     } else {
+        // ToString(form) runs before the form-validity check, so a Symbol form
+        // throws a TypeError (§7.1.17) — not the RangeError of an invalid form.
+        crate::builtins::reject_symbol_to_string(form_value);
         let form_ptr = crate::value::js_jsvalue_to_string(form_value);
         if is_valid_string_ptr(form_ptr) {
             string_as_str(form_ptr).to_string()

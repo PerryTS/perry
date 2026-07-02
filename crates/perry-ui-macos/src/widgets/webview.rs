@@ -306,66 +306,72 @@ define_class!(
             const POLICY_ALLOW: i64 = 1;
 
             let key = self.ivars().callback_key.get();
-            let url_str = unsafe { url_from_action(action) };
 
-            let (should_allow, on_should_navigate, allowed) = WEBVIEW_STATES.with(|s| {
-                let states = s.borrow();
-                if let Some(st) = states.get(&key) {
-                    (true, st.on_should_navigate, st.allowed_domains.clone())
-                } else {
-                    (true, 0.0, Vec::new())
-                }
-            });
-            let _ = should_allow;
+            // This method is a non-unwinding ObjC callback: a Rust panic that
+            // escapes it aborts the whole process (#3129 — WebView aborted on
+            // the first navigation). So the entire policy computation — state
+            // lookup, allowlist gate, and the user `onShouldNavigate` closure
+            // round-trip — runs inside a panic guard, defaulting to ALLOW so
+            // navigation proceeds rather than killing the app.
+            let policy_cell = std::cell::Cell::new(POLICY_ALLOW);
+            let policy_cell_ref = &policy_cell;
+            crate::catch_callback_panic(
+                "webview decidePolicyForNavigationAction",
+                std::panic::AssertUnwindSafe(|| {
+                    let url_str = unsafe { url_from_action(action) };
 
-            // 1. Allowlist gate (no user-closure round-trip — security).
-            if !allowed.is_empty() {
-                let host = unsafe { host_of_url_string(&url_str) };
-                if !host_in_allowlist(&host, &allowed) {
-                    if !decision_handler.is_null() {
-                        unsafe { (*decision_handler).call((POLICY_CANCEL,)); }
+                    let (on_should_navigate, allowed) = WEBVIEW_STATES.with(|s| {
+                        let states = s.borrow();
+                        if let Some(st) = states.get(&key) {
+                            (st.on_should_navigate, st.allowed_domains.clone())
+                        } else {
+                            (0.0, Vec::new())
+                        }
+                    });
+
+                    // 1. Allowlist gate (no user-closure round-trip — security).
+                    if !allowed.is_empty() {
+                        let host = unsafe { host_of_url_string(&url_str) };
+                        if !host_in_allowlist(&host, &allowed) {
+                            policy_cell_ref.set(POLICY_CANCEL);
+                            return;
+                        }
                     }
-                    return;
-                }
-            }
 
-            // 2. User intercept — only if a closure is registered.
-            if on_should_navigate != 0.0 {
-                let url_nb = nanbox_str(&url_str);
-                let closure_ptr = unsafe { js_nanbox_get_pointer(on_should_navigate) } as *const u8;
-                let result_cell = std::cell::Cell::new(f64::from_bits(0x7FFC_0000_0000_0001));
-                if !closure_ptr.is_null() {
-                    let result_cell_ref = &result_cell;
-                    crate::catch_callback_panic(
-                        "webview onShouldNavigate",
-                        std::panic::AssertUnwindSafe(|| {
-                            let r = unsafe { js_closure_call1(closure_ptr, url_nb) };
-                            result_cell_ref.set(r);
-                        }),
-                    );
-                }
-                let result = result_cell.get();
+                    // 2. User intercept — only if a closure is registered.
+                    if on_should_navigate != 0.0 {
+                        let url_nb = nanbox_str(&url_str);
+                        let closure_ptr =
+                            unsafe { js_nanbox_get_pointer(on_should_navigate) } as *const u8;
+                        if closure_ptr.is_null() {
+                            return; // default ALLOW
+                        }
+                        let result = unsafe { js_closure_call1(closure_ptr, url_nb) };
 
-                // Per the API: undefined / no return = allow (matches JS
-                // "implicit allow"); explicit `false` / 0 / null = cancel.
-                let bits = result.to_bits();
-                let is_undefined = bits == 0x7FFC_0000_0000_0001;
-                let policy = if is_undefined {
-                    POLICY_ALLOW
-                } else if unsafe { js_is_truthy(result) != 0 } {
-                    POLICY_ALLOW
-                } else {
-                    POLICY_CANCEL
-                };
-                if !decision_handler.is_null() {
-                    unsafe { (*decision_handler).call((policy,)); }
-                }
-                return;
-            }
+                        // Per the API: undefined / no return = allow (matches JS
+                        // "implicit allow"); explicit `false` / 0 / null = cancel.
+                        let bits = result.to_bits();
+                        let is_undefined = bits == 0x7FFC_0000_0000_0001;
+                        if !is_undefined && unsafe { js_is_truthy(result) == 0 } {
+                            policy_cell_ref.set(POLICY_CANCEL);
+                        }
+                    }
 
-            // 3. No intercept registered — allow.
+                    // 3. No intercept registered — leaves the default ALLOW.
+                }),
+            );
+            let policy = policy_cell.get();
+
+            // Deliver the decision exactly once. Calling back into the
+            // WKWebView block also crosses the FFI boundary, so guard it too —
+            // a panic here previously aborted the app (#3129, webview.rs:359).
             if !decision_handler.is_null() {
-                unsafe { (*decision_handler).call((POLICY_ALLOW,)); }
+                crate::catch_callback_panic(
+                    "webview decisionHandler",
+                    std::panic::AssertUnwindSafe(|| {
+                        unsafe { (*decision_handler).call((policy,)); }
+                    }),
+                );
             }
         }
 

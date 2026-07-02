@@ -1,14 +1,18 @@
 //! `Intl.DurationFormat` — ECMA-402 duration formatting.
 //!
-//! A focused implementation: the constructor resolves `style` + the ten
-//! per-unit style/display slots via the spec's `GetDurationUnitOptions`
-//! (including the `numeric`→`fractional` promotion for sub-second units and the
-//! `prevStyle`-driven `2-digit` propagation), validates the options bag, and
-//! exposes `format` / `formatToParts` / `resolvedOptions`. The localized output
-//! uses a deterministic English rendering (full CLDR unit patterns + list
-//! grouping need data Perry doesn't carry); `format` validates its duration
-//! argument per `ToDurationRecord` + `IsValidDuration` so the argument-negative
-//! tests pass regardless.
+//! The constructor resolves `style` + the ten per-unit style/display slots via the
+//! spec's `GetDurationUnitOptions` (including the `numeric`→`fractional` promotion
+//! for sub-second units and the `prevStyle`-driven `2-digit` propagation), validates
+//! the options bag, and exposes `format` / `formatToParts` / `resolvedOptions`.
+//!
+//! `format`/`formatToParts` are a faithful port of `PartitionDurationFormatPattern`:
+//! each unit value is rendered through the *same* `Intl.NumberFormat` code path that
+//! a nested `new Intl.NumberFormat(...)` would use (see [`super::number_parts_from_resolved`])
+//! and the per-unit strings are joined with [`super::list_format_parts`]. Routing
+//! through the shared formatters keeps the output byte-identical to the value test262
+//! computes from `Intl.NumberFormat`/`Intl.ListFormat`, regardless of how much CLDR
+//! data those carry. The argument is validated per `ToDurationRecord` + `IsValidDuration`
+//! (objects, and ISO-8601 duration strings).
 
 use super::*;
 
@@ -28,6 +32,22 @@ const UNITS: &[(&str, &[&str], &str)] = &[
     ("milliseconds", SUB, "numeric"),
     ("microseconds", SUB, "numeric"),
     ("nanoseconds", SUB, "numeric"),
+];
+
+/// Singular `Intl.NumberFormat` unit identifier for each duration unit, in `UNITS`
+/// order (`"years"` → `"year"`). Used as the `unit` option when rendering through
+/// the shared NumberFormat path.
+const UNIT_SINGULAR: &[&str] = &[
+    "year",
+    "month",
+    "week",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "millisecond",
+    "microsecond",
+    "nanosecond",
 ];
 
 fn is_hms(unit: &str) -> bool {
@@ -190,8 +210,23 @@ fn report_style(style: &str) -> &str {
 }
 
 /// Configure a freshly-allocated `Intl.DurationFormat` instance: read + validate
-/// the options bag (in spec order) and install the bound instance methods.
+/// the options bag (in spec order).
 pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
+    // GetOptionsObject: `undefined` → empty options; any other non-object
+    // (notably `null` and primitives) is a TypeError. Object-like values —
+    // including arrays, functions, and Proxies (all pointer-tagged) — are
+    // accepted, so a property-bag Proxy still has its traps observed. Symbols
+    // are also pointer-tagged, so `is_pointer()` alone would wrongly admit them;
+    // exclude registered symbols explicitly.
+    let opts_jv = JSValue::from_bits(options.to_bits());
+    let is_symbol = opts_jv.is_pointer()
+        && crate::symbol::is_registered_symbol(
+            (options.to_bits() & crate::value::POINTER_MASK) as usize,
+        );
+    if !opts_jv.is_undefined() && (!opts_jv.is_pointer() || is_symbol) {
+        throw_type_error("Intl.DurationFormat: options must be an object");
+    }
+
     // Order (constructor-options-order): localeMatcher, numberingSystem, style,
     // then each unit + unitDisplay, then fractionalDigits.
     let _matcher = df_enum_option(
@@ -247,13 +282,28 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
         set_internal_field(obj, KEY_DF_FRACTIONAL, n);
     }
 
-    install_bound_instance_function(obj, "format", bound_format_thunk as *const u8, 1);
-    install_bound_instance_function(obj, "formatToParts", bound_to_parts_thunk as *const u8, 1);
-    install_bound_instance_function(
+    // Unlike `Intl.NumberFormat.prototype.format` (a bound getter), the
+    // `Intl.DurationFormat` methods are plain prototype methods that read their
+    // receiver from `this` — so a detached `const f = df.format; f(d)` must throw.
+    // We install them as own instance properties (Perry's method dispatch resolves
+    // own properties) but back them with the implicit-`this` thunks, so a
+    // detached call lands on an undefined receiver and `RequireInternalSlot` throws.
+    super::install_function(obj, "format", format_thunk as *const u8, 1, 1, false);
+    super::install_function(
+        obj,
+        "formatToParts",
+        to_parts_thunk as *const u8,
+        1,
+        1,
+        false,
+    );
+    super::install_function(
         obj,
         "resolvedOptions",
-        bound_resolved_options_thunk as *const u8,
+        resolved_options_thunk as *const u8,
         0,
+        0,
+        false,
     );
 }
 
@@ -292,11 +342,6 @@ fn resolved_options_object(obj: *const ObjectHeader) -> f64 {
     js_nanbox_pointer(out as i64)
 }
 
-extern "C" fn bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
-    let obj = captured_intl_object(closure, "resolvedOptions", super::KIND_DURATION_FORMAT);
-    resolved_options_object(obj)
-}
-
 pub(super) extern "C" fn resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
     let obj = this_intl_object("resolvedOptions", super::KIND_DURATION_FORMAT);
     resolved_options_object(obj)
@@ -318,21 +363,45 @@ const DURATION_UNITS: &[&str] = &[
 ];
 
 /// `ToDurationRecord` + `IsValidDuration`: returns the ten unit values in
-/// `DURATION_UNITS` order. Throws `TypeError` for a non-object / all-undefined
-/// input and `RangeError` for non-integral values, mixed signs, or
-/// out-of-range magnitudes.
+/// `DURATION_UNITS` order. A String is parsed as an ISO-8601 duration; a non-object
+/// non-string is a `TypeError`; out-of-range / non-integral / mixed-sign records are
+/// a `RangeError`.
 fn to_duration_record(value: f64) -> Vec<f64> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_any_string() {
+        let s = string_from_string_value(value).unwrap_or_default();
+        let Some(vals) = parse_iso_duration(&s) else {
+            throw_range_error("Intl.DurationFormat.format: invalid duration string");
+        };
+        validate_duration(&vals);
+        return vals;
+    }
     let Some(input) = object_ptr_from_value(value) else {
         throw_type_error("Intl.DurationFormat.format: duration must be an object");
     };
-    let mut vals = Vec::with_capacity(DURATION_UNITS.len());
+    // ToDurationRecord reads the fields in alphabetical order (days, hours,
+    // microseconds, milliseconds, minutes, months, nanoseconds, seconds, weeks,
+    // years), which is observable through Proxy/getter side effects — distinct
+    // from the DURATION_UNITS storage order. The second tuple element is the
+    // index into the returned `vals` (DURATION_UNITS order).
+    const FIELD_ORDER: &[(&str, usize)] = &[
+        ("days", 3),
+        ("hours", 4),
+        ("microseconds", 8),
+        ("milliseconds", 7),
+        ("minutes", 5),
+        ("months", 1),
+        ("nanoseconds", 9),
+        ("seconds", 6),
+        ("weeks", 2),
+        ("years", 0),
+    ];
+    let mut vals = vec![0.0; DURATION_UNITS.len()];
     let mut any = false;
-    let mut sign = 0i32;
-    for unit in DURATION_UNITS.iter().copied() {
+    for (unit, idx) in FIELD_ORDER.iter().copied() {
         let raw = get_field(input, unit);
         let jv = JSValue::from_bits(raw.to_bits());
         if jv.is_undefined() {
-            vals.push(0.0);
             continue;
         }
         any = true;
@@ -343,6 +412,21 @@ fn to_duration_record(value: f64) -> Vec<f64> {
                 "Intl.DurationFormat.format: {unit} must be an integer"
             ));
         }
+        vals[idx] = n;
+    }
+    if !any {
+        throw_type_error("Intl.DurationFormat.format: duration must have at least one field");
+    }
+    validate_duration(&vals);
+    vals
+}
+
+/// `IsValidDuration`: a single overall sign, years/months/weeks bounded by 2^32-1,
+/// and the calendar/time units' combined magnitude (in seconds) below 2^53.
+fn validate_duration(vals: &[f64]) {
+    let mut sign = 0i32;
+    for (i, unit) in DURATION_UNITS.iter().copied().enumerate() {
+        let n = vals[i];
         if n > 0.0 {
             if sign < 0 {
                 throw_range_error("Intl.DurationFormat.format: duration fields have mixed signs");
@@ -354,16 +438,8 @@ fn to_duration_record(value: f64) -> Vec<f64> {
             }
             sign = -1;
         }
-        vals.push(n);
-    }
-    if !any {
-        throw_type_error("Intl.DurationFormat.format: duration must have at least one field");
-    }
-    // IsValidDuration: years/months/weeks bounded by 2^32-1; the calendar/time
-    // units' combined magnitude in seconds must stay below 2^53.
-    const U32_MAX: f64 = 4_294_967_295.0;
-    for (i, unit) in DURATION_UNITS.iter().copied().enumerate() {
-        if matches!(unit, "years" | "months" | "weeks") && vals[i].abs() > U32_MAX {
+        const U32_MAX: f64 = 4_294_967_295.0;
+        if matches!(unit, "years" | "months" | "weeks") && n.abs() > U32_MAX {
             throw_range_error(&format!("Intl.DurationFormat.format: {unit} out of range"));
         }
     }
@@ -378,75 +454,349 @@ fn to_duration_record(value: f64) -> Vec<f64> {
     if !normalized.is_finite() || normalized.abs() >= 9_007_199_254_740_992.0 {
         throw_range_error("Intl.DurationFormat.format: duration out of range");
     }
-    vals
 }
 
-// ---- format / formatToParts (deterministic English rendering) --------------
-
-/// English unit label for `(unit, style)`, pluralized by `n`. Used only by the
-/// data-free fallback rendering.
-fn unit_label(unit: &str, style: &str, n: f64) -> String {
-    let plural = n.abs() != 1.0;
-    let base = unit.strip_suffix('s').unwrap_or(unit); // "years" -> "year"
-    match style {
-        "long" => {
-            if plural {
-                format!("{base}s")
-            } else {
-                base.to_string()
-            }
+/// Parse an ISO-8601 / `Temporal.Duration` string (`±P[nY][nM][nW][nD][T[nH][nM][nS]]`,
+/// designators case-insensitive, fraction allowed on the final time component) into
+/// the ten unit values. Returns `None` for any structural deviation. Fractional
+/// seconds split into milli/micro/nanoseconds.
+fn parse_iso_duration(s: &str) -> Option<Vec<f64>> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let sign = match bytes.first() {
+        Some(b'+') => {
+            i += 1;
+            1.0
         }
-        _ => {
-            // short / narrow abbreviations
-            let abbr = match base {
-                "year" => "yr",
-                "month" => "mth",
-                "week" => "wk",
-                "day" => "day",
-                "hour" => "hr",
-                "minute" => "min",
-                "second" => "sec",
-                "millisecond" => "ms",
-                "microsecond" => "μs",
-                "nanosecond" => "ns",
-                other => other,
-            };
-            abbr.to_string()
+        Some(b'-') => {
+            i += 1;
+            -1.0
         }
+        _ => 1.0,
+    };
+    if bytes.get(i).map(|b| b.to_ascii_uppercase()) != Some(b'P') {
+        return None;
     }
-}
+    i += 1;
 
-/// Build the rendered segments for a validated duration. Best-effort English;
-/// the concatenation is what `format` returns and `formatToParts` mirrors.
-fn render(obj: *const ObjectHeader, vals: &[f64]) -> Vec<(&'static str, String)> {
-    let mut pieces: Vec<String> = Vec::new();
-    for (i, (unit, _, _)) in UNITS.iter().copied().enumerate() {
-        let n = vals[i];
-        let display =
-            get_string_field(obj, &display_key(unit)).unwrap_or_else(|| "auto".to_string());
-        if n == 0.0 && display == "auto" {
+    // years, months, weeks, days, hours, minutes, seconds, ms, us, ns
+    let mut vals = [0.0f64; 10];
+    let mut any = false;
+    let mut in_time = false;
+    // Track which designators are allowed to appear (monotonic order).
+    let mut date_idx = 0usize; // 0=Y,1=M,2=W,3=D
+    let mut time_idx = 0usize; // 0=H,1=M,2=S
+
+    while i < bytes.len() {
+        let c = bytes[i].to_ascii_uppercase();
+        if c == b'T' {
+            if in_time {
+                return None;
+            }
+            in_time = true;
+            i += 1;
+            // T must be followed by at least one time component.
+            if i >= bytes.len() {
+                return None;
+            }
             continue;
         }
-        let style = get_string_field(obj, &style_key(unit)).unwrap_or_else(|| "short".to_string());
-        if style == "numeric" || style == "2-digit" {
-            pieces.push(format!("{}", n as i64));
+        // Read a number (digits, optionally a fraction for the final time component).
+        let num_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let int_str = &s[num_start..i];
+        let mut frac_str: &str = "";
+        if i < bytes.len() && (bytes[i] == b'.' || bytes[i] == b',') {
+            i += 1;
+            let frac_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            frac_str = &s[frac_start..i];
+            if frac_str.is_empty() {
+                return None;
+            }
+        }
+        if int_str.is_empty() {
+            return None;
+        }
+        let int_val: f64 = int_str.parse().ok()?;
+        let designator = *bytes.get(i)?;
+        i += 1;
+        let has_frac = !frac_str.is_empty();
+        any = true;
+
+        if !in_time {
+            // Date designators in strict order: Y < M < W < D.
+            let target = match designator {
+                b'Y' | b'y' => 0,
+                b'M' | b'm' => 1,
+                b'W' | b'w' => 2,
+                b'D' | b'd' => 3,
+                _ => return None,
+            };
+            if target < date_idx || has_frac {
+                return None;
+            }
+            date_idx = target + 1;
+            vals[target] = int_val;
         } else {
-            pieces.push(format!("{} {}", n as i64, unit_label(unit, &style, n)));
+            // Time designators in strict order: H < M < S. Fraction only on the last.
+            match designator {
+                b'H' | b'h' => {
+                    if time_idx > 0 || has_frac {
+                        return None;
+                    }
+                    time_idx = 1;
+                    vals[4] = int_val;
+                }
+                b'M' | b'm' => {
+                    if time_idx > 1 || has_frac {
+                        return None;
+                    }
+                    time_idx = 2;
+                    vals[5] = int_val;
+                }
+                b'S' | b's' => {
+                    if time_idx > 2 {
+                        return None;
+                    }
+                    time_idx = 3;
+                    vals[6] = int_val;
+                    if has_frac {
+                        // Pad/truncate fraction to 9 digits, split 3/3/3.
+                        let mut frac = frac_str.to_string();
+                        frac.truncate(9);
+                        while frac.len() < 9 {
+                            frac.push('0');
+                        }
+                        vals[7] = frac[0..3].parse::<f64>().ok()?;
+                        vals[8] = frac[3..6].parse::<f64>().ok()?;
+                        vals[9] = frac[6..9].parse::<f64>().ok()?;
+                    }
+                }
+                _ => return None,
+            }
         }
     }
-    let joined = pieces.join(", ");
-    vec![("literal", joined)]
+    // A lone `T` with nothing after, or `P` with no components, is invalid.
+    if !any {
+        return None;
+    }
+    for v in vals.iter_mut() {
+        *v *= sign;
+    }
+    Some(vals.to_vec())
+}
+
+// ---- format / formatToParts (PartitionDurationFormatPattern) ---------------
+
+/// One emitted part: a NumberFormat/ListFormat segment plus the singular unit it
+/// belongs to (for `formatToParts`; list separators carry no unit).
+struct DfPart {
+    ty: &'static str,
+    value: String,
+    unit: Option<&'static str>,
+}
+
+/// `durationToFractional(duration, exponent)` from the spec helper: combine the
+/// sub-second units at or below `exponent` into a single decimal seconds/ms/µs value.
+/// Mirrors the reference's integer-division string construction (so a zero integer
+/// part drops the sign, exactly as `${q}.${r}` does).
+fn duration_to_fractional(vals: &[f64], exponent: u32) -> f64 {
+    let (sec, ms, us, ns) = (vals[6], vals[7], vals[8], vals[9]);
+    match exponent {
+        9 if ms == 0.0 && us == 0.0 && ns == 0.0 => return sec,
+        6 if us == 0.0 && ns == 0.0 => return ms,
+        3 if ns == 0.0 => return us,
+        _ => {}
+    }
+    let mut total: i128 = ns as i128;
+    if exponent == 9 {
+        total += (sec as i128) * 1_000_000_000;
+    }
+    if exponent >= 6 {
+        total += (ms as i128) * 1_000_000;
+    }
+    if exponent >= 3 {
+        total += (us as i128) * 1_000;
+    }
+    let e: i128 = 10i128.pow(exponent);
+    let q = total / e;
+    let r = (total % e).unsigned_abs();
+    let frac = format!("{:0width$}", r, width = exponent as usize);
+    format!("{q}.{frac}").parse::<f64>().unwrap_or(0.0)
+}
+
+/// Index of `unit`'s successor in `UNITS`, used to peek the next unit's resolved
+/// style for the sub-second fractional combination.
+fn next_style(obj: *const ObjectHeader, idx: usize) -> String {
+    UNITS
+        .get(idx + 1)
+        .and_then(|(u, _, _)| get_string_field(obj, &style_key(u)))
+        .unwrap_or_default()
+}
+
+/// `PartitionDurationFormatPattern`: render the validated duration to a flat part
+/// list. Routes every numeric value through [`super::number_parts_from_resolved`] and
+/// joins the per-unit strings with [`super::list_format_parts`].
+fn partition(obj: *const ObjectHeader, vals: &[f64]) -> Vec<DfPart> {
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    let numbering = get_string_field(obj, KEY_DF_NUMBERING).unwrap_or_else(|| "latn".to_string());
+    let base_style = get_string_field(obj, KEY_DF_STYLE).unwrap_or_else(|| "short".to_string());
+    let fractional_digits = get_number_field(obj, KEY_DF_FRACTIONAL).map(|n| n as u32);
+
+    let mut result: Vec<Vec<DfPart>> = Vec::new();
+    let mut need_separator = false;
+    let mut display_negative_sign = true;
+
+    for (idx, (unit, _, _)) in UNITS.iter().copied().enumerate() {
+        let mut value = vals[idx];
+        let style = get_string_field(obj, &style_key(unit)).unwrap_or_else(|| "short".to_string());
+        let display =
+            get_string_field(obj, &display_key(unit)).unwrap_or_else(|| "auto".to_string());
+        let nf_unit = UNIT_SINGULAR[idx];
+
+        let mut r = super::nf_resolved_default(&locale);
+        r.numbering_system = numbering.clone();
+
+        // Numeric seconds and sub-seconds combine into one fractional value.
+        let mut done = false;
+        if matches!(unit, "seconds" | "milliseconds" | "microseconds")
+            && next_style(obj, idx) == "numeric"
+        {
+            let exponent = match unit {
+                "seconds" => 9,
+                "milliseconds" => 6,
+                _ => 3,
+            };
+            value = duration_to_fractional(vals, exponent);
+            r.max_frac = fractional_digits.unwrap_or(9);
+            r.min_frac = fractional_digits.unwrap_or(0);
+            r.rounding_mode = "trunc".to_string();
+            done = true;
+        }
+
+        // Display zero numeric minutes when seconds will be displayed.
+        let mut display_required = false;
+        if unit == "minutes" && need_separator {
+            let seconds_display = get_string_field(obj, &display_key("seconds"))
+                .unwrap_or_else(|| "auto".to_string());
+            display_required = seconds_display == "always"
+                || vals[6] != 0.0
+                || vals[7] != 0.0
+                || vals[8] != 0.0
+                || vals[9] != 0.0;
+        }
+
+        if value != 0.0 || display != "auto" || display_required {
+            // Only the first displayed value shows the duration sign.
+            if display_negative_sign {
+                display_negative_sign = false;
+                if value == 0.0 && vals.iter().any(|v| *v < 0.0) {
+                    value = -0.0;
+                }
+            } else {
+                r.sign_display = "never".to_string();
+            }
+
+            if style == "2-digit" {
+                r.min_int = 2;
+            }
+            if style != "numeric" && style != "2-digit" {
+                r.style = "unit".to_string();
+                r.unit = Some(nf_unit.to_string());
+                r.unit_display = style.clone();
+            } else {
+                r.use_grouping = "false".to_string();
+            }
+
+            let nf_parts = super::number_parts_from_resolved(&r, value);
+
+            if !need_separator {
+                let list: Vec<DfPart> = nf_parts
+                    .into_iter()
+                    .map(|(ty, v)| DfPart {
+                        ty,
+                        value: v,
+                        unit: Some(nf_unit),
+                    })
+                    .collect();
+                if style == "2-digit" || style == "numeric" {
+                    need_separator = true;
+                }
+                result.push(list);
+            } else if let Some(list) = result.last_mut() {
+                list.push(DfPart {
+                    ty: "literal",
+                    value: ":".to_string(),
+                    unit: None,
+                });
+                for (ty, v) in nf_parts {
+                    list.push(DfPart {
+                        ty,
+                        value: v,
+                        unit: Some(nf_unit),
+                    });
+                }
+            }
+        }
+
+        if done {
+            break;
+        }
+    }
+
+    let mut list_style = base_style;
+    if list_style == "digital" {
+        list_style = "short".to_string();
+    }
+    let strings: Vec<String> = result
+        .iter()
+        .map(|parts| parts.iter().map(|p| p.value.as_str()).collect())
+        .collect();
+    let lf_parts = super::list_format_parts(&strings, "unit", &list_style);
+
+    let mut flattened: Vec<DfPart> = Vec::new();
+    let mut elem = 0usize;
+    for (ty, val) in lf_parts {
+        if ty == "element" {
+            if let Some(parts) = result.get_mut(elem) {
+                flattened.append(parts);
+            }
+            elem += 1;
+        } else {
+            flattened.push(DfPart {
+                ty,
+                value: val,
+                unit: None,
+            });
+        }
+    }
+    flattened
+}
+
+/// Convert duration parts into the `formatToParts` JS array (`{ type, value, unit? }`).
+fn df_parts_to_js_array(parts: &[DfPart]) -> f64 {
+    let mut arr = js_array_alloc(parts.len() as u32);
+    for part in parts {
+        let obj = js_object_alloc(0, 3);
+        set_field(obj, "type", string_value(part.ty));
+        set_field(obj, "value", string_value(&part.value));
+        if let Some(unit) = part.unit {
+            set_field(obj, "unit", string_value(unit));
+        }
+        arr = js_array_push_f64(arr, js_nanbox_pointer(obj as i64));
+    }
+    js_nanbox_pointer(arr as i64)
 }
 
 fn format_value(obj: *const ObjectHeader, duration: f64) -> f64 {
     let vals = to_duration_record(duration);
-    let parts = render(obj, &vals);
-    string_value(&parts.iter().map(|(_, v)| v.as_str()).collect::<String>())
-}
-
-extern "C" fn bound_format_thunk(closure: *const ClosureHeader, duration: f64) -> f64 {
-    let obj = captured_intl_object(closure, "format", super::KIND_DURATION_FORMAT);
-    format_value(obj, duration)
+    let parts = partition(obj, &vals);
+    string_value(&parts.iter().map(|p| p.value.as_str()).collect::<String>())
 }
 
 pub(super) extern "C" fn format_thunk(_closure: *const ClosureHeader, duration: f64) -> f64 {
@@ -454,19 +804,17 @@ pub(super) extern "C" fn format_thunk(_closure: *const ClosureHeader, duration: 
     format_value(obj, duration)
 }
 
-extern "C" fn bound_to_parts_thunk(closure: *const ClosureHeader, duration: f64) -> f64 {
-    let obj = captured_intl_object(closure, "formatToParts", super::KIND_DURATION_FORMAT);
-    let vals = to_duration_record(duration);
-    parts_to_js_array(&render(obj, &vals))
-}
-
 pub(super) extern "C" fn to_parts_thunk(_closure: *const ClosureHeader, duration: f64) -> f64 {
     let obj = this_intl_object("formatToParts", super::KIND_DURATION_FORMAT);
     let vals = to_duration_record(duration);
-    parts_to_js_array(&render(obj, &vals))
+    df_parts_to_js_array(&partition(obj, &vals))
 }
 
 pub(super) extern "C" fn constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+    // `Intl.DurationFormat` is `[[Construct]]`-only: a bare call is a TypeError.
+    if crate::object::js_new_target_get().to_bits() == crate::value::TAG_UNDEFINED {
+        throw_type_error("Constructor Intl.DurationFormat requires 'new'");
+    }
     super::make_instance(
         closure,
         super::KIND_DURATION_FORMAT,

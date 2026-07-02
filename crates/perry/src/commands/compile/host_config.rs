@@ -931,6 +931,87 @@ pub(super) fn apply_pkg_and_toml_config(
                     );
                 }
             }
+
+            // --- [ads] config parsing (issue #867) ---
+            //
+            // Shape:
+            //
+            //     [ads]
+            //     ios_app_id     = "ca-app-pub-XXXX~YYYY"
+            //     android_app_id = "ca-app-pub-XXXX~ZZZZ"
+            //     test_device_ids = ["DEVICE_HASH"]
+            //     request_non_personalized_ads_only = false
+            //     att_usage_description = "We use your data to show relevant ads."
+            //
+            // The Google Mobile Ads SDK requires the per-platform App ID to be
+            // present in the host manifest *before* the app launches:
+            //   - iOS / Mac Catalyst: `inject_ads_info_plist` writes
+            //     `GADApplicationIdentifier` (and, when `att_usage_description`
+            //     is set, `NSUserTrackingUsageDescription` so the ATT prompt
+            //     can be shown) into the generated Info.plist.
+            //   - Android: `inject_ads_android_manifest` writes a
+            //     `<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID">`
+            //     element under `<application>` in AndroidManifest.xml.
+            // We validate types up front so a typo (`ios_app_id = 42`) fails at
+            // compile time rather than crashing the SDK's `start()` at launch.
+            if let Some(ads) = doc.get("ads").and_then(|v| v.as_table()) {
+                fn warn_non_string(key: &str, ads: &toml::Table) {
+                    if let Some(v) = ads.get(key) {
+                        if v.as_str().is_none() {
+                            eprintln!(
+                                "  Warning: perry.toml [ads].{} must be a string (got {:?}); ignoring.",
+                                key,
+                                v.type_str()
+                            );
+                        }
+                    }
+                }
+                fn warn_non_bool(key: &str, ads: &toml::Table) {
+                    if let Some(v) = ads.get(key) {
+                        if v.as_bool().is_none() {
+                            eprintln!(
+                                "  Warning: perry.toml [ads].{} must be a boolean (got {:?}); ignoring.",
+                                key,
+                                v.type_str()
+                            );
+                        }
+                    }
+                }
+                warn_non_string("ios_app_id", ads);
+                warn_non_string("android_app_id", ads);
+                warn_non_string("att_usage_description", ads);
+                warn_non_bool("request_non_personalized_ads_only", ads);
+
+                if let Some(ids) = ads.get("test_device_ids") {
+                    match ids.as_array() {
+                        Some(arr) => {
+                            for (i, item) in arr.iter().enumerate() {
+                                if item.as_str().is_none() {
+                                    eprintln!(
+                                        "  Warning: perry.toml [ads].test_device_ids[{}] must be a string (got {:?}); ignoring.",
+                                        i,
+                                        item.type_str()
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            eprintln!(
+                                "  Warning: perry.toml [ads].test_device_ids must be an array of strings (got {:?}); ignoring.",
+                                ids.type_str()
+                            );
+                        }
+                    }
+                }
+
+                if let OutputFormat::Text = format {
+                    let configured = ["ios_app_id", "android_app_id"]
+                        .iter()
+                        .filter(|k| ads.get(**k).and_then(|v| v.as_str()).is_some())
+                        .count();
+                    println!("  ads: {} app id(s) configured (#867)", configured);
+                }
+            }
         }
     }
 

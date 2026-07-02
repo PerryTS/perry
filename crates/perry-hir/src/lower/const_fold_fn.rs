@@ -29,6 +29,9 @@ use crate::eval_classifier::{const_string_of, eval_diag_enabled, EvalSurface};
 use crate::ir::Expr;
 
 use super::expr_function::lower_fn_expr;
+use super::global_eval_hoist::{
+    apply_function_eval_hoist, apply_global_eval_hoist, collect_nested_fn_decl_names,
+};
 use super::lower_expr::lower_expr;
 use super::LoweringContext;
 
@@ -306,6 +309,26 @@ pub(crate) fn try_const_fold_function_construct_kind(
         // `new Function()` / `Function()` — empty params, empty body.
         None => (String::new(), String::new()),
     };
+
+    // CSP capability-probe handling (`PERRY_EVAL_CSP`). A trivial no-op
+    // `new Function("")` / `Function("")` is the canonical runtime-codegen
+    // feature-test (`try { new Function(""), true } catch { false }`). perry is
+    // ahead-of-time compiled and cannot generate code from a runtime string, so
+    // under CSP mode this probe must report "unavailable" — throw at
+    // *construction* (not when called), exactly as a CSP `unsafe-eval`-blocked
+    // environment does — so probing callers (e.g. zod 4's validator JIT) take
+    // their non-codegen interpreter fallback. Only the trivial empty-body no-op
+    // is refused; real literal bodies (`return 42`, the `return this` globalThis
+    // polyfill) still fold, preserving spec behavior by default.
+    if body_src.trim().is_empty() && crate::eval_classifier::eval_csp_probe_unavailable() {
+        return synth_throwing_iife(
+            ctx,
+            "throw new TypeError(\"Function: runtime dynamic code generation is \
+             unavailable in this ahead-of-time compiled binary\");",
+            span,
+        )
+        .map(Some);
+    }
 
     // Assemble the exact source text the spec's CreateDynamicFunction
     // prescribes: newlines around the body and *before the closing paren*
@@ -729,17 +752,258 @@ pub(crate) fn try_indirect_eval_general(
     if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts) {
         return Ok(Some(throw));
     }
-    // Do NOT model value-producing execution here. Indirect eval runs as global
-    // code: its body sees only the *global* environment, not any enclosing
-    // module/function bindings. A completion-tracking IIFE necessarily captures
-    // the enclosing scope, so it would wrongly resolve module-scoped `var`s that
-    // are invisible to real global eval (e.g. `(0,eval)("y = x")` must throw
-    // ReferenceError when `x` is a module-local) and wrongly persist `var`/
-    // function/class declarations that belong in the global var environment.
-    // Defer all valid bodies to the runtime global-`eval` thunk. (Only the
-    // parse-/early-error SyntaxError cases above are modeled at compile time.)
+    // Indirect eval runs as *global* code: its body sees only the global
+    // environment, never any enclosing module/function bindings. A completion-
+    // tracking IIFE captures the *enclosing* scope, so it only matches global
+    // eval semantics where the enclosing scope already IS the global scope:
+    // module top level (`scope_depth == 0`, no `with` / ESM)
+    // under global-script mode, where module-top `var`s/functions and `this`
+    // are the global bindings (#5608/#5609). There, fold the body to the shared
+    // completion-value IIFE so `(0,eval)('x = 1')` mutates the global `x` and
+    // yields its completion value (test262 language/eval-code/indirect/
+    // cptn-nrml-expr-*, always-non-strict). The wrapper runs sloppy unless the
+    // body opens with its own Use Strict Directive — indirect eval never
+    // inherits the caller's strictness.
+    //
+    // Anywhere else (nested scope, or default CJS mode), capturing the
+    // enclosing scope would wrongly resolve module/function-locals that real
+    // global eval cannot see, so defer those to the runtime global-`eval`
+    // thunk. (Only the parse-/early-error SyntaxError cases above are modeled.)
+    let module_top_global = eval_is_module_top_global(ctx);
+    // A scope-capturing IIFE places any `var`/`function`/`class`/`let`/`const`
+    // the body declares inside the wrapper, but real global eval routes them to
+    // the global var environment (`var`/`function`) or the eval's own fresh
+    // lexical environment (`let`/`const`/`class`). A declaration-free body has no
+    // such binding to misplace; it only reads/assigns the globals it names,
+    // which the IIFE resolves correctly.
+    if module_top_global && !eval_body_declares_bindings(&body_stmts) {
+        let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
+        return build_eval_completion_iife(ctx, body_stmts, eval_strict, span);
+    }
+    if module_top_global {
+        let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
+        // Annex B.3.3.3: a *sloppy* global (indirect) eval whose body declares
+        // `var`/`function` bindings hoists them into the global variable
+        // environment. Rewrite those to global assignments and fold; the rewrite
+        // bails (→ falls through below) on a `class` declaration — which Perry
+        // would otherwise register at module scope, leaking it past the eval
+        // (test262 language/eval-code/indirect/lex-env-distinct-cls expects it to
+        // stay invisible). Strict eval keeps its own variable environment, which
+        // the completion IIFE already models, so it skips the hoist.
+        if !eval_strict {
+            if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+                return build_eval_completion_iife(ctx, hoisted, false, span);
+            }
+        }
+        // No nested function to hoist (top-level declarations only, or a strict
+        // body). Still fold the body to the completion IIFE so it runs for its
+        // side effects and yields its ECMAScript completion value — the runtime
+        // eval thunk otherwise returns `undefined` *without executing the body*,
+        // dropping both. Guarded by `eval_body_iife_foldable`, which keeps a
+        // class-declaring body on the runtime thunk (the class would leak to
+        // module scope when lowered in the IIFE). (test262 language/eval-code/
+        // indirect/cptn-nrml-* with declarations, var-env-var-* completion.)
+        if eval_body_iife_foldable(&body_stmts) {
+            return build_eval_completion_iife(ctx, body_stmts, eval_strict, span);
+        }
+    }
+    // Even when not at module top (e.g. inside a callback passed to
+    // `assert.throws`), a declaration-bearing body in global-script mode can
+    // still be folded via `apply_global_eval_hoist` — IF the body contains no
+    // var declarations with initializers. When a var has an initializer, the
+    // hoisted rewrite emits a bare `name = init` assignment that would wrongly
+    // capture an enclosing function-local of the same name rather than the
+    // global. Function/generator declarations and init-free vars are safe: their
+    // hoisted prelude exclusively uses `Object.defineProperty(globalThis, …)` /
+    // `globalThis["name"] = void 0` and never resolves through the local scope.
+    //
+    // This handles `(0,eval)("function NaN(){}")` from inside a nested function:
+    // the hoisted body throws a TypeError via `CanDeclareGlobalFunction`
+    // (test262 `*/non-definable-global-{function,generator,var}`).
+    if !module_top_global
+        && super::lower_expr::global_script_this_enabled()
+        && eval_body_no_var_initializers(&body_stmts)
+    {
+        let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
+        if !eval_strict {
+            if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+                return build_eval_completion_iife(ctx, hoisted, false, span);
+            }
+        }
+    }
     let _ = span;
     Ok(None)
+}
+
+/// Does an (indirect) eval body declare any binding — `var` / `function` /
+/// `class` / `let` / `const` / `using` — anywhere within it? Scans recursively
+/// through every statement form that can nest a declaration (a `var`/`function`
+/// hoists out of blocks, loops, `try`, `switch`, `with`, labeled and `if`
+/// statements), so the answer is conservative: a `true` defers the fold.
+fn eval_body_declares_bindings(stmts: &[ast::Stmt]) -> bool {
+    stmts.iter().any(stmt_declares_binding)
+}
+
+fn stmt_declares_binding(stmt: &ast::Stmt) -> bool {
+    use ast::Stmt;
+    match stmt {
+        Stmt::Decl(_) => true,
+        Stmt::Block(b) => eval_body_declares_bindings(&b.stmts),
+        Stmt::Labeled(l) => stmt_declares_binding(&l.body),
+        Stmt::If(i) => {
+            stmt_declares_binding(&i.cons) || i.alt.as_deref().is_some_and(stmt_declares_binding)
+        }
+        Stmt::For(f) => {
+            matches!(&f.init, Some(ast::VarDeclOrExpr::VarDecl(_)))
+                || stmt_declares_binding(&f.body)
+        }
+        Stmt::ForIn(f) => {
+            matches!(
+                &f.left,
+                ast::ForHead::VarDecl(_) | ast::ForHead::UsingDecl(_)
+            ) || stmt_declares_binding(&f.body)
+        }
+        Stmt::ForOf(f) => {
+            matches!(
+                &f.left,
+                ast::ForHead::VarDecl(_) | ast::ForHead::UsingDecl(_)
+            ) || stmt_declares_binding(&f.body)
+        }
+        Stmt::While(w) => stmt_declares_binding(&w.body),
+        Stmt::DoWhile(d) => stmt_declares_binding(&d.body),
+        Stmt::With(w) => stmt_declares_binding(&w.body),
+        Stmt::Try(t) => {
+            eval_body_declares_bindings(&t.block.stmts)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| eval_body_declares_bindings(&h.body.stmts))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| eval_body_declares_bindings(&f.stmts))
+        }
+        Stmt::Switch(s) => s.cases.iter().any(|c| eval_body_declares_bindings(&c.cons)),
+        // Statements that cannot introduce a binding. Listed explicitly (no
+        // `_` catch-all) so a future `ast::Stmt` variant that *can* nest a
+        // declaration is a compile error here rather than a silent miss.
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
+    }
+}
+
+/// Is an eval body safe to fold via [`apply_global_eval_hoist`] from a *nested*
+/// (non-module-top) scope? The hoisted rewrite emits a bare `name = init`
+/// assignment for `var` declarations that have an initializer, which would
+/// capture an enclosing function-local of the same name rather than the global.
+/// Var declarations without initializers and function/generator declarations
+/// only produce `globalThis.*` writes, so they are safe from nested scopes.
+fn eval_body_no_var_initializers(stmts: &[ast::Stmt]) -> bool {
+    !stmts.iter().any(stmt_has_var_with_initializer)
+}
+
+fn stmt_has_var_with_initializer(stmt: &ast::Stmt) -> bool {
+    use ast::Stmt;
+    match stmt {
+        Stmt::Decl(ast::Decl::Var(v)) => {
+            matches!(v.kind, ast::VarDeclKind::Var) && v.decls.iter().any(|d| d.init.is_some())
+        }
+        Stmt::Decl(_) => false,
+        Stmt::Block(b) => b.stmts.iter().any(stmt_has_var_with_initializer),
+        Stmt::Labeled(l) => stmt_has_var_with_initializer(&l.body),
+        Stmt::If(i) => {
+            stmt_has_var_with_initializer(&i.cons)
+                || i.alt.as_deref().is_some_and(stmt_has_var_with_initializer)
+        }
+        Stmt::For(f) => {
+            matches!(
+                &f.init,
+                Some(ast::VarDeclOrExpr::VarDecl(v)) if v.decls.iter().any(|d| d.init.is_some())
+            ) || stmt_has_var_with_initializer(&f.body)
+        }
+        Stmt::ForIn(f) => stmt_has_var_with_initializer(&f.body),
+        Stmt::ForOf(f) => stmt_has_var_with_initializer(&f.body),
+        Stmt::While(w) => stmt_has_var_with_initializer(&w.body),
+        Stmt::DoWhile(d) => stmt_has_var_with_initializer(&d.body),
+        Stmt::With(w) => stmt_has_var_with_initializer(&w.body),
+        Stmt::Try(t) => {
+            t.block.stmts.iter().any(stmt_has_var_with_initializer)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.stmts.iter().any(stmt_has_var_with_initializer))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.stmts.iter().any(stmt_has_var_with_initializer))
+        }
+        Stmt::Switch(s) => s
+            .cases
+            .iter()
+            .any(|c| c.cons.iter().any(stmt_has_var_with_initializer)),
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
+    }
+}
+
+/// Can a declaration-bearing (indirect) eval body be folded to the completion
+/// IIFE — executing it for its side effects and completion value — without an
+/// observably wrong result? The one disqualifier is a *class declaration*: Perry
+/// registers class names at module scope when lowering them inside the IIFE,
+/// which would leak the class past the eval (real global eval discards the
+/// eval's own lexical environment, so the class is invisible afterward — test262
+/// `language/eval-code/indirect/lex-env-distinct-cls`). `var`/`function` only
+/// fail to *publish* to the global var environment (trapped as arrow-locals),
+/// which is no worse than the runtime thunk not executing the body at all; and
+/// `let`/`const` correctly stay arrow-local (matching the eval's fresh, discarded
+/// lexical environment). Scans recursively, mirroring [`stmt_declares_binding`].
+fn eval_body_iife_foldable(stmts: &[ast::Stmt]) -> bool {
+    !stmts.iter().any(stmt_has_class_decl)
+}
+
+fn stmt_has_class_decl(stmt: &ast::Stmt) -> bool {
+    use ast::Stmt;
+    match stmt {
+        Stmt::Decl(ast::Decl::Class(_)) => true,
+        Stmt::Decl(_) => false,
+        Stmt::Block(b) => b.stmts.iter().any(stmt_has_class_decl),
+        Stmt::Labeled(l) => stmt_has_class_decl(&l.body),
+        Stmt::If(i) => {
+            stmt_has_class_decl(&i.cons) || i.alt.as_deref().is_some_and(stmt_has_class_decl)
+        }
+        Stmt::For(f) => stmt_has_class_decl(&f.body),
+        Stmt::ForIn(f) => stmt_has_class_decl(&f.body),
+        Stmt::ForOf(f) => stmt_has_class_decl(&f.body),
+        Stmt::While(w) => stmt_has_class_decl(&w.body),
+        Stmt::DoWhile(d) => stmt_has_class_decl(&d.body),
+        Stmt::With(w) => stmt_has_class_decl(&w.body),
+        Stmt::Try(t) => {
+            t.block.stmts.iter().any(stmt_has_class_decl)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.stmts.iter().any(stmt_has_class_decl))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.stmts.iter().any(stmt_has_class_decl))
+        }
+        Stmt::Switch(s) => s
+            .cases
+            .iter()
+            .any(|c| c.cons.iter().any(stmt_has_class_decl)),
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
+    }
 }
 
 pub(crate) fn try_indirect_eval_globalthis(
@@ -794,9 +1058,15 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
         && ctx.current_class.is_none()
         && ctx.with_env_stack.is_empty()
         && !ctx.is_external_module;
+    // In global-script mode the module top-level `this` IS `globalThis`, so a
+    // direct `eval('this')` must fold to the same — keeping `eval('this') ===
+    // this` true under a conforming Test262 host (#5579). See `lower_expr`'s
+    // `ast::Expr::This` arm for the matching default-vs-script split.
+    let module_top_this_global = module_top_this && super::lower_expr::global_script_this_enabled();
     if let Some(normalized) = normalize_eval_this_body(&body) {
         return match normalized.as_str() {
             "globalThis" => Some(Expr::GlobalThisExpr),
+            "this" if module_top_this_global => Some(Expr::GlobalThisExpr),
             "this" if module_top_this => Some(Expr::ModuleTopThis),
             "this" if ctx.current_strict && ctx.scope_depth > 0 => Some(Expr::Undefined),
             "this" => Some(Expr::This),
@@ -1385,7 +1655,58 @@ fn try_const_fold_eval(
     // plain assignment. (test262 language/eval-code/direct/strictness-override)
     let eval_strict = ctx.current_strict || crate::lower_decl::body_has_use_strict(&body_stmts);
 
+    // Annex B.3.3.3: a *sloppy global* direct eval routes the `var`/`function`
+    // declarations of its body into the global variable environment, so they
+    // survive after the eval returns. Rewrite them to global assignments before
+    // folding (otherwise the completion IIFE traps them as arrow-locals). Strict
+    // eval keeps its own variable environment (the IIFE already models that).
+    if !eval_strict && eval_is_module_top_global(ctx) {
+        if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+            return build_eval_completion_iife(ctx, hoisted, eval_strict, span);
+        }
+    }
+
+    // Annex B.3.3.3 (direct eval *inside a function*): a sloppy direct eval
+    // routes its body's var-scoped declarations into the enclosing function's
+    // variable environment. The completion IIFE already creates a fresh
+    // function-scope binding for a block function whose name is new — but when
+    // that name already binds in the enclosing function (a parameter or outer
+    // `var`), the IIFE's fresh binding wrongly shadows it, so the body reads
+    // `undefined` instead of the pre-existing value (test262 annexB
+    // `.../func-*-eval-func-no-skip-param`). Republish those nested functions to
+    // the enclosing binding. Limited to nested function names actually bound in
+    // the enclosing scope, so a brand-new binding keeps the IIFE's (correct)
+    // fresh slot rather than leaking a sloppy global.
+    if !eval_strict && !eval_is_module_top_global(ctx) && ctx.with_env_stack.is_empty() {
+        let bound: std::collections::HashSet<String> = collect_nested_fn_decl_names(&body_stmts)
+            .into_iter()
+            .filter(|n| ctx.locals.lookup(n).is_some())
+            .collect();
+        if let Some(hoisted) = apply_function_eval_hoist(&body_stmts, bound) {
+            return build_eval_completion_iife(ctx, hoisted, eval_strict, span);
+        }
+    }
+
     build_eval_completion_iife(ctx, body_stmts, eval_strict, span)
+}
+
+/// Is the current eval call site at module top level in global-script mode,
+/// where the enclosing variable environment *is* the global object — the only
+/// place the Annex B.3.3.3 global var-scoped hoisting ([`apply_global_eval_hoist`])
+/// applies? (Mirrors the `module_top_this`/`module_top_global` guards.)
+fn eval_is_module_top_global(ctx: &LoweringContext) -> bool {
+    // `current_class` may be set when we are inside a class field initializer
+    // that is at module top level (`scope_depth == 0`). That context does not
+    // create a new variable environment — the enclosing scope is still the
+    // global scope in global-script mode. Class methods do enter their own
+    // scope (scope_depth >= 1), so they are excluded by the scope_depth check.
+    // Declaration-free bodies (checked by the caller) have no bindings to
+    // misplace, so the IIFE captures only global reads/writes — correct for
+    // global indirect eval semantics (#5592).
+    super::lower_expr::global_script_this_enabled()
+        && ctx.scope_depth == 0
+        && ctx.with_env_stack.is_empty()
+        && !ctx.is_external_module
 }
 
 /// Build the completion-tracking IIFE that runs an eval body AOT and yields its
@@ -1451,4 +1772,64 @@ fn build_eval_completion_iife(
         type_args: vec![],
         byte_offset: 0,
     }))
+}
+
+#[cfg(test)]
+mod foldable_tests {
+    use super::eval_body_iife_foldable;
+    use swc_ecma_ast as ast;
+
+    fn parse(src: &str) -> Vec<ast::Stmt> {
+        perry_parser::parse_typescript(src, "<eval body>.cjs")
+            .expect("parses")
+            .body
+            .into_iter()
+            .filter_map(|item| match item {
+                ast::ModuleItem::Stmt(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn declaration_bearing_non_class_bodies_are_foldable() {
+        // The bodies that regressed to `undefined` because they declare a
+        // binding (so the declaration-free fast path skipped them) yet have no
+        // nested function to hoist — now fold to the completion IIFE.
+        for src in [
+            "var a = 1; 42",
+            "initial = x; var x = 9;",
+            "let y = 2; y + 1",
+            "const z = 3; ({})",
+            "{ var nested; } 7",
+            "for (var i = 0; i < 1; i++) {} 5",
+            "'use strict'; var s = 1; s",
+        ] {
+            assert!(
+                eval_body_iife_foldable(&parse(src)),
+                "expected foldable: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn class_declaring_bodies_are_not_foldable() {
+        // A class declaration (top-level or nested) would leak to module scope
+        // when lowered in the IIFE, so it stays on the runtime thunk.
+        for src in [
+            "class C {}",
+            "{ class C {} }",
+            "if (true) { class C {} }",
+            "switch (1) { case 1: class C {} }",
+            "try { class C {} } catch (e) {}",
+        ] {
+            assert!(
+                !eval_body_iife_foldable(&parse(src)),
+                "expected NOT foldable: {src:?}"
+            );
+        }
+        // A class *expression* binds through `var`/`let` (no module-scope
+        // registration) and stays foldable.
+        assert!(eval_body_iife_foldable(&parse("var x = class {}; x")));
+    }
 }

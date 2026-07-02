@@ -4,9 +4,42 @@
 //! repository's 2,000-line lint gate.
 
 use super::*;
+use std::cell::Cell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+thread_local! {
+    /// The `signal` from the in-progress `fetch(url, { signal })` call, stashed
+    /// so the stdlib `js_fetch_with_options` (whose 4-arg ABI predates
+    /// AbortSignal support) can pick it up at entry without an ABI change.
+    static PENDING_FETCH_SIGNAL: Cell<f64> =
+        const { Cell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+}
+
+/// Stash the `signal` for the fetch call about to be dispatched. Set on the main
+/// thread immediately before the fetch call and consumed at the start of
+/// `js_fetch_with_options` — JS is single-threaded between those two points, so
+/// there is no interleaving with another fetch. The runtime
+/// `global_this_fetch_thunk` calls this for the dynamic/aliased fetch path; the
+/// codegen `fetch(url, {static init})` fast path can emit it too.
+#[no_mangle]
+pub extern "C" fn js_fetch_set_pending_signal(signal: f64) {
+    PENDING_FETCH_SIGNAL.with(|c| c.set(signal));
+}
+
+/// Consume and clear the pending fetch signal, returning `undefined` when none
+/// was set for this call (so a signal never leaks into a later signal-less
+/// fetch on the same thread).
+#[no_mangle]
+pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
+    PENDING_FETCH_SIGNAL.with(|c| {
+        let v = c.get();
+        c.set(f64::from_bits(crate::value::TAG_UNDEFINED));
+        v
+    })
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 const FETCH_REASON: &str =
     "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
 
@@ -62,6 +95,14 @@ static GLOBAL_FETCH_BODY_INIT_PTR: AtomicPtr<()> = AtomicPtr::new(null_mut());
 /// of a direct perry-stdlib symbol dependency (which would link-break a
 /// stdlib-less build — the #5112 regression class).
 static GLOBAL_HEADERS_ENTRIES_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
+/// perry-stdlib's `Headers` → flat `{name: value}` object-JSON producer, used by
+/// the `fetch(url, { headers })` request path. A `Headers` instance is a
+/// fetch-band registry *handle*, not a heap pointer, so feeding it straight to
+/// `js_json_stringify` faults on the `gc_obj_type` back-read (the `claude -p`
+/// SIGSEGV). Routing handle-band `headers` values here reads the registry
+/// instead of dereferencing the id. Registered separately from the constructors
+/// so a stdlib-less runtime build stays link-clean (the #5112 regression class).
+static GLOBAL_HEADERS_OBJECT_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 type HeadersEntriesJsonFn = extern "C" fn(f64) -> *mut crate::StringHeader;
 
@@ -139,20 +180,23 @@ fn fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader
     crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
 }
 
+/// Codegen entry point for the `fetch(url, { headers })` request path: stringify
+/// the already-evaluated `headers` value into the flat `{name:value}` JSON that
+/// `js_fetch_with_options` parses, treating a `Headers` handle safely (no
+/// dereference of a fetch-band id). Mirrors the runtime thunk's
+/// `headers_init_json_ptr`; returned as an i64 `*const StringHeader` so the
+/// codegen call site can pass it straight into `js_fetch_with_options`.
+#[no_mangle]
+pub extern "C" fn js_fetch_headers_to_json(headers: f64) -> i64 {
+    headers_init_json_ptr(headers) as i64
+}
+
 fn fetch_headers_json_ptr(init: f64) -> *const crate::StringHeader {
     let headers = fetch_option(init, b"headers");
-    if matches!(
-        headers.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
-    }
-    let json = unsafe { crate::json::js_json_stringify(headers, 0) };
-    if json.is_null() {
-        crate::string::js_string_from_bytes(b"{}".as_ptr(), 2)
-    } else {
-        json
-    }
+    // `init.headers` may be a `Headers` instance (a fetch-band handle), a plain
+    // object, or null/undefined — `headers_init_json_ptr` normalizes all three
+    // (Headers handle read from its registry, null/undefined → `{}`).
+    headers_init_json_ptr(headers)
 }
 
 #[cfg(feature = "external-fetch-symbols")]
@@ -190,11 +234,69 @@ unsafe fn call_fetch_with_options(
     null_mut()
 }
 
+#[cfg(not(feature = "external-fetch-symbols"))]
 fn warn_unregistered_fetch_symbol(name: &'static str) -> f64 {
     crate::stub_diag::perry_stub_warn(name, FETCH_REASON, None);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+// When `external-fetch-symbols` is set, perry-stdlib's `web-fetch`
+// implementations are statically linked into this binary — the same invariant
+// `call_fetch_with_options` above relies on (and the same one perry's codegen
+// fast path uses when it emits a direct `js_headers_new` call). In that build
+// the fetch constructor wrappers below call those symbols directly instead of
+// routing through the `GLOBAL_FETCH_*` registry. This keeps the registry-backed
+// construction path (reflective `new Headers()` / `new Request()` via the class
+// registry) consistent with the direct codegen path, and avoids a startup
+// hazard where the registry pointer is observed null in the auto-optimized,
+// bundled-runtime build even though `js_stdlib_init_dispatch` already stored it.
+// The `not(external-fetch-symbols)` variants keep today's registry-load +
+// no-op-stub-warn behavior for runtime-only builds (where these externs are not
+// linked and a runtime stub provides the symbol instead).
+#[cfg(feature = "external-fetch-symbols")]
+unsafe extern "C" {
+    fn js_blob_new(parts: f64, type_value: f64) -> f64;
+    fn js_file_new(parts: f64, name: f64, type_value: f64, last_modified: f64) -> f64;
+    fn js_headers_new() -> f64;
+    fn js_headers_init_from_value(handle: f64, init: f64) -> f64;
+    fn js_request_new(
+        url_ptr: *const crate::StringHeader,
+        method_ptr: *const crate::StringHeader,
+        body_ptr: *const crate::StringHeader,
+        headers_handle: f64,
+        referrer_ptr: *const crate::StringHeader,
+        referrer_policy_ptr: *const crate::StringHeader,
+        mode_ptr: *const crate::StringHeader,
+        credentials_ptr: *const crate::StringHeader,
+        cache_ptr: *const crate::StringHeader,
+        redirect_ptr: *const crate::StringHeader,
+        integrity_ptr: *const crate::StringHeader,
+        keepalive: f64,
+        duplex_ptr: *const crate::StringHeader,
+        signal: f64,
+    ) -> f64;
+    fn js_response_new(
+        body_ptr: *const crate::StringHeader,
+        status: f64,
+        status_text_ptr: *const crate::StringHeader,
+        headers_handle: f64,
+    ) -> f64;
+    fn js_response_static_json(
+        value: f64,
+        init_status: f64,
+        init_status_text_ptr: *const crate::StringHeader,
+        headers_handle: f64,
+    ) -> f64;
+    fn js_response_static_redirect(url_ptr: *const crate::StringHeader, status: f64) -> f64;
+    fn js_response_static_error() -> f64;
+}
+
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
+    unsafe { js_blob_new(parts, type_value) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
     let f = GLOBAL_FETCH_BLOB_NEW.load(Ordering::Acquire);
     if !f.is_null() {
@@ -204,6 +306,17 @@ pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
     warn_unregistered_fetch_symbol("js_blob_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_file_new(
+    parts: f64,
+    name: f64,
+    type_value: f64,
+    last_modified: f64,
+) -> f64 {
+    unsafe { js_file_new(parts, name, type_value, last_modified) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_file_new(
     parts: f64,
     name: f64,
@@ -218,6 +331,12 @@ pub(super) fn call_global_file_new(
     warn_unregistered_fetch_symbol("js_file_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_headers_new() -> f64 {
+    unsafe { js_headers_new() }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_headers_new() -> f64 {
     let f = GLOBAL_FETCH_HEADERS_NEW.load(Ordering::Acquire);
     if !f.is_null() {
@@ -227,6 +346,12 @@ pub(super) fn call_global_headers_new() -> f64 {
     warn_unregistered_fetch_symbol("js_headers_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64 {
+    unsafe { js_headers_init_from_value(handle, init) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64 {
     let f = GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE.load(Ordering::Acquire);
     if !f.is_null() {
@@ -253,6 +378,65 @@ fn call_global_headers_entries_json(value: f64) -> *mut crate::StringHeader {
     }
     let func: HeadersEntriesJsonFn = unsafe { std::mem::transmute(f) };
     func(value)
+}
+
+/// Register perry-stdlib's `Headers` → flat `{name: value}` object-JSON producer
+/// (used by the `fetch(url, { headers: Headers })` request path).
+#[no_mangle]
+pub extern "C" fn js_register_global_headers_object_json(f: HeadersEntriesJsonFn) {
+    GLOBAL_HEADERS_OBJECT_JSON.store(f as *mut (), Ordering::Release);
+}
+
+fn call_global_headers_object_json(value: f64) -> *mut crate::StringHeader {
+    let f = GLOBAL_HEADERS_OBJECT_JSON.load(Ordering::Acquire);
+    if f.is_null() {
+        return null_mut();
+    }
+    let func: HeadersEntriesJsonFn = unsafe { std::mem::transmute(f) };
+    func(value)
+}
+
+/// JSON-stringify a fetch `init.headers` value into the flat `{name: value}`
+/// object that `js_fetch_with_options` parses, WITHOUT ever dereferencing a
+/// `Headers` registry handle.
+///
+/// A `Headers` instance is a fetch-band POINTER_TAG handle (its first id is
+/// `0x40000`), not a heap object. The generic `js_json_stringify` walker reaches
+/// `gc_obj_type` and back-reads `id - 8` as a `GcHeader`, faulting on unmapped
+/// memory — the consistent `claude -p` SIGSEGV during request setup. Classify by
+/// address band first: a handle-band `Headers` value is delegated to the
+/// registered stdlib producer (which reads its own registry); everything else (a
+/// plain `{ … }` object, a `Map`, …) is a real heap value and stringifies
+/// safely. Same family as #5559/#5560 (handle-band ids mis-dereferenced as heap
+/// pointers).
+fn headers_init_json_ptr(headers: f64) -> *const crate::StringHeader {
+    // Normalize null/undefined to an empty object so BOTH entry points — the
+    // codegen `js_fetch_headers_to_json` and the runtime `fetch_headers_json_ptr`
+    // — serialize `headers: null` as `{}` rather than the literal `"null"` that
+    // `js_fetch_with_options` cannot parse.
+    if matches!(
+        headers.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
+    }
+    let jsv = crate::value::JSValue::from_bits(headers.to_bits());
+    if jsv.is_pointer() {
+        let addr = (headers.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::value::addr_class::is_handle_band(addr) {
+            let p = call_global_headers_object_json(headers);
+            if !p.is_null() {
+                return p;
+            }
+            return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
+        }
+    }
+    let json = unsafe { crate::json::js_json_stringify(headers, 0) };
+    if json.is_null() {
+        crate::string::js_string_from_bytes(b"{}".as_ptr(), 2)
+    } else {
+        json
+    }
 }
 
 /// Normalize a `res.setHeaders(x)` argument into a JSON array of
@@ -287,6 +471,44 @@ pub extern "C" fn js_node_setheaders_entries_json(value: f64) -> *mut crate::Str
     null_mut()
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_request_new(
+    url_ptr: *const crate::StringHeader,
+    method_ptr: *const crate::StringHeader,
+    body_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+    referrer_ptr: *const crate::StringHeader,
+    referrer_policy_ptr: *const crate::StringHeader,
+    mode_ptr: *const crate::StringHeader,
+    credentials_ptr: *const crate::StringHeader,
+    cache_ptr: *const crate::StringHeader,
+    redirect_ptr: *const crate::StringHeader,
+    integrity_ptr: *const crate::StringHeader,
+    keepalive: f64,
+    duplex_ptr: *const crate::StringHeader,
+    signal: f64,
+) -> f64 {
+    unsafe {
+        js_request_new(
+            url_ptr,
+            method_ptr,
+            body_ptr,
+            headers_handle,
+            referrer_ptr,
+            referrer_policy_ptr,
+            mode_ptr,
+            credentials_ptr,
+            cache_ptr,
+            redirect_ptr,
+            integrity_ptr,
+            keepalive,
+            duplex_ptr,
+            signal,
+        )
+    }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_request_new(
     url_ptr: *const crate::StringHeader,
     method_ptr: *const crate::StringHeader,
@@ -328,6 +550,17 @@ pub(super) fn call_global_request_new(
     warn_unregistered_fetch_symbol("js_request_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_new(
+    body_ptr: *const crate::StringHeader,
+    status: f64,
+    status_text_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+) -> f64 {
+    unsafe { js_response_new(body_ptr, status, status_text_ptr, headers_handle) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_new(
     body_ptr: *const crate::StringHeader,
     status: f64,
@@ -342,6 +575,17 @@ pub(super) fn call_global_response_new(
     warn_unregistered_fetch_symbol("js_response_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+) -> f64 {
+    unsafe { js_response_static_json(value, init_status, init_status_text_ptr, headers_handle) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_static_json(
     value: f64,
     init_status: f64,
@@ -356,6 +600,15 @@ pub(super) fn call_global_response_static_json(
     warn_unregistered_fetch_symbol("js_response_static_json")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_static_redirect(
+    url_ptr: *const crate::StringHeader,
+    status: f64,
+) -> f64 {
+    unsafe { js_response_static_redirect(url_ptr, status) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_static_redirect(
     url_ptr: *const crate::StringHeader,
     status: f64,
@@ -368,6 +621,12 @@ pub(super) fn call_global_response_static_redirect(
     warn_unregistered_fetch_symbol("js_response_static_redirect")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_static_error() -> f64 {
+    unsafe { js_response_static_error() }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_static_error() -> f64 {
     let f = GLOBAL_FETCH_RESPONSE_STATIC_ERROR.load(Ordering::Acquire);
     if !f.is_null() {
@@ -390,6 +649,10 @@ pub(super) extern "C" fn global_this_fetch_thunk(
     let method_ptr = fetch_option_string_ptr(init, b"method");
     let body_ptr = fetch_option_string_ptr(init, b"body");
     let headers_json_ptr = fetch_headers_json_ptr(init);
+
+    // Hand the `init.signal` (if any) to `js_fetch_with_options` so an
+    // `AbortController` / `AbortSignal.timeout` can cancel this request.
+    js_fetch_set_pending_signal(fetch_option(init, b"signal"));
 
     let promise =
         unsafe { call_fetch_with_options(url_ptr, method_ptr, body_ptr, headers_json_ptr) };

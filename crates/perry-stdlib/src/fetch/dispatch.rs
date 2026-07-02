@@ -54,6 +54,34 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
         }
     }
+    // #5437: a Node `IncomingMessage` body — the request-body bridge Next.js's
+    // `NextRequestAdapter.fromNodeNextRequest` relies on. It sets the web
+    // `Request` body to the `NodeNextRequest`'s `.body`, which is the underlying
+    // `IncomingMessage` (a native handle: `POINTER_TAG | small id`, not bytes).
+    // Stringifying it below yielded `"[object Object]"`, so `req.json()` /
+    // `req.text()` saw garbage and POST bodies were silently lost. Read the
+    // request's buffered bytes through the handle-property dispatch — the node
+    // http impl exposes them as a Buffer under `rawBody` (`js_node_http_im_raw_body`)
+    // — and materialize a lossless StringHeader from them. Only a small-handle
+    // POINTER value is probed, so string / heap-object / buffer bodies above are
+    // untouched. A handle without a buffered `rawBody` falls through to ToString.
+    {
+        let jsval = JSValue::from_bits(value.to_bits());
+        if jsval.is_pointer() {
+            let raw = jsval.as_pointer::<u8>() as usize;
+            if raw != 0 && raw < 0x10000 {
+                let key = unsafe { js_string_from_bytes(b"rawBody".as_ptr(), 7) };
+                let raw_body = perry_runtime::object::js_object_get_field_by_name_f64(
+                    raw as *const perry_runtime::object::ObjectHeader,
+                    key,
+                );
+                if let Some(bytes) = unsafe { body_value_buffer_bytes(raw_body) } {
+                    return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) }
+                        as i64;
+                }
+            }
+        }
+    }
     // A heap-object body — a boxed `String` (hono's `raw()` / JSX `c.html()`
     // returns `new String(value)` with an `isEscaped` expando), an array, or a
     // plain object — is a `POINTER_TAG` value. `js_get_string_pointer_unified`
@@ -116,6 +144,20 @@ pub(crate) unsafe fn body_value_buffer_bytes(value: f64) -> Option<Vec<u8>> {
             return None;
         }
     };
+    body_addr_buffer_bytes(addr)
+}
+
+/// Registry-probe core shared by `body_value_buffer_bytes` (which first decodes
+/// a NaN-boxed body *value* to an address) and `js_request_new` (whose body
+/// argument codegen already decoded to a raw heap address via
+/// `js_get_string_pointer_unified`). Returns a copy of the raw bytes when `addr`
+/// is a registered typed array / Buffer / ArrayBuffer, else `None` so the caller
+/// falls back to a StringHeader read. A Buffer/Uint8Array body fed straight to
+/// `string_from_header` read its byte length off the right field but its data
+/// off the StringHeader data offset (20) instead of the buffer data offset (8),
+/// shifting every binary body left by 12 bytes (#5483, the Request-side twin of
+/// #5435's zero-fill).
+pub(crate) unsafe fn body_addr_buffer_bytes(addr: usize) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
@@ -130,6 +172,32 @@ pub(crate) unsafe fn body_value_buffer_bytes(value: f64) -> Option<Vec<u8>> {
         return Some(std::slice::from_raw_parts(data, len).to_vec());
     }
     None
+}
+
+/// Extract a fetch *request* body as raw bytes for the send paths
+/// (`js_fetch_with_options`, `js_fetch_post`). The `body_ptr` codegen hands us is
+/// the body value unboxed to its raw heap address (`unbox_to_i64`), so it can be
+/// either a binary body — a Buffer / Uint8Array / typed array / ArrayBuffer, data
+/// at offset 8 — or a `StringHeader` (a string body, data at offset 20). Probe
+/// the buffer / typed-array registry first so a binary body round-trips
+/// byte-for-byte; only fall back to the `string_from_header` read when the
+/// address isn't a registered binary body.
+///
+/// Reading a binary body straight through `string_from_header` took the byte
+/// length off the right field but the data off the StringHeader data offset (20)
+/// instead of the buffer data offset (8), shifting every binary payload left by
+/// 12 bytes — `fetch(url, { body: Buffer.from("0123456789ABCDEF") })` arrived as
+/// `"CDEF" + zero-fill` (#5757). This is the `fetch(url, init)` twin of
+/// #5435/#5483, which fixed the Response body and the `Request` constructor but
+/// left the fetch send path reading the body as a string.
+pub(crate) unsafe fn fetch_request_body_bytes(body_ptr: *const StringHeader) -> Option<Vec<u8>> {
+    if body_ptr.is_null() || (body_ptr as usize) < 0x1000 {
+        return None;
+    }
+    if let Some(bytes) = body_addr_buffer_bytes(body_ptr as usize) {
+        return Some(bytes);
+    }
+    super::string_from_header(body_ptr).map(String::into_bytes)
 }
 
 lazy_static::lazy_static! {

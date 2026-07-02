@@ -196,6 +196,11 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "setImmediate",
     "clearImmediate",
     "queueMicrotask",
+    // The `gc()` builtin, exposed as a real callable global value so the
+    // capability-guard idioms `if (globalThis.gc) gc()` / `global.gc?.()` /
+    // `const f = gc; f()` work (Perry's `gc()` is always available, unlike
+    // Node's `--expose-gc`-gated one).
+    "gc",
     // #2905: standard global helper functions. These route through Perry's
     // real direct-call runtime helpers, so `const p = parseInt; p("42px")`
     // and `globalThis.encodeURIComponent("a b")` match Node.

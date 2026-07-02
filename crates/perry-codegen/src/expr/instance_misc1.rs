@@ -390,11 +390,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,
-                // WeakMap / WeakSet / DataView — no runtime probe for real
-                // instances yet (those return false independently), but the
-                // reserved ids let a `class S extends WeakMap {}` subclass
-                // instance match via the class-chain walk in
-                // perry-runtime/src/object/instanceof.rs. Refs
+                // WeakMap / WeakSet: real instances match via a runtime probe
+                // (CLASS_ID_WEAKMAP/CLASS_ID_WEAKSET in weakref.rs, #5834) —
+                // see the matching arm in perry-runtime/src/object/instanceof.rs.
+                // DataView has no such probe yet (returns false independently),
+                // but this reserved id still lets a `class S extends DataView {}`
+                // subclass instance match via the class-chain walk. Refs
                 // class/subclass-builtins/subclass-{WeakMap,WeakSet,DataView}.
                 "DataView" => 0xFFFF002Bu32,
                 "WeakMap" => 0xFFFF002Cu32,
@@ -636,13 +637,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
                     let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
-                    let obj_handle = unbox_to_i64(blk, &obj_box);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_handle = unbox_to_i64(blk, &key_box);
+                    // Pass the RAW receiver: `delete (primitive).field` must no-op
+                    // to `true`, not unbox a non-object as a garbage ObjectHeader*.
                     let i32_v = blk.call(
                         I32,
-                        "js_object_delete_field",
-                        &[(I64, &obj_handle), (I64, &key_handle)],
+                        "js_object_delete_field_value",
+                        &[(DOUBLE, &obj_box), (I64, &key_handle)],
                     );
                     Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
@@ -657,14 +659,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                     let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
-                    let obj_handle = unbox_to_i64(blk, &obj_box);
                     // SSO-safe key unbox — `js_object_delete_field`
                     // dereferences the key as `*StringHeader`. #214 class.
                     let key_handle = unbox_str_handle(blk, &key_box);
+                    // Raw receiver: primitive `delete prim[k]` no-ops to `true`.
                     let i32_v = blk.call(
                         I32,
-                        "js_object_delete_field",
-                        &[(I64, &obj_handle), (I64, &key_handle)],
+                        "js_object_delete_field_value",
+                        &[(DOUBLE, &obj_box), (I64, &key_handle)],
                     );
                     Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
@@ -679,11 +681,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                     let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
-                    let obj_handle = unbox_to_i64(blk, &obj_box);
+                    // Raw receiver: primitive `delete prim[expr]` no-ops to `true`.
                     let i32_v = blk.call(
                         I32,
-                        "js_object_delete_dynamic",
-                        &[(I64, &obj_handle), (DOUBLE, &idx_box)],
+                        "js_object_delete_dynamic_value",
+                        &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
                     );
                     Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }

@@ -122,6 +122,49 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             return crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
         }
 
+        // A per-evaluation class object (`ClassExprFresh`, #1772/#1787) is a
+        // POINTER-tagged heap object, not a `0x7FFE` class ref, so the
+        // `class_ref_id` branch below never fires for it. Its static METHODS
+        // live in the class registry keyed by the header class_id (not as own
+        // properties), so `getOwnPropertyDescriptor(C, "staticMethod")` reported
+        // `undefined` — which broke NestJS's tslib `__decorate` chain
+        // (`descriptor.value` on undefined → "reading 'value'") when the Logger
+        // class took the fresh path (its getter/methods capture module locals
+        // like `DEFAULT_LOGGER`, forcing `ClassExprFresh`). Mirror the class-ref
+        // branch's static-method descriptor: a `static m(){}` is a `{ writable,
+        // enumerable: false, configurable }` own data property of the
+        // constructor. `is_class_object_value` is pointer-safe (it checks the
+        // NaN-box tag before any deref). Own per-evaluation static FIELDS fall
+        // through to the ordinary own-property path (checked here via
+        // `own_key_present` so a field shadows a same-named template method).
+        // Skip Symbol keys here: `metadata_key_to_string` / `js_string_coerce`
+        // would stringify a Symbol and wrongly return a string-named static
+        // method descriptor instead of letting it reach the symbol descriptor
+        // path below.
+        if super::class_registry::is_class_object_value(obj_value)
+            && crate::symbol::js_is_symbol(key_value) == 0
+        {
+            if let Some(method_name) = metadata_key_to_string(key_value) {
+                let obj = extract_obj_ptr(obj_value);
+                let key_str = crate::builtins::js_string_coerce(key_value);
+                if !obj.is_null() && !key_str.is_null() && !own_key_present(obj, key_str) {
+                    let class_id = super::js_object_get_class_id(obj as *const ObjectHeader);
+                    if class_id != 0
+                        && !super::class_registry::class_is_key_deleted(class_id, &method_name)
+                        && super::class_registry::class_has_own_static_method(
+                            class_id,
+                            &method_name,
+                        )
+                    {
+                        let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+                        let value =
+                            super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
+                        return build_data_descriptor(value, true, false, true);
+                    }
+                }
+            }
+        }
+
         // Private elements (`#x`) are stored on the static side / in a class
         // instance's keys_array but are never reflectable own properties, so
         // their descriptor is always undefined. (Plain `{"#fff": 1}` literals
@@ -1225,7 +1268,9 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             let key_val = crate::array::js_array_get(keys, pos(i));
             if hide_private {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
-                    if b.first() == Some(&b'#') {
+                    if b.first() == Some(&b'#')
+                        || super::field_get_set::is_internal_runtime_key_bytes(b)
+                    {
                         continue;
                     }
                 }

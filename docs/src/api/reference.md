@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2815 entries across 115 modules.
+Total: 2825 entries across 116 modules.
 
 ## Modules
 
@@ -66,6 +66,7 @@ Total: 2815 entries across 115 modules.
 - [`path/posix`](#path-posix)
 - [`path/win32`](#path-win32)
 - [`perf_hooks`](#perf-hooks)
+- [`perry`](#perry)
 - [`perry/ads`](#perry-ads)
 - [`perry/audio`](#perry-audio)
 - [`perry/background`](#perry-background)
@@ -2235,6 +2236,17 @@ Total: 2815 entries across 115 modules.
 - `constants`
 - `performance`
 
+## `perry`
+
+### Methods
+
+- `embeddedFiles` — module
+- `readEmbedded` — module
+
+### Properties
+
+- `isStandaloneExecutable`
+
 ## `perry/ads`
 
 ### Methods
@@ -2243,6 +2255,7 @@ Total: 2815 entries across 115 modules.
 - `js_ads_banner_destroy` — module
 - `js_ads_interstitial_load` — module
 - `js_ads_interstitial_show` — module
+- `js_ads_request_consent` — module
 - `js_ads_rewarded_load` — module
 - `js_ads_rewarded_show` — module
 
@@ -2525,6 +2538,7 @@ Total: 2815 entries across 115 modules.
 
 - `App` — module
 - `AttributedText` — module
+- `BloomView` — module
 - `BottomNavigation` — module
 - `Button` — module
 - `CameraView` — module
@@ -2562,11 +2576,14 @@ Total: 2815 entries across 115 modules.
 - `addKeyboardShortcut` — module
 - `alert` — module
 - `alertWithButtons` — module
+- `appSetActivationPolicy` — module
 - `appSetMaxSize` — module
 - `appSetMinSize` — module
 - `appSetTimer` — module
 - `attributedTextAppend` — module
 - `attributedTextClear` — module
+- `bloomViewGetHwnd` — module
+- `bloomViewGetNativeHandle` — module
 - `blur` — module
 - `bottomNavAddItem` — module
 - `bottomNavSetBadge` — module
@@ -3674,6 +3691,7 @@ Total: 2815 entries across 115 modules.
 
 - `BroadcastChannel` — module
 - `MessageChannel` — module
+- `addEventListener` — instance
 - `cpuUsage` — instance *(class: `Worker`)*
 - `getEnvironmentData` — module
 - `getHeapSnapshot` — instance *(class: `Worker`)*
@@ -3688,6 +3706,7 @@ Total: 2815 entries across 115 modules.
 - `postMessageToThread` — module
 - `receiveMessageOnPort` — module
 - `ref` — instance *(class: `Worker`)*
+- `removeEventListener` — instance
 - `setEnvironmentData` — module
 - `startCpuProfile` — instance *(class: `Worker`)*
 - `startHeapProfile` — instance *(class: `Worker`)*

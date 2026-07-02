@@ -1420,6 +1420,70 @@ pub(super) fn split_module_spec(spec: &str) -> Option<(String, String)> {
     }
 }
 
+/// Derive the ergonomic camelCase export name a native-library binding
+/// is expected to expose over a snake_case `js_<pkg>_*` FFI symbol
+/// (issue #5621).
+///
+/// `module` is the import specifier the manifest is attached to
+/// (`@perryts/webgpu`); `symbol` is a `perry.nativeLibrary.functions`
+/// entry name (`js_webgpu_request_adapter`). Returns the camelCase form
+/// (`requestAdapter`) **only** when `symbol` follows the standard
+/// `js_<pkg>_<snake>` convention for this package, where `<pkg>` is the
+/// sanitized last path segment of the module name. When the prefix
+/// doesn't match (e.g. `@perryts/storekit`'s raw ambient `js_storekit_*`
+/// exports, which are imported verbatim), this returns `None` so the
+/// existing byte-for-byte exact-match convention keeps working unchanged.
+pub(crate) fn ergonomic_export_alias(module: &str, symbol: &str) -> Option<String> {
+    // `<pkg>` is the last path segment: `@perryts/webgpu` → `webgpu`,
+    // `webgpu` → `webgpu`. Sanitize to the symbol-token convention —
+    // lowercase ASCII alphanumerics, everything else (`-`, `.`) collapses
+    // away — so a hyphenated package still yields a clean prefix.
+    let pkg = module.rsplit('/').next().unwrap_or(module);
+    let pkg_token: String = pkg
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if pkg_token.is_empty() {
+        return None;
+    }
+    let prefix = format!("js_{pkg_token}_");
+    let suffix = symbol.strip_prefix(&prefix)?;
+    // The convention is strictly `js_<pkg>_<snake_case>`: the suffix must be
+    // lowercase ASCII / digits / underscores, with at least one
+    // alphanumeric. Rejecting mixed-case suffixes (`js_webgpu_requestAdapter`)
+    // keeps the derivation conservative — a malformed manifest symbol isn't
+    // silently routed through the alias path; it falls back to exact match.
+    let is_snake_case = suffix
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && suffix
+            .chars()
+            .any(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !is_snake_case {
+        return None;
+    }
+    Some(snake_to_camel(suffix))
+}
+
+/// Convert a snake_case identifier to camelCase: `request_adapter` →
+/// `requestAdapter`. Leading/trailing/double underscores are tolerated.
+fn snake_to_camel(snake: &str) -> String {
+    let mut out = String::with_capacity(snake.len());
+    let mut upper_next = false;
+    for ch in snake.chars() {
+        if ch == '_' {
+            upper_next = true;
+        } else if upper_next {
+            out.extend(ch.to_uppercase());
+            upper_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// The ABI version the bundled `perry-ffi` ships. External wrappers
 /// declare an `abiVersion` semver range that must include this exact
 /// version to be allowed to load. Tracked alongside the workspace
@@ -1489,5 +1553,98 @@ pub(crate) fn validate_abi_version(manifest: &NativeLibraryManifest) -> Result<(
              release whose perry-ffi version matches the declared range.",
             manifest.module, declared, PERRY_FFI_ABI_VERSION
         ))
+    }
+}
+#[cfg(test)]
+mod ergonomic_alias_tests {
+    use super::ergonomic_export_alias;
+
+    #[test]
+    fn camel_case_alias_for_scoped_package() {
+        // The motivating cases from issue #5621.
+        assert_eq!(
+            ergonomic_export_alias("@perryts/webgpu", "js_webgpu_request_adapter").as_deref(),
+            Some("requestAdapter")
+        );
+        assert_eq!(
+            ergonomic_export_alias("@perryts/webgpu", "js_webgpu_request_device").as_deref(),
+            Some("requestDevice")
+        );
+        assert_eq!(
+            ergonomic_export_alias("@perryts/iroh", "js_iroh_node_addr").as_deref(),
+            Some("nodeAddr")
+        );
+    }
+
+    #[test]
+    fn single_word_suffix_passes_through() {
+        assert_eq!(
+            ergonomic_export_alias("@scope/foo", "js_foo_thing").as_deref(),
+            Some("thing")
+        );
+    }
+
+    #[test]
+    fn unscoped_package_name_works() {
+        assert_eq!(
+            ergonomic_export_alias("webgpu", "js_webgpu_request_adapter").as_deref(),
+            Some("requestAdapter")
+        );
+    }
+
+    #[test]
+    fn mixed_case_suffix_is_rejected() {
+        // The convention is strictly `js_<pkg>_<snake_case>`. A symbol that
+        // already carries a camelCase suffix is malformed and must not be
+        // routed through the alias path.
+        assert_eq!(
+            ergonomic_export_alias("@perryts/webgpu", "js_webgpu_requestAdapter"),
+            None
+        );
+        assert_eq!(
+            ergonomic_export_alias("@perryts/webgpu", "js_webgpu_Request_adapter"),
+            None
+        );
+        // Pure underscores (no alphanumeric) is not a real suffix either.
+        assert_eq!(ergonomic_export_alias("@scope/foo", "js_foo___"), None);
+    }
+
+    #[test]
+    fn hyphenated_package_name_is_sanitized() {
+        // `@scope/web-gpu` → token `webgpu` → `js_webgpu_*`.
+        assert_eq!(
+            ergonomic_export_alias("@scope/web-gpu", "js_webgpu_do_thing").as_deref(),
+            Some("doThing")
+        );
+    }
+
+    #[test]
+    fn storekit_derives_alias_but_caller_keeps_exact_match() {
+        // storekit ships raw ambient exports whose binding name IS the
+        // symbol (`js_storekit_load_products`). We still *derive* a
+        // camelCase form here, but the caller only registers it when the
+        // derived name equals the actual imported binding — which it
+        // never does for storekit (consumers import the raw symbol), so
+        // exact match remains the sole routing path for that package.
+        assert_eq!(
+            ergonomic_export_alias("@perryts/storekit", "js_storekit_load_products").as_deref(),
+            Some("loadProducts")
+        );
+    }
+
+    #[test]
+    fn prefix_mismatch_returns_none() {
+        // A symbol whose prefix doesn't match the package token at all
+        // must not produce a spurious alias.
+        assert_eq!(
+            ergonomic_export_alias("@scope/foo", "js_bar_do_thing"),
+            None
+        );
+        assert_eq!(ergonomic_export_alias("@scope/foo", "do_thing"), None);
+    }
+
+    #[test]
+    fn empty_suffix_returns_none() {
+        assert_eq!(ergonomic_export_alias("@scope/foo", "js_foo_"), None);
     }
 }

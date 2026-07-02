@@ -197,6 +197,14 @@ pub struct Class {
     /// `extends` and `extends_name` are both `None` for these classes (the
     /// parent class_id is only known at runtime).
     pub extends_expr: Option<Box<Expr>>,
+    /// #5437: the parent name resolves to an in-scope LEXICAL LOCAL that shadows
+    /// a same-named native/built-in/module-global parent (`const Error = class
+    /// {…}; class X extends Error {}`). When set, `super()` codegen must use the
+    /// dynamic `extends_expr` value (the local) and MUST NOT take any built-in
+    /// special-case path keyed on the parent NAME (Error/Request/Response/Event/
+    /// CustomEvent/stream family) — that would run the built-in initializer
+    /// instead of the lexical local's constructor.
+    pub heritage_lexically_shadowed: bool,
     /// Instance fields
     pub fields: Vec<ClassField>,
     /// Constructor (if any)

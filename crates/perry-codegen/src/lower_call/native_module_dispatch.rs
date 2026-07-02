@@ -374,4 +374,37 @@ mod ffi_return_type_tests {
         assert!(returns_i64_str);
         assert!(returns_string); // also true — but i64_str branch fires first
     }
+
+    #[test]
+    fn fastify_header_routes_by_receiver_class() {
+        // Regression: the request getter `request.header(name)` and the reply
+        // setter `reply.header(name, value)` are distinct rows in FASTIFY_ROWS
+        // sharing method "header". When both were `class_filter: None`, the
+        // arity-blind generic pass matched BOTH to whichever row came first
+        // (the request getter), so `reply.header(...)` silently no-op'd. Tagging
+        // them Some("Request") / Some("Reply") lets the exact-class first pass
+        // route each by receiver. (Fastify handler params are registered as
+        // ("fastify","Request") / ("fastify","Reply") by position.)
+        let req = super::native_module_lookup("fastify", true, "header", Some("Request"))
+            .expect("request.header must resolve");
+        assert_eq!(
+            req.runtime, "js_fastify_req_header",
+            "request.header(name) must route to the 1-arg getter"
+        );
+        assert_eq!(req.args.len(), 1, "request getter takes one arg");
+
+        let reply = super::native_module_lookup("fastify", true, "header", Some("Reply"))
+            .expect("reply.header must resolve");
+        assert_eq!(
+            reply.runtime, "js_fastify_reply_header",
+            "reply.header(name, value) must route to the 2-arg setter, not the getter"
+        );
+        assert_eq!(reply.args.len(), 2, "reply setter takes two args");
+
+        // The two receiver classes must NOT collide on the same runtime symbol.
+        assert_ne!(
+            req.runtime, reply.runtime,
+            "request and reply `.header` must resolve to different runtime symbols"
+        );
+    }
 }

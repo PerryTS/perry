@@ -350,6 +350,11 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
     for i in 0..n as usize {
         let v = unsafe { *values.add(i) };
         let slot = unsafe { elems.add(i) };
+        // A uniquely-owned string element now aliases this slot — demote it to
+        // shared so a later `s += x` allocates fresh instead of mutating the
+        // stored element. No-op for SSO / non-string. (This outline path doesn't
+        // funnel through `note_array_slot`.)
+        crate::string::js_string_addref_if_heap_string(v);
         // GC_STORE_AUDIT(BARRIERED): element store immediately followed by the
         // slot layout note + write barrier below, identical to the inline
         // array-literal element store via emit_jsvalue_slot_store_on_block.

@@ -38,6 +38,18 @@ pub extern "C" fn js_arena_stats(out_used: *mut u64, out_total: *mut u64) {
             total += block.size as u64;
         }
     });
+    // Old-generation arena. Large objects (>16 KB — typed arrays, big arrays /
+    // strings) are born here, and minor-GC survivors are promoted here. Without
+    // this region `heapUsed` / `heapTotal` collapse toward 0 while RSS climbs,
+    // since the live/large heap lives entirely in old-gen. Mirrors the old-gen
+    // phase of `arena_in_use_bytes` (walk.rs) so the two accounts agree.
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        for block in &arena.blocks {
+            used += block.offset as u64;
+            total += block.size as u64;
+        }
+    });
     unsafe {
         *out_used = used;
         *out_total = total;

@@ -335,7 +335,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
         return false;
     }
     unsafe {
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         type_tag == CLOSURE_MAGIC
     }
 }
@@ -643,7 +643,7 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
     }
     // Check CLOSURE_MAGIC
     unsafe {
-        let type_tag = *((ptr as *const u8).add(12) as *const u32);
+        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag != CLOSURE_MAGIC {
             return val;
         }
@@ -664,8 +664,9 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         let new_closure = js_closure_alloc(func_ptr, raw_count);
         let source_bits = val_handle.get_nanbox_f64().to_bits();
         let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let source_type_tag =
-            std::ptr::read_volatile((source_ptr as *const u8).add(12) as *const u32);
+        let source_type_tag = std::ptr::read_volatile(
+            (source_ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+        );
         if source_type_tag != CLOSURE_MAGIC {
             return val_handle.get_nanbox_f64();
         }
@@ -825,18 +826,40 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         return closure_bits;
     }
     let ptr = (closure_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if ptr < 0x10000 {
+    // Validate the payload is a real heap closure BEFORE any header read.
+    // `is_closure_ptr` rejects the native/fetch/proxy small-handle band, any
+    // address outside the platform heap range, misaligned pointers, AND
+    // confirms CLOSURE_MAGIC — so a mis-boxed POINTER_TAG value (a fetch handle,
+    // or an `i32 << 32` style value above the band) can't SIGSEGV the probe
+    // (#4740, #wall2). This subsumes the old hand-rolled band + magic checks.
+    if !is_closure_ptr(ptr) {
         return closure_bits;
     }
     unsafe {
-        let type_tag = std::ptr::read_volatile((ptr as *const u8).add(12) as *const u32);
-        if type_tag != CLOSURE_MAGIC {
+        let header = ptr as *const ClosureHeader;
+        // Arrow functions bind `this` lexically: their `this` capture slot holds
+        // the enclosing instance and must NEVER be overwritten with a call-time
+        // receiver (proxy handler, getter receiver, method-call object, …).
+        // They still carry CAPTURES_THIS_FLAG (the body reads `this`), so the
+        // flag check below does not exclude them — guard explicitly. Without this,
+        // an arrow used as a proxy trap / accessor would observe the rebind
+        // receiver and lose its captured instance's data fields (#wall11).
+        if crate::closure::closure_is_arrow(header) {
             return closure_bits;
         }
-        let header = ptr as *const ClosureHeader;
         let raw_count = (*header).capture_count;
         // No CAPTURES_THIS_FLAG → the closure body doesn't read `this`, no rebind needed.
         if raw_count & CAPTURES_THIS_FLAG == 0 {
+            return closure_bits;
+        }
+        // Generator state-machine step closures (`next`/`return`/`throw`) capture
+        // the generator BODY's `this` lexically — it is fixed at generator
+        // creation and must NOT be re-bound by `.call`/method dispatch. The
+        // `yield* gen` desugar calls `next.call(iter, v)`; rebinding here would
+        // clobber the captured body-`this` with the iterator object. The flag is
+        // stamped on the closure header (per-closure, no global table) by
+        // `js_generator_attach_prototype` when it wires the generator instance.
+        if raw_count & NO_THIS_REBIND_FLAG != 0 {
             return closure_bits;
         }
         let count = real_capture_count(raw_count) as usize;
@@ -851,8 +874,9 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         let new_closure = js_closure_alloc(func_ptr, raw_count);
         let source_bits = closure_handle.get_nanbox_u64();
         let source_ptr = (source_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let source_type_tag =
-            std::ptr::read_volatile((source_ptr as *const u8).add(12) as *const u32);
+        let source_type_tag = std::ptr::read_volatile(
+            (source_ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32,
+        );
         if source_type_tag != CLOSURE_MAGIC {
             return source_bits;
         }

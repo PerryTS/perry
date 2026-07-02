@@ -236,6 +236,18 @@ pub fn const_string_of(expr: &ast::Expr) -> Option<String> {
                     .unwrap_or_else(|| q.raw.as_str().to_string())
             })
         }
+        // Constant string concatenation: `'a' + 'b' + 'c'`. Test262's
+        // procedurally-generated eval cases split a body across `+`-joined
+        // string literals (one segment per `switch` case / `if` branch), so
+        // the whole argument is still a constant the AOT eval fold can run.
+        // Only fold when BOTH operands are themselves constant strings — a
+        // numeric `+` (or a string + non-constant) is not a constant body.
+        ast::Expr::Bin(bin) if bin.op == ast::BinaryOp::Add => {
+            let mut left = const_string_of(&bin.left)?;
+            let right = const_string_of(&bin.right)?;
+            left.push_str(&right);
+            Some(left)
+        }
         _ => None,
     }
 }
@@ -305,6 +317,22 @@ pub fn eval_diag_enabled() -> bool {
 /// pre-#5206 escape hatch).
 pub fn eval_override_enabled() -> bool {
     env_flag("PERRY_ALLOW_EVAL")
+}
+
+/// Whether `PERRY_EVAL_CSP` is set — present runtime dynamic-code generation as
+/// *unavailable* to capability probes. With it set, a trivial no-op
+/// `new Function("")` / `Function("")` (the canonical
+/// `try { new Function(""), true } catch { false }` feature-test — the same
+/// shape a CSP `unsafe-eval` policy blocks) throws at construction instead of
+/// const-folding to a no-op function. Libraries that probe this way (e.g. zod 4's
+/// object-validator JIT) then take their non-codegen interpreter fallback, which
+/// perry compiles normally. Default off (spec-compliant: Node returns an empty
+/// function); opt-in for ahead-of-time binaries that hit such a JIT. Only the
+/// trivial no-op shape is affected — real literal bodies (`new Function("return
+/// 42")`, the `return this` globalThis polyfill) still fold, so those idioms are
+/// unaffected.
+pub fn eval_csp_probe_unavailable() -> bool {
+    env_flag("PERRY_EVAL_CSP")
 }
 
 /// Whether `PERRY_ALLOW_UNIMPLEMENTED` is set — forces non-strict (defer) mode
@@ -587,7 +615,24 @@ pub fn check_site(
 mod tests {
     use super::*;
     use crate::ir::{clear_current_module_source, set_current_module_source};
+    use std::sync::Mutex;
     use swc_common::{BytePos, Span};
+
+    /// Serializes the tests that drain the process-global deferred-eval-site
+    /// sink. `take_deferred_eval_sites()` is destructive (it drains the WHOLE
+    /// sink), so two such tests running concurrently under the parallel
+    /// `cargo test` harness steal each other's recorded sites — which flaked
+    /// `unimplemented_defers_by_default_and_records_site` ("exactly one recorded
+    /// site"). Each sink-touching test holds this lock across its push→take.
+    static EVAL_SITE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquire [`EVAL_SITE_TEST_LOCK`], tolerating poisoning from an unrelated
+    /// panicking test — we only need the mutual exclusion, not protected data.
+    fn lock_eval_sink() -> std::sync::MutexGuard<'static, ()> {
+        EVAL_SITE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     fn str_lit(s: &str) -> ast::Expr {
         ast::Expr::Lit(ast::Lit::Str(ast::Str {
@@ -685,6 +730,38 @@ mod tests {
     }
 
     #[test]
+    fn constant_string_concatenation_folds() {
+        // Test262's procedurally-generated eval cases split a body across
+        // `+`-joined string literals; the whole argument is still a constant.
+        let add = |l: ast::Expr, r: ast::Expr| {
+            ast::Expr::Bin(ast::BinExpr {
+                span: Span::new(BytePos(0), BytePos(0)),
+                op: ast::BinaryOp::Add,
+                left: Box::new(l),
+                right: Box::new(r),
+            })
+        };
+        // `'switch (1) {' + '  case 1:' + '}'`
+        let expr = add(
+            add(str_lit("switch (1) {"), str_lit("  case 1:")),
+            str_lit("}"),
+        );
+        assert_eq!(
+            const_string_of(&expr).as_deref(),
+            Some("switch (1) {  case 1:}")
+        );
+        // A non-`+` operator, or a non-constant operand, does not fold.
+        let sub = ast::Expr::Bin(ast::BinExpr {
+            span: Span::new(BytePos(0), BytePos(0)),
+            op: ast::BinaryOp::Sub,
+            left: Box::new(str_lit("a")),
+            right: Box::new(str_lit("b")),
+        });
+        assert_eq!(const_string_of(&sub), None);
+        assert_eq!(const_string_of(&add(str_lit("a"), non_const())), None);
+    }
+
+    #[test]
     fn line_resolved_from_installed_module_source() {
         // Offset lands on line 3 (two newlines precede it).
         set_current_module_source("a\nb\nnew Function(x)\n".to_string());
@@ -730,6 +807,7 @@ mod tests {
     /// throw-on-reach value AND is recorded for the end-of-compile notice.
     #[test]
     fn default_mode_defers_runtime_unknown_and_records_site() {
+        let _sink_guard = lock_eval_sink();
         set_eval_strict_mode(false);
         // Use a unique path so this test's recorded site is identifiable even
         // if other tests push to the process-global sink concurrently.
@@ -753,6 +831,7 @@ mod tests {
     /// Strict-eval mode: a runtime-unknown site is a hard compile-time error.
     #[test]
     fn strict_mode_refuses_runtime_unknown() {
+        let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_EVAL would force non-strict; only assert when unset.
         if eval_override_enabled() {
             return;
@@ -807,6 +886,7 @@ mod tests {
     /// the `"unimplemented API"` kind.
     #[test]
     fn unimplemented_defers_by_default_and_records_site() {
+        let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_UNIMPLEMENTED forces defer regardless — fine for this
         // (defer) assertion either way, so no skip needed.
         set_unimplemented_strict_mode(false);
@@ -837,6 +917,7 @@ mod tests {
     /// caller raises the hard `#463` error) and records no notice site.
     #[test]
     fn unimplemented_refuses_in_strict_mode() {
+        let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_UNIMPLEMENTED would force defer; only assert when unset.
         if unimplemented_override_enabled() {
             return;

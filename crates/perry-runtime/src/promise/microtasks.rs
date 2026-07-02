@@ -808,5 +808,5 @@ fn propagate_callback_result(result: f64, next: *mut Promise) {
             return;
         }
     }
-    crate::promise::combinators::promise_resolve_assimilating(next, result);
+    crate::promise::assimilate::promise_resolve_assimilating(next, result);
 }

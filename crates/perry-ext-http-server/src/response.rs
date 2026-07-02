@@ -262,8 +262,13 @@ impl HyperResponseShape {
     /// Build a hyper `Response<BoxBody<Bytes, Infallible>>` ready to return from the
     /// service fn.
     pub fn into_hyper(self) -> Response<ResponseBody> {
-        let mut builder =
-            Response::builder().status(StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
+        // Fast path: common status codes resolve to a pre-validated
+        // `StatusCode` constant, skipping `from_u16`'s numeric range-check
+        // + `unwrap_or` on every response. Uncommon / custom codes keep the
+        // parsing path, so the resulting status is identical for every code.
+        let status = crate::response_fast::status_code_const(self.status)
+            .unwrap_or_else(|| StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
+        let mut builder = Response::builder().status(status);
         // `res.statusMessage = 'Custom Message'` must reach the HTTP/1
         // status line (test-http-status-message reads it off the raw
         // socket). hyper emits it via the ReasonPhrase extension.
@@ -354,8 +359,14 @@ impl HyperResponseShape {
             self.headers
                 .push(("Connection".to_string(), "keep-alive".to_string()));
             let secs = (keep_alive_timeout_ms / 1000.0).floor().max(0.0) as u64;
-            self.headers
-                .push(("Keep-Alive".to_string(), format!("timeout={}", secs)));
+            // Fast path: the `Keep-Alive: timeout=N` value is interned for the
+            // timeouts servers commonly run with (Node's 5 s default, etc.), so
+            // the per-response `format!` only fires for an unusual timeout. The
+            // interned string equals `format!("timeout={}", secs)` exactly.
+            let value = crate::response_fast::keep_alive_header_value(secs)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("timeout={}", secs));
+            self.headers.push(("Keep-Alive".to_string(), value));
         } else {
             self.headers
                 .push(("Connection".to_string(), "close".to_string()));
@@ -1065,14 +1076,34 @@ fn apply_headers_flat_array(sr: &mut ServerResponse, json: &str) {
 /// (`begin_streaming` succeeded now or earlier), `None` when it isn't —
 /// the caller falls back to the legacy buffered path.
 fn stream_write(handle: i64, bytes: &[u8]) -> Option<bool> {
+    stream_write_with_cb(handle, bytes, 0)
+}
+
+/// `stream_write`, but also enqueues `callback` (if non-zero) into
+/// `pending_write_callbacks` BEFORE the data frame is published on the channel.
+///
+/// Ordering matters: the stream-frame send makes the bytes visible to the
+/// reader task, which may drain and run pending write callbacks immediately. If
+/// we pushed the callback AFTER `tx.send(...)` (as the call site used to), a
+/// receiver that drains right away could run this write's callback out of order
+/// — after later writes' callbacks or `.end()`. Registering it first keeps the
+/// callback ordered relative to the frame it belongs to and to later writes.
+fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool> {
     if !begin_streaming(handle) {
         return None;
     }
     let sr = get_handle_mut::<ServerResponse>(handle)?;
-    let tx = sr.stream_tx.as_ref()?;
-    let in_flight = sr.stream_in_flight.as_ref()?;
+    // Clone the channel handles so the immutable borrow of `sr` ends before we
+    // mutate `pending_write_callbacks` / `needs_drain` (the sender + Arc are
+    // cheap to clone). The `fetch_add` reserves this chunk's byte count.
+    let tx = sr.stream_tx.as_ref()?.clone();
+    let in_flight = sr.stream_in_flight.as_ref()?.clone();
     let queued =
         in_flight.fetch_add(bytes.len(), std::sync::atomic::Ordering::AcqRel) + bytes.len();
+    // Register the write callback BEFORE publishing the frame (see doc comment).
+    if callback != 0 {
+        sr.pending_write_callbacks.push(callback);
+    }
     let _ = tx.send(StreamFrame::Data(Bytes::copy_from_slice(bytes)));
     let below_hwm = queued <= DEFAULT_HIGH_WATER_MARK;
     if !below_hwm {
@@ -1656,6 +1687,30 @@ pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callback: i64) -> i32 {
     let bytes = jsvalue_to_body_bytes(chunk);
+    // Honor streaming mode (after `res.flushHeaders()` / a prior streamed
+    // `res.write`) exactly like `js_node_http_res_write`: the chunk must go down
+    // the stream channel, NOT into `buffered_body`. Without this, a streamed
+    // response whose chunks arrive via the callback-aware dispatch arm
+    // (`res.write(chunk)` from Next's `pipeToNodeResponse` WritableStream)
+    // buffered every chunk while `.end()` took the stream-finalize path — which
+    // only sends the final `.end(chunk)` arg and drops `buffered_body` entirely,
+    // so the JSON API-route body never reached the wire (HTTP 200, 0 bytes).
+    // #5437 (Next.js app-route response pipe).
+    if let Some(b) = &bytes {
+        let ended = get_handle::<ServerResponse>(handle)
+            .map(|sr| sr.writable_ended)
+            .unwrap_or(true);
+        if !ended {
+            // Register the write callback BEFORE the data frame is published so
+            // a receiver that drains immediately can't run it out of order
+            // relative to later writes / `.end()` (Node fires it once the chunk
+            // is flushed; queued, it drains in order, #4904). `stream_write_with_cb`
+            // enqueues the callback ahead of the `tx.send`.
+            if let Some(below_hwm) = stream_write_with_cb(handle, b, callback) {
+                return below_hwm as i32;
+            }
+        }
+    }
     // #4909 — real backpressure boolean (mirrors `js_node_http_res_write_full`
     // on the static path): `false` past the 16 KiB high-water mark, so dynamic
     // `while (res.write(buf, cb))` producer loops terminate.
@@ -1739,14 +1794,26 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         sr.writable_ended = true;
         sr.ensure_content_length();
         let body = std::mem::take(&mut sr.buffered_body);
-        let reason = sr.status_message.clone().unwrap_or_else(|| {
-            StatusCode::from_u16(sr.status_code)
-                .ok()
-                .and_then(|s| s.canonical_reason())
-                .unwrap_or("")
-                .to_string()
+        // Fast path: with no custom `statusMessage`, a common status code has a
+        // precomputed `HTTP/1.1 <code> <canonical reason>\r\n` status line,
+        // skipping the per-response `format!`. The interned bytes equal exactly
+        // what the `format!` produced for `(code, canonical reason)`. A custom
+        // message, or an uncommon code, falls back so its reason still reaches
+        // the wire byte-for-byte.
+        let mut head = match sr.status_message.as_deref() {
+            None => crate::response_fast::status_line_bytes(sr.status_code).map(str::to_string),
+            Some(_) => None,
+        }
+        .unwrap_or_else(|| {
+            let reason = sr.status_message.clone().unwrap_or_else(|| {
+                StatusCode::from_u16(sr.status_code)
+                    .ok()
+                    .and_then(|s| s.canonical_reason())
+                    .unwrap_or("")
+                    .to_string()
+            });
+            format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason)
         });
-        let mut head = format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason);
         for (k, v) in sr.snapshot_headers() {
             head.push_str(&k);
             head.push_str(": ");

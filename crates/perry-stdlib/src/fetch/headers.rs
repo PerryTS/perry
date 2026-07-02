@@ -366,6 +366,48 @@ pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut String
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
+/// Produce a flat `{ "name": "value", … }` JSON object from a `Headers` handle,
+/// for the `fetch(url, { headers })` request path (which parses headers-JSON as
+/// a `HashMap<String, String>`).
+///
+/// The global `fetch` thunk and the codegen `headers_dynamic` path both
+/// JSON-stringify the `init.headers` value. A `Headers` instance is a
+/// fetch-band registry *handle* (its first id is `0x40000`), NOT a heap
+/// pointer, so the generic `js_json_stringify` walker reaches `gc_obj_type`
+/// and dereferences `id - 8` as a `GcHeader` → SIGSEGV (the `claude -p` crash;
+/// same #5559/#5560 family of handle-band ids treated as heap pointers). The
+/// fetch entry points classify by address band BEFORE any dereference and route
+/// `Headers` handles here, reading the request's own header registry instead of
+/// walking a bogus pointer. Returns null for an unknown handle so the caller
+/// falls back to `{}`.
+#[no_mangle]
+pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader {
+    let id = handle_id(handle);
+    let guard = HEADERS_REGISTRY.lock().unwrap();
+    let Some(store) = guard.get(&id) else {
+        return std::ptr::null_mut();
+    };
+    // Preserve insertion order; collapse repeated names (incl. Set-Cookie) the
+    // same way `HeadersStore::get` does so the request carries the combined
+    // value. A `serde_json::Map` keeps first-seen insertion order under the
+    // `preserve_order` feature; without it the object is still a valid flat map
+    // that `serde_json::from_str::<HashMap<_,_>>` accepts.
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = serde_json::Map::new();
+    for (k, _) in &store.entries {
+        if seen.iter().any(|s| s == k) {
+            continue;
+        }
+        seen.push(k.clone());
+        if let Some(v) = store.get(k) {
+            out.insert(k.clone(), serde_json::Value::String(v));
+        }
+    }
+    let s =
+        serde_json::to_string(&serde_json::Value::Object(out)).unwrap_or_else(|_| "{}".to_string());
+    js_string_from_bytes(s.as_ptr(), s.len() as u32)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeader) -> f64 {
     let id = handle_id(handle);

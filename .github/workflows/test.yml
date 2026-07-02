@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -135,7 +135,7 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -150,7 +150,7 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -246,7 +246,7 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -261,7 +261,7 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -428,7 +428,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -479,7 +479,7 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -494,7 +494,7 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -702,7 +702,7 @@ jobs:
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -838,7 +838,7 @@ jobs:
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -918,9 +918,10 @@ jobs:
           # ld-unresolved-reference failure observed on #1038 pre-merge.
           # Move to a jose-aware test runner once that crate's CI hook
           # is wired up.
+          # test_ui_adbanner_smoke (#867 AdBanner widget),
           # test_ui_on_keydown_smoke / test_issue_1495_image_systemname /
           # test_issue_1867_audio_playback / test_issue_2022_canvas_draw_image
-          # all import `perry/ui` (App/Image/Canvas/loadImage/keydown). Like the
+          # all import `perry/ui` (App/AdBanner/Image/Canvas/loadImage/keydown). Like the
           # rest of the test_ui_* / media family above they need `--target
           # macos` to link the platform widgets; the bare `perry foo.ts -o out`
           # smoke path doesn't pull in libperry_ui_* on Linux, so they fail with
@@ -929,6 +930,7 @@ jobs:
             test_ui_comprehensive \
             test_ui_controls \
             test_ui_phase4 \
+            test_ui_adbanner_smoke \
             test_ui_on_keydown_smoke \
             test_issue_1495_image_systemname \
             test_issue_1867_audio_playback \
@@ -1213,7 +1215,7 @@ jobs:
     continue-on-error: true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -1274,7 +1276,7 @@ jobs:
           --health-timeout=3s
           --health-retries=20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -1336,7 +1338,7 @@ jobs:
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -1385,7 +1387,7 @@ jobs:
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -1512,7 +1514,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # macos-14 ships with ~14 GB free disk after the preinstalled Xcode +
       # iOS/tvOS/watchOS simulator runtime images. Several `cargo build
@@ -1679,7 +1681,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

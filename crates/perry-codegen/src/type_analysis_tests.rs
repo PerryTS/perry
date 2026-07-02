@@ -165,6 +165,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         extends_name: None,
         native_extends: None,
         extends_expr: None,
+        heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
         methods: vec![perry_hir::Function {
@@ -221,6 +222,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         extends_name: Some("Base".to_string()),
         native_extends: None,
         extends_expr: None,
+        heritage_lexically_shadowed: false,
         fields: vec![perry_hir::ClassField {
             name: "label".to_string(),
             key_expr: None,

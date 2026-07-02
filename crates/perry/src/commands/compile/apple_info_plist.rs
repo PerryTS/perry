@@ -8,6 +8,9 @@
 //! - `inject_google_auth_info_plist` (#674/#1138) — read `[google_auth]` from
 //!   `perry.toml` and inject `GIDClientID` / `GIDServerClientID` /
 //!   `GIDDefaultScopes` for the `@perryts/google-auth` Swift bridge.
+//! - `inject_ads_info_plist` (#867) — read `[ads]` from `perry.toml` and inject
+//!   `GADApplicationIdentifier` (+ `NSUserTrackingUsageDescription`) for the
+//!   Google Mobile Ads SDK.
 //!
 //! Both functions follow the same shape: return the mutated plist on success,
 //! `None` on any read/parse/write failure. The orchestrator falls back to the
@@ -186,6 +189,82 @@ pub(super) fn inject_google_auth_info_plist(
 
     if let OutputFormat::Text = format {
         println!("  google_auth: injected GoogleSignIn Info.plist keys");
+    }
+
+    Some(info_plist.replace(
+        "</dict>\n</plist>",
+        &format!("{}</dict>\n</plist>", entries),
+    ))
+}
+
+/// #867 — read `[ads]` from `perry.toml` and inject the Google Mobile
+/// Ads keys into `info_plist`:
+///
+/// - `GADApplicationIdentifier` (from `ios_app_id`) — required; the SDK
+///   raises an exception at `start()` if it's missing.
+/// - `NSUserTrackingUsageDescription` (from `att_usage_description`) —
+///   the purpose string iOS shows in the App Tracking Transparency
+///   prompt. Only emitted when configured, and only if the app hasn't
+///   already declared it via `[ios.info_plist]`.
+///
+/// Returns the mutated plist on success, `None` if the block / the
+/// `ios_app_id` key is absent (caller falls back to the unmutated
+/// plist). Mirrors `inject_google_auth_info_plist`.
+pub(super) fn inject_ads_info_plist(
+    info_plist: &str,
+    input: &std::path::Path,
+    format: OutputFormat,
+) -> Option<String> {
+    let mut dir = input.canonicalize().ok()?;
+    let mut data: Option<String> = None;
+    for _ in 0..5 {
+        dir = dir.parent()?.to_path_buf();
+        let toml_path = dir.join("perry.toml");
+        if toml_path.exists() {
+            data = fs::read_to_string(&toml_path).ok();
+            break;
+        }
+    }
+    let raw = data?;
+    let doc: toml::Table = raw.parse().ok()?;
+    let ads = doc.get("ads")?.as_table()?;
+
+    // GADApplicationIdentifier is the only required key — without it the
+    // SDK can't start, so a `[ads]` block with no `ios_app_id` is a no-op
+    // for the Apple side.
+    let app_id = ads.get("ios_app_id").and_then(|v| v.as_str())?;
+
+    // App IDs are `ca-app-pub-<digits>~<digits>` (no XML specials), but
+    // escape defensively so a malformed value can't produce an invalid
+    // plist — matches the Android-manifest injector.
+    let app_id_escaped = app_id
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let mut entries = String::new();
+    entries.push_str(&format!(
+        "    <key>GADApplicationIdentifier</key>\n    <string>{}</string>\n",
+        app_id_escaped
+    ));
+
+    // ATT purpose string is free-form user text — escape XML specials.
+    // Skip it if the app already declared NSUserTrackingUsageDescription
+    // (e.g. via [ios.info_plist]) so we don't emit a duplicate key.
+    if let Some(desc) = ads.get("att_usage_description").and_then(|v| v.as_str()) {
+        if !info_plist.contains("NSUserTrackingUsageDescription") {
+            let escaped = desc
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            entries.push_str(&format!(
+                "    <key>NSUserTrackingUsageDescription</key>\n    <string>{}</string>\n",
+                escaped
+            ));
+        }
+    }
+
+    if let OutputFormat::Text = format {
+        println!("  ads: injected GoogleMobileAds Info.plist keys (#867)");
     }
 
     Some(info_plist.replace(
@@ -509,5 +588,91 @@ mod push_entitlement_tests {
 
         assert!(inject_ios_push_entitlement(&input, &app_dir, OutputFormat::Json).is_none());
         assert!(!app_dir.join("app.entitlements").exists());
+    }
+}
+
+#[cfg(test)]
+mod ads_info_plist_tests {
+    use super::inject_ads_info_plist;
+    use crate::OutputFormat;
+
+    const BASE_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        <plist version=\"1.0\">\n<dict>\n    \
+        <key>CFBundleIdentifier</key>\n    <string>com.example.app</string>\n</dict>\n</plist>";
+
+    /// Stage a project tree with `perry.toml` one dir above `src/main.ts`
+    /// and return `(tempdir, input_path)`. The injector walks up from the
+    /// input via `parent()`, so the toml must sit above the input.
+    fn staged(toml_body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("src").join("main.ts");
+        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+        std::fs::write(&input, "console.log('x')").unwrap();
+        std::fs::write(dir.path().join("perry.toml"), toml_body).unwrap();
+        (dir, input)
+    }
+
+    #[test]
+    fn injects_gad_application_identifier() {
+        let (_dir, input) =
+            staged("[ads]\nios_app_id = \"ca-app-pub-3940256099942544~1458002511\"\n");
+        let out = inject_ads_info_plist(BASE_PLIST, &input, OutputFormat::Json).unwrap();
+        assert!(out.contains("<key>GADApplicationIdentifier</key>"));
+        assert!(out.contains("ca-app-pub-3940256099942544~1458002511"));
+        // Wrapper integrity — exactly one closing dict/plist, keys spliced
+        // before them.
+        assert_eq!(out.matches("</dict>").count(), 1);
+        assert_eq!(out.matches("</plist>").count(), 1);
+        // Untouched existing keys survive.
+        assert!(out.contains("<key>CFBundleIdentifier</key>"));
+    }
+
+    #[test]
+    fn injects_att_usage_description_when_configured() {
+        let (_dir, input) = staged(
+            "[ads]\nios_app_id = \"ca-app-pub-XXXX~YYYY\"\natt_usage_description = \"Ads & you\"\n",
+        );
+        let out = inject_ads_info_plist(BASE_PLIST, &input, OutputFormat::Json).unwrap();
+        assert!(out.contains("<key>NSUserTrackingUsageDescription</key>"));
+        // Free-text purpose string gets XML-escaped.
+        assert!(out.contains("Ads &amp; you"));
+    }
+
+    #[test]
+    fn skips_att_key_when_already_declared() {
+        // The app already set NSUserTrackingUsageDescription via
+        // [ios.info_plist]; we must not emit a duplicate key.
+        let with_att = BASE_PLIST.replace(
+            "</dict>",
+            "    <key>NSUserTrackingUsageDescription</key>\n    <string>existing</string>\n</dict>",
+        );
+        let (_dir, input) = staged(
+            "[ads]\nios_app_id = \"ca-app-pub-XXXX~YYYY\"\natt_usage_description = \"new\"\n",
+        );
+        let out = inject_ads_info_plist(&with_att, &input, OutputFormat::Json).unwrap();
+        assert_eq!(out.matches("NSUserTrackingUsageDescription").count(), 1);
+        assert!(out.contains("<string>existing</string>"));
+        // GADApplicationIdentifier still added.
+        assert!(out.contains("<key>GADApplicationIdentifier</key>"));
+    }
+
+    #[test]
+    fn escapes_xml_specials_in_app_id() {
+        // A malformed app_id with XML specials must not produce an invalid
+        // plist (#867 / CodeRabbit).
+        let (_dir, input) = staged("[ads]\nios_app_id = \"ca&app<pub>id\"\n");
+        let out = inject_ads_info_plist(BASE_PLIST, &input, OutputFormat::Json).unwrap();
+        assert!(out.contains("ca&amp;app&lt;pub&gt;id"));
+        assert!(!out.contains("ca&app<pub>id"));
+    }
+
+    #[test]
+    fn no_op_when_block_or_id_absent() {
+        // No [ads] block at all.
+        let (_d1, i1) = staged("[ios]\nbundle_id = \"a\"\n");
+        assert!(inject_ads_info_plist(BASE_PLIST, &i1, OutputFormat::Json).is_none());
+        // [ads] present but no ios_app_id (Android-only config).
+        let (_d2, i2) = staged("[ads]\nandroid_app_id = \"ca-app-pub-XXXX~ZZZZ\"\n");
+        assert!(inject_ads_info_plist(BASE_PLIST, &i2, OutputFormat::Json).is_none());
     }
 }

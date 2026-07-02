@@ -301,7 +301,7 @@ strip = false
 codegen-units = 16
 
 [workspace.package]
-version = "0.5.1198"
+version = "0.5.1211"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -350,7 +350,7 @@ similar = "2.4"
 # HTTP / WebSocket (for publish command)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "blocking"] }
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 url = "2"
 dirs = "6"
@@ -362,7 +362,7 @@ dotenvy = "0.15"
 flate2 = "1"
 tar = "0.4"
 base64 = "0.22"
-zip = "2"
+zip = "8"
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
 zstd = "0.13"

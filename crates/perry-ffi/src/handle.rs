@@ -15,12 +15,33 @@
 //! # Layout
 //!
 //! Single process-wide [`DashMap`] keyed by [`Handle`] (a `i64`).
-//! Each `i64` is allocated atomically from a counter starting at 1
-//! — `0` is reserved as `INVALID_HANDLE` so `register_handle` can
+//! A fresh `i64` is allocated atomically from a counter starting at
+//! 1 — `0` is reserved as `INVALID_HANDLE` so `register_handle` can
 //! never produce a falsy value (matches JS truthiness semantics
 //! for type checks like `if (handle)`). Visible ids stop before
 //! `0x40000`; the pointer-tagged small-handle band above that is
 //! reserved for Web Fetch and proxy handles.
+//!
+//! Ids freed by [`drop_handle`] / [`take_handle`] are parked on a
+//! bounded freelist and handed back out by [`register_handle`]
+//! before the counter advances, so a handle-per-request workload
+//! consumes ids in proportion to its *concurrent* live count rather
+//! than its *cumulative* allocation count — while reclaimed ids fit
+//! within the bounded freelist. Frees beyond [`FREE_HANDLES_CAP`]
+//! are intentionally discarded, so a burst larger than the cap can
+//! still advance [`NEXT_HANDLE`] and consume fresh ids. Ids are
+//! therefore reused over time but a given id is unique among the
+//! handles live at any instant — a recycled id is only parked after
+//! its prior entry was removed from the map.
+//!
+//! A freed id is NOT reusable the instant it is freed: it first sits
+//! in a quarantine and is promoted to the freelist only by
+//! [`drain_quarantined_handles`], which the host event loop calls
+//! once per tick. This deferral closes an ABA / use-after-recycle
+//! hazard — a consumer holding a stale bare id (e.g. an HTTP handler's
+//! `res` after the response was finalized) would otherwise see its id
+//! re-occupied by the next registration within the same tick and
+//! silently mutate a different object. See [`QUARANTINED_HANDLES`].
 //!
 //! perry-stdlib has its own copy of this same registry (in
 //! `crates/perry-stdlib/src/common/handle.rs`). They are separate
@@ -49,6 +70,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -67,6 +89,206 @@ const FFI_HANDLE_ID_START: Handle = 1;
 const FFI_HANDLE_ID_END: Handle = 0x40000;
 
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(FFI_HANDLE_ID_START);
+
+/// Freelist of ids reclaimed by [`drop_handle`] / [`take_handle`].
+///
+/// Without this, [`register_handle`] only ever bumps [`NEXT_HANDLE`], so a
+/// long-lived process that allocates a handle per unit of work — e.g.
+/// `perry-ext-http-server`, which registers a request + response handle per
+/// request and `drop_handle`s both once the response flushes — burns through
+/// the visible id band (`1 .. 0x40000`) and eventually panics in
+/// [`next_fresh_handle_id`], even though only a handful of handles are live at
+/// any instant. Recycling freed ids bounds id consumption by the *concurrent*
+/// live-handle count rather than the *cumulative* allocation count.
+///
+/// Bounded at [`FREE_HANDLES_CAP`] idle ids: a brief spike that frees a huge
+/// batch parks at most that many for reuse, and any excess is simply not
+/// recycled (the fresh-id path still serves it) so the freelist's own memory
+/// can't grow without limit. An id is only ever pushed here *after* it has
+/// been removed from [`HANDLES`], so a recycled id is never live in two
+/// registrations at once.
+static FREE_HANDLES: Lazy<Mutex<Vec<Handle>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Upper bound on parked idle ids. The visible band is `0x40000` (262 144)
+/// ids; capping the freelist well under that keeps its backing `Vec` small
+/// while still covering realistic concurrent in-flight counts (tens of
+/// thousands of simultaneous requests). Past the cap, a freed id is dropped on
+/// the floor — `register_handle` falls back to a fresh id exactly as it did
+/// before recycling existed.
+const FREE_HANDLES_CAP: usize = 64 * 1024;
+
+/// Quarantine for ids that have just been removed from [`HANDLES`] but are NOT
+/// yet eligible for reuse.
+///
+/// # Why a quarantine, not direct recycling (ABA / use-after-recycle)
+///
+/// The visible handle is a bare integer with no generation/epoch (the i64 ABI
+/// is fixed and published — a generation cannot be packed into the id). A
+/// consumer that resolves an object purely by id therefore cannot distinguish
+/// "the object I was given" from "a *different* object that happens to occupy
+/// the same recycled id now." `perry-ext-http-server` hits this: a request
+/// handler can return before `res.end()`, leaving a stale JS-side `res` value
+/// (a bare tagged id) outstanding; once that request is finalized its id is
+/// freed. If the id were recycled *immediately*, the very next
+/// [`register_handle`] (e.g. the next incoming request's response) would
+/// re-occupy it, and a late `res.write`/`res.end` from the retired handler
+/// would resolve the id to — and mutate — the *new* request's response,
+/// bleeding one request's body into another's. Before the freelist existed a
+/// freed id stayed dead, so such a stale write was a safe no-op; the freelist
+/// removed that safety. The quarantine restores it.
+///
+/// A freed id is parked here first and only promoted to [`FREE_HANDLES`] by
+/// [`drain_quarantined_handles`], which the host event loop calls once per
+/// pump tick. One full tick covers the dominant case: a stale `res.*` that the
+/// retired handler defers via a microtask or a same-turn continuation runs
+/// before the next tick's drain, and while the id sits in quarantine it maps
+/// to nothing in [`HANDLES`], so that stale call re-fetches an empty slot and
+/// no-ops (exactly the pre-freelist behavior) instead of corrupting a live
+/// object.
+///
+/// # The two quarantine tiers
+///
+/// The one-tick window only covers ids whose owner is *provably done writing*
+/// at free time — an HTTP response that reached `res.end()` (its
+/// `writable_ended` is set, so any further `res.write`/`res.end` is a no-op the
+/// caller can't ride into a recycled object). For those, one tick is enough:
+/// the stale call spends itself against an empty slot on the same turn.
+///
+/// But a response can be finalized *without* ever ending — the HTTP reaper
+/// frees a parked request's handles when its peer disconnects, or when the
+/// owning server is force-closed, neither of which sets `writable_ended`. The
+/// handler is still suspended on a slow `await`/`fetch` and may resume many
+/// ticks later and call `res.write`. A one-tick quarantine would have promoted
+/// (and possibly re-minted) that id long before, so the late write would land
+/// on a *live* response — silent cross-request body corruption that is NOT a
+/// write-after-end (the handler never called `end()`, so nothing rejects it).
+///
+/// For that case the id goes into [`QUARANTINED_UNTIL`] with a *deadline*
+/// instead — the request's grace deadline, which the reaper already tracks
+/// (Node's `requestTimeout`, default ~300s). The id is held until that deadline
+/// passes, by which point the request is definitively dead: a handler that
+/// resumes within grace finds its id still parked (the write no-ops against an
+/// empty slot); once the deadline elapses no legitimate resume can write, so
+/// the id is safe to recycle. This closes the window for arbitrarily-long-async
+/// handlers without a per-handle generation (which the fixed i64 ABI forbids).
+///
+/// Bound: the deadline-gated quarantine holds at most one id per response per
+/// in-flight grace window — the same population the reaper's `IN_FLIGHT` list
+/// already bounds — and is capped at [`FREE_HANDLES_CAP`] like every other
+/// tier, so it cannot grow without limit.
+///
+/// Embedders that never call [`drain_quarantined_handles`] simply never
+/// recycle ids — they fall back to fresh-id minting, which is the pre-freelist
+/// behavior and is safe (it only forgoes the id-reuse optimization).
+static QUARANTINED_HANDLES: Lazy<Mutex<Vec<Handle>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Deadline-gated quarantine: ids freed before their owner finished writing
+/// (the HTTP reaper's peer-disconnect / force-close paths, where
+/// `writable_ended` was never set). Each id is held until `Instant::now()`
+/// passes its paired deadline, then promoted to [`FREE_HANDLES`] by
+/// [`drain_quarantined_handles`]. See [`QUARANTINED_HANDLES`] for the full
+/// rationale (the "two quarantine tiers" section).
+static QUARANTINED_UNTIL: Lazy<Mutex<Vec<(Handle, Instant)>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Pop a recycled id, or `None` when the freelist is empty.
+fn pop_free_handle() -> Option<Handle> {
+    FREE_HANDLES.lock().unwrap_or_else(|p| p.into_inner()).pop()
+}
+
+/// Park a no-longer-live id in the quarantine (NOT the freelist — see
+/// [`QUARANTINED_HANDLES`]). Caller MUST have already removed `handle` from
+/// [`HANDLES`] (see the safety note above). Drops the id when the quarantine
+/// is at [`FREE_HANDLES_CAP`], in which case the id is simply never reused
+/// (the fresh-id path still serves it), matching the freelist's overflow
+/// behavior.
+fn recycle_handle(handle: Handle) {
+    let mut q = QUARANTINED_HANDLES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    push_bounded(&mut q, handle, FREE_HANDLES_CAP);
+}
+
+/// Park a no-longer-live id in the DEADLINE-GATED quarantine — held until
+/// `Instant::now()` passes `deadline`, not merely until the next tick. For ids
+/// freed before their owner finished writing (the HTTP reaper's
+/// peer-disconnect / force-close paths); see [`QUARANTINED_UNTIL`]. Caller MUST
+/// have already removed `handle` from [`HANDLES`]. Bounded exactly like
+/// [`recycle_handle`] — past the cap the id is dropped and the fresh-id path
+/// serves future registrations.
+fn recycle_handle_until(handle: Handle, deadline: Instant) {
+    let mut q = QUARANTINED_UNTIL.lock().unwrap_or_else(|p| p.into_inner());
+    if q.len() < FREE_HANDLES_CAP {
+        q.push((handle, deadline));
+    }
+}
+
+/// Promote quarantined ids to the freelist, making them eligible for reuse by
+/// [`register_handle`]. The host event loop calls this once per pump tick, AT
+/// THE TOP of the tick — before any of this tick's finalizations quarantine new
+/// ids.
+///
+/// Two tiers are drained (see [`QUARANTINED_HANDLES`]):
+///
+/// * The one-tick tier ([`QUARANTINED_HANDLES`]) is drained whole. An id freed
+///   during tick N is released no earlier than the start of tick N+1, by which
+///   point tick N's handler microtasks have drained and any stale handle
+///   reference has been spent against an empty slot.
+/// * The deadline-gated tier ([`QUARANTINED_UNTIL`]) is drained SELECTIVELY:
+///   only entries whose deadline has elapsed are promoted; the rest are
+///   retained for a future tick. This holds an id freed before its owner
+///   finished writing until the request's grace window closes, so a
+///   long-suspended handler that resumes within grace still no-ops against an
+///   empty slot.
+///
+/// Returns the number of ids promoted (for diagnostics/tests).
+pub fn drain_quarantined_handles() -> usize {
+    let now = Instant::now();
+    let one_tick: Vec<Handle> = {
+        let mut q = QUARANTINED_HANDLES
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        std::mem::take(&mut *q)
+    };
+    let elapsed: Vec<Handle> = {
+        let mut q = QUARANTINED_UNTIL.lock().unwrap_or_else(|p| p.into_inner());
+        // Retain entries still within their grace window; harvest the elapsed
+        // ones for promotion.
+        let mut ready = Vec::new();
+        q.retain(|(handle, deadline)| {
+            if now >= *deadline {
+                ready.push(*handle);
+                false
+            } else {
+                true
+            }
+        });
+        ready
+    };
+    if one_tick.is_empty() && elapsed.is_empty() {
+        return 0;
+    }
+    let mut free = FREE_HANDLES.lock().unwrap_or_else(|p| p.into_inner());
+    let mut promoted = 0;
+    for handle in one_tick.into_iter().chain(elapsed) {
+        let before = free.len();
+        push_bounded(&mut free, handle, FREE_HANDLES_CAP);
+        if free.len() != before {
+            promoted += 1;
+        }
+    }
+    promoted
+}
+
+/// Push `handle` onto `free` unless it is already at `cap`. Factored out so
+/// the bounding invariant is unit-testable without touching the process-wide
+/// freelist (which concurrent tests churn).
+fn push_bounded(free: &mut Vec<Handle>, handle: Handle, cap: usize) {
+    if free.len() < cap {
+        free.push(handle);
+    }
+}
+
 static ROOT_SCANNERS: Lazy<Mutex<Vec<fn(&mut dyn FnMut(f64))>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<NamedGcMutableRootScanner>>> =
@@ -125,7 +347,7 @@ extern "C" {
 // isolation (no `--workspace` feature unification, see `.github/workflows/
 // test.yml`). The handle-registry tests below exercise `register_handle`,
 // which calls `js_register_ffi_handle_exists_probe` to wire up the runtime's
-// handle-vs-timer disambiguation probe (#5083). Give that test binary a no-op
+// handle-vs-timer disambiguation probe. Give that test binary a no-op
 // definition so it links and the registry tests keep running. Gated on
 // `not(feature = "runtime-link")` so it never collides with perry-runtime's
 // real definition — which is present whenever runtime-link is on, or at a
@@ -246,12 +468,15 @@ impl<'a> GcRootVisitor<'a> {
 /// handle data while the main thread is also touching it).
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     ensure_handle_exists_probe_registered();
-    let handle = next_handle_id();
+    // Reuse a reclaimed id when one is parked, else mint a fresh one. A
+    // recycled id was removed from `HANDLES` before being parked, so inserting
+    // under it here cannot collide with a live registration.
+    let handle = pop_free_handle().unwrap_or_else(next_fresh_handle_id);
     HANDLES.insert(handle, Box::new(value));
     handle
 }
 
-fn next_handle_id() -> Handle {
+fn next_fresh_handle_id() -> Handle {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     if handle >= FFI_HANDLE_ID_END {
         panic!("perry-ffi handle id range exhausted before reserved Web handle bands");
@@ -309,8 +534,12 @@ pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'stat
 /// Remove the handle from the registry and return its value if
 /// the type matches. After this, the handle is no longer valid.
 pub fn take_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<T> {
-    HANDLES
-        .remove(&handle)
+    let removed = HANDLES.remove(&handle);
+    if removed.is_some() {
+        // Removed from the registry — the id is dead and safe to recycle.
+        recycle_handle(handle);
+    }
+    removed
         .and_then(|(_, boxed)| boxed.downcast::<T>().ok())
         .map(|b| *b)
 }
@@ -318,7 +547,31 @@ pub fn take_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<T> {
 /// Remove a handle and drop its value. Returns `true` if the
 /// handle existed.
 pub fn drop_handle(handle: Handle) -> bool {
-    HANDLES.remove(&handle).is_some()
+    if HANDLES.remove(&handle).is_some() {
+        // Removed from the registry — the id is dead and safe to recycle.
+        recycle_handle(handle);
+        true
+    } else {
+        false
+    }
+}
+
+/// Remove a handle and drop its value, but defer recycling its id until
+/// `deadline` rather than the next tick. Returns `true` if the handle existed.
+///
+/// For ids freed before their owner finished writing — the HTTP reaper frees a
+/// parked response on peer-disconnect / server-force-close without ever setting
+/// `writable_ended`, so a handler suspended on a slow `await` can resume many
+/// ticks later and write through the bare id. Holding the id until the
+/// request's grace deadline keeps it parked (a no-op slot) across that whole
+/// window. See [`QUARANTINED_UNTIL`].
+pub fn drop_handle_until(handle: Handle, deadline: Instant) -> bool {
+    if HANDLES.remove(&handle).is_some() {
+        recycle_handle_until(handle, deadline);
+        true
+    } else {
+        false
+    }
 }
 
 /// True if the handle currently maps to a registered object.
@@ -386,9 +639,9 @@ where
 /// pattern is to snapshot ids into a `Vec` first, then act on each
 /// id outside the iteration.
 ///
-/// Added by issue #604 — perry-ext-http-server's main-thread pump
-/// needs to walk every registered HttpServer / HttpsServer /
-/// Http2SecureServer handle each tick to drain pending requests.
+/// perry-ext-http-server's main-thread pump walks every registered
+/// HttpServer / HttpsServer / Http2SecureServer handle each tick to
+/// drain pending requests.
 pub fn iter_handle_ids_of<T, F>(mut f: F)
 where
     T: 'static + Send + Sync,
@@ -560,6 +813,7 @@ extern "C" fn scan_registered_mutable_root_by_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn round_trip_simple_value() {
@@ -618,5 +872,397 @@ mod tests {
         assert_ne!(a, b);
         drop_handle(a);
         drop_handle(b);
+    }
+
+    // ----------------------------------------------------------------
+    // Id-recycling freelist.
+    //
+    // The registry is process-wide and the default test harness runs
+    // these in parallel, so the reuse-sensitive tests below serialize on
+    // `RECYCLE_TEST_LOCK` and assert the *recycling contract* (a freed id
+    // is reused, fresh-id consumption stays bounded) rather than a fixed id
+    // value — robust to other tests churning the shared registry, but still
+    // failing hard against a no-reclaim `drop_handle` (the freed id never
+    // lands on the freelist, so it is never reused and id consumption is
+    // unbounded). The bounding invariant is tested in isolation against a
+    // local freelist via `push_bounded`.
+    // ----------------------------------------------------------------
+
+    static RECYCLE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Register `value`, reporting whether `register_handle` REUSED a parked
+    /// id rather than minting a fresh one (the recycling contract). A pop
+    /// leaves [`NEXT_HANDLE`] untouched; a fresh mint advances it, which a
+    /// no-reclaim build would do on every register. Returns `(handle, reused)`.
+    fn register_observing_reuse<T: 'static + Send + Sync>(value: T) -> (Handle, bool) {
+        let before = NEXT_HANDLE.load(Ordering::SeqCst);
+        let handle = register_handle(value);
+        let reused = NEXT_HANDLE.load(Ordering::SeqCst) == before;
+        (handle, reused)
+    }
+
+    /// Free `id`, then register `value` and keep retrying until we observe a
+    /// REUSE (the new registration drew a parked id instead of minting fresh),
+    /// returning the reused handle. Each non-reusing attempt is dropped so it
+    /// re-parks an id for the next try.
+    ///
+    /// A freed id now sits in QUARANTINE until [`drain_quarantined_handles`]
+    /// promotes it to the freelist (the ABA fix), so each attempt drains first
+    /// — exactly what the host event loop does once per tick. A no-reclaim
+    /// `drop_handle` would quarantine NOTHING, so the drain promotes nothing
+    /// and reuse never happens: the contract still fails hard against a build
+    /// that doesn't reclaim.
+    ///
+    /// The bounded retry is what makes the reuse assertion both robust and
+    /// meaningful on the *process-wide* freelist. The non-serialized registry
+    /// tests (`round_trip_simple_value` etc.) run in parallel and can pop the
+    /// very id we just freed in the window before our register — so a single
+    /// observation can legitimately miss reuse. But recycling guarantees reuse
+    /// happens *eventually* (we keep re-parking + re-draining ids), whereas a
+    /// no-reclaim `drop_handle` parks NOTHING, so every attempt mints fresh and
+    /// the loop exhausts — turning "reuse never happens" into a hard failure.
+    fn drop_then_register_reusing<T: 'static + Send + Sync>(id: Handle, value: T) -> Handle
+    where
+        T: Clone,
+    {
+        assert!(drop_handle(id), "the id to recycle must have been live");
+        for _ in 0..10_000 {
+            // Promote prior-tick quarantined ids to the freelist (the host
+            // pump's per-tick drain), then observe whether register reuses one.
+            drain_quarantined_handles();
+            let (handle, reused) = register_observing_reuse(value.clone());
+            if reused {
+                return handle;
+            }
+            // A parallel test popped our parked id first and we minted fresh;
+            // drop it (re-quarantining an id) and try again.
+            assert!(drop_handle(handle));
+        }
+        panic!(
+            "register_handle never reused a freed id across 10000 attempts — \
+             ids are not being recycled (a no-reclaim drop_handle would do this)"
+        );
+    }
+
+    #[test]
+    fn register_drop_register_reuses_a_freed_id() {
+        // End-to-end: a register/drop/register cycle reuses the freed id rather
+        // than minting a second fresh one. A no-reclaim `drop_handle` parks
+        // nothing, so `register_handle` would always mint fresh and
+        // `drop_then_register_reusing` would never observe reuse — a hard fail.
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let h1 = register_handle(7_i64);
+        let h2 = drop_then_register_reusing(h1, 9_i64);
+        assert_eq!(with_handle::<i64, _, _>(h2, |v| *v), Some(9));
+        assert!(drop_handle(h2));
+    }
+
+    #[test]
+    fn reused_id_carries_no_stale_state() {
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Register a String, drop it, then register a different type under the
+        // RECYCLED id. The recycled id must resolve to the NEW value with the
+        // NEW type — never the prior String (cross-request bleed). The String
+        // is no longer reachable because its entry was removed at drop.
+        //
+        // `drop_then_register_reusing` guarantees the second register actually
+        // reused the freed id, so this test exercises the recycle path — it
+        // would never silently pass on a no-reclaim registry where the
+        // stale-state question is moot.
+        let first = register_handle("stale".to_string());
+        let second = drop_then_register_reusing(first, 1234_i64);
+        assert!(
+            with_handle::<String, _, _>(second, |s| s.clone()).is_none(),
+            "recycled id must not expose the prior handle's value or type"
+        );
+        assert_eq!(with_handle::<i64, _, _>(second, |v| *v), Some(1234));
+        drop_handle(second);
+    }
+
+    #[test]
+    fn freed_id_is_not_reusable_until_drained_no_cross_request_bleed() {
+        // The ABA / use-after-recycle regression. Models the HTTP cross-request
+        // body bleed in handle-registry terms (the layer where the hazard lives,
+        // independent of perry-ext-http-server's reaper plumbing): a response R1
+        // is registered under id `h`; the handler returns before `res.end()` and
+        // the request is later finalized, freeing `h`; within the SAME tick a new
+        // request registers its response R2; then a stale `res.write`/`res.end`
+        // from the retired handler fires, carrying only the bare id `h`, and
+        // mutates whatever `h` resolves to.
+        //
+        // The hazard: if the free made `h` immediately reusable, the new
+        // registration would re-occupy `h` with R2 and the stale write would
+        // mutate R2 — one request's body bleeding into another's. The quarantine
+        // makes a freed id reusable only after `drain_quarantined_handles` (the
+        // host pump's per-tick promotion, which runs only AFTER the finalizing
+        // handler's microtasks — and thus any stale writes — have drained). So
+        // within the tick `h` resolves to NOTHING, and the stale write no-ops
+        // against the empty slot exactly as it did before the freelist existed.
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // A `ServerResponse`-shaped stand-in: the field a bleed would corrupt.
+        #[derive(Clone)]
+        struct Response {
+            buffered_body: Vec<u8>,
+        }
+
+        // Register R1, capturing its id (the stale `res` holds this).
+        let h = register_handle(Response {
+            buffered_body: b"request-1-body".to_vec(),
+        });
+
+        // Finalize R1 — it is removed from the registry and its id freed
+        // (quarantined, NOT yet on the freelist).
+        assert!(drop_handle(h));
+
+        // A new request registers R2 in the SAME tick (no drain yet). Because
+        // `h` is quarantined, register_handle CANNOT hand `h` back — R2 gets a
+        // different id. This is the load-bearing assertion: revert the
+        // quarantine (recycle straight to the freelist) and `h2 == h`, so the
+        // stale write below lands on R2 and the final assertion fails.
+        let h2 = register_handle(Response {
+            buffered_body: b"request-2-body".to_vec(),
+        });
+        assert_ne!(
+            h2, h,
+            "a just-freed id must not be reusable within the same tick — \
+             reusing it lets a stale handle holder corrupt the new request"
+        );
+
+        // The stale write fires against `h`. With the quarantine, `h` resolves
+        // to nothing — a safe no-op (mirrors how the HTTP FFI's
+        // `get_handle::<ServerResponse>(h)` returns None → early-return).
+        let appended = with_handle_mut::<Response, _, _>(h, |r| {
+            r.buffered_body.extend_from_slice(b"-STALE-WRITE");
+        });
+        assert!(
+            appended.is_none(),
+            "a stale write to a finalized (quarantined) id must hit an empty \
+             slot, not a live object"
+        );
+
+        // R2's body is pristine — the stale write did NOT bleed into it.
+        let r2_body = with_handle::<Response, _, _>(h2, |r| r.buffered_body.clone())
+            .expect("R2 is still live");
+        assert_eq!(
+            r2_body, b"request-2-body",
+            "the second request's response body must be untouched by the \
+             stale write to the finalized first request's id"
+        );
+
+        // After a tick boundary (drain), `h` is safely reusable again — and a
+        // fresh registration under it carries no stale R1 state.
+        drain_quarantined_handles();
+        let h3 = drop_then_register_reusing(
+            h2,
+            Response {
+                buffered_body: b"request-3-body".to_vec(),
+            },
+        );
+        let r3_body =
+            with_handle::<Response, _, _>(h3, |r| r.buffered_body.clone()).expect("R3 is live");
+        assert_eq!(r3_body, b"request-3-body");
+        drop_handle(h3);
+    }
+
+    #[test]
+    fn deadline_gated_id_survives_ticks_until_grace_then_recycles() {
+        // The LONG-ASYNC use-after-recycle regression — the residual window the
+        // one-tick quarantine does NOT cover. Models the HTTP reaper finalizing a
+        // response that never ended (`writable_ended` unset — peer disconnect or
+        // server force-close) while its handler is still suspended on a slow
+        // upstream `await`: response R1 is registered under id `h`; the reaper
+        // finalizes the request WITHOUT the handler ending the response
+        // (`drop_handle_until(h, grace_deadline)`) because the peer is gone, so
+        // `h` enters the deadline-gated quarantine; many pump ticks pass (each
+        // draining); then the handler resumes — still within the grace window —
+        // and its stale `res.write` fires carrying only the bare id `h`.
+        //
+        // With a one-tick quarantine, the first drain would have promoted `h`
+        // (and a new request could have re-minted it), so the resumed write would
+        // mutate a LIVE response — cross-request body corruption that is NOT a
+        // write-after-end (the handler never called `end()`). The deadline-gated
+        // quarantine keeps `h` parked across EVERY tick until the grace deadline
+        // passes, so the stale write no-ops against an empty slot for the whole
+        // window — then `h` recycles cleanly once the request is definitively
+        // dead.
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        #[derive(Clone)]
+        struct Response {
+            buffered_body: Vec<u8>,
+        }
+
+        // Register R1 (the suspended handler holds this bare id).
+        let h = register_handle(Response {
+            buffered_body: b"request-1-body".to_vec(),
+        });
+
+        // The reaper finalizes WITHOUT end — defer recycling until a grace
+        // deadline well in the future (stand-in for `requestTimeout`).
+        let grace = Instant::now() + Duration::from_secs(3600);
+        assert!(drop_handle_until(h, grace));
+
+        // Several pump ticks pass. Each drain must leave `h` parked because its
+        // deadline has not elapsed — so a new request can never be handed `h`.
+        // (Fail-before: a one-tick quarantine promotes `h` on the first drain,
+        // making the assertion below fail.)
+        for _ in 0..5 {
+            drain_quarantined_handles();
+            let probe = register_handle(0_i64);
+            assert_ne!(
+                probe, h,
+                "a deadline-gated id must not be recycled before its grace \
+                 deadline — reusing it lets a long-suspended handler corrupt a \
+                 new request's response"
+            );
+            drop_handle(probe);
+        }
+
+        // The stale write fires against `h`. While `h` is parked it maps to
+        // nothing, so the write no-ops against an empty slot — no bleed.
+        let appended = with_handle_mut::<Response, _, _>(h, |r| {
+            r.buffered_body.extend_from_slice(b"-STALE-WRITE");
+        });
+        assert!(
+            appended.is_none(),
+            "a stale write to a deadline-gated id must hit an empty slot, not a \
+             live object"
+        );
+
+        // Drain the far-future entry away so it can't leak into later tests
+        // (its deadline hasn't elapsed, so this is a no-op for `h` — but it
+        // clears the one-tick tier). Then prove the elapsed-deadline path DOES
+        // recycle: a separate id parked with an already-past deadline is
+        // promoted by the very next drain and reused cleanly, carrying no stale
+        // state. This is the post-grace tick, modeled deterministically (no
+        // sleep) with an id we fully control.
+        drain_quarantined_handles();
+        let dead = register_handle(Response {
+            buffered_body: b"to-be-finalized".to_vec(),
+        });
+        assert!(drop_handle_until(
+            dead,
+            Instant::now() - Duration::from_secs(1)
+        ));
+        // The elapsed-deadline entry is eligible immediately; retry to absorb
+        // parallel tests racing the shared freelist (same pattern as
+        // `drop_then_register_reusing`).
+        let mut recycled = None;
+        for _ in 0..10_000 {
+            drain_quarantined_handles();
+            let candidate = register_handle(Response {
+                buffered_body: b"request-2-body".to_vec(),
+            });
+            if candidate == dead {
+                recycled = Some(candidate);
+                break;
+            }
+            drop_handle(candidate);
+        }
+        let h2 = recycled.expect("an elapsed-deadline id must recycle once its grace passes");
+        let body = with_handle::<Response, _, _>(h2, |r| r.buffered_body.clone())
+            .expect("the recycled id resolves to the new response");
+        assert_eq!(
+            body, b"request-2-body",
+            "the recycled id carries the NEW response, never the finalized one"
+        );
+        drop_handle(h2);
+
+        // `h`'s far-future deadline entry stays parked — that is the point of
+        // the test. The freelist is bounded and the process-wide registry
+        // tolerates a held id, so this leaks nothing that matters across tests.
+    }
+
+    #[test]
+    fn live_handles_never_share_an_id() {
+        // Serialized: this test drains the quarantine, which mutates the shared
+        // recycle state the other recycle-sensitive tests depend on.
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Recycling must never hand the same id to two live handles. Hold a
+        // batch live (none dropped) and assert every id is distinct, then
+        // free them and re-allocate the same count, again all-distinct.
+        fn batch_all_distinct() -> Vec<Handle> {
+            let live: Vec<Handle> = (0..256).map(|i| register_handle(i as i64)).collect();
+            let mut sorted = live.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted.len(),
+                live.len(),
+                "no two concurrently-live handles may share an id"
+            );
+            live
+        }
+
+        let first = batch_all_distinct();
+        for h in &first {
+            drop_handle(*h);
+        }
+        // Promote the just-quarantined ids so the next batch reuses them (the
+        // host pump's per-tick drain); they must still all be mutually distinct.
+        drain_quarantined_handles();
+        let second = batch_all_distinct();
+        for h in &second {
+            drop_handle(*h);
+        }
+    }
+
+    #[test]
+    fn freelist_is_bounded() {
+        // The bounding invariant, tested against a local freelist so it is
+        // deterministic and can't race the process-wide one. Past `cap`,
+        // `push_bounded` drops the id on the floor — `register_handle` then
+        // falls back to a fresh id, exactly as before recycling existed.
+        let cap = 4;
+        let mut free: Vec<Handle> = Vec::new();
+        for id in 0..(cap as Handle + 8) {
+            push_bounded(&mut free, id, cap);
+        }
+        assert_eq!(free.len(), cap, "freelist must not grow past the cap");
+        // Below the cap it parks every id in order.
+        assert_eq!(free, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn churn_does_not_exhaust_the_id_band() {
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Register/drop churn past the id band size while never holding more
+        // than one handle live. With recycling the fresh counter barely
+        // moves — each drop refills the freelist the next register drains —
+        // so cumulative allocations are decoupled from fresh-id consumption.
+        // Without recycling this loop would advance the counter by
+        // `iterations` and `next_fresh_handle_id` would PANIC at the
+        // `FFI_HANDLE_ID_END` exhaustion check (a fail-before of a different
+        // shape: the no-reclaim build can't even complete the loop).
+        //
+        // Measure the fresh-counter delta directly. Concurrent tests mint a
+        // bounded handful of fresh ids; recycling keeps OUR contribution near
+        // zero, so the total delta stays tiny in absolute terms.
+        let iterations = FFI_HANDLE_ID_END as usize + 8192;
+        let before = NEXT_HANDLE.load(Ordering::SeqCst);
+        for n in 0..iterations {
+            let h = register_handle(n as i64);
+            assert!(drop_handle(h));
+            // The dropped id is quarantined, not yet reusable — drain it back
+            // to the freelist (the host pump's per-tick promotion) so the next
+            // register reuses it rather than minting fresh and exhausting the
+            // band. A no-reclaim build quarantines nothing, so this drain is a
+            // no-op and the counter still runs away.
+            drain_quarantined_handles();
+        }
+        let after = NEXT_HANDLE.load(Ordering::SeqCst);
+        let fresh_minted = (after - before) as usize;
+        assert!(
+            fresh_minted < 4096,
+            "fresh-id consumption ({fresh_minted}) over {iterations} \
+             register/drop cycles should stay tiny once ids recycle; a \
+             no-reclaim registry would mint one per allocation and exhaust \
+             the band"
+        );
     }
 }

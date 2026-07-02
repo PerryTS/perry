@@ -105,7 +105,19 @@ pub(crate) fn to_integer_if_integral(raw: f64) -> i128 {
             "Temporal duration fields must be integers",
         );
     }
-    n as i128
+    let i = n as i128;
+    // Guard against values that are finite and integral in IEEE-754 terms but
+    // exceed the i128 range (e.g. Number.MAX_VALUE ≈ 1.8×10^308 > i128::MAX
+    // ≈ 1.7×10^38). Such a cast silently saturates, then the narrowing to i64
+    // wraps (e.g. i128::MAX as i64 = -1), producing a nonsensical field value
+    // that temporal_rs accepts without complaint. Round-tripping back to f64
+    // detects the saturation.
+    if i as f64 != n {
+        crate::fs::validate::throw_range_error_with_code(
+            "Temporal duration fields must be integers",
+        );
+    }
+    i
 }
 
 /// `ToIntegerIfIntegral(args[i])`, defaulting an absent / `undefined` argument
@@ -283,6 +295,94 @@ pub fn get_property(recv: f64, name: &str) -> Option<f64> {
         TemporalValue::PlainMonthDay(md) => super::plain_month_day::get(md, name),
         TemporalValue::ZonedDateTime(z) => super::zoned_date_time::get(z, name),
     }
+}
+
+/// Whether `name` is an instance method of the Temporal value `recv`. Used by
+/// the `class X extends Temporal.<Type>` subclass getter forward to decide
+/// whether a non-getter property read should resolve to a (bound) callable
+/// instead of `undefined` — so `subInstance.abs` reads as a function, not just
+/// `subInstance.abs()` / `subInstance[name]()` dispatching. The name sets
+/// mirror each type's `call()` match arms (the authoritative dispatch). (#5587)
+pub fn has_method(recv: f64, name: &str) -> bool {
+    // Methods shared by (nearly) every Temporal type.
+    const COMMON: &[&str] = &["toString", "toJSON", "toLocaleString", "valueOf"];
+    if COMMON.contains(&name) {
+        return temporal_value_ref(recv).is_some();
+    }
+    let names: &[&str] = match temporal_value_ref(recv) {
+        Some(TemporalValue::Duration(_)) => &[
+            "with", "negated", "abs", "add", "subtract", "round", "total",
+        ],
+        Some(TemporalValue::Instant(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "round",
+            "equals",
+            "toZonedDateTimeISO",
+        ],
+        Some(TemporalValue::PlainDate(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "equals",
+            "with",
+            "withCalendar",
+            "toPlainDateTime",
+            "toPlainMonthDay",
+            "toPlainYearMonth",
+            "toZonedDateTime",
+        ],
+        Some(TemporalValue::PlainTime(_)) => &[
+            "add", "subtract", "until", "since", "round", "equals", "with",
+        ],
+        Some(TemporalValue::PlainDateTime(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "round",
+            "equals",
+            "with",
+            "withCalendar",
+            "withPlainTime",
+            "toPlainDate",
+            "toPlainTime",
+            "toZonedDateTime",
+        ],
+        Some(TemporalValue::PlainYearMonth(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "equals",
+            "with",
+            "toPlainDate",
+        ],
+        Some(TemporalValue::PlainMonthDay(_)) => &["equals", "with", "toPlainDate"],
+        Some(TemporalValue::ZonedDateTime(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "round",
+            "equals",
+            "with",
+            "withCalendar",
+            "withPlainTime",
+            "withTimeZone",
+            "startOfDay",
+            "getTimeZoneTransition",
+            "toInstant",
+            "toPlainDate",
+            "toPlainTime",
+            "toPlainDateTime",
+        ],
+        None => return false,
+    };
+    names.contains(&name)
 }
 
 /// Dispatch an instance method (`duration.add(x)`, `instant.toString()`, …).

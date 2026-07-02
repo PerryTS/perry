@@ -8,6 +8,7 @@ fn empty_opts() -> CompileOptions {
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
+        import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
         import_function_v8_specifiers: std::collections::HashMap::new(),
         import_function_node_submodule: std::collections::HashMap::new(),
@@ -63,6 +64,8 @@ fn entry_opts() -> CompileOptions {
 
 fn shadow_hygiene_module() -> Module {
     Module {
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         name: "shadow_hygiene.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -124,6 +127,7 @@ fn shadow_hygiene_module() -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
@@ -141,6 +145,8 @@ fn top_level_shadow_module(name: &str) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: Vec::new(),
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         init: vec![
             Stmt::Let {
                 id: 10,
@@ -178,6 +184,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
@@ -215,6 +222,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: Vec::new(),
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         init: vec![
             Stmt::Let {
                 id: 30,
@@ -261,6 +270,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
@@ -269,6 +279,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
 
 fn reassigned_any_shadow_module() -> Module {
     Module {
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         name: "reassigned_any_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -317,6 +329,7 @@ fn reassigned_any_shadow_module() -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
@@ -325,6 +338,8 @@ fn reassigned_any_shadow_module() -> Module {
 
 fn mixed_any_alias_shadow_module() -> Module {
     Module {
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         name: "mixed_any_alias_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -388,6 +403,7 @@ fn mixed_any_alias_shadow_module() -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
@@ -396,6 +412,8 @@ fn mixed_any_alias_shadow_module() -> Module {
 
 fn closure_captured_write_shadow_module() -> Module {
     Module {
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         name: "closure_captured_write_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -467,6 +485,7 @@ fn closure_captured_write_shadow_module() -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        class_display_names: std::collections::HashMap::new(),
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
@@ -490,11 +509,19 @@ fn function_slice<'a>(ir: &'a str, name: &str) -> &'a str {
 }
 
 fn init_body_function_name(ir: &str) -> String {
+    // `__init_body` is emitted with `external` linkage (worker_threads must
+    // call it directly, bypassing the once-guard on the `__init` wrapper — see
+    // codegen/entry.rs), so locate it by the `void @<prefix>__init_body()`
+    // shape rather than hard-coding the `internal` linkage word.
     for line in ir.lines() {
-        if let Some(start) = line.find("define internal void @") {
-            if let Some(end) = line[start..].find("__init_body()") {
-                let rest = &line[start + "define internal void @".len()..start + end];
-                return format!("{}__init_body", rest);
+        if !line.trim_start().starts_with("define ") {
+            continue;
+        }
+        if let Some(at) = line.find(" void @") {
+            let after_at = at + " void @".len();
+            if let Some(end) = line[after_at..].find("__init_body()") {
+                let prefix = &line[after_at..after_at + end];
+                return format!("{}__init_body", prefix);
             }
         }
     }

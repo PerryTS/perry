@@ -107,7 +107,7 @@ impl BuildCacheProbe {
             .join(manifest_name);
         let eligible = eligibility(args, project_root);
         Self {
-            args_key: args_key(args, &output_path),
+            args_key: args_key(args, &output_path, project_root),
             manifest_path,
             output_path,
             target_name: args.target.clone().unwrap_or_else(|| "native".to_string()),
@@ -440,7 +440,7 @@ fn entry_uses_precompile(input: &Path) -> bool {
         .unwrap_or(true)
 }
 
-fn args_key(args: &CompileArgs, output_path: &Path) -> String {
+fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> String {
     let mut hasher = Sha256::new();
     hash_field(&mut hasher, "args-debug", &format!("{args:?}"));
     hash_field(&mut hasher, "input", &absolute_identity(&args.input));
@@ -456,6 +456,51 @@ fn args_key(args: &CompileArgs, output_path: &Path) -> String {
         "features",
         args.features.as_deref().unwrap_or(""),
     );
+    // #5731 — fold the resolved embedded-asset set into the key. `{args:?}`
+    // covers `--embed` patterns but not `perry.embed` / `[compile] embed`
+    // config nor the files' state, so without this an edit to an embedded file
+    // (with no pattern change) would reuse a stale cached binary. Key on each
+    // asset's name + size + mtime rather than re-reading and hashing the full
+    // contents here — the bytes are already streamed into the binary at embed
+    // time, and size+mtime is the conventional, cheap freshness signal (a fresh
+    // checkout bumps mtime → safe rebuild; the only miss is a content change
+    // that preserves both size and mtime, which real edits don't do).
+    //
+    // Fail closed on resolution / per-asset stat failures. `run_pipeline`
+    // treats `resolve_embedded_assets` as fatal (the `?` at its embed step), so
+    // the cache must not let a broken `perry.embed` / `[compile] embed` config —
+    // or a file that vanished or can't be stat'd — silently drop the embed
+    // inputs and fall back to the non-embed key, which could reuse a stale
+    // manifest and mask the error. Folding a sentinel field on every error path
+    // makes the key diverge from any successful build (which never emits these
+    // field names), so the probe misses, `run_pipeline` re-runs, and the real
+    // error surfaces instead of a stale binary.
+    match super::embed::resolve_embedded_assets(&args.embed, project_root) {
+        Ok(assets) => {
+            for (name, path) in &assets {
+                hash_field(&mut hasher, "embed-name", name);
+                match fs::metadata(path) {
+                    Ok(meta) => {
+                        hash_field(&mut hasher, "embed-size", &meta.len().to_string());
+                        match meta
+                            .modified()
+                            .ok()
+                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                        {
+                            Some(dur) => hash_field(
+                                &mut hasher,
+                                "embed-mtime",
+                                &format!("{}.{:09}", dur.as_secs(), dur.subsec_nanos()),
+                            ),
+                            None => hash_field(&mut hasher, "embed-mtime-unavailable", name),
+                        }
+                    }
+                    Err(e) => hash_field(&mut hasher, "embed-stat-error", &format!("{name}: {e}")),
+                }
+            }
+        }
+        Err(e) => hash_field(&mut hasher, "embed-resolve-error", &e.to_string()),
+    }
     hex::encode(hasher.finalize())
 }
 

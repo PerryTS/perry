@@ -62,6 +62,7 @@ use std::sync::Once;
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod app;
+mod cluster_bind;
 mod context;
 mod router;
 mod server;
@@ -123,6 +124,29 @@ fn scan_fastify_roots(visitor: &mut GcRootVisitor<'_>) {
         // copied-minor GC can rewrite closures if they move.
         for cb in app.upgrade_handlers.iter_mut() {
             visitor.visit_i64_slot(cb);
+        }
+    });
+
+    // Per-request `req.params` / `req.query` / `req.headers` JS objects are
+    // cached on each live FastifyContext (`params_object_cache` /
+    // `query_object_cache` / `headers_object_cache`). Visit them as NaN-boxed
+    // value slots so a copying GC between the first accessor build and a later
+    // read keeps the object alive AND relocates the cached pointer.
+    // `0` means uncached; only a real object pointer (POINTER_TAG `0x7FFD`) is
+    // visited. `get_mut()` is sound here — the GC scan has exclusive access to
+    // each handle.
+    iter_handles_of_mut::<FastifyContext, _>(|ctx| {
+        let params_slot = ctx.params_object_cache.get_mut();
+        if *params_slot >> 48 == 0x7FFD {
+            visitor.visit_nanbox_u64_slot(params_slot);
+        }
+        let query_slot = ctx.query_object_cache.get_mut();
+        if *query_slot >> 48 == 0x7FFD {
+            visitor.visit_nanbox_u64_slot(query_slot);
+        }
+        let headers_slot = ctx.headers_object_cache.get_mut();
+        if *headers_slot >> 48 == 0x7FFD {
+            visitor.visit_nanbox_u64_slot(headers_slot);
         }
     });
 }
@@ -209,6 +233,174 @@ mod tests {
             assert_rewritten(hook, app.hooks.on_request[0]);
             assert_rewritten(error, app.error_handler.expect("error handler"));
             assert_rewritten(plugin, app.plugins[0].handler);
+        }
+        drop_handle(handle);
+    }
+
+    /// A fresh `FastifyContext` must have both per-request object caches empty
+    /// (`0`), and the slots round-trip the NaN-boxed bits they're built to hold.
+    #[test]
+    fn context_object_caches_start_empty() {
+        use std::sync::atomic::Ordering;
+        let ctx = FastifyContext::new(
+            7,
+            "GET".to_string(),
+            "/users/:id".to_string(),
+            HashMap::new(),
+            None,
+            HashMap::new(),
+        );
+        assert_eq!(ctx.params_object_cache.load(Ordering::Acquire), 0);
+        assert_eq!(ctx.query_object_cache.load(Ordering::Acquire), 0);
+        assert_eq!(ctx.headers_object_cache.load(Ordering::Acquire), 0);
+
+        // Round-trip a synthetic NaN-boxed object pointer through each slot, so a
+        // wiring regression in either cache is caught.
+        let nan_boxed = 0x7FFD_0000_DEAD_BEEFu64;
+        ctx.params_object_cache.store(nan_boxed, Ordering::Release);
+        assert_eq!(ctx.params_object_cache.load(Ordering::Acquire), nan_boxed);
+        ctx.query_object_cache.store(nan_boxed, Ordering::Release);
+        assert_eq!(ctx.query_object_cache.load(Ordering::Acquire), nan_boxed);
+        ctx.headers_object_cache.store(nan_boxed, Ordering::Release);
+        assert_eq!(ctx.headers_object_cache.load(Ordering::Acquire), nan_boxed);
+    }
+
+    /// The `req.params` / `req.query` / `req.headers` object accessors build the
+    /// object once and return the cached NaN-boxed pointer on subsequent calls
+    /// within a request.
+    #[test]
+    fn req_object_accessors_cache_within_request() {
+        use std::sync::atomic::Ordering;
+        let _guard = GcTestGuard::new();
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "42".to_string());
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), "example.com".to_string());
+        let ctx = FastifyContext::new(
+            0,
+            "GET".to_string(),
+            "/users/42?trace=1".to_string(),
+            headers,
+            None,
+            params,
+        );
+        let h = register_handle(ctx);
+        unsafe {
+            // params: two reads return identical (cached) bits.
+            let a = js_fastify_req_params_object(h);
+            let b = js_fastify_req_params_object(h);
+            assert_eq!(a.to_bits(), b.to_bits(), "second params read is cached");
+            assert_eq!(a.to_bits() >> 48, 0x7FFD, "params object is POINTER_TAG'd");
+            let cached_p = get_handle::<FastifyContext>(h)
+                .unwrap()
+                .params_object_cache
+                .load(Ordering::Acquire);
+            assert_eq!(
+                cached_p,
+                a.to_bits(),
+                "params cache holds the returned object"
+            );
+
+            // query: same, and a distinct slot from params.
+            let c = js_fastify_req_query_object(h);
+            let d = js_fastify_req_query_object(h);
+            assert_eq!(c.to_bits(), d.to_bits(), "second query read is cached");
+            assert_eq!(c.to_bits() >> 48, 0x7FFD, "query object is POINTER_TAG'd");
+            assert_ne!(
+                a.to_bits(),
+                c.to_bits(),
+                "query cache must not reuse the params object"
+            );
+            let cached_q = get_handle::<FastifyContext>(h)
+                .unwrap()
+                .query_object_cache
+                .load(Ordering::Acquire);
+            assert_eq!(
+                cached_q,
+                c.to_bits(),
+                "query cache holds the returned object"
+            );
+
+            // headers: same caching behaviour, a third distinct slot.
+            let e = js_fastify_req_headers(h);
+            let f = js_fastify_req_headers(h);
+            assert_eq!(e, f, "second headers read is cached");
+            assert_eq!((e as u64) >> 48, 0x7FFD, "headers object is POINTER_TAG'd");
+            assert_ne!(
+                e as u64,
+                a.to_bits(),
+                "headers cache must not reuse the params object"
+            );
+            assert_ne!(
+                e as u64,
+                c.to_bits(),
+                "headers cache must not reuse the query object"
+            );
+            let cached_h = get_handle::<FastifyContext>(h)
+                .unwrap()
+                .headers_object_cache
+                .load(Ordering::Acquire);
+            assert_eq!(
+                cached_h, e as u64,
+                "headers cache holds the returned object"
+            );
+        }
+        drop_handle(h);
+    }
+
+    /// GC soundness: the root scanner must visit each live FastifyContext's
+    /// cached object slots so a copying GC keeps them alive AND relocates the
+    /// cached pointer in place — and must preserve the NaN-box `POINTER_TAG`
+    /// (a raw `visit_i64_slot` would strip it). Without this rooting a GC between
+    /// the first `req.params` build and a later read would dangle the cache.
+    #[test]
+    fn gc_scanner_rewrites_cached_object_slots() {
+        use std::sync::atomic::Ordering;
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-fastify", scan_fastify_roots);
+
+        let params_obj = young_gc_root();
+        let query_obj = young_gc_root();
+        let headers_obj = young_gc_root();
+        let nanbox = |addr: i64| 0x7FFD_0000_0000_0000u64 | (addr as u64 & 0x0000_FFFF_FFFF_FFFF);
+        let mask = 0x0000_FFFF_FFFF_FFFFu64;
+
+        let ctx = FastifyContext::new(
+            0,
+            "GET".to_string(),
+            "/x".to_string(),
+            HashMap::new(),
+            None,
+            HashMap::new(),
+        );
+        ctx.params_object_cache
+            .store(nanbox(params_obj), Ordering::Release);
+        ctx.query_object_cache
+            .store(nanbox(query_obj), Ordering::Release);
+        ctx.headers_object_cache
+            .store(nanbox(headers_obj), Ordering::Release);
+        let handle = register_handle(ctx);
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let ctx =
+                get_handle::<FastifyContext>(handle).expect("context handle should remain live");
+            let p = ctx.params_object_cache.load(Ordering::Acquire);
+            let q = ctx.query_object_cache.load(Ordering::Acquire);
+            let hdr = ctx.headers_object_cache.load(Ordering::Acquire);
+            // Tag preserved (visit_nanbox_u64_slot, not visit_i64_slot).
+            assert_eq!(p >> 48, 0x7FFD, "params cache keeps POINTER_TAG after GC");
+            assert_eq!(q >> 48, 0x7FFD, "query cache keeps POINTER_TAG after GC");
+            assert_eq!(
+                hdr >> 48,
+                0x7FFD,
+                "headers cache keeps POINTER_TAG after GC"
+            );
+            // Address relocated to the moved object, still in the nursery.
+            assert_rewritten(params_obj, (p & mask) as i64);
+            assert_rewritten(query_obj, (q & mask) as i64);
+            assert_rewritten(headers_obj, (hdr & mask) as i64);
         }
         drop_handle(handle);
     }
@@ -350,6 +542,57 @@ mod tests {
         assert_eq!(unsafe { js_ext_fastify_is_context_handle(ctx_handle) }, 0);
     }
 
+    /// Regression: the per-request dispatcher (`process_request` in `server.rs`)
+    /// registers a fresh `FastifyContext` in the handle registry for every
+    /// request and must drop that handle once the response is sent. Without the
+    /// trailing `drop_handle`, every served request would leak one context — its
+    /// headers map, body, params, and response state — into the global registry,
+    /// growing unbounded under sustained load until allocation fails.
+    ///
+    /// This drives an actual request *through* `process_request` rather than
+    /// calling `drop_handle` directly, so it pins the real dispatch invariant: a
+    /// change that removed the cleanup at the tail of `process_request` leaves
+    /// the handle live and fails here. The request matches no route, so the
+    /// dispatcher takes the no-handler path (`undefined` result →
+    /// `build_response_body` short-circuits to `{}` with no JS allocation),
+    /// while still exercising the full register → build response → drop
+    /// lifecycle. `process_request` returns the context handle it registered
+    /// (and must have freed) so the assertion targets that exact handle —
+    /// race-free under parallel test execution.
+    #[test]
+    fn context_handle_dropped_after_dispatch() {
+        let app_handle = register_handle(FastifyApp::new());
+        let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
+        let pending = crate::server::FastifyPendingRequest {
+            method: "GET".to_string(),
+            path: "/health".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            params: HashMap::new(),
+            response_tx,
+        };
+
+        // Drive the real dispatcher; it returns the context handle it
+        // registered and freed.
+        let ctx_handle = crate::server::process_request(app_handle, pending);
+
+        // The request actually flowed through: the no-route path still sends a
+        // `{}` response, so the oneshot has a value.
+        assert!(
+            response_rx.try_recv().is_ok(),
+            "process_request should send a response even for an unmatched route"
+        );
+
+        // The invariant: the context handle `process_request` created must be
+        // gone. A missing `drop_handle` at the tail would leave it live here.
+        assert!(
+            get_handle::<FastifyContext>(ctx_handle).is_none(),
+            "FastifyContext handle leaked: still present after process_request"
+        );
+
+        drop_handle(app_handle);
+    }
+
     #[test]
     fn port_extraction_safe_defaults() {
         // Object literal pattern verified through the wider unit
@@ -385,5 +628,255 @@ mod tests {
         assert!(app.error_handler.is_none());
         app.set_error_handler(42);
         assert_eq!(app.error_handler, Some(42));
+    }
+
+    #[test]
+    fn static_index_population_and_lookup() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/ping", 11);
+        app.add_route("POST", "/users", 22);
+        app.add_route("GET", "/users/:id", 33); // parametric — not indexed
+        app.add_route("GET", "/static/*", 44); // wildcard — not indexed
+
+        // Only the two fully-static routes are indexed.
+        assert!(app.static_index.contains_key("GET /ping"));
+        assert!(app.static_index.contains_key("POST /users"));
+        assert_eq!(app.static_index.len(), 2);
+
+        // Indexed lookup returns the correct handler and empty params.
+        let (route, params) = app.match_route("GET", "/ping").expect("static hit");
+        assert_eq!(route.handler, 11);
+        assert!(params.is_empty());
+
+        // A query string on the request must not break the static-index hit.
+        let (route, params) = app
+            .match_route("GET", "/ping?trace=1")
+            .expect("static hit with query string");
+        assert_eq!(route.handler, 11);
+        assert!(params.is_empty());
+
+        // Parametric routes still match via the linear-scan fallback, with params.
+        let (route, params) = app.match_route("GET", "/users/42").expect("parametric hit");
+        assert_eq!(route.handler, 33);
+        assert_eq!(params.get("id").map(String::as_str), Some("42"));
+
+        // Method mismatch must not short-circuit: only POST /users is registered,
+        // so GET /users falls through to None rather than hitting the POST entry.
+        assert!(app.match_route("GET", "/users").is_none());
+    }
+
+    #[test]
+    fn static_index_respects_prefix() {
+        let mut app = FastifyApp::with_prefix("/api".to_string());
+        app.add_route("GET", "/users", 7);
+        // The index key is the full prefixed path, not the bare registration path.
+        assert!(app.static_index.contains_key("GET /api/users"));
+        assert!(!app.static_index.contains_key("GET /users"));
+        let (route, _) = app
+            .match_route("GET", "/api/users")
+            .expect("prefixed static hit");
+        assert_eq!(route.handler, 7);
+    }
+
+    /// The index is consulted before the linear scan, so it must not let a later
+    /// static route jump ahead of an earlier parametric/wildcard route that also
+    /// matches — first-registered-wins has to survive.
+    #[test]
+    fn static_index_preserves_registration_precedence() {
+        // Parametric `/:slug` registered FIRST, colliding static `/static` second.
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/:slug", 1); // parametric, registered first
+        app.add_route("GET", "/static", 2); // static, collides with /:slug
+
+        // The shadowed static route is deliberately NOT indexed...
+        assert!(!app.static_index.contains_key("GET /static"));
+        // ...so the earlier parametric route still wins through the linear scan.
+        let (route, params) = app.match_route("GET", "/static").expect("hit");
+        assert_eq!(route.handler, 1);
+        assert_eq!(params.get("slug").map(String::as_str), Some("static"));
+
+        // Reverse order: static registered first IS indexed and wins.
+        let mut app2 = FastifyApp::new();
+        app2.add_route("GET", "/static", 2); // static first
+        app2.add_route("GET", "/:slug", 1); // parametric second
+        assert!(app2.static_index.contains_key("GET /static"));
+        assert_eq!(app2.match_route("GET", "/static").unwrap().0.handler, 2);
+
+        // Wildcard `/static/*` registered FIRST: the later static `/static/foo`
+        // must not bypass it via the index — the wildcard still wins and captures.
+        let mut app3 = FastifyApp::new();
+        app3.add_route("GET", "/static/*", 3); // wildcard, registered first
+        app3.add_route("GET", "/static/foo", 4); // static, shadowed by the wildcard
+        assert!(!app3.static_index.contains_key("GET /static/foo"));
+        let (route, params) = app3.match_route("GET", "/static/foo").expect("hit");
+        assert_eq!(route.handler, 3);
+        assert_eq!(params.get("*").map(String::as_str), Some("foo"));
+    }
+
+    /// Redundant slashes in a registered path must not push a static route off
+    /// the O(1) index: `RoutePattern` ignores empty segments, so the index key
+    /// has to normalize the same way (`/api//users` → `GET /api/users`).
+    #[test]
+    fn static_index_normalizes_redundant_slashes() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/api//users", 9);
+        // Indexed under the normalized key, not the raw double-slash path.
+        assert!(app.static_index.contains_key("GET /api/users"));
+        assert!(!app.static_index.contains_key("GET /api//users"));
+        // And a normal request resolves through the fast path.
+        assert_eq!(app.match_route("GET", "/api/users").unwrap().0.handler, 9);
+    }
+
+    /// Exact-duplicate static routes keep the first registration (matching the
+    /// linear scan's first-match behaviour) rather than flipping to last-wins.
+    #[test]
+    fn static_index_duplicate_routes_keep_first() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/dup", 100);
+        app.add_route("GET", "/dup", 200);
+        assert_eq!(app.static_index.get("GET /dup"), Some(&0));
+        assert_eq!(app.match_route("GET", "/dup").unwrap().0.handler, 100);
+    }
+
+    /// `add_route` stores the method upper-cased, so `match_route` must normalize
+    /// the lookup method too — a lowercase/mixed-case caller resolves through both
+    /// the static index and the linear-scan fallback.
+    #[test]
+    fn match_route_normalizes_method_case() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/ping", 11); // static -> index
+        app.add_route("GET", "/users/:id", 22); // parametric -> scan
+
+        // Static, indexed: lowercase + mixed-case both hit.
+        assert_eq!(app.match_route("get", "/ping").unwrap().0.handler, 11);
+        assert_eq!(app.match_route("GeT", "/ping").unwrap().0.handler, 11);
+        // Parametric, scanned: same normalization on the slow path.
+        let (route, params) = app.match_route("get", "/users/7").expect("hit");
+        assert_eq!(route.handler, 22);
+        assert_eq!(params.get("id").map(String::as_str), Some("7"));
+    }
+
+    /// Regression: the per-request dispatch in `process_request` must MOVE the
+    /// pending request's headers/body/params into `FastifyContext` (via
+    /// `mem::take` / `Option::take`) rather than clone them — each is consumed
+    /// exactly once, so cloning fires three redundant per-request allocations
+    /// (two `HashMap`s + one `Vec`, dominated by the O(headers) header-map clone).
+    ///
+    /// This drives `build_context_from_pending` — the *same* helper
+    /// `process_request` uses to construct the context — so the test fails if
+    /// that construction reverts to cloning: after the call the source `pending`
+    /// collections must be empty (a clone would leave them populated, the canary),
+    /// while `method`/`path` must survive (they're reused for the route match).
+    #[test]
+    fn process_request_moves_pending_fields_not_clone() {
+        use crate::server::{build_context_from_pending, FastifyPendingRequest};
+
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert("x-trace-id".to_string(), "abc-123".to_string());
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "42".to_string());
+
+        // The response channel is irrelevant to context construction; a dropped
+        // receiver is fine — the helper never touches `response_tx`.
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        let mut pending = FastifyPendingRequest {
+            method: "POST".to_string(),
+            path: "/users/42".to_string(),
+            headers,
+            body: Some(b"{\"hello\":\"world\"}".to_vec()),
+            params,
+            response_tx,
+        };
+
+        // Exercise the production construction path.
+        let ctx = build_context_from_pending(7, &mut pending);
+
+        // (a) The context received the original values (incl. the request_id).
+        assert_eq!(ctx.request_id, 7);
+        assert_eq!(ctx.method, "POST");
+        assert_eq!(ctx.headers.len(), 2);
+        assert_eq!(
+            ctx.headers.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(ctx.params.get("id").map(String::as_str), Some("42"));
+        assert_eq!(ctx.body.as_deref(), Some(&b"{\"hello\":\"world\"}"[..]));
+
+        // (b) Move semantics — `pending`'s collections are empty post-construction.
+        // A clone-based helper would leave them populated, failing the test.
+        assert!(pending.headers.is_empty());
+        assert!(pending.params.is_empty());
+        assert!(pending.body.is_none());
+
+        // (c) method/path are intentionally NOT consumed — reused for the route match.
+        assert_eq!(pending.method, "POST");
+        assert_eq!(pending.path, "/users/42");
+    }
+
+    /// The string fast path in `jsvalue_to_response_body` copies the
+    /// `StringHeader` bytes directly, bypassing the `extract_jsvalue_string`
+    /// round-trip. It must reproduce the source bytes exactly — including
+    /// multi-byte UTF-8 — and tag the body `TextOrJson`.
+    #[test]
+    fn jsvalue_to_response_body_string_fast_path() {
+        let _guard = GcTestGuard::new();
+        // SAFETY: `alloc_string` returns a live `StringHeader`; we NaN-box it and
+        // read it back synchronously with no intervening GC.
+        unsafe {
+            for sample in ["Status: UP [200]", "héllo → 世界 🚀", ""] {
+                let s = perry_ffi::alloc_string(sample);
+                assert!(!s.is_null(), "alloc_string returned null for {sample:?}");
+                let value = f64::from_bits(perry_ffi::nanbox_string_bits(s.as_raw()));
+
+                let (bytes, kind) = crate::context::jsvalue_to_response_body(value);
+                assert_eq!(bytes, sample.as_bytes(), "byte-exact round-trip");
+                assert_eq!(kind, crate::context::BodyKind::TextOrJson);
+            }
+        }
+    }
+
+    /// A WTF-8 string carrying a lone surrogate must NOT take the verbatim-copy
+    /// fast path (that would emit invalid UTF-8). It has to fall back to the
+    /// lossy `String` round-trip, substituting U+FFFD — exactly the
+    /// pre-fast-path behaviour.
+    #[test]
+    fn jsvalue_to_response_body_lone_surrogate_falls_back_to_lossy() {
+        let _guard = GcTestGuard::new();
+        unsafe {
+            // "hi" + lone surrogate U+D800 (WTF-8: ED A0 80) + "!".
+            let wtf8: &[u8] = b"hi\xED\xA0\x80!";
+            let ptr =
+                perry_runtime::string::js_string_from_wtf8_bytes(wtf8.as_ptr(), wtf8.len() as u32);
+            assert!(!ptr.is_null());
+            // The constructor flags the string as carrying lone surrogates, so the
+            // fast path must skip it (otherwise this test wouldn't exercise the guard).
+            assert_ne!(
+                (*ptr).flags & perry_runtime::string::STRING_FLAG_HAS_LONE_SURROGATES,
+                0,
+                "expected js_string_from_wtf8_bytes to flag the lone surrogate"
+            );
+            // The two `StringHeader` types are layout-identical across crates.
+            let value = f64::from_bits(perry_ffi::nanbox_string_bits(
+                ptr as *mut perry_ffi::StringHeader,
+            ));
+
+            let (bytes, kind) = crate::context::jsvalue_to_response_body(value);
+            // Output is the lossy form (valid UTF-8), not the raw WTF-8 bytes.
+            assert_eq!(
+                bytes,
+                String::from_utf8_lossy(wtf8).into_owned().into_bytes()
+            );
+            assert!(
+                std::str::from_utf8(&bytes).is_ok(),
+                "response body must be valid UTF-8"
+            );
+            assert_ne!(
+                bytes.as_slice(),
+                wtf8,
+                "raw WTF-8 bytes must not be emitted verbatim"
+            );
+            assert_eq!(kind, crate::context::BodyKind::TextOrJson);
+        }
     }
 }

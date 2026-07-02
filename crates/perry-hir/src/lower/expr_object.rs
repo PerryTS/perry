@@ -203,6 +203,8 @@ fn lower_method_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     // Object-literal methods are NOT implicitly strict (unlike class bodies):
     // strictness is inherited from the enclosing code or introduced by the
     // method's own directive prologue. A blanket `true` here made every
@@ -343,6 +345,7 @@ fn lower_method_prop(
     }
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Capture analysis (same pattern as arrow/function expressions)
     let mut all_refs = Vec::new();
@@ -465,6 +468,8 @@ fn lower_accessor_prop(
         .collect();
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     // Accessors in object literals inherit strictness (see lower_method_prop).
     let accessor_strict = ctx.current_strict_mode()
         || body
@@ -508,6 +513,7 @@ fn lower_accessor_prop(
     };
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Capture analysis — identical pattern to `lower_method_prop`.
     let mut all_refs = Vec::new();

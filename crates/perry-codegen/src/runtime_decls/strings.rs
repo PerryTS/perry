@@ -61,8 +61,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_position_to_index", I32, &[DOUBLE]);
     module.declare_function("js_string_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_string_substring", I64, &[I64, I32, I32]);
-    // Legacy substr(start, length); length sentinel i32::MIN = omitted (#2897).
-    module.declare_function("js_string_substr", I64, &[I64, I32, I32]);
+    // Legacy substr(start, length); raw NaN-boxed JS values, ToIntegerOrInfinity
+    // applied in the runtime helper. An `undefined` length means "rest" (#2897).
+    module.declare_function("js_string_substr", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_string_split", I64, &[I64, I64]);
     module.declare_function("js_string_split_n", I64, &[I64, I64, I32]);
     // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)
@@ -186,6 +187,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_generator_function", VOID, &[PTR]);
+    // #5504: tag-checking unbox for dynamic call callees — throws
+    // `TypeError: value is not a function` instead of masking a
+    // non-pointer value's low 48 bits into a wild closure pointer.
+    module.declare_function("js_closure_unbox_callee_checked", I64, &[DOUBLE]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
@@ -679,7 +684,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_transferable_abort_signal", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_parse_args", DOUBLE, &[DOUBLE]);
     module.declare_function("js_boxed_number_new", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_boxed_string_new", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_boxed_boolean_new", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_arguments_object", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_promise", DOUBLE, &[DOUBLE]);
@@ -956,6 +961,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_inline_arena_state", PTR, &[]);
     module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);
+    // Primitive-safe `delete` wrappers: take the RAW NaN-boxed receiver (DOUBLE)
+    // so `delete (number).x` / `delete (number)[k]` no-op to `true` instead of
+    // unboxing the primitive's bits as a garbage ObjectHeader* (EXC_BAD_ACCESS).
+    module.declare_function("js_object_delete_field_value", I32, &[DOUBLE, I64]);
+    module.declare_function("js_object_delete_dynamic_value", I32, &[DOUBLE, DOUBLE]);
     // Box a `delete` success bit into a JS boolean, throwing TypeError in
     // strict mode when the delete was refused (non-configurable property).
     module.declare_function("js_delete_result", DOUBLE, &[I32, I32]);
@@ -1004,10 +1014,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_date_new_from_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_indexOf_f64", I32, &[I64, DOUBLE]);
     // #2804: indexOf/includes carry an optional fromIndex (value, fromIndex, has_from).
-    module.declare_function("js_array_indexOf_jsvalue", I32, &[I64, DOUBLE, DOUBLE, I32]);
+    // Return I64 so indices >= 2^31 are not truncated.
+    module.declare_function("js_array_indexOf_jsvalue", I64, &[I64, DOUBLE, DOUBLE, I32]);
     module.declare_function(
         "js_array_last_index_of_jsvalue",
-        I32,
+        I64,
         &[I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function("js_array_includes_f64", I32, &[I64, DOUBLE]);
@@ -1090,6 +1101,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Full ECMAScript RegExp constructor: NaN-boxed pattern + flags in, handles
     // RegExp/undefined/object patterns and ToString-coerced flags.
     module.declare_function("js_regexp_construct", I64, &[DOUBLE, DOUBLE]);
+    // Function-call form `RegExp(x)`: identity shortcut (a RegExp arg + undefined
+    // flags returns the same object) then falls back to `js_regexp_construct`.
+    module.declare_function("js_regexp_construct_call", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
@@ -1107,6 +1121,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // local failed clang with "use of undefined value
     // @js_string_addref" — pure linker-visible declaration fix.
     module.declare_function("js_string_addref", VOID, &[I64]);
+    // Tag-checked addref taking a NaN-boxed value (DOUBLE): the scalar-replaced
+    // object-field / array-element stores demote a possibly-unique string source
+    // without materializing SSO strings. Same declaration rationale as above.
+    module.declare_function("js_string_addref_if_heap_string", VOID, &[DOUBLE]);
     module.declare_function("js_bigint_from_string", I64, &[PTR, I32]);
     module.declare_function("js_bigint_from_f64", I64, &[DOUBLE]);
     module.declare_function("js_bigint_from_i128_parts", I64, &[I64, I64]);
@@ -1194,6 +1212,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
     // Static-method prologue read of one decl-site capture snapshot slot.
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
+    // #5437: snapshot slot read with a `new`-site appended cap-arg fallback
+    // (used when no decl-site snapshot was registered for the class).
+    module.declare_function("js_class_capture_value_or", DOUBLE, &[I32, I32, DOUBLE]);
+    // #5437 (param-first): the live `new`-site cap param wins when present; the
+    // decl-site snapshot is consulted only when the param is `undefined` (the
+    // cross-module construct path). Used by the synthesized ctor capture rebind.
+    module.declare_function(
+        "js_param_or_class_capture_value",
+        DOUBLE,
+        &[DOUBLE, I32, I32],
+    );
     // `super(...spread)` — dynamic-arity ancestor ctor invocation on `this`.
     module.declare_function("js_super_construct_apply", VOID, &[I32, DOUBLE, DOUBLE]);
     // `super.method(...)` on a class with a runtime-registered (dynamic) parent
@@ -1202,6 +1231,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_super_method_call_dynamic",
         DOUBLE,
         &[I32, PTR, I64, DOUBLE, PTR, I64],
+    );
+    // `super.method(...spread)` — flatten the (codegen-built) args array into a
+    // flat f64 buffer and forward to `js_super_method_call_dynamic`.
+    module.declare_function(
+        "js_super_method_call_dynamic_apply",
+        DOUBLE,
+        &[I32, PTR, I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
     // Issue #711 part 2: prototype-based class declaration via

@@ -168,17 +168,64 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Read slot `index` of the class's decl-site capture snapshot —
         // STATIC method prologue rebinds (no instance to carry the
         // `__perry_cap_*` fields).
-        Expr::ClassCaptureValue { class_name, index } => {
+        Expr::ClassCaptureValue {
+            class_name,
+            index,
+            fallback,
+            prefer_fallback,
+        } => {
+            // The fallback (a synthesized `__perry_cap_*` ctor param) must be
+            // lowered FIRST so its value is available regardless of whether the
+            // class id resolves — and so its side-effect-free read happens in
+            // program order.
+            let fallback_v = match fallback {
+                Some(fb) => Some(lower_expr(ctx, fb)?),
+                None => None,
+            };
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 let cid_str = class_id.to_string();
                 let idx_str = index.to_string();
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_class_capture_value",
-                    &[(crate::types::I32, &cid_str), (crate::types::I32, &idx_str)],
-                ));
+                return Ok(match (&fallback_v, *prefer_fallback) {
+                    // #5437 (param-first): the LIVE param (the `new`-site cap
+                    // arg) wins whenever present; the decl-site snapshot is
+                    // consulted ONLY when the param is `undefined` (the
+                    // cross-module construct path drops the cap arg). Used by the
+                    // synthesized constructor's capture rebind so a SAME-module
+                    // `new C(...)`'s current (possibly mutated) outer is NOT
+                    // overridden by a stale snapshot.
+                    (Some(fb), true) => ctx.block().call(
+                        DOUBLE,
+                        "js_param_or_class_capture_value",
+                        &[
+                            (DOUBLE, fb),
+                            (crate::types::I32, &cid_str),
+                            (crate::types::I32, &idx_str),
+                        ],
+                    ),
+                    // #5437: snapshot-or-fallback (snapshot-first). The decl-site
+                    // snapshot wins when it holds a real value (W6: the appended
+                    // cap arg may be a mis-boxed multi-level capture, or —
+                    // cross-module — absent entirely); otherwise the fallback is
+                    // used.
+                    (Some(fb), false) => ctx.block().call(
+                        DOUBLE,
+                        "js_class_capture_value_or",
+                        &[
+                            (crate::types::I32, &cid_str),
+                            (crate::types::I32, &idx_str),
+                            (DOUBLE, fb),
+                        ],
+                    ),
+                    (None, _) => ctx.block().call(
+                        DOUBLE,
+                        "js_class_capture_value",
+                        &[(crate::types::I32, &cid_str), (crate::types::I32, &idx_str)],
+                    ),
+                });
             }
-            Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)))
+            // Class id unknown in this module: keep the fallback if we have one
+            // (the cap param the construct supplied), else `undefined`.
+            Ok(fallback_v.unwrap_or_else(|| double_literal(f64::from_bits(0x7FFC_0000_0000_0001))))
         }
         // Issue #894: `static [Symbol.for("k")] = init` inside a
         // class expression returned from a factory function. Emitted

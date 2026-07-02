@@ -19,6 +19,15 @@ pub extern "C" fn perry_ui_image_create_symbol(name_ptr: i64) -> i64 {
     widgets::image::create_symbol(name_ptr as *const u8)
 }
 
+/// Create an AdBanner (#867). `unit_id_ptr` / `size_ptr` are string
+/// headers. Default build is a layout placeholder sized to the banner
+/// slot; a live `AdView` (play-services-ads) is a follow-up. Returns
+/// widget handle.
+#[no_mangle]
+pub extern "C" fn perry_ui_adbanner_create(unit_id_ptr: i64, size_ptr: i64) -> i64 {
+    widgets::adbanner::create(unit_id_ptr as *const u8, size_ptr as *const u8)
+}
+
 /// #635 stub: remote URL images aren't fetched on Android yet —
 /// register an empty image widget so layout still works.
 #[no_mangle]

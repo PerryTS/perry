@@ -250,6 +250,26 @@ pub(crate) fn build_and_run_link(
             // Native macOS/iOS via clang driver
             cmd.arg("-Wl,-dead_strip");
         }
+        // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
+        // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
+        // every non-Windows linker, not just native macOS. GNU ld (ELF) spells
+        // it `-Map=<file>`; ld64 (Apple) spells it `-map <file>`. The
+        // cross-Apple linkers are driven directly (no `-Wl,` prefix).
+        if let Some(map) = std::env::var_os("PERRY_LINK_MAP") {
+            let map = map.to_string_lossy();
+            if is_android || is_linux || is_harmonyos {
+                cmd.arg(format!("-Wl,-Map,{map}"));
+            } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
+                cmd.arg("-map").arg(map.as_ref());
+            } else if is_watchos || is_visionos {
+                cmd.arg("-Xlinker")
+                    .arg("-map")
+                    .arg("-Xlinker")
+                    .arg(map.as_ref());
+            } else {
+                cmd.arg(format!("-Wl,-map,{map}"));
+            }
+        }
     } else {
         // MSVC link.exe / lld-link equivalents:
         //   /OPT:REF — drop unreferenced functions/data (= --gc-sections)
@@ -367,7 +387,21 @@ pub(crate) fn build_and_run_link(
                 // Also link runtime for symbols DCE'd from stdlib's bundled
                 // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
                 if !is_android && !is_windows {
-                    cmd.arg(dedup_runtime_for_tier3(target, runtime_lib, stdlib));
+                    // #5000 (macOS/Linux): the standalone runtime archive is built
+                    // WITHOUT the `stdlib` feature, so it also defines the no-op
+                    // stdlib_stubs (js_fetch_with_options, js_headers_new,
+                    // js_request_new, js_ws_*, js_readline_*). With ELF/Mach-O
+                    // first-definition-wins those stubs can satisfy the user's
+                    // fetch ref before perry-stdlib's real impls, so `fetch()`
+                    // no-ops and a program awaiting it hangs. When this build
+                    // actually uses stdlib (fetch / ws / readline), localize those
+                    // stub symbols in a copy of the runtime so perry-stdlib wins.
+                    let runtime_for_link = if ctx.uses_fetch || ctx.needs_stdlib {
+                        localize_stdlib_stub_symbols(runtime_lib, stdlib)
+                    } else {
+                        runtime_lib.to_path_buf()
+                    };
+                    cmd.arg(dedup_runtime_for_tier3(target, &runtime_for_link, stdlib));
                 }
             } else {
                 if ctx.needs_stdlib {
@@ -383,8 +417,28 @@ pub(crate) fn build_and_run_link(
                 cmd.arg(runtime_lib);
             }
         } else {
-            // Runtime-only linking — no stdlib needed
-            cmd.arg(runtime_lib);
+            // Runtime-only linking — no stdlib needed.
+            //
+            // #5000 (Linux GTK4 UI): a bare UI program has
+            // `ctx.needs_stdlib == false`, so perry-stdlib isn't linked above —
+            // but the GTK4 UI branch below force-links it with
+            // `--whole-archive --allow-multiple-definition` to satisfy glib
+            // trampolines that call js_stdlib_process_pending /
+            // js_promise_run_microtasks. With first-definition-wins, the
+            // unlocalized runtime stubs linked here would shadow stdlib's real
+            // impls, leaving those pumps as no-ops. Localize the runtime's stub
+            // symbols first so stdlib wins, mirroring the needs_stdlib path.
+            let force_stdlib_for_linux_ui =
+                is_linux && ctx.needs_ui && find_ui_library(target).is_some();
+            let runtime_for_link = if force_stdlib_for_linux_ui {
+                match stdlib_lib.clone().or_else(|| find_stdlib_library(target)) {
+                    Some(stdlib) => localize_stdlib_stub_symbols(runtime_lib, &stdlib),
+                    None => runtime_lib.to_path_buf(),
+                }
+            } else {
+                runtime_lib.to_path_buf()
+            };
+            cmd.arg(&runtime_for_link);
         }
     } else if ctx.needs_stdlib {
         // Android + UI: runtime is provided by UI lib, but stdlib must still be linked
@@ -454,6 +508,77 @@ pub(crate) fn build_and_run_link(
                 let _ = writeln!(def_file, "EXPORTS");
                 for sym in PLUGIN_HOST_SYMBOLS {
                     let _ = writeln!(def_file, "    {}", sym);
+                }
+                // Enumerate every `js_*` / `perry_*` symbol from the auto-built
+                // runtime + stdlib .lib archives. Plugins reference these via
+                // `GetProcAddress` after `LoadLibraryW`, so the host must
+                // export them — listing only the static PLUGIN_HOST_SYMBOLS
+                // subset leaves hundreds of `js_gc_*`, `js_array_*`,
+                // `js_string_*` etc. unresolved at LoadLibrary time and the
+                // DLL fails to initialize (Win32 error 1114 =
+                // ERROR_DLL_INIT_FAILED). The `llvm-nm` enumeration
+                // guarantees the full surface; it costs ~5000 .def lines and
+                // a few hundred ms of `nm` time per link.
+                let mut libs: Vec<std::path::PathBuf> = vec![runtime_lib.to_path_buf()];
+                if let Some(ref s) = stdlib_lib {
+                    libs.push(s.clone());
+                }
+                if let Some(nm_path) = find_llvm_tool("llvm-nm") {
+                    let mut all_syms: std::collections::BTreeSet<String> =
+                        std::collections::BTreeSet::new();
+                    for lib in &libs {
+                        if !std::path::Path::new(lib).exists() {
+                            continue;
+                        }
+                        if let Ok(out) = std::process::Command::new(&nm_path)
+                            .args(["--extern-only", "--defined-only"])
+                            .arg(lib)
+                            .output()
+                        {
+                            if out.status.success() {
+                                let text = String::from_utf8_lossy(&out.stdout);
+                                for line in text.lines() {
+                                    // llvm-nm format: "<addr> <type> <name>" e.g.
+                                    //   "00000000 T _js_array_alloc"
+                                    //   "00000000 B PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"
+                                    //   "00000000 D __imp_PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"
+                                    // We capture T (text), B (BSS), D (data), R (rodata) and
+                                    // skip the __imp_ PE-import stubs (the leading-underscore
+                                    // non-prefixed name is the actual export).
+                                    let mut parts = line.split_whitespace();
+                                    let _addr = parts.next();
+                                    let ty = parts.next();
+                                    let name_field = parts.next();
+                                    if let (Some(ty), Some(rest)) = (ty, name_field) {
+                                        if !matches!(ty, "T" | "B" | "D" | "R") {
+                                            continue;
+                                        }
+                                        let bare = rest.strip_prefix('_').unwrap_or(rest);
+                                        let export_name =
+                                            if let Some(stripped) = bare.strip_prefix("__imp_") {
+                                                stripped
+                                            } else {
+                                                bare
+                                            };
+                                        if export_name.starts_with("js_")
+                                            || export_name.starts_with("perry_")
+                                            || export_name.starts_with("PERRY_")
+                                        {
+                                            all_syms.insert(export_name.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for s in &all_syms {
+                        let _ = writeln!(def_file, "    {}", s);
+                    }
+                    eprintln!(
+                        "[perry] plugin-host .def: {} symbols ({} base + enumerated)",
+                        all_syms.len() + PLUGIN_HOST_SYMBOLS.len(),
+                        PLUGIN_HOST_SYMBOLS.len()
+                    );
                 }
             }
             cmd.arg(format!("/DEF:{}", def_path.display()));
@@ -1084,10 +1209,13 @@ pub(crate) fn build_and_run_link(
             } else if is_android {
                 (
                     "libperry_ui_android.a",
-                    // #1529 — TLS model must be global-dynamic for the dlopen'd cdylib.
-                    // `tls-model` is `-Z`-gated on the toolchains we ship against, so
-                    // RUSTC_BOOTSTRAP=1 lets the gated flag through on a stable rustc.
-                    "RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
+                    // Two audiences here: a binary-install user (WinGet/Scoop/npm,
+                    // no source tree) can't run cargo, so point them at the
+                    // prebuilt cross bundle first; the from-source build follows
+                    // for workspace users. #1529 — the dlopen'd cdylib needs the
+                    // global-dynamic TLS model, and `tls-model` is `-Z`-gated, so
+                    // RUSTC_BOOTSTRAP=1 lets it through on a stable rustc.
+                    "either (a) drop libperry_ui_android.a next to perry under aarch64-linux-android/release/ from the prebuilt perry-cross-aarch64-linux-android.tar.gz release asset, or (b) from a perry checkout: RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
                 )
             } else if is_linux {
                 (
@@ -1569,6 +1697,18 @@ pub(crate) fn build_and_run_link(
                             }
                         }
                     }
+                }
+            }
+
+            // Issue #5812 item 2 — auto-append the Windows system libs that
+            // wgpu's graphics backends reference but cargo's `#[link]` attrs
+            // on the wgpu crate don't cover (d3dcompiler / opengl32). Without
+            // them a Windows app linking a wgpu-backed native ext failed with
+            // LNK2019 unresolved externals (the reporter patched the link
+            // line by hand). See `windows_wgpu_backend_syslibs`.
+            if is_windows {
+                for syslib in super::windows_wgpu_backend_syslibs(target_config) {
+                    cmd.arg(syslib);
                 }
             }
 

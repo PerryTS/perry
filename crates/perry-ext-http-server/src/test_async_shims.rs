@@ -46,3 +46,12 @@ pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
 ) {
     invoke(ctx);
 }
+
+// `perry_ffi_spawn_async` is declared extern in perry-ffi's async runtime and
+// normally provided by perry-stdlib / the prebuilt static archive at the final
+// link. The unit-test binary pulls it in transitively via the perry-ext-net
+// rlib but has no perry-stdlib edge in a fresh checkout, so it fails to link on
+// this one symbol. None of this crate's unit tests touch the async runtime, so
+// a no-op stub lets the test binary link. (Test-only; never shipped.)
+#[no_mangle]
+pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}

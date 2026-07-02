@@ -82,6 +82,17 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if raw < 0x1000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // #5525 fast path: cached typed-array kind lookup + inline load, ahead of
+    // the thread-local `typed_array_get_numeric_index` registry dispatch.
+    // `typed_array_fast_index_get` returns `Some(value)` for an in-bounds read
+    // or `Some(undefined)` for an in-range OOB index, `None` for the BigInt /
+    // non-canonical-key cases the slow path still owns.
+    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw as usize) {
+        if let Some(value) = crate::typedarray::typed_array_fast_index_get(raw as usize, kind, idx)
+        {
+            return value;
+        }
+    }
     if let Some(value) =
         unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
     {
@@ -209,6 +220,17 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     };
     if raw < 0x1000 {
         return;
+    }
+    // #5525 fast path: a cached typed-array kind lookup + inline store, before
+    // the thread-local `typed_array_set_numeric_index` registry dispatch
+    // (`typed_array_owner_*` → `_tlv_get_addr`) that dominated the bcrypt
+    // profile. `typed_array_fast_index_set` returns `true` when it fully handled
+    // the write (in-bounds store or spec-correct OOB-canonical drop), `false`
+    // for the BigInt / non-canonical-key cases the slow dispatch still owns.
+    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw as usize) {
+        if crate::typedarray::typed_array_fast_index_set(raw as usize, kind, idx, value) {
+            return;
+        }
     }
     if unsafe { crate::typedarray_props::typed_array_set_numeric_index(raw as usize, idx, value) } {
         return;

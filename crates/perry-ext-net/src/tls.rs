@@ -141,7 +141,12 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
     let is_closure =
         |v: f64| is_nanboxed_pointer(v) && js_value_is_closure(v.to_bits() as i64) != 0;
     let as_string = |v: f64| -> Option<String> {
-        if !JsValue::from_bits(v.to_bits()).is_string() {
+        // #1781: accept BOTH heap (STRING_TAG) and inline SSO
+        // (SHORT_STRING_TAG) strings. The strict `is_string()` matched
+        // STRING_TAG only, so a short tls arg (`tls.connect("h", …)`)
+        // was dropped before `js_get_string_pointer_unified` — which
+        // already materializes either repr — ever ran.
+        if !JsValue::from_bits(v.to_bits()).is_any_string() {
             return None;
         }
         string_from_header_i64(js_get_string_pointer_unified(v))

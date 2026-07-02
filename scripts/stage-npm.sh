@@ -123,6 +123,83 @@ resolve_artifact() {
   echo "$workdir"
 }
 
+# #4823: Stage Android cross-compile libs into a platform package.
+#
+# `perry --target android` links three static archives (runtime, stdlib, UI).
+# We mirror the layout perry's library_search.rs probes —
+# `<bin-dir>/aarch64-linux-android/release/<lib>` and its `.a.zst` sibling —
+# under the package's `bin/` dir (already covered by the npm `files`
+# allowlist, so no package.json change is needed).
+#
+# Each lib is sourced from the host package's own build artifact first (the
+# Windows release leg cross-builds all three — see release-packages.yml). The
+# UI lib is best-effort on that leg, so it falls back to the standalone
+# `perry-cross-aarch64-linux-android` bundle the Android cross-bundle job
+# always produces. This both enables npm-installed android builds (previously
+# the npm packages shipped no android libs at all) and backfills the UI lib
+# when the Windows-side cross-build was skipped.
+#
+# Args: $1 = package dir, $2 = host artifact src dir (may lack the subdir).
+stage_android_cross_libs() {
+  local pkg_dir="$1" host_src="$2"
+  local triple="aarch64-linux-android"
+  local host_sub="$host_src/$triple/release"
+  local dest="$pkg_dir/bin/$triple/release"
+
+  # Extract the standalone cross bundle once (fallback source for any lib the
+  # host artifact is missing). download-artifact nests by artifact name; also
+  # tolerate a flat drop for local runs.
+  local cross_dir="" cb="$ARTIFACT_DIR/perry-cross-$triple/perry-cross-$triple.tar.gz"
+  [ -f "$cb" ] || cb="$ARTIFACT_DIR/perry-cross-$triple.tar.gz"
+  if [ -f "$cb" ]; then
+    cross_dir="$ARTIFACT_DIR/.extracted/perry-cross-$triple"
+    if [ ! -d "$cross_dir" ]; then
+      mkdir -p "$cross_dir"
+      tar xzf "$cb" -C "$cross_dir"
+    fi
+  fi
+
+  mkdir -p "$dest"
+  local staged=0 lib src
+  for lib in libperry_runtime.a libperry_stdlib.a libperry_ui_android.a; do
+    src=""
+    if [ -f "$host_sub/$lib" ]; then
+      src="$host_sub/$lib"
+    elif [ -n "$cross_dir" ] && [ -f "$cross_dir/$lib" ]; then
+      src="$cross_dir/$lib"
+    fi
+    if [ -z "$src" ]; then
+      echo "  (android: $lib unavailable — skipping)"
+      continue
+    fi
+    cp "$src" "$dest/$lib"
+    staged=$((staged + 1))
+  done
+
+  if [ "$staged" -eq 0 ]; then
+    rm -rf "$pkg_dir/bin/$triple"
+    echo "  (android: no cross-libs staged)"
+    return 0
+  fi
+
+  # Compress to match the rest of the package (raw .a's blow npm's upload
+  # limit; the binary decompresses the .a.zst transparently — see
+  # compressed_libs.rs). The existing lib/ compression loop only walks lib/,
+  # so these bin/-subdir archives must be compressed here.
+  if [ "${PERRY_NPM_NO_COMPRESS:-0}" != "1" ]; then
+    if ! command -v zstd >/dev/null 2>&1; then
+      echo "  error: zstd not found but archive compression is required" >&2
+      exit 1
+    fi
+    for f in "$dest"/*.a; do
+      [ -f "$f" ] || continue
+      zstd -19 -T0 -q -f --rm "$f"
+      echo "  compressed android/$(basename "$f") -> $(basename "$f").zst"
+    done
+  fi
+  echo "  android: staged $staged cross-lib(s) under bin/$triple/release/"
+}
+
 # -----------------------------------------------------------------------------
 # Stage wrapper package
 # -----------------------------------------------------------------------------
@@ -166,6 +243,9 @@ for entry in "${PLATFORMS[@]}"; do
     for lib in "${WIN_CORE_LIBS[@]}" "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
+    # #4823: the Windows package also carries the android cross-libs so
+    # `perry --target android` works from an npm install (parity with the zip).
+    stage_android_cross_libs "$pkg_dir" "$src_dir"
   else
     cp "$src_dir/perry" "$pkg_dir/bin/perry"
     chmod +x "$pkg_dir/bin/perry"

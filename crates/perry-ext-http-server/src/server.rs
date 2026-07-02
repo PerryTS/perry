@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use lazy_static::lazy_static;
 
@@ -31,8 +31,8 @@ use perry_ffi::{
 
 use crate::ensure_gc_scanner_registered;
 use crate::request::{
-    alloc_incoming_message, close_incoming_message, emit_no_arg_to_listeners,
-    handle_to_pointer_f64, with_implicit_this, IncomingMessage,
+    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
+    IncomingMessage,
 };
 use crate::response::{
     alloc_server_response_for_request, HyperResponseShape, ResponseBody, ServerResponse,
@@ -42,6 +42,31 @@ use crate::types::{
     jsvalue_to_owned_string, read_string_header, Promise, POINTER_TAG, PTR_MASK, TAG_NULL,
     TAG_UNDEFINED,
 };
+
+// #4728 — in-flight (async-handler) request tracking + the reaper that
+// finalizes parked requests. Extracted to keep this file under the 2000-line
+// file-size limit; the dispatch paths here (`process_pending`,
+// `js_node_http_server_close_all_connections`, the pump) call into it.
+mod in_flight;
+use in_flight::IN_FLIGHT;
+pub(crate) use in_flight::{
+    finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
+    reap_in_flight_requests, response_writable_ended,
+};
+
+/// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
+/// default, ON) to a freshly accepted TCP stream before it is served. Node
+/// disables Nagle on every accepted connection unless the server was created
+/// with `noDelay: false`. A single named call site for the option keeps the
+/// accept loops applying the server's *configured* value rather than each
+/// re-deriving it — the HTTPS and HTTP/2-secure accept loops had both regressed
+/// to a literal `true`, ignoring `noDelay: false` (the bug this helper + its
+/// test guard against). Covered by `https_server::nodelay_tests` over a real
+/// loopback accept. `set_nodelay` is best-effort: a failure to set the socket
+/// option is non-fatal (Node likewise ignores it), so the result is discarded.
+pub(crate) fn apply_accept_no_delay(stream: &tokio::net::TcpStream, no_delay: bool) {
+    let _ = stream.set_nodelay(no_delay);
+}
 
 /// Backing struct for an `http.Server` JS-side handle.
 pub struct HttpServer {
@@ -358,6 +383,35 @@ pub unsafe extern "C" fn js_node_http_create_server_with_options(
     register_handle(server)
 }
 
+/// Largest `requestTimeout` Node accepts, mirroring its
+/// `kMaxRequestTimeout = MAX_SAFE_INTEGER` (`2**53 - 1`) ceiling in
+/// `lib/_http_server.js`.
+const MAX_REQUEST_TIMEOUT_MS: f64 = 9_007_199_254_740_991.0;
+
+/// Coerce a `requestTimeout` (ms) into the same finite, non-negative,
+/// integer, `MAX_SAFE_INTEGER`-bounded domain Node enforces via
+/// `validateInteger(value, 'requestTimeout', 0, kMaxRequestTimeout)`,
+/// so the value the in-flight reaper later casts to `u64` to build a
+/// `Duration` deadline can never overflow.
+///
+/// The bug this guards (CodeRabbit, #5663): an un-sanitized `f64`
+/// reaching `grace_ms as u64` produces a garbage deadline — Rust's
+/// saturating float→int cast turns `Infinity` into `u64::MAX` (a
+/// deadline that never fires) and an oversized finite value into a
+/// nonsensical one. Node rejects those at construction with
+/// `ERR_OUT_OF_RANGE`; lacking a throw path here, we coerce to the
+/// nearest in-range value instead — non-finite falls back to Node's
+/// 300s default, out-of-range clamps to `[0, MAX_SAFE_INTEGER]`, and
+/// the fractional part is truncated to an integer ms count. `0` is
+/// preserved (Node's "disabled" sentinel; the reaper maps it back to
+/// the default).
+pub(crate) fn sanitize_request_timeout(ms: f64) -> f64 {
+    if !ms.is_finite() {
+        return 300_000.0;
+    }
+    ms.trunc().clamp(0.0, MAX_REQUEST_TIMEOUT_MS)
+}
+
 /// Read each Node-documented timeout/socket knob off the options
 /// object and overwrite the server's default. Missing keys leave the
 /// default in place; non-numeric values silently no-op (matches
@@ -397,7 +451,7 @@ pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
         server.keep_alive_timeout_buffer = v;
     }
     if let Some(v) = as_num("requestTimeout") {
-        server.request_timeout = v;
+        server.request_timeout = sanitize_request_timeout(v);
     }
     if let Some(v) = as_num("timeout") {
         server.idle_timeout = v;
@@ -471,7 +525,20 @@ server_setter!(
     keep_alive_timeout_buffer
 );
 server_getter!(js_node_http_server_request_timeout, request_timeout);
-server_setter!(js_node_http_server_set_request_timeout, request_timeout);
+/// `server.requestTimeout = ms` — sanitized rather than macro-generated
+/// so the stored value is always a finite, non-negative, integer,
+/// `MAX_SAFE_INTEGER`-bounded ms count (see `sanitize_request_timeout`).
+/// This keeps the in-flight reaper's `grace_ms as u64` cast from
+/// overflowing on `Infinity`/oversized values regardless of which
+/// setter path (constructor option or this property) wrote the field.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_set_request_timeout(handle: i64, value: f64) -> f64 {
+    let sanitized = sanitize_request_timeout(value);
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.request_timeout = sanitized;
+    }
+    value
+}
 server_getter!(js_node_http_server_idle_timeout, idle_timeout);
 server_setter!(js_node_http_server_set_idle_timeout, idle_timeout);
 server_getter!(js_node_http_server_max_headers_count, max_headers_count);
@@ -647,6 +714,7 @@ fn spawn_rr_inject_loop(
     mut shutdown_rx: oneshot::Receiver<()>,
     request_tx_for_spawn: Arc<mpsc::Sender<HttpPendingRequest>>,
     upgrade_tx_for_spawn: Arc<mpsc::Sender<HttpPendingUpgrade>>,
+    no_delay: bool,
 ) {
     use std::os::unix::io::{FromRawFd, RawFd};
 
@@ -675,13 +743,17 @@ fn spawn_rr_inject_loop(
                             .peer_addr()
                             .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
                         match tokio::net::TcpStream::from_std(std_stream) {
-                            Ok(stream) => serve_http_connection(
-                                server_handle,
-                                stream,
-                                peer,
-                                request_tx_for_spawn.clone(),
-                                upgrade_tx_for_spawn.clone(),
-                            ),
+                            Ok(stream) => {
+                                // Match Node's per-connection `noDelay` (default on).
+                                let _ = stream.set_nodelay(no_delay);
+                                serve_http_connection(
+                                    server_handle,
+                                    stream,
+                                    peer,
+                                    request_tx_for_spawn.clone(),
+                                    upgrade_tx_for_spawn.clone(),
+                                );
+                            }
                             Err(e) => eprintln!("[node:http] rr adopt failed: {}", e),
                         }
                     }
@@ -759,6 +831,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         {
             let actual_port = resolved.unwrap();
             crate::cluster_bind::notify_listening(&host, actual_port);
+            let no_delay;
             if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
                 s.bound_port = actual_port;
                 s.bound_host = host.clone();
@@ -766,6 +839,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                 s.shutdown_tx = Some(shutdown_tx);
                 s.request_rx = Some(request_rx);
                 s.upgrade_rx = Some(upgrade_rx);
+                no_delay = s.no_delay;
             } else {
                 return server_handle;
             }
@@ -776,6 +850,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                 shutdown_rx,
                 request_tx_for_spawn,
                 upgrade_tx_for_spawn,
+                no_delay,
             );
         }
     } else {
@@ -803,6 +878,10 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         }
         crate::cluster_bind::notify_listening(&host, actual_port);
 
+        // Node applies `noDelay` (default true) to every accepted connection.
+        // Capture it before the accept loop spawns so the option can be set on
+        // each accepted socket without re-locking the handle map per accept.
+        let no_delay;
         if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
             s.bound_port = actual_port;
             s.bound_host = host.clone();
@@ -810,6 +889,7 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
             s.shutdown_tx = Some(shutdown_tx);
             s.request_rx = Some(request_rx);
             s.upgrade_rx = Some(upgrade_rx);
+            no_delay = s.no_delay;
         } else {
             return server_handle;
         }
@@ -840,6 +920,8 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
                         accepted = listener.accept() => {
                             match accepted {
                                 Ok((stream, peer)) => {
+                                    // Match Node's per-connection `noDelay` (default on).
+                                    let _ = stream.set_nodelay(no_delay);
                                     serve_http_connection(
                                         server_handle,
                                         stream,
@@ -918,20 +1000,29 @@ pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
     // Parked async requests on the destroyed connections can never flush
     // a response (the per-request oneshot receiver died with the
     // connection task) — drop them now so `has_in_flight_requests()`
-    // doesn't pin the event loop for the 300s grace window.
-    let mut to_finalize: Vec<(i64, i64)> = Vec::new();
+    // doesn't pin the event loop for the 300s grace window. The response
+    // never ended, so a handler still suspended on a slow `await` could
+    // resume and write through the bare id; defer recycling that id until the
+    // request's grace deadline (same use-after-recycle guard as the reaper's
+    // peer-gone path) so a late write hits an empty slot, not a recycled one.
+    let mut to_finalize: Vec<(i64, i64, Option<Instant>)> = Vec::new();
     if let Ok(mut guard) = IN_FLIGHT.lock() {
         guard.retain(|e| {
             if e.server_handle == handle {
-                to_finalize.push((e.request_handle, e.response_handle));
+                let recycle_deadline = if response_writable_ended(e.response_handle) {
+                    None
+                } else {
+                    Some(e.deadline)
+                };
+                to_finalize.push((e.request_handle, e.response_handle, recycle_deadline));
                 false
             } else {
                 true
             }
         });
     }
-    for (req, res) in to_finalize {
-        finalize_request_handles(req, res);
+    for (req, res, recycle_deadline) in to_finalize {
+        finalize_request_handles_deferred(req, res, recycle_deadline);
     }
 }
 
@@ -1354,172 +1445,6 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
     active
 }
 
-// ============================================================================
-// #4728 — in-flight (async-handler) request tracking.
-//
-// A `(req, res) => { … }` handler that finishes the response on a *later*
-// event-loop tick — an outbound `fetch()`, a `setTimeout`, any `await`
-// chain that calls `res.end()` from a microtask/timer/tokio resolution —
-// returns to `process_pending` before `res.end()` has run. Pre-#4728,
-// `process_pending` then synthesized a default empty 200 and freed the
-// per-request handles immediately, so the real `res.end(...)` later fired
-// on a dropped handle (no-op) and the client saw an empty/closed reply.
-//
-// Fix: when the handler returns without ending the response, park the
-// request here instead of synthesizing+freeing. The reaper runs each pump
-// tick (the codegen-emitted main loop keeps ticking while the server is a
-// live handle, draining timers / fetch resolutions / microtasks), and
-// finalizes a parked request once `res.end()` has flushed the real
-// response — or, as a safety net mirroring Node's `requestTimeout`,
-// synthesizes the default response and frees the handles if the handler
-// never responds within the grace window so a buggy handler can't pin a
-// hyper connection (and its request handles) forever.
-// ============================================================================
-
-/// A request whose handler returned before finishing the response.
-struct InFlightRequest {
-    /// Owning server — lets `closeAllConnections()` drop parked requests
-    /// whose connection it just destroyed (#4905).
-    server_handle: i64,
-    request_handle: i64,
-    response_handle: i64,
-    /// Mirrors `HttpPendingRequest::skip_default_response`: when true the
-    /// response is driven elsewhere (e.g. an upgraded/stream path) so the
-    /// reaper must not synthesize a default on timeout.
-    skip_default_response: bool,
-    /// Grace deadline. Past this, synthesize the default response (unless
-    /// `skip_default_response`) and free the handles regardless.
-    deadline: Instant,
-}
-
-static IN_FLIGHT: Mutex<Vec<InFlightRequest>> = Mutex::new(Vec::new());
-
-/// True iff `res.end()` has flushed the response (or the handle is already
-/// gone). A missing handle reads as "done" so a stray entry can't wedge
-/// the reaper.
-fn response_writable_ended(response_handle: i64) -> bool {
-    get_handle::<ServerResponse>(response_handle)
-        .map(|sr| sr.writable_ended)
-        .unwrap_or(true)
-}
-
-/// Free the per-request request + response handles. Mirrors the tail of
-/// the synchronous-handler path in `process_pending`.
-fn finalize_request_handles(request_handle: i64, response_handle: i64) {
-    close_incoming_message(request_handle);
-    perry_ffi::drop_handle(request_handle);
-    perry_ffi::drop_handle(response_handle);
-}
-
-/// True iff any request is parked awaiting an async handler — keeps the
-/// server's handle "active" so the main loop doesn't exit before the
-/// pending response is flushed.
-fn has_in_flight_requests() -> bool {
-    IN_FLIGHT.lock().map(|g| !g.is_empty()).unwrap_or(false)
-}
-
-/// Finalize parked requests whose handler has now called `res.end()` (the
-/// common case — fetch/timer/await resolved on a later tick), or whose
-/// grace deadline has elapsed (a handler that never responds). Called each
-/// pump tick. #4728.
-fn reap_in_flight_requests() {
-    // (request_handle, response_handle, needs_synthesize)
-    let mut to_finalize: Vec<(i64, i64, bool)> = Vec::new();
-    let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
-    {
-        let mut guard = match IN_FLIGHT.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        if guard.is_empty() {
-            return;
-        }
-        let now = Instant::now();
-        guard.retain(|e| {
-            let ended = response_writable_ended(e.response_handle);
-            if !ended {
-                // Streaming backpressure cleared — fire `'drain'` (outside
-                // the lock) so `res.on('drain')` producer loops resume.
-                let ls = crate::response::take_drain_listeners_if_ready(e.response_handle);
-                if !ls.is_empty() {
-                    drain_listeners.push(ls);
-                }
-            }
-            // #4905: the per-request oneshot receiver died with its
-            // connection task (client disconnected / closeAllConnections)
-            // — the response can never be flushed, so don't pin the event
-            // loop for the rest of the grace window. A streaming response
-            // whose body receiver dropped is the same edge.
-            let peer_gone = get_handle::<ServerResponse>(e.response_handle)
-                .and_then(|sr| sr.response_tx.as_ref())
-                .map(|tx| tx.is_closed())
-                .unwrap_or(false)
-                || crate::response::stream_receiver_gone(e.response_handle);
-            let expired = now >= e.deadline;
-            if ended || expired || peer_gone {
-                to_finalize.push((
-                    e.request_handle,
-                    e.response_handle,
-                    // Only synthesize when we're giving up on a handler
-                    // that never ended the response — not when it ended
-                    // it itself, never for skip-default paths, and never
-                    // when the peer is gone (nothing to deliver to).
-                    !ended && !e.skip_default_response && !peer_gone,
-                ));
-                false
-            } else {
-                true
-            }
-        });
-    }
-    for ls in drain_listeners {
-        crate::request::emit_no_arg_to_listeners(&ls);
-    }
-    // Finalize outside the lock — `synthesize_default_response_if_needed`
-    // and `drop_handle` don't touch `IN_FLIGHT`, but keeping them off the
-    // lock avoids any future re-entrancy surprise.
-    for (req, res, needs_synth) in to_finalize {
-        if needs_synth {
-            synthesize_default_response_if_needed(res);
-        }
-        finalize_request_handles(req, res);
-    }
-}
-
-/// Finalize a just-dispatched request, or park it for the reaper if its
-/// handler returned before finishing the response (an async handler that
-/// will call `res.end()` on a later tick). Shared by the HTTP/1 and HTTPS
-/// dispatch paths. #4728.
-pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
-    if response_writable_ended(pending.response_handle) {
-        finalize_request_handles(pending.request_handle, pending.response_handle);
-        return;
-    }
-    // Grace window mirrors Node's `requestTimeout` (default 300s; `0` =
-    // disabled, so fall back to the default rather than parking forever).
-    let grace_ms = get_handle::<HttpServer>(pending.server_handle)
-        .map(|s| s.request_timeout)
-        .filter(|t| *t > 0.0)
-        .unwrap_or(300_000.0);
-    let deadline = Instant::now() + Duration::from_millis(grace_ms as u64);
-    if let Ok(mut guard) = IN_FLIGHT.lock() {
-        guard.push(InFlightRequest {
-            server_handle: pending.server_handle,
-            request_handle: pending.request_handle,
-            response_handle: pending.response_handle,
-            skip_default_response: pending.skip_default_response,
-            deadline,
-        });
-    } else {
-        // Lock poisoned — fall back to the old immediate behavior so we
-        // never leak the handles.
-        if !pending.skip_default_response {
-            synthesize_default_response_if_needed(pending.response_handle);
-        }
-        finalize_request_handles(pending.request_handle, pending.response_handle);
-    }
-}
-
 /// Drain pending requests + upgrades from every registered server,
 /// dispatching to the user handler / `'upgrade'` listener on the
 /// main thread. Called each tick by perry-stdlib's pump (gated on
@@ -1620,6 +1545,19 @@ where
 #[no_mangle]
 pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     let mut count = 0i32;
+
+    // Promote ids freed on PRIOR ticks from quarantine to the reusable
+    // freelist — at the top of the tick, before this tick's finalizations
+    // quarantine fresh ids. The one-tick deferral closes the same-tick ABA
+    // hazard: a handler that returned before `res.end()` leaves a stale `res`
+    // (a bare tagged handle id) outstanding, and recycling its id immediately
+    // would let the next request re-occupy it and a microtask-deferred
+    // `res.write`/`res.end` corrupt the new request's response. Holding the id
+    // in quarantine for a full tick lets those stale calls spend themselves
+    // against an empty slot first. (A write deferred MORE than a tick past
+    // finalization is a write-after-end use error and out of scope — see
+    // `perry_ffi::drain_quarantined_handles`.)
+    perry_ffi::drain_quarantined_handles();
 
     // #4728 — finalize any async-handler requests that have flushed their
     // response since the last tick (or timed out) before draining new ones.

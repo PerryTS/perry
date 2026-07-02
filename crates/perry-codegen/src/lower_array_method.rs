@@ -630,8 +630,8 @@ pub(crate) fn lower_array_method(
             // string array returned -1 because the SSO element bits
             // never bit-equal the heap-string needle bits). Mirrors
             // the existing `includes` arm.
-            let i32_v = blk.call(
-                I32,
+            let i64_v = blk.call(
+                I64,
                 "js_array_indexOf_jsvalue",
                 &[
                     (I64, &recv_handle),
@@ -640,7 +640,7 @@ pub(crate) fn lower_array_method(
                     (I32, has_from),
                 ],
             );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            Ok(blk.sitofp(I64, &i64_v, DOUBLE))
         }
         "lastIndexOf" => {
             if args.len() > 2 {
@@ -665,8 +665,8 @@ pub(crate) fn lower_array_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let i32_v = blk.call(
-                I32,
+            let i64_v = blk.call(
+                I64,
                 "js_array_last_index_of_jsvalue",
                 &[
                     (I64, &recv_handle),
@@ -675,7 +675,7 @@ pub(crate) fn lower_array_method(
                     (I32, has_from),
                 ],
             );
-            Ok(blk.sitofp(I32, &i32_v, DOUBLE))
+            Ok(blk.sitofp(I64, &i64_v, DOUBLE))
         }
         "at" => {
             // `arr.at()` with no index → `at(undefined)` → index 0, not a
@@ -788,14 +788,22 @@ pub(crate) fn lower_array_method(
         }
         "unshift" => {
             // #2814 + Issue #656: returns the new array length per ECMA-262.
-            // 0 args -> no mutation, just return current length. N args ->
-            // insert all items at the front in source order via the variadic
-            // helper. The (possibly reallocated) array forwards from its old
-            // pointer, so in-place mutation stays visible to the receiver slot.
+            // 0 args -> no mutation per spec, but frozen/non-writable guards
+            // must still fire (ECMA-262 §23.1.3.31 step 8 always calls Set
+            // [[length]] even for 0-arg). Route through the variadic helper
+            // with null/0 so the runtime guards run. N args -> insert all
+            // items at the front in source order via the variadic helper.
+            // The (possibly reallocated) array forwards from its old pointer,
+            // so in-place mutation stays visible to the receiver slot.
             if args.is_empty() {
                 let blk = ctx.block();
                 let recv_handle = unbox_to_i64(blk, &recv_box);
-                let len_i32 = blk.call(I32, "js_array_length", &[(I64, &recv_handle)]);
+                let new_handle = blk.call(
+                    I64,
+                    "js_array_unshift_variadic",
+                    &[(I64, &recv_handle), (PTR, "null"), (I32, "0")],
+                );
+                let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
                 return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
             }
             // Lower every argument, then materialize them into an alloca buffer

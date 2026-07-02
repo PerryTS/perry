@@ -42,6 +42,21 @@ pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
     }
 }
 
+/// Guard called from the static `push_single`/`push` codegen path so that
+/// frozen + non-writable-`length` checks fire even for `arr.push()` with no
+/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`.
+#[no_mangle]
+pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    guard_writable_length(arr);
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mut ArrayHeader {
     if arr.is_null() || (arr as usize) < 0x1000 {
@@ -163,6 +178,13 @@ unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // A uniquely-owned (refcount==1) string pushed into the array aliases an
+    // element slot — demote it to shared so a later `s += x` on the source local
+    // allocates fresh instead of mutating the stored element in place. No-op for
+    // SSO / non-string. Done on the raw value, covering the inline, grow, and
+    // proxy paths below (mirrors the object-field demote in
+    // `runtime_store_jsvalue_slot`).
+    crate::string::js_string_addref_if_heap_string(value);
     // #5135: a Proxy whose static type is an array (immer drafts) reaches here
     // with the masked proxy id. Perform the spec `Array.prototype.push` for a
     // single element directly through the proxy's `get`/`set` traps:
@@ -497,6 +519,11 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // #5552: a uniquely-owned (refcount==1) string unshifted to the front aliases
+    // the new slot — demote it to shared so a later `s += x` on the source local
+    // allocates fresh instead of mutating the stored element. No-op for SSO /
+    // non-string (mirrors `js_array_push_f64`, #5548).
+    crate::string::js_string_addref_if_heap_string(value);
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);
@@ -557,13 +584,18 @@ pub extern "C" fn js_array_unshift_variadic(
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so a
-    // non-writable `length` throws before the no-op early return.
+    // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so both
+    // a frozen array and a non-writable `length` throw before the no-op early
+    // return. Frozen check must come first because freeze doesn't record "length"
+    // attrs, so `guard_writable_length` alone wouldn't catch it.
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
     guard_writable_length(arr);
     if count == 0 {
         return arr;
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -591,8 +623,12 @@ pub extern "C" fn js_array_unshift_variadic(
         // Shift existing elements up by `n`.
         // GC_STORE_AUDIT(BARRIERED): memmove + new slots followed by layout/barrier rebuild.
         ptr::copy(elements_ptr, elements_ptr.add(n), length as usize);
-        // Write items in source order at the front.
+        // Write items in source order at the front. #5552: demote each
+        // uniquely-owned string before it aliases its slot (no-op for SSO /
+        // non-string).
         for (i, v) in item_vec.into_iter().enumerate() {
+            crate::string::js_string_addref_if_heap_string(v);
+            // GC_STORE_AUDIT(BARRIERED): inserted slots are followed by the layout/barrier rebuild below.
             ptr::write(elements_ptr.add(i), v);
         }
         (*arr).length = length + n as u32;

@@ -108,6 +108,15 @@ fn append_property_decorator_init(
         return;
     }
 
+    // NOTE: TypeScript's `emitDecoratorMetadata` stores instance-member
+    // `design:type` on `Class.prototype`, and class-transformer reads it back
+    // with `Reflect.getMetadata("design:type", SomeClass.prototype, prop)`.
+    // Perry stores it on the class constructor (`ClassRef`) here; the runtime
+    // metadata store folds class-prototype lookup targets onto the same class
+    // key (see `proxy/metadata.rs::normalize_target_bits`), so both the
+    // historical `getMetadata(..., Class, prop)` reads (locked in by
+    // test_decorators_legacy_property_metadata.ts) and the library's
+    // `Class.prototype` reads resolve to this entry.
     out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
         key: Box::new(Expr::String("design:type".to_string())),
         value: Box::new(type_metadata_expr(&field.ty)),

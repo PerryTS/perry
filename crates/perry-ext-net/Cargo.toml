@@ -11,6 +11,12 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 tokio = { workspace = true }
+# Zero-copy socket reads: `read_buf` fills a reused `BytesMut` in place and
+# `split_to(n).freeze()` carves each read off as a refcounted `Bytes` view,
+# which the 'data' event carries to the drain handler (it only borrows it as
+# `&[u8]`). Drops the per-read `Vec<u8>` alloc + memcpy. Already in the
+# lockfile via tokio/rustls, so declaring it pulls nothing new.
+bytes = "1"
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-native-certs = "0.8"

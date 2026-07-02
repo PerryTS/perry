@@ -3,6 +3,10 @@
 //! Extracted from `expr/mod.rs` to keep that file under the 2000-line cap.
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
+//!
+//! Further split (chore: 2000-line cap) into topical sibling modules under
+//! `calls/`. The `lower()` dispatcher keeps every arm guard verbatim and
+//! delegates each large arm body to a sibling helper.
 
 use anyhow::Result;
 #[allow(unused_imports)]
@@ -47,144 +51,40 @@ use super::{
     I18nLowerCtx,
 };
 
-/// #5247: under `--debug-symbols`, emit a `js_set_call_location(file, line)`
-/// runtime call right before a dynamic method dispatch so the
-/// "X is not a function" throw path can render `at <file>:<line>` in the thrown
-/// TypeError's `.stack`. Resolves the *pending* call byte offset (recorded by
-/// the `Expr::Call` dispatcher) → `(file, line)` via the module's installed
-/// debug-location context. No-op (no IR emitted) when the context is absent
-/// (default build) or the pending offset is 0 (synthesized call).
-///
-/// Called at the dispatch emission site (after the call's arguments are
-/// lowered) with the offset the dispatcher captured at entry — before any
-/// nested-call argument overwrote the shared pending offset — so the location
-/// reflects the OUTER call, not its last-lowered argument.
-pub(crate) fn emit_call_location_at(ctx: &mut FnCtx<'_>, byte_offset: u32) {
-    let Some((file, line)) = ctx
-        .strings
-        .call_location_for(byte_offset)
-        .map(|(f, l)| (f.to_string(), l))
-    else {
-        return;
-    };
-    let file_label = emit_string_literal_global(ctx, &file);
-    let file_len = file.len();
-    let blk = ctx.block();
-    blk.call_void(
-        "js_set_call_location",
-        &[
-            (PTR, &file_label),
-            (I64, &file_len.to_string()),
-            (I32, &line.to_string()),
-        ],
-    );
-}
+mod crypto_hash;
+mod crypto_kdf;
+mod crypto_keys;
+mod crypto_misc;
+mod fs;
+mod helpers;
 
-/// #2013/#3146: emit a setup-time `validateString` call. `value_box` is the
-/// original NaN-boxed value; `name` is the static argument name node uses in
-/// the error (`"algorithm"` for `createHash`, `"hmac"` for `createHmac`'s
-/// algorithm, `"digest"` for `pbkdf2`). The runtime throws `TypeError
-/// [ERR_INVALID_ARG_TYPE]` on a non-string value, so this is emitted BEFORE the
-/// value is unboxed to a raw pointer (a number would otherwise mask into a
-/// bogus pointer and segfault `bytes_from_ptr`).
-fn emit_validate_string_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str) {
-    let name_label = emit_string_literal_global(ctx, name);
-    let name_len = name.len();
-    let blk = ctx.block();
-    blk.call_void(
-        "js_runtime_validate_string_arg",
-        &[
-            (DOUBLE, value_box),
-            (PTR, &name_label),
-            (I32, &name_len.to_string()),
-        ],
-    );
-}
-
-/// #2013/#3146: emit a setup-time validation for a `node:crypto` key-material
-/// argument (`createHmac` key). Accepts a string or `Buffer`/`TypedArray`/
-/// `DataView`/`ArrayBuffer`; throws `TypeError [ERR_INVALID_ARG_TYPE]`
-/// otherwise. Emitted before the value is unboxed.
-fn emit_validate_crypto_key_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str) {
-    let name_label = emit_string_literal_global(ctx, name);
-    let name_len = name.len();
-    let blk = ctx.block();
-    blk.call_void(
-        "js_runtime_validate_crypto_key_arg",
-        &[
-            (DOUBLE, value_box),
-            (PTR, &name_label),
-            (I32, &name_len.to_string()),
-        ],
-    );
-}
-
-/// #2013/#3146: emit a setup-time `validateInteger(value, name, min, max)`
-/// call. Used for `pbkdf2*` iterations/keylen and `scryptSync` keylen, which
-/// node validates as integers in a fixed range before deriving. Emitted in
-/// node's argument order so the first bad argument reports the matching error.
-fn emit_validate_integer_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str, min: f64, max: f64) {
-    let name_label = emit_string_literal_global(ctx, name);
-    let name_len = name.len();
-    let blk = ctx.block();
-    blk.call_void(
-        "js_runtime_validate_integer_arg",
-        &[
-            (DOUBLE, value_box),
-            (PTR, &name_label),
-            (I32, &name_len.to_string()),
-            (DOUBLE, &double_literal(min)),
-            (DOUBLE, &double_literal(max)),
-        ],
-    );
-}
-
-/// Whether a `createHash(...).update(e)` / `createHmac(alg, e)` argument is a
-/// Buffer / Uint8Array — either a direct buffer-producing expression or a
-/// local/field whose static type is `Buffer` / `Uint8Array`. Such inputs must
-/// not take the inline `*StringHeader` hash fast path, whose UTF-8 string
-/// unboxing reads the wrong bytes for a Buffer (#1354).
-fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    if matches!(
-        e,
-        Expr::BufferFrom { .. }
-            | Expr::BufferFromArrayBuffer { .. }
-            | Expr::BufferAlloc { .. }
-            | Expr::BufferAllocUnsafe(_)
-            | Expr::BufferConcat(_)
-            | Expr::BufferConcatWithLength { .. }
-            | Expr::CryptoRandomBytes(_)
-    ) {
-        return true;
-    }
-    // `crypto.createSecretKey(...)` / `crypto.generateKeySync(...)` /
-    // `crypto.pbkdf2Sync(...)` / `crypto.scryptSync(...)` / `crypto.hkdfSync(...)`
-    // all return a BufferHeader (Uint8Array-marked) — the HIR cannot infer
-    // that statically without this hint, so without it `createHmac(secretKey, ...)`
-    // would route to the string fast-path that misreads buffer bytes as UTF-8.
-    if let Expr::Call { callee, .. } = e {
-        if let Expr::PropertyGet { object, property } = callee.as_ref() {
-            if matches!(object.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
-                && matches!(
-                    property.as_str(),
-                    "createSecretKey"
-                        | "generateKeySync"
-                        | "pbkdf2Sync"
-                        | "scryptSync"
-                        | "hkdfSync"
-                        | "randomBytes"
-                        | "randomFillSync"
-                )
-            {
-                return true;
-            }
-        }
-    }
-    matches!(
-        static_type_of(ctx, e),
-        Some(HirType::Named(ref n)) if n == "Buffer" || n == "Uint8Array"
-    )
-}
+pub(crate) use crypto_hash::{arm_crypto_create_hash, arm_crypto_hash_chain};
+pub(crate) use crypto_kdf::{
+    arm_crypto_argon2, arm_crypto_argon2_sync, arm_crypto_hkdf_async_alg, arm_crypto_hkdf_sync,
+    arm_crypto_hkdf_sync_alg, arm_crypto_pbkdf2_async, arm_crypto_pbkdf2_sync, arm_crypto_scrypt,
+    arm_crypto_scrypt_sync,
+};
+pub(crate) use crypto_keys::{
+    arm_crypto_create_ecdh, arm_crypto_create_key, arm_crypto_create_sign_verify_legacy,
+    arm_crypto_decapsulate, arm_crypto_diffie_hellman_ctor, arm_crypto_diffie_hellman_stateless,
+    arm_crypto_encapsulate, arm_crypto_generate_key_pair_async,
+    arm_crypto_generate_key_pair_sync_alg,
+};
+pub(crate) use crypto_misc::{
+    arm_crypto_create_cipheriv, arm_crypto_create_hmac, arm_crypto_create_secret_key,
+    arm_crypto_create_sign_verify, arm_crypto_generate_key_async,
+    arm_crypto_generate_key_pair_sync, arm_crypto_generate_key_sync, arm_crypto_get_cipher_info,
+    arm_crypto_get_fips, arm_crypto_get_inventory, arm_crypto_prime,
+    arm_crypto_public_private_crypt, arm_crypto_random_bytes, arm_crypto_random_bytes_async,
+    arm_crypto_random_fill, arm_crypto_random_int, arm_crypto_random_uuid,
+    arm_crypto_random_uuidv7, arm_crypto_secure_heap_used, arm_crypto_set_fips, arm_crypto_sign,
+    arm_crypto_timing_safe_equal, arm_crypto_verify,
+};
+pub(crate) use fs::{arm_fs, arm_fs_promises};
+pub(crate) use helpers::{
+    emit_call_location_at, emit_validate_crypto_key_arg, emit_validate_integer_arg,
+    emit_validate_string_arg, hash_input_is_buffer,
+};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -263,315 +163,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             )
         ) =>
         {
-            // Walk the chain to extract: alg (from createHash/Hash/createHmac/Hmac args),
-            // key (from createHmac's second arg, if present),
-            // data (from update args), enc (from digest args).
-            let digest_args = outer_args;
-            let update_call = if let Expr::PropertyGet { object, .. } = outer_callee.as_ref() {
-                object.as_ref()
-            } else {
-                unreachable!()
-            };
-            let (update_args, create_call) = if let Expr::Call {
-                callee: uc,
-                args: ua,
-                ..
-            } = update_call
-            {
-                let inner = if let Expr::PropertyGet { object, .. } = uc.as_ref() {
-                    object.as_ref()
-                } else {
-                    unreachable!()
-                };
-                (ua.as_slice(), inner)
-            } else {
-                unreachable!()
-            };
-            let (create_method, create_args) = if let Expr::Call {
-                callee: cc,
-                args: ca,
-                ..
-            } = create_call
-            {
-                let m = if let Expr::PropertyGet { property, .. } = cc.as_ref() {
-                    property.as_str()
-                } else {
-                    unreachable!()
-                };
-                (m, ca.as_slice())
-            } else {
-                unreachable!()
-            };
-
-            // Determine algorithm from the first arg of createHash/createHmac.
-            let alg = if let Some(Expr::String(s)) = create_args.first() {
-                s.as_str()
-            } else {
-                ""
-            };
-
-            // `.digest()` (no arg) returns a Buffer of the raw digest bytes;
-            // `.digest('hex')` returns a hex string. SCRAM (and any binary
-            // crypto workload) needs the Buffer path — it XORs, hashes, and
-            // base64-encodes raw bytes. Route to _bytes FFI variants when no
-            // encoding was specified.
-            let want_buffer =
-                digest_args.is_empty() || matches!(digest_args.first(), Some(Expr::Undefined));
-
-            // The inline `js_crypto_sha256` / `js_crypto_md5` fast path only
-            // produces a hex string (or, for the no-arg form, a raw-byte
-            // Buffer). Any other digest encoding (`'base64'`, `'base64url'`,
-            // …) must fall through to the runtime handle dispatch, whose
-            // `dispatch_hash` honors the encoding (#1352). A non-literal
-            // encoding arg also can't be folded inline.
-            let enc_fast_ok = match digest_args.first() {
-                None | Some(Expr::Undefined) => true,
-                Some(Expr::String(s)) => s.eq_ignore_ascii_case("hex"),
-                _ => false,
-            };
-            // The inline path unboxes the data/key as a `*StringHeader` and
-            // hashes the UTF-8 string bytes. A Buffer / Uint8Array input has a
-            // different header layout, so hashing it through the string path
-            // reads the wrong bytes (#1354). Route Buffer-typed inputs to the
-            // handle dispatch, whose `bytes_from_ptr` reads either layout.
-            // Detect both inline buffer-producing expressions (`Buffer.from(…)`,
-            // `crypto.randomBytes(…)`, …) and locals/fields whose static type
-            // is Buffer / Uint8Array (see `hash_input_is_buffer`). Each borrow
-            // of `ctx` is scoped to the `is_some_and` call so it does not
-            // collide with the `&mut ctx` borrows in the arm bodies.
-            let data_is_buffer = update_args
-                .first()
-                .is_some_and(|e| hash_input_is_buffer(ctx, e));
-            let key_is_buffer = create_args
-                .get(1)
-                .is_some_and(|e| hash_input_is_buffer(ctx, e));
-            // The fast paths below unbox the data/key via `unbox_str_handle`
-            // and hash the raw `StringHeader` bytes. A literal string is
-            // statically known to be a `StringHeader`; any non-literal
-            // (Call, Identifier, PropertyGet, ...) may resolve to a Buffer
-            // or KeyObject at runtime (e.g. `crypto.createSecretKey(...)`),
-            // which `hash_input_is_buffer` cannot detect from the HIR alone.
-            // Tightening to literal-string keys/data closes that gap (this
-            // restores PR #1419's original gating). Non-literal cases drop
-            // through to the handle-dispatch fallback that calls
-            // `bytes_from_ptr` and reads either layout correctly.
-            let data_is_literal_string = matches!(update_args.first(), Some(Expr::String(_)));
-            let key_is_literal_string = matches!(create_args.get(1), Some(Expr::String(_)));
-            let fast_ok = enc_fast_ok && !data_is_buffer && data_is_literal_string;
-            let hmac_fast_ok = fast_ok && !key_is_buffer && key_is_literal_string;
-
-            match (create_method, alg) {
-                ("createHash", "sha256") if fast_ok && update_args.len() == 1 => {
-                    let data_box = lower_expr(ctx, &update_args[0])?;
-                    let blk = ctx.block();
-                    // SSO-safe data unbox — both `js_crypto_sha256` and the
-                    // `_bytes` variant deref as `*StringHeader`. #214 class.
-                    let data_handle = unbox_str_handle(blk, &data_box);
-                    if want_buffer {
-                        let result =
-                            blk.call(I64, "js_crypto_sha256_bytes", &[(I64, &data_handle)]);
-                        Ok(nanbox_pointer_inline(blk, &result))
-                    } else {
-                        let result = blk.call(I64, "js_crypto_sha256", &[(I64, &data_handle)]);
-                        Ok(nanbox_string_inline(blk, &result))
-                    }
-                }
-                ("createHash", "md5") if fast_ok && update_args.len() == 1 => {
-                    let data_box = lower_expr(ctx, &update_args[0])?;
-                    let blk = ctx.block();
-                    // SSO-safe — see sha256 arm above.
-                    let data_handle = unbox_str_handle(blk, &data_box);
-                    let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
-                    Ok(nanbox_string_inline(blk, &result))
-                }
-                ("createHmac", "sha256")
-                    if hmac_fast_ok && create_args.len() >= 2 && update_args.len() == 1 =>
-                {
-                    let key_box = lower_expr(ctx, &create_args[1])?;
-                    let data_box = lower_expr(ctx, &update_args[0])?;
-                    let blk = ctx.block();
-                    // SSO-safe — both runtime fns deref as `*StringHeader`.
-                    let key_handle = unbox_str_handle(blk, &key_box);
-                    let data_handle = unbox_str_handle(blk, &data_box);
-                    if want_buffer {
-                        let result = blk.call(
-                            I64,
-                            "js_crypto_hmac_sha256_bytes",
-                            &[(I64, &key_handle), (I64, &data_handle)],
-                        );
-                        Ok(nanbox_pointer_inline(blk, &result))
-                    } else {
-                        let result = blk.call(
-                            I64,
-                            "js_crypto_hmac_sha256",
-                            &[(I64, &key_handle), (I64, &data_handle)],
-                        );
-                        Ok(nanbox_string_inline(blk, &result))
-                    }
-                }
-                _ => {
-                    // Fallback for non-literal alg (#1076) and for algorithms
-                    // we don't have a direct FFI helper for (sha1, sha512,
-                    // md5 for HMAC; sha1, sha512 for hash). Route through
-                    // the same handle protocol the standalone `createHash`
-                    // / `createHmac` arms use: allocate a Hash/Hmac handle,
-                    // chain `.update(data).digest(enc)` via runtime method
-                    // dispatch. Previously this arm returned `""` silently —
-                    // see #1076 (HMAC signature verification always failing
-                    // when `alg` was a `const`-bound or for-of-bound name).
-                    if create_args.is_empty() || update_args.is_empty() {
-                        // Mirror the legacy empty-string return for malformed
-                        // input so downstream chains keep their shape.
-                        let blk = ctx.block();
-                        let empty =
-                            blk.call(I64, "js_string_from_bytes", &[(I64, "0"), (I32, "0")]);
-                        return Ok(nanbox_string_inline(blk, &empty));
-                    }
-                    // Lower all the sub-expressions before any FFI call so
-                    // their side-effects run in the source order Node sees.
-                    let alg_box = lower_expr(ctx, &create_args[0])?;
-                    let key_box_opt = if (create_method == "createHmac" || create_method == "Hmac")
-                        && create_args.len() >= 2
-                    {
-                        Some(lower_expr(ctx, &create_args[1])?)
-                    } else {
-                        None
-                    };
-                    let hash_options_box_opt = if (create_method == "createHash"
-                        || create_method == "Hash")
-                        && create_args.len() >= 2
-                    {
-                        Some(lower_expr(ctx, &create_args[1])?)
-                    } else {
-                        None
-                    };
-                    let data_box = lower_expr(ctx, &update_args[0])?;
-                    let update_encoding_box_opt = if update_args.len() >= 2 {
-                        Some(lower_expr(ctx, &update_args[1])?)
-                    } else {
-                        None
-                    };
-                    let enc_box_opt = if digest_args.is_empty() {
-                        None
-                    } else {
-                        Some(lower_expr(ctx, &digest_args[0])?)
-                    };
-
-                    // #2013/#3146: validate the algorithm (and HMAC key) BEFORE
-                    // unboxing — a non-string would mask into a bogus pointer
-                    // and segfault `bytes_from_ptr`. node validates the
-                    // algorithm first, then the key.
-                    let is_hmac = create_method == "createHmac" || create_method == "Hmac";
-                    emit_validate_string_arg(
-                        ctx,
-                        &alg_box,
-                        if is_hmac { "hmac" } else { "algorithm" },
-                    );
-                    if is_hmac {
-                        if let Some(kb) = &key_box_opt {
-                            emit_validate_crypto_key_arg(ctx, kb, "key");
-                        }
-                    }
-                    let blk = ctx.block();
-                    let alg_handle = unbox_to_i64(blk, &alg_box);
-                    // Allocate the handle. Both helpers return f64 already
-                    // NaN-boxed with POINTER_TAG, suitable as the receiver
-                    // for `js_native_call_method`.
-                    let recv = if create_method == "createHmac" || create_method == "Hmac" {
-                        let key_box = key_box_opt.expect("createHmac needs a key arg");
-                        let key_handle = unbox_to_i64(blk, &key_box);
-                        blk.call(
-                            DOUBLE,
-                            "js_crypto_create_hmac",
-                            &[(I64, &alg_handle), (I64, &key_handle)],
-                        )
-                    } else {
-                        if let Some(options_box) = hash_options_box_opt {
-                            blk.call(
-                                DOUBLE,
-                                "js_crypto_create_hash_options",
-                                &[(I64, &alg_handle), (DOUBLE, &options_box)],
-                            )
-                        } else {
-                            blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)])
-                        }
-                    };
-
-                    // Invoke `.update(data[, inputEncoding])` via the runtime's generic
-                    // handle-method dispatcher.
-                    let update_name = emit_string_literal_global(ctx, "update");
-                    let update_argc_usize = if update_encoding_box_opt.is_some() {
-                        2
-                    } else {
-                        1
-                    };
-                    let update_argc = update_argc_usize.to_string();
-                    let update_args_buf = ctx.func.alloca_entry_array(DOUBLE, update_argc_usize);
-                    {
-                        let blk = ctx.block();
-                        let slot = blk.gep(DOUBLE, &update_args_buf, &[(I64, "0")]);
-                        blk.store(DOUBLE, &data_box, &slot);
-                        if let Some(update_encoding_box) = update_encoding_box_opt.as_ref() {
-                            let slot = blk.gep(DOUBLE, &update_args_buf, &[(I64, "1")]);
-                            blk.store(DOUBLE, update_encoding_box, &slot);
-                        }
-                    }
-                    let update_args_ptr = {
-                        let blk = ctx.block();
-                        let reg = blk.next_reg();
-                        blk.emit_raw(format!(
-                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                            reg, update_argc_usize, update_args_buf
-                        ));
-                        reg
-                    };
-                    let blk = ctx.block();
-                    let updated = blk.call(
-                        DOUBLE,
-                        "js_native_call_method",
-                        &[
-                            (DOUBLE, &recv),
-                            (PTR, &update_name),
-                            (I64, &format!("{}", "update".len())),
-                            (PTR, &update_args_ptr),
-                            (I64, &update_argc),
-                        ],
-                    );
-
-                    // Invoke `.digest(enc?)` — 0 or 1 args.
-                    let digest_name = emit_string_literal_global(ctx, "digest");
-                    let (digest_args_ptr, digest_argc) = if let Some(enc_box) = enc_box_opt {
-                        let buf = ctx.func.alloca_entry_array(DOUBLE, 1);
-                        {
-                            let blk = ctx.block();
-                            let slot = blk.gep(DOUBLE, &buf, &[(I64, "0")]);
-                            blk.store(DOUBLE, &enc_box, &slot);
-                        }
-                        let blk = ctx.block();
-                        let reg = blk.next_reg();
-                        blk.emit_raw(format!(
-                            "{} = getelementptr [1 x double], ptr {}, i64 0, i64 0",
-                            reg, buf
-                        ));
-                        (reg, "1".to_string())
-                    } else {
-                        ("null".to_string(), "0".to_string())
-                    };
-                    let blk = ctx.block();
-                    let result = blk.call(
-                        DOUBLE,
-                        "js_native_call_method",
-                        &[
-                            (DOUBLE, &updated),
-                            (PTR, &digest_name),
-                            (I64, &format!("{}", "digest".len())),
-                            (PTR, &digest_args_ptr),
-                            (I64, &digest_argc),
-                        ],
-                    );
-                    Ok(result)
-                }
-            }
+            arm_crypto_hash_chain(ctx, outer_callee.as_ref(), outer_args)
         }
 
         // Standalone `crypto.createHash(alg)` / legacy callable
@@ -592,29 +184,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let options_box = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
-            } else {
-                None
-            };
-            // #2013/#3146: reject a non-string algorithm before unboxing.
-            emit_validate_string_arg(ctx, &alg_box, "algorithm");
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
-            if let Some(options_box) = options_box {
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_create_hash_options",
-                    &[(I64, &alg_handle), (DOUBLE, &options_box)],
-                ))
-            } else {
-                Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
-            }
+            arm_crypto_create_hash(ctx, callee.as_ref(), args)
         }
 
         // `crypto.createSign(alg)` / legacy `crypto.Sign(alg)` and
@@ -629,23 +199,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let fname = if property == "createSign" || property == "Sign" {
-                "js_crypto_create_sign"
-            } else {
-                "js_crypto_create_verify"
-            };
-            Ok(blk.call(DOUBLE, fname, &[(I64, &alg_handle)]))
+            arm_crypto_create_sign_verify_legacy(ctx, callee.as_ref(), args)
         }
 
         // `crypto.createECDH(curve)` — Node-compatible ECDH handle. The
@@ -660,13 +214,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let curve_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let curve_handle = unbox_to_i64(blk, &curve_box);
-            Ok(blk.call(DOUBLE, "js_crypto_create_ecdh", &[(I64, &curve_handle)]))
+            arm_crypto_create_ecdh(ctx, callee.as_ref(), args)
         }
 
         // `crypto.createDiffieHellman(...)` / legacy constructor alias
@@ -682,44 +230,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            if property == "getDiffieHellman"
-                || property == "createDiffieHellmanGroup"
-                || property == "DiffieHellmanGroup"
-            {
-                let group = if let Some(arg) = args.first() {
-                    lower_expr(ctx, arg)?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let blk = ctx.block();
-                return Ok(blk.call(DOUBLE, "js_crypto_get_diffie_hellman", &[(DOUBLE, &group)]));
-            }
-            let first = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let second = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let third = if let Some(arg) = args.get(2) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_create_diffie_hellman",
-                &[(DOUBLE, &first), (DOUBLE, &second), (DOUBLE, &third)],
-            ))
+            arm_crypto_diffie_hellman_ctor(ctx, callee.as_ref(), args)
         }
 
         // Minimal KeyObject-compatible input path:
@@ -735,23 +246,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            let key_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let fname = if property == "createPrivateKey" {
-                "js_crypto_create_private_key_value"
-            } else {
-                "js_crypto_create_public_key_value"
-            };
-            let pem = blk.call(I64, fname, &[(DOUBLE, &key_box)]);
-            Ok(nanbox_string_inline(blk, &pem))
+            arm_crypto_create_key(ctx, callee.as_ref(), args)
         }
 
         // `crypto.generateKeyPair("rsa"|"ec"|"ed25519"|"x25519", options,
@@ -766,16 +261,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) && args.len() >= 3 =>
         {
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let options = lower_expr(ctx, &args[1])?;
-            let callback = lower_expr(ctx, &args[2])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_generate_key_pair_async",
-                &[(I64, &alg_handle), (DOUBLE, &options), (DOUBLE, &callback)],
-            ))
+            arm_crypto_generate_key_pair_async(ctx, callee.as_ref(), args)
         }
 
         // `crypto.generateKeyPairSync("rsa", { ...pem encodings... })` —
@@ -789,26 +275,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            let options = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let fname = match args.first() {
-                Some(Expr::String(alg)) if alg == "ec" => {
-                    "js_crypto_generate_key_pair_sync_ec_p256"
-                }
-                Some(Expr::String(alg)) if alg == "ed25519" => {
-                    "js_crypto_generate_key_pair_sync_ed25519"
-                }
-                Some(Expr::String(alg)) if alg == "x25519" => {
-                    "js_crypto_generate_key_pair_sync_x25519"
-                }
-                _ => "js_crypto_generate_key_pair_sync_rsa",
-            };
-            let pair = blk.call(I64, fname, &[(DOUBLE, &options)]);
-            Ok(nanbox_pointer_inline(blk, &pair))
+            arm_crypto_generate_key_pair_sync_alg(ctx, callee.as_ref(), args)
         }
 
         // `crypto.diffieHellman({ privateKey, publicKey })` — currently
@@ -822,13 +289,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let options = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let secret = blk.call(I64, "js_crypto_diffie_hellman", &[(DOUBLE, &options)]);
-            Ok(nanbox_pointer_inline(blk, &secret))
+            arm_crypto_diffie_hellman_stateless(ctx, callee.as_ref(), args)
         }
 
         // `crypto.encapsulate(publicKey[, callback])` — currently covers the
@@ -842,23 +303,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let key = lower_expr(ctx, &args[0])?;
-            if let Some(callback) = args.get(1) {
-                let callback = lower_expr(ctx, callback)?;
-                let blk = ctx.block();
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_encapsulate_async",
-                    &[(DOUBLE, &key), (DOUBLE, &callback)],
-                ))
-            } else {
-                let blk = ctx.block();
-                let result = blk.call(I64, "js_crypto_encapsulate", &[(DOUBLE, &key)]);
-                Ok(nanbox_pointer_inline(blk, &result))
-            }
+            arm_crypto_encapsulate(ctx, callee.as_ref(), args)
         }
 
         // `crypto.decapsulate(privateKey, ciphertext[, callback])` — X25519
@@ -872,28 +317,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 2 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let key = lower_expr(ctx, &args[0])?;
-            let ciphertext = lower_expr(ctx, &args[1])?;
-            if let Some(callback) = args.get(2) {
-                let callback = lower_expr(ctx, callback)?;
-                let blk = ctx.block();
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_decapsulate_async",
-                    &[(DOUBLE, &key), (DOUBLE, &ciphertext), (DOUBLE, &callback)],
-                ))
-            } else {
-                let blk = ctx.block();
-                let shared = blk.call(
-                    I64,
-                    "js_crypto_decapsulate",
-                    &[(DOUBLE, &key), (DOUBLE, &ciphertext)],
-                );
-                Ok(nanbox_pointer_inline(blk, &shared))
-            }
+            arm_crypto_decapsulate(ctx, callee.as_ref(), args)
         }
 
         // Standalone `crypto.createHmac(alg, key)` / legacy
@@ -914,28 +338,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 2 {
-                // Lower whatever's there to honor side effects, then
-                // return undefined — Node throws here, but our other
-                // crypto arms degrade gracefully rather than panic.
-                for a in args {
-                    let _ = lower_expr(ctx, a)?;
-                }
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let key_box = lower_expr(ctx, &args[1])?;
-            // #2013/#3146: validate algorithm (then key) before unboxing.
-            emit_validate_string_arg(ctx, &alg_box, "hmac");
-            emit_validate_crypto_key_arg(ctx, &key_box, "key");
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let key_handle = unbox_to_i64(blk, &key_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_create_hmac",
-                &[(I64, &alg_handle), (I64, &key_handle)],
-            ))
+            arm_crypto_create_hmac(ctx, callee.as_ref(), args)
         }
 
         // `crypto.createCipheriv(alg, key, iv)` / `crypto.createDecipheriv(...)`
@@ -957,42 +360,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )
             ) =>
         {
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            if args.len() < 3 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let key_box = lower_expr(ctx, &args[1])?;
-            let iv_box = lower_expr(ctx, &args[2])?;
-            let options_box = if let Some(options) = args.get(3) {
-                lower_expr(ctx, options)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let key_handle = unbox_to_i64(blk, &key_box);
-            let iv_handle = unbox_to_i64(blk, &iv_box);
-            let fname = if property == "createCipheriv" {
-                "js_crypto_create_cipheriv"
-            } else {
-                "js_crypto_create_decipheriv"
-            };
-            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
-            Ok(blk.call(
-                DOUBLE,
-                fname,
-                &[
-                    (I64, &alg_handle),
-                    (I64, &key_handle),
-                    (I64, &iv_handle),
-                    (DOUBLE, &options_box),
-                ],
-            ))
+            arm_crypto_create_cipheriv(ctx, callee.as_ref(), args)
         }
 
         // `crypto.randomBytes(size, callback)` — callback form. Perry
@@ -1007,14 +375,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) && args.len() >= 2 =>
         {
-            let size_box = lower_expr(ctx, &args[0])?;
-            let cb_box = lower_expr(ctx, &args[1])?;
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_random_bytes_async",
-                &[(DOUBLE, &size_box), (DOUBLE, &cb_box)],
-            ))
+            arm_crypto_random_bytes_async(ctx, callee.as_ref(), args)
         }
 
         // `crypto.randomFill(buffer[, offset][, size], callback)`.
@@ -1027,30 +388,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) && args.len() >= 2 =>
         {
-            let last = args.len() - 1;
-            let buf_box = lower_expr(ctx, &args[0])?;
-            let off_box = if last >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let sz_box = if last >= 3 {
-                lower_expr(ctx, &args[2])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let cb_box = lower_expr(ctx, &args[last])?;
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_random_fill_async",
-                &[
-                    (DOUBLE, &buf_box),
-                    (DOUBLE, &off_box),
-                    (DOUBLE, &sz_box),
-                    (DOUBLE, &cb_box),
-                ],
-            ))
+            arm_crypto_random_fill(ctx, callee.as_ref(), args)
         }
 
         // `crypto.createSign(alg)` / `crypto.createVerify(alg)` (#1364) —
@@ -1069,24 +407,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )
             ) =>
         {
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let fname = if property == "createSign" {
-                "js_crypto_create_sign"
-            } else {
-                "js_crypto_create_verify"
-            };
-            // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
-            Ok(blk.call(DOUBLE, fname, &[(I64, &alg_handle)]))
+            arm_crypto_create_sign_verify(ctx, callee.as_ref(), args)
         }
 
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
@@ -1099,13 +420,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(0.0));
-            }
-            let size_box = lower_expr(ctx, &args[0])?;
-            let blk = ctx.block();
-            let buf_handle = blk.call(I64, "js_crypto_random_bytes_buffer", &[(DOUBLE, &size_box)]);
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_random_bytes(ctx, callee.as_ref(), args)
         }
 
         // Phase H crypto: `crypto.randomUUID()`.
@@ -1118,30 +433,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            let options_box = if let Some(options) = args.first() {
-                lower_expr(ctx, options)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_crypto_random_uuid", &[(DOUBLE, &options_box)]);
-            Ok(nanbox_string_inline(blk, &handle))
+            arm_crypto_random_uuid(ctx, callee.as_ref(), args)
         }
 
         // `crypto.randomUUIDv7([options])` — RFC 9562 v7 (#2550).
-        Expr::Call {
-            callee, args: _, ..
-        } if matches!(
-            callee.as_ref(),
-            Expr::PropertyGet { object, property } if property == "randomUUIDv7" && matches!(
-                object.as_ref(),
-                Expr::NativeModuleRef(n) if n == "crypto"
-            )
-        ) =>
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "randomUUIDv7" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
         {
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_crypto_random_uuidv7", &[]);
-            Ok(nanbox_string_inline(blk, &handle))
+            arm_crypto_random_uuidv7(ctx, callee.as_ref(), args)
         }
 
         // Phase H crypto: `crypto.randomInt([min,] max[, callback])` —
@@ -1159,39 +464,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(0.0));
-            }
-            let zero = Expr::Integer(0);
-            let (min_expr, max_expr, callback_expr) = match args.len() {
-                1 => (&zero, &args[0], None),
-                2 => (&args[0], &args[1], None),
-                _ => (&args[0], &args[1], Some(&args[2])),
-            };
-            let min_box = lower_expr(ctx, min_expr)?;
-            let max_box = lower_expr(ctx, max_expr)?;
-            let callback_box = if let Some(callback_expr) = callback_expr {
-                Some(lower_expr(ctx, callback_expr)?)
-            } else {
-                None
-            };
-            let blk = ctx.block();
-            if let Some(callback_box) = callback_box {
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_random_int_async",
-                    &[
-                        (DOUBLE, &min_box),
-                        (DOUBLE, &max_box),
-                        (DOUBLE, &callback_box),
-                    ],
-                ));
-            }
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_random_int",
-                &[(DOUBLE, &min_box), (DOUBLE, &max_box)],
-            ))
+            arm_crypto_random_int(ctx, callee.as_ref(), args)
         }
 
         // Phase H crypto: `crypto.timingSafeEqual(a, b)` — constant-time
@@ -1205,17 +478,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 2 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let a_box = lower_expr(ctx, &args[0])?;
-            let b_box = lower_expr(ctx, &args[1])?;
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_timing_safe_equal",
-                &[(DOUBLE, &a_box), (DOUBLE, &b_box)],
-            ))
+            arm_crypto_timing_safe_equal(ctx, callee.as_ref(), args)
         }
 
         // Prime generation/checking APIs used by Node's crypto prime suite.
@@ -1233,85 +496,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            let first_box = lower_expr(ctx, &args[0])?;
-            let options_box = if args.len() >= 2 {
-                lower_expr(ctx, &args[1])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let callback_box =
-                if matches!(property, "generatePrime" | "checkPrime") && args.len() >= 3 {
-                    Some(lower_expr(ctx, &args[2])?)
-                } else {
-                    None
-                };
-            let blk = ctx.block();
-            let is_generate = property == "generatePrime" || property == "generatePrimeSync";
-            if let Some(callback_box) = callback_box {
-                let fname = if is_generate {
-                    "js_crypto_generate_prime_async"
-                } else {
-                    "js_crypto_check_prime_async"
-                };
-                return Ok(blk.call(
-                    DOUBLE,
-                    fname,
-                    &[
-                        (DOUBLE, &first_box),
-                        (DOUBLE, &options_box),
-                        (DOUBLE, &callback_box),
-                    ],
-                ));
-            }
-            if is_generate {
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_generate_prime_sync",
-                    &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
-                ))
-            } else {
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_check_prime_sync",
-                    &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
-                ))
-            }
+            arm_crypto_prime(ctx, callee.as_ref(), args)
         }
 
         // `crypto.getHashes()` / `getCiphers()` / `getCurves()` — stable
         // deterministic inventories used for feature detection. The runtime
         // helper returns an ArrayHeader pointer.
-        Expr::Call {
-            callee, args: _, ..
-        } if matches!(
-            callee.as_ref(),
-            Expr::PropertyGet { object, property } if matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves") && matches!(
-                object.as_ref(),
-                Expr::NativeModuleRef(n) if n == "crypto"
-            )
-        ) =>
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves") && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
         {
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            let fname = match property {
-                "getHashes" => "js_crypto_get_hashes",
-                "getCiphers" => "js_crypto_get_ciphers",
-                _ => "js_crypto_get_curves",
-            };
-            let blk = ctx.block();
-            let arr = blk.call(I64, fname, &[]);
-            Ok(nanbox_pointer_inline(blk, &arr))
+            arm_crypto_get_inventory(ctx, callee.as_ref(), args)
         }
 
         // `crypto.getCipherInfo(algorithm, options?)` — feature detection
@@ -1325,35 +525,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let options_box = if let Some(arg) = args.get(1) {
-                lower_expr(ctx, arg)?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_get_cipher_info",
-                &[(DOUBLE, &alg_box), (DOUBLE, &options_box)],
-            ))
+            arm_crypto_get_cipher_info(ctx, callee.as_ref(), args)
         }
 
         // `crypto.getFips()` — Perry does not expose OpenSSL FIPS mode.
-        Expr::Call {
-            callee, args: _, ..
-        } if matches!(
-            callee.as_ref(),
-            Expr::PropertyGet { object, property } if property == "getFips" && matches!(
-                object.as_ref(),
-                Expr::NativeModuleRef(n) if n == "crypto"
-            )
-        ) =>
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "getFips" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
         {
-            Ok(double_literal(0.0))
+            arm_crypto_get_fips(ctx, callee.as_ref(), args)
         }
 
         // `crypto.setFips(false|0)` — Perry has no OpenSSL FIPS mode, so
@@ -1367,27 +552,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            arm_crypto_set_fips(ctx, callee.as_ref(), args)
         }
 
         // `crypto.secureHeapUsed()` — default Node shape when secure heap
         // is not enabled: { total: 0, used: 0, utilization: 0, min: 0 }.
-        Expr::Call {
-            callee, args: _, ..
-        } if matches!(
-            callee.as_ref(),
-            Expr::PropertyGet { object, property } if property == "secureHeapUsed" && matches!(
-                object.as_ref(),
-                Expr::NativeModuleRef(n) if n == "crypto"
-            )
-        ) =>
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "secureHeapUsed" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
         {
-            let blk = ctx.block();
-            let obj = blk.call(I64, "js_crypto_secure_heap_used", &[]);
-            Ok(nanbox_pointer_inline(blk, &obj))
+            arm_crypto_secure_heap_used(ctx, callee.as_ref(), args)
         }
 
         // One-shot asymmetric signing/verification. Initial native parity
@@ -1402,38 +581,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 3 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let data_box = lower_expr(ctx, &args[1])?;
-            let key_box = lower_expr(ctx, &args[2])?;
-            let callback_box = if args.len() >= 4 {
-                Some(lower_expr(ctx, &args[3])?)
-            } else {
-                None
-            };
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let data_handle = unbox_to_i64(blk, &data_box);
-            if let Some(callback_box) = callback_box {
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_sign_async",
-                    &[
-                        (I64, &alg_handle),
-                        (I64, &data_handle),
-                        (DOUBLE, &key_box),
-                        (DOUBLE, &callback_box),
-                    ],
-                ));
-            }
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_sign_rsa_sha256",
-                &[(I64, &alg_handle), (I64, &data_handle), (DOUBLE, &key_box)],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_sign(ctx, callee.as_ref(), args)
         }
 
         Expr::Call { callee, args, .. }
@@ -1445,45 +593,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 4 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_FALSE)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let data_box = lower_expr(ctx, &args[1])?;
-            let key_box = lower_expr(ctx, &args[2])?;
-            let sig_box = lower_expr(ctx, &args[3])?;
-            let callback_box = if args.len() >= 5 {
-                Some(lower_expr(ctx, &args[4])?)
-            } else {
-                None
-            };
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let data_handle = unbox_to_i64(blk, &data_box);
-            let sig_handle = unbox_to_i64(blk, &sig_box);
-            if let Some(callback_box) = callback_box {
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_crypto_verify_async",
-                    &[
-                        (I64, &alg_handle),
-                        (I64, &data_handle),
-                        (DOUBLE, &key_box),
-                        (I64, &sig_handle),
-                        (DOUBLE, &callback_box),
-                    ],
-                ));
-            }
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_verify_rsa_sha256",
-                &[
-                    (I64, &alg_handle),
-                    (I64, &data_handle),
-                    (DOUBLE, &key_box),
-                    (I64, &sig_handle),
-                ],
-            ))
+            arm_crypto_verify(ctx, callee.as_ref(), args)
         }
 
         // RSA encryption/decryption one-shot APIs. Covers the common
@@ -1499,33 +609,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 2 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            let key_box = lower_expr(ctx, &args[0])?;
-            let data_box = lower_expr(ctx, &args[1])?;
-            let blk = ctx.block();
-            let key_converter = match property {
-                "publicEncrypt" | "publicDecrypt" => "js_crypto_create_public_key_value",
-                "privateDecrypt" | "privateEncrypt" => "js_crypto_create_private_key_value",
-                _ => unreachable!(),
-            };
-            let key_handle = blk.call(I64, key_converter, &[(DOUBLE, &key_box)]);
-            let data_handle = unbox_to_i64(blk, &data_box);
-            let fname = match property {
-                "publicEncrypt" => "js_crypto_public_encrypt",
-                "privateDecrypt" => "js_crypto_private_decrypt",
-                "privateEncrypt" => "js_crypto_private_encrypt",
-                "publicDecrypt" => "js_crypto_public_decrypt",
-                _ => unreachable!(),
-            };
-            let buf_handle = blk.call(I64, fname, &[(I64, &key_handle), (I64, &data_handle)]);
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_public_private_crypt(ctx, callee.as_ref(), args)
         }
 
         // `crypto.createSecretKey(key, encoding?)` — JWT signing key for
@@ -1542,28 +626,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let key_box = lower_expr(ctx, &args[0])?;
-            let enc_box = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
-            } else {
-                None
-            };
-            let blk = ctx.block();
-            let key_handle = unbox_to_i64(blk, &key_box);
-            let enc_handle = if let Some(enc) = enc_box {
-                unbox_to_i64(blk, &enc)
-            } else {
-                "0".to_string()
-            };
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_create_secret_key",
-                &[(I64, &key_handle), (I64, &enc_handle)],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_create_secret_key(ctx, callee.as_ref(), args)
         }
 
         // `crypto.generateKeySync("aes"|"hmac", { length })` — returns a
@@ -1578,19 +641,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 2 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let options_box = lower_expr(ctx, &args[1])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_generate_key_sync",
-                &[(I64, &alg_handle), (DOUBLE, &options_box)],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_generate_key_sync(ctx, callee.as_ref(), args)
         }
 
         // `crypto.generateKey("aes"|"hmac", { length }, cb)` — async Node
@@ -1605,23 +656,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 3 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let options_box = lower_expr(ctx, &args[1])?;
-            let cb_box = lower_expr(ctx, &args[2])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_generate_key_async",
-                &[
-                    (I64, &alg_handle),
-                    (DOUBLE, &options_box),
-                    (DOUBLE, &cb_box),
-                ],
-            ))
+            arm_crypto_generate_key_async(ctx, callee.as_ref(), args)
         }
 
         // crypto.argon2Sync(algorithm, parameters) -> Buffer.
@@ -1634,19 +669,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 2 {
-                return Ok(double_literal(0.0));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let params_box = lower_expr(ctx, &args[1])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_argon2_sync",
-                &[(I64, &alg_handle), (DOUBLE, &params_box)],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_argon2_sync(ctx, callee.as_ref(), args)
         }
 
         // crypto.argon2(algorithm, parameters, callback)
@@ -1659,19 +682,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 3 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let params_box = lower_expr(ctx, &args[1])?;
-            let cb_box = lower_expr(ctx, &args[2])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_argon2_async",
-                &[(I64, &alg_handle), (DOUBLE, &params_box), (DOUBLE, &cb_box)],
-            ))
+            arm_crypto_argon2(ctx, callee.as_ref(), args)
         }
 
         // crypto.hkdfSync(algorithm, ikm, salt, info, keylen) -> Buffer.
@@ -1684,31 +695,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 5 {
-                return Ok(double_literal(0.0));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let ikm_box = lower_expr(ctx, &args[1])?;
-            let salt_box = lower_expr(ctx, &args[2])?;
-            let info_box = lower_expr(ctx, &args[3])?;
-            let len_box = lower_expr(ctx, &args[4])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let ikm_handle = unbox_to_i64(blk, &ikm_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            let info_handle = unbox_to_i64(blk, &info_box);
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_hkdf_bytes_alg",
-                &[
-                    (I64, &alg_handle),
-                    (I64, &ikm_handle),
-                    (I64, &salt_handle),
-                    (I64, &info_handle),
-                    (DOUBLE, &len_box),
-                ],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_hkdf_sync_alg(ctx, callee.as_ref(), args)
         }
 
         // crypto.hkdf(algorithm, ikm, salt, info, keylen, callback)
@@ -1721,32 +708,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 6 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let alg_box = lower_expr(ctx, &args[0])?;
-            let ikm_box = lower_expr(ctx, &args[1])?;
-            let salt_box = lower_expr(ctx, &args[2])?;
-            let info_box = lower_expr(ctx, &args[3])?;
-            let len_box = lower_expr(ctx, &args[4])?;
-            let cb_box = lower_expr(ctx, &args[5])?;
-            let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            let ikm_handle = unbox_to_i64(blk, &ikm_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            let info_handle = unbox_to_i64(blk, &info_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_hkdf_async_alg",
-                &[
-                    (I64, &alg_handle),
-                    (I64, &ikm_handle),
-                    (I64, &salt_handle),
-                    (I64, &info_handle),
-                    (DOUBLE, &len_box),
-                    (DOUBLE, &cb_box),
-                ],
-            ))
+            arm_crypto_hkdf_async_alg(ctx, callee.as_ref(), args)
         }
 
         // crypto.scrypt(password, salt, keylen[, options], callback)
@@ -1759,32 +721,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 4 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let pwd_box = lower_expr(ctx, &args[0])?;
-            let salt_box = lower_expr(ctx, &args[1])?;
-            let len_box = lower_expr(ctx, &args[2])?;
-            let cb_expr = if args.len() >= 5 {
-                let _ = lower_expr(ctx, &args[3])?;
-                &args[4]
-            } else {
-                &args[3]
-            };
-            let cb_box = lower_expr(ctx, cb_expr)?;
-            let blk = ctx.block();
-            let pwd_handle = unbox_to_i64(blk, &pwd_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_scrypt_async",
-                &[
-                    (I64, &pwd_handle),
-                    (I64, &salt_handle),
-                    (DOUBLE, &len_box),
-                    (DOUBLE, &cb_box),
-                ],
-            ))
+            arm_crypto_scrypt(ctx, callee.as_ref(), args)
         }
 
         // crypto.pbkdf2Sync(password, salt, iterations, keylen, digest) -> Buffer.
@@ -1801,46 +738,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 4 {
-                return Ok(double_literal(0.0));
-            }
-            let pwd_box = lower_expr(ctx, &args[0])?;
-            let salt_box = lower_expr(ctx, &args[1])?;
-            let iter_box = lower_expr(ctx, &args[2])?;
-            let keylen_box = lower_expr(ctx, &args[3])?;
-            let digest_box = if args.len() >= 5 {
-                Some(lower_expr(ctx, &args[4])?)
-            } else {
-                None
-            };
-            // #2013/#3146: node validates iterations (int >= 1), keylen
-            // (int >= 0), then the digest (string) before deriving — and a
-            // non-string digest would otherwise mask into a bogus pointer and
-            // segfault `bytes_from_ptr`.
-            emit_validate_integer_arg(ctx, &iter_box, "iterations", 1.0, i32::MAX as f64);
-            emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
-            if let Some(db) = &digest_box {
-                emit_validate_string_arg(ctx, db, "digest");
-            }
-            let blk = ctx.block();
-            let pwd_handle = unbox_to_i64(blk, &pwd_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            let digest_handle = match &digest_box {
-                Some(b) => unbox_to_i64(blk, b),
-                None => "0".to_string(),
-            };
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_pbkdf2_bytes",
-                &[
-                    (I64, &pwd_handle),
-                    (I64, &salt_handle),
-                    (DOUBLE, &iter_box),
-                    (DOUBLE, &keylen_box),
-                    (I64, &digest_handle),
-                ],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_pbkdf2_sync(ctx, callee.as_ref(), args)
         }
 
         // crypto.pbkdf2(password, salt, iterations, keylen, algorithm, callback)
@@ -1853,31 +751,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 6 {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let pwd_box = lower_expr(ctx, &args[0])?;
-            let salt_box = lower_expr(ctx, &args[1])?;
-            let iter_box = lower_expr(ctx, &args[2])?;
-            let keylen_box = lower_expr(ctx, &args[3])?;
-            let alg_box = lower_expr(ctx, &args[4])?;
-            let cb_box = lower_expr(ctx, &args[5])?;
-            let blk = ctx.block();
-            let pwd_handle = unbox_to_i64(blk, &pwd_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            let alg_handle = unbox_to_i64(blk, &alg_box);
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_pbkdf2_async_alg",
-                &[
-                    (I64, &pwd_handle),
-                    (I64, &salt_handle),
-                    (DOUBLE, &iter_box),
-                    (DOUBLE, &keylen_box),
-                    (I64, &alg_handle),
-                    (DOUBLE, &cb_box),
-                ],
-            ))
+            arm_crypto_pbkdf2_async(ctx, callee.as_ref(), args)
         }
 
         // crypto.scryptSync(password, salt, keylen, options?) -> Buffer.
@@ -1894,37 +768,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 3 {
-                return Ok(double_literal(0.0));
-            }
-            let pwd_box = lower_expr(ctx, &args[0])?;
-            let salt_box = lower_expr(ctx, &args[1])?;
-            let keylen_box = lower_expr(ctx, &args[2])?;
-            let opts_box = if args.len() >= 4 {
-                Some(lower_expr(ctx, &args[3])?)
-            } else {
-                None
-            };
-            // #2013/#3146: node validates keylen as an integer in [0, 2^31-1].
-            emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
-            let blk = ctx.block();
-            let pwd_handle = unbox_to_i64(blk, &pwd_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            let opts_handle = match &opts_box {
-                Some(b) => unbox_to_i64(blk, b),
-                None => "0".to_string(),
-            };
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_scrypt_bytes",
-                &[
-                    (I64, &pwd_handle),
-                    (I64, &salt_handle),
-                    (DOUBLE, &keylen_box),
-                    (I64, &opts_handle),
-                ],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_scrypt_sync(ctx, callee.as_ref(), args)
         }
 
         // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
@@ -1939,31 +783,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.len() < 5 {
-                return Ok(double_literal(0.0));
-            }
-            let digest_box = lower_expr(ctx, &args[0])?;
-            let ikm_box = lower_expr(ctx, &args[1])?;
-            let salt_box = lower_expr(ctx, &args[2])?;
-            let info_box = lower_expr(ctx, &args[3])?;
-            let keylen_box = lower_expr(ctx, &args[4])?;
-            let blk = ctx.block();
-            let digest_handle = unbox_to_i64(blk, &digest_box);
-            let ikm_handle = unbox_to_i64(blk, &ikm_box);
-            let salt_handle = unbox_to_i64(blk, &salt_box);
-            let info_handle = unbox_to_i64(blk, &info_box);
-            let buf_handle = blk.call(
-                I64,
-                "js_crypto_hkdf_sync",
-                &[
-                    (I64, &digest_handle),
-                    (I64, &ikm_handle),
-                    (I64, &salt_handle),
-                    (I64, &info_handle),
-                    (DOUBLE, &keylen_box),
-                ],
-            );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            arm_crypto_hkdf_sync(ctx, callee.as_ref(), args)
         }
 
         // crypto.generateKeyPairSync(type, options) -> { publicKey, privateKey }.
@@ -1979,27 +799,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            if args.is_empty() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let type_box = lower_expr(ctx, &args[0])?;
-            let opts_box = if args.len() >= 2 {
-                Some(lower_expr(ctx, &args[1])?)
-            } else {
-                None
-            };
-            let blk = ctx.block();
-            let type_handle = unbox_to_i64(blk, &type_box);
-            let opts_handle = match &opts_box {
-                Some(b) => unbox_to_i64(blk, b),
-                None => "0".to_string(),
-            };
-            // Returns an already-NaN-boxed object (POINTER_TAG).
-            Ok(blk.call(
-                DOUBLE,
-                "js_crypto_generate_key_pair_sync",
-                &[(I64, &type_handle), (I64, &opts_handle)],
-            ))
+            arm_crypto_generate_key_pair_sync(ctx, callee.as_ref(), args)
         }
 
         // Phase H fs: `fs.promises.METHOD(args...)` — HIR shape is a
@@ -2020,79 +820,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            match property {
-                "readFile" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_promises_read_file",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "writeFile" if args.len() >= 2 => {
-                    let path = lower_expr(ctx, &args[0])?;
-                    let content = lower_expr(ctx, &args[1])?;
-                    let options = if args.len() >= 3 {
-                        lower_expr(ctx, &args[2])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_promises_write_file",
-                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
-                    ))
-                }
-                "appendFile" if args.len() >= 2 => {
-                    let path = lower_expr(ctx, &args[0])?;
-                    let content = lower_expr(ctx, &args[1])?;
-                    let options = if args.len() >= 3 {
-                        lower_expr(ctx, &args[2])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_promises_append_file",
-                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
-                    ))
-                }
-                "mkdir" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_promises_mkdir",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                _ => {
-                    // Unsupported — return a resolved promise holding
-                    // undefined so `await` sees a real pending→settled
-                    // transition instead of a null pointer.
-                    for a in args {
-                        let _ = lower_expr(ctx, a)?;
-                    }
-                    let blk = ctx.block();
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-                    Ok(nanbox_pointer_inline(blk, &promise_handle))
-                }
-            }
+            arm_fs_promises(ctx, callee.as_ref(), args)
         }
 
         // Phase H fs: `fs.METHOD(args...)` — catch all Call expressions
@@ -2112,298 +840,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             ) =>
         {
-            let property = if let Expr::PropertyGet { property, .. } = callee.as_ref() {
-                property.as_str()
-            } else {
-                unreachable!()
-            };
-            match property {
-                "readFileSync" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_read_file_dispatch",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "openAsBlob" => {
-                    let p = if let Some(arg) = args.first() {
-                        lower_expr(ctx, arg)?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_open_as_blob",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "statSync" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_stat_sync_options",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "readdirSync" if !args.is_empty() => {
-                    // Runtime returns a raw ArrayHeader pointer
-                    // transmuted to f64 (no NaN-box tag). Unbox as i64
-                    // and re-NaN-box with POINTER_TAG so downstream
-                    // length/index paths see a proper array handle.
-                    // Issue #631: forward optional `options` arg to
-                    // pick up `withFileTypes:true`.
-                    let p = lower_expr(ctx, &args[0])?;
-                    let opts = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let blk = ctx.block();
-                    let raw = blk.call(
-                        DOUBLE,
-                        "js_fs_readdir_sync",
-                        &[(DOUBLE, &p), (DOUBLE, &opts)],
-                    );
-                    let raw_bits = blk.bitcast_double_to_i64(&raw);
-                    Ok(nanbox_pointer_inline(blk, &raw_bits))
-                }
-                "renameSync" if args.len() >= 2 => {
-                    let from = lower_expr(ctx, &args[0])?;
-                    let to = lower_expr(ctx, &args[1])?;
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_rename_sync",
-                        &[(DOUBLE, &from), (DOUBLE, &to)],
-                    );
-                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-                }
-                "copyFileSync" if args.len() >= 2 => {
-                    let from = lower_expr(ctx, &args[0])?;
-                    let to = lower_expr(ctx, &args[1])?;
-                    let flags = if args.len() >= 3 {
-                        lower_expr(ctx, &args[2])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_copy_file_sync_flags",
-                        &[(DOUBLE, &from), (DOUBLE, &to), (DOUBLE, &flags)],
-                    );
-                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-                }
-                "writeFileSync" if args.len() >= 2 => {
-                    let path = lower_expr(ctx, &args[0])?;
-                    let content = lower_expr(ctx, &args[1])?;
-                    let options = if args.len() >= 3 {
-                        lower_expr(ctx, &args[2])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_write_file_sync_options",
-                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
-                    );
-                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-                }
-                "appendFileSync" if args.len() >= 2 => {
-                    let path = lower_expr(ctx, &args[0])?;
-                    let content = lower_expr(ctx, &args[1])?;
-                    let options = if args.len() >= 3 {
-                        lower_expr(ctx, &args[2])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_append_file_sync_options",
-                        &[(DOUBLE, &path), (DOUBLE, &content), (DOUBLE, &options)],
-                    );
-                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-                }
-                "accessSync" if !args.is_empty() => {
-                    // Node throws on inaccessible paths. We dispatch
-                    // through `js_fs_access_sync_throw` which calls
-                    // `js_throw` on failure, longjmping into the
-                    // nearest enclosing try/catch. Returns NaN-boxed
-                    // undefined on success.
-                    let p = lower_expr(ctx, &args[0])?;
-                    let mode = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_access_sync_throw_mode",
-                        &[(DOUBLE, &p), (DOUBLE, &mode)],
-                    ))
-                }
-                "realpathSync" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_realpath_dispatch",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "mkdtempSync" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_mkdtemp_dispatch",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "mkdtempDisposableSync" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_mkdtemp_disposable_sync",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "symlink" if args.len() >= 2 => {
-                    let target = lower_expr(ctx, &args[0])?;
-                    let path = lower_expr(ctx, &args[1])?;
-                    let arg2 = if args.len() >= 3 {
-                        lower_expr(ctx, &args[2])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let arg3 = if args.len() >= 4 {
-                        lower_expr(ctx, &args[3])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_symlink_callback",
-                        &[
-                            (DOUBLE, &target),
-                            (DOUBLE, &path),
-                            (DOUBLE, &arg2),
-                            (DOUBLE, &arg3),
-                        ],
-                    ))
-                }
-                "rmdirSync" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    let _ = ctx.block().call(
-                        I32,
-                        "js_fs_rmdir_sync_options",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    );
-                    Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-                }
-                "createWriteStream" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_create_write_stream",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "createReadStream" if !args.is_empty() => {
-                    let p = lower_expr(ctx, &args[0])?;
-                    let options = if args.len() >= 2 {
-                        lower_expr(ctx, &args[1])?
-                    } else {
-                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                    };
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_create_read_stream",
-                        &[(DOUBLE, &p), (DOUBLE, &options)],
-                    ))
-                }
-                "_toUnixTimestamp" if !args.is_empty() => {
-                    let time = lower_expr(ctx, &args[0])?;
-                    Ok(ctx
-                        .block()
-                        .call(DOUBLE, "js_fs_to_unix_timestamp", &[(DOUBLE, &time)]))
-                }
-                "readFile" if args.len() >= 3 => {
-                    // Node `fs.readFile(path, encoding, callback)` —
-                    // sync read + immediate callback invocation.
-                    let p = lower_expr(ctx, &args[0])?;
-                    let enc = lower_expr(ctx, &args[1])?;
-                    let cb = lower_expr(ctx, &args[2])?;
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_read_file_callback",
-                        &[(DOUBLE, &p), (DOUBLE, &enc), (DOUBLE, &cb)],
-                    ))
-                }
-                "readFile" if args.len() >= 2 => {
-                    // Node `fs.readFile(path, callback)` (no encoding).
-                    let p = lower_expr(ctx, &args[0])?;
-                    let cb = lower_expr(ctx, &args[1])?;
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_fs_read_file_callback",
-                        &[(DOUBLE, &p), (DOUBLE, &undef), (DOUBLE, &cb)],
-                    ))
-                }
-                _ => {
-                    super::downgrade_buffer_aliases_in_expr(
-                        ctx,
-                        callee,
-                        crate::native_value::MaterializationReason::UnknownCallEscape,
-                    );
-                    for arg in args {
-                        super::downgrade_buffer_aliases_in_expr(
-                            ctx,
-                            arg,
-                            crate::native_value::MaterializationReason::UnknownCallEscape,
-                        );
-                    }
-                    lower_call(ctx, callee, args)
-                }
-            }
+            arm_fs(ctx, callee.as_ref(), args)
         }
 
         // -------- Calls --------

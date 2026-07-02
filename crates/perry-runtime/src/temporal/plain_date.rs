@@ -4,7 +4,9 @@
 //! a calendar id string selects another (`temporal_rs` owns the calendar math).
 
 use super::dispatch::{self, boolean, ok_or_throw, raw_arg, string, undefined};
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::{Calendar, PlainDate, PlainTime, TimeZone};
 
@@ -58,7 +60,7 @@ fn coerce_date_with_overflow(
     v: f64,
     overflow: Option<temporal_rs::options::Overflow>,
 ) -> PlainDate {
-    match temporal_value_ref(v) {
+    match temporal_value_ref_or_subclass(v) {
         Some(TemporalValue::PlainDate(d)) => return d.clone(),
         Some(TemporalValue::PlainDateTime(dt)) => return dt.to_plain_date(),
         Some(TemporalValue::ZonedDateTime(z)) => return z.to_plain_date(),
@@ -92,7 +94,7 @@ pub fn from_static(args: &[f64]) -> f64 {
         let _ = super::options::overflow(opts);
         return wrap(d);
     }
-    match temporal_value_ref(item) {
+    match temporal_value_ref_or_subclass(item) {
         Some(TemporalValue::PlainDate(d)) => {
             let _ = super::options::overflow(opts);
             return wrap(d.clone());
@@ -192,18 +194,15 @@ fn to_zoned_args(v: f64) -> (TimeZone, Option<PlainTime>) {
 pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
     match name {
         "add" => {
+            // Spec reads the duration argument's fields BEFORE the options bag.
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
             let overflow = super::options::overflow(raw_arg(args, 1));
-            wrap(ok_or_throw(d.add(
-                &super::duration::coerce_duration(raw_arg(args, 0)),
-                overflow,
-            )))
+            wrap(ok_or_throw(d.add(&dur, overflow)))
         }
         "subtract" => {
+            let dur = super::duration::coerce_duration(raw_arg(args, 0));
             let overflow = super::options::overflow(raw_arg(args, 1));
-            wrap(ok_or_throw(d.subtract(
-                &super::duration::coerce_duration(raw_arg(args, 0)),
-                overflow,
-            )))
+            wrap(ok_or_throw(d.subtract(&dur, overflow)))
         }
         "until" => super::duration::wrap(ok_or_throw(d.until(
             &coerce_date(raw_arg(args, 0)),
@@ -223,7 +222,25 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         "toString" => {
             string(&d.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
         }
-        "toJSON" | "toLocaleString" => string(&d.to_string()),
+        "toJSON" => string(&d.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(d.calendar().identifier());
+            let epoch_ms = crate::date::components_to_timestamp(
+                d.year(),
+                d.month() as u32,
+                d.day() as u32,
+                0,
+                0,
+                0,
+            ) as f64
+                * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainDate,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

@@ -184,7 +184,9 @@ pub(crate) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(crate) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 pub(crate) const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
+pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
 pub(crate) const TYPE_UNKNOWN: u32 = 0;
 pub(crate) const TYPE_OBJECT: u32 = 1;
@@ -513,14 +515,26 @@ pub(crate) unsafe fn extract_pointer(bits: u64) -> Option<*const u8> {
 
 /// Read the GC header's object type tag for a user-space heap pointer.
 /// The GcHeader sits 8 bytes before `ptr`; its first byte is `obj_type`.
-/// Returns 0 when `ptr` is null or in the low-memory guard range.
+/// Returns 0 when `ptr` is null, in the low-memory guard range, or a value
+/// that is not a plausible heap address (a small-handle-band id, e.g. a
+/// revocable-Proxy id / fetch / zlib / stream handle, or NaN-box tag remnant).
+///
+/// The handle-band guard is load-bearing: a `POINTER_TAG`/raw-pointer-shaped
+/// field can carry a registry handle id (Next.js render reaches
+/// `JSON.stringify(value, replacer)` over an object holding a revocable-Proxy
+/// id in the `[0xF0000, 0x100000)` band). Dereferencing `id - 8` as a GcHeader
+/// segfaults, so classify by magnitude FIRST. Mirrors the plain-stringify
+/// path's `is_closure_value` / `is_handle_band` guards (#4904, #1843) and the
+/// canonical `addr_class::try_read_gc_header` contract.
 #[inline]
 pub(crate) unsafe fn gc_obj_type(ptr: *const u8) -> u8 {
     if ptr.is_null() || (ptr as usize) < 0x1000 {
         return 0;
     }
-    // GcHeader.obj_type is at offset 0 (see crate::gc::GcHeader layout).
-    *(ptr.sub(crate::gc::GC_HEADER_SIZE))
+    match crate::value::addr_class::try_read_gc_header(ptr as usize) {
+        Some(header) => header.obj_type,
+        None => 0,
+    }
 }
 
 /// NaN-box a string pointer as f64 (STRING_TAG)
@@ -786,6 +800,53 @@ mod tests {
         let outer_boxed = crate::value::js_nanbox_pointer(outer as i64);
         let output = unsafe { js_json_stringify(outer_boxed, TYPE_UNKNOWN) };
         assert_eq!(unsafe { str_from_header(output).unwrap() }, r#"{"o":{}}"#);
+    }
+
+    #[test]
+    fn stringify_int32_fields_emit_integers_not_null() {
+        // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN.
+        // Before the `write_number` int32 funnel, an int32 object field — e.g. a
+        // sqlite INTEGER column from the better-sqlite3 binding — fell into the
+        // `is_nan()` → "null" arm and serialized as `null`, silently corrupting
+        // integers crossing JSON/IPC. They must emit the integer value.
+        let obj = crate::object::js_object_alloc(0, 3);
+        let k_id = js_string_from_bytes(b"id".as_ptr(), 2);
+        let k_neg = js_string_from_bytes(b"neg".as_ptr(), 3);
+        let k_zero = js_string_from_bytes(b"zero".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            k_id,
+            f64::from_bits(JSValue::int32(42).bits()),
+        );
+        crate::object::js_object_set_field_by_name(
+            obj,
+            k_neg,
+            f64::from_bits(JSValue::int32(-7).bits()),
+        );
+        crate::object::js_object_set_field_by_name(
+            obj,
+            k_zero,
+            f64::from_bits(JSValue::int32(0).bits()),
+        );
+        let boxed = crate::value::js_nanbox_pointer(obj as i64);
+        let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
+        assert_eq!(
+            unsafe { str_from_header(output).unwrap() },
+            r#"{"id":42,"neg":-7,"zero":0}"#
+        );
+    }
+
+    #[test]
+    fn stringify_int32_array_elements_emit_integers_not_null() {
+        // Same INT32_TAG funnel for array elements (drizzle raw-mode rows,
+        // integer arrays over IPC).
+        let mut arr = crate::array::js_array_alloc(3);
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(1).bits()));
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(2).bits()));
+        arr = crate::array::js_array_push_f64(arr, f64::from_bits(JSValue::int32(-9).bits()));
+        let boxed = crate::value::js_nanbox_pointer(arr as i64);
+        let output = unsafe { js_json_stringify(boxed, TYPE_ARRAY) };
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, "[1,2,-9]");
     }
 
     #[test]

@@ -40,13 +40,14 @@ use super::{
     emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_event_emitter_subclass_init, lower_expr,
-    lower_expr_as_i32, lower_index_set_fast, lower_js_args_array, lower_node_stream_super_init,
-    lower_object_literal, lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline,
-    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
-    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
-    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
-    FlatConstInfo, FnCtx, I18nLowerCtx,
+    lower_array_literal, lower_array_super_init, lower_channel_reduction,
+    lower_event_emitter_subclass_init, lower_expr, lower_expr_as_i32, lower_index_set_fast,
+    lower_js_args_array, lower_node_stream_super_init, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
+    try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
+    unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
+    I18nLowerCtx,
 };
 
 /// Built-in constructor names (beyond Error/stream/fetch, which have their own
@@ -171,6 +172,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Some(slot) => ctx.block().load(DOUBLE, &slot),
                 None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
+            // `class X extends Map | Set` with a spread super (`super(...args)`,
+            // e.g. NestJS's `ModulesContainer`'s `super(...arguments)`) — install
+            // the hidden collection backing from the (possibly spread) args
+            // array instead of dispatching the uncallable builtin ctor. The
+            // first array element (if any) is the iterable; `js_map_from_iterable`
+            // / `js_set_from_iterable` ignore extra elements. Mirrors the
+            // non-spread `Expr::SuperCall` Map/Set arm.
+            let map_set_kind = ctx
+                .classes
+                .get(&current_class_name)
+                .and_then(|c| c.extends_name.as_deref())
+                .and_then(|p| match p {
+                    "Map" => Some(0i32),
+                    "Set" => Some(1i32),
+                    _ => None,
+                });
+            if let Some(kind) = map_set_kind {
+                let blk = ctx.block();
+                let arr_box = nanbox_pointer_inline(blk, &arr);
+                let zero_idx = "0".to_string();
+                let first =
+                    ctx.block()
+                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &zero_idx)]);
+                let _ = arr_box;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_map_set_subclass_init",
+                    &[
+                        (DOUBLE, &this_box),
+                        (I32, &kind.to_string()),
+                        (DOUBLE, &first),
+                    ],
+                );
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             if let Some(&child_cid) = ctx.class_ids.get(&current_class_name) {
                 let cid_str = child_cid.to_string();
                 let blk = ctx.block();
@@ -219,7 +260,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
-            let parent_class = match ctx.classes.get(&parent_name).copied() {
+            // #5437 (Next.js p-queue `PQueue`): when HIR captured a dynamic
+            // `extends_expr` for this class, the parent is a LEXICAL runtime
+            // value (an in-scope local / require result) — NOT the same-named
+            // module-global class that `ctx.classes.get(parent_name)` would
+            // wrongly return (minified turbopack chunks reuse single-letter
+            // class names across webpack factories). Force the `None` arm's
+            // dynamic-parent dispatch so `super()` invokes the real lexical
+            // parent value, mirroring the synthesized-ctor dynamic-parent path
+            // in `codegen/method.rs`. Without this, `PQueue extends t` resolved
+            // `t` to superstruct's `StructError` base and `super()` inlined its
+            // destructuring ctor on the undefined options arg → HTTP 500.
+            let static_parent_lookup = if current_class.extends_expr.is_some() {
+                None
+            } else {
+                ctx.classes.get(&parent_name).copied()
+            };
+            let parent_class = match static_parent_lookup {
                 Some(c) => c,
                 None => {
                     // #321 / #66 (#1787 follow-up): `class Sub extends <runtimeValueFn>`
@@ -285,7 +342,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ) || (is_stream_family_name
                         && !has_extends_expr)
                         || is_other_builtin_constructor_name(parent_name.as_str()))
-                        && !(is_stream_family_name && has_extends_expr);
+                        && !(is_stream_family_name && has_extends_expr)
+                        // #5437: a parent NAME shadowed by an in-scope lexical
+                        // local is NOT the built-in — route it through the
+                        // dynamic `extends_expr` value so `super()` runs the
+                        // local's constructor (`const Error = class {…}; class X
+                        // extends Error {}`), not the built-in Error initializer.
+                        && !current_class.heritage_lexically_shadowed;
                     if !is_builtin_parent_name {
                         if let Some(extends_expr) = current_class.extends_expr.as_deref() {
                             // Lower the super-call args first so they get fresh slots
@@ -414,6 +477,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )?;
                         return Ok(result);
                     }
+                    // `class X extends Array` — size the subclass instance and
+                    // install the Array surface (`fill`, …) it relies on. Perry
+                    // models the instance as a plain object, not a real exotic
+                    // Array (ArrayHeader has no class_id slot), so `super(n)`
+                    // would otherwise leave it length-less with no Array methods.
+                    if parent_name == "Array" {
+                        let result = lower_array_super_init(ctx, super_args)?;
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(result);
+                    }
                     // Issue #562: `class X extends WritableStream/ReadableStream/TransformStream`
                     // — `super({ ... })` allocates an underlying stream registry handle and
                     // stashes it on `this` under `__perry_stream_handle__`. Inherited methods
@@ -460,6 +539,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
                         return Ok(result);
+                    }
+                    // `class X extends Map` / `extends Set` — `super(iterable?)`
+                    // allocates a real Map/Set backing store, stashes it on
+                    // `this` under a hidden field, and installs the collection
+                    // method surface (`has`/`get`/`set`/`delete`/`clear`/
+                    // `forEach`/`keys`/`values`/`entries`/`size`/`Symbol.iterator`)
+                    // so a source-compiled subclass (e.g. NestJS's
+                    // `ModulesContainer extends Map`) actually behaves as a Map.
+                    // Perry models the instance as a plain object (not a real
+                    // exotic Map), so without this `super()` was a no-op and
+                    // `m.has(...)` threw "has is not a function".
+                    let map_set_kind = match parent_name.as_str() {
+                        "Map" => Some(0i32),
+                        "Set" => Some(1i32),
+                        _ => None,
+                    };
+                    if let Some(kind) = map_set_kind {
+                        let iterable = if let Some(first) = super_args.first() {
+                            lower_expr(ctx, first)?
+                        } else {
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                        };
+                        for a in super_args.iter().skip(1) {
+                            let _ = lower_expr(ctx, a)?;
+                        }
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_map_set_subclass_init",
+                            &[
+                                (DOUBLE, &this_box),
+                                (I32, &kind.to_string()),
+                                (DOUBLE, &iterable),
+                            ],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     // #5137: `class X extends EventEmitter` (node:events) —
                     // `super()` installs the bare EventEmitter listener/emit
@@ -754,8 +879,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }));
                     }
                 }
-                let saved_scope =
-                    bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
+                // #5437: fill the parent's cap params from its decl-site
+                // capture snapshot. The snapshot is authoritative for EVERY
+                // parent cap param — `bind_inline_constructor_params` consumes
+                // the values the child-forwarding loop appended above only to
+                // keep the user/cap tail-split aligned, then discards them in
+                // favour of `js_class_capture_value`. This matters when the
+                // captured local is out of scope at the super-call site (the
+                // forwarded value would be `undefined`); the snapshot still
+                // holds the correct decl-site capture. `backfill` sets
+                // `caps_absent_from_args=false` because the caps ARE present in
+                // `lowered_args` (this is not the caps-absent member-new path).
+                let parent_capture_fill = ctx
+                    .class_ids
+                    .get(effective_parent_name.as_str())
+                    .copied()
+                    .map(crate::lower_call::CaptureFill::backfill);
+                let saved_scope = bind_inline_constructor_params(
+                    ctx,
+                    &parent_ctor.params,
+                    &lowered_args,
+                    parent_capture_fill,
+                );
 
                 ctx.class_stack.push(effective_parent_name.clone());
                 crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;

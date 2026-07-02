@@ -17,6 +17,9 @@ extern "C" {
     pub(crate) fn js_net_validate_connect_port(value: f64);
     fn js_net_validate_socket_timeout(value: f64);
     fn js_net_validate_tos(value: f64) -> i32;
+    // perry-runtime/src/value/truthy.rs — general JS ToBoolean over the C ABI.
+    // Used by `setNoDelay` to coerce its argument the way Node does.
+    fn js_is_truthy(value: f64) -> i32;
 }
 
 // ─── Chainable no-op socket/server options (issue #1852) ─────────────────────
@@ -91,6 +94,28 @@ pub extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i6
     let tos = unsafe { js_net_validate_tos(tos) } as u8;
     if let Some(s) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
         s.type_of_service = tos;
+    }
+    handle
+}
+
+/// `socket.setNoDelay([enable])` — toggle Nagle's algorithm (`TCP_NODELAY`)
+/// on the live socket. Node coerces the arg as `enable === undefined || !!enable`,
+/// so a bare `setNoDelay()` enables nodelay (the connection default), and an
+/// explicit `setNoDelay(false)` re-enables Nagle. The owning `TcpStream` lives
+/// in `run_socket_task`, so the request is forwarded as a `SetNoDelay` command
+/// over the socket's channel; returns the handle for chaining.
+///
+/// # Safety
+///
+/// `arg_bits` is a NaN-boxed JSValue passed as raw bits (the codegen NA_F64
+/// slot, re-bitcast here); it is not dereferenced.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_set_no_delay(handle: i64, arg_bits: i64) -> i64 {
+    let arg = f64::from_bits(arg_bits as u64);
+    let enable = perry_ffi::JsValue::from_bits(arg.to_bits()).is_undefined()
+        || unsafe { js_is_truthy(arg) } != 0;
+    if let Some(s) = crate::statics::sockets().lock().unwrap().get(&handle) {
+        let _ = s.cmd_tx.send(crate::SocketCommand::SetNoDelay(enable));
     }
     handle
 }

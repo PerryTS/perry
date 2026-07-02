@@ -171,3 +171,58 @@ fn microsecond_budget_step_remains_bounded_on_multi_slice_heap() {
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }
+
+/// Allocate one unreachable old-arena object and return only its size. Kept
+/// `#[inline(never)]` so the raw `dead_old` pointer lives and dies entirely
+/// within this frame — it never lands on the caller's stack where a conservative
+/// scan could pin it. (The GC test guard already pins `Auto` scan mode, which
+/// skips the native-stack scan, but isolating the pointer makes the reclaim
+/// assertion robust regardless of scan mode.)
+#[inline(never)]
+fn allocate_unreachable_old_for_reclaim() -> u64 {
+    let dead_old = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING);
+    unsafe { (*header_from_user_ptr(dead_old as *const u8)).size as u64 }
+}
+
+/// #5476: a compute-only workload that churns large temporaries never runs a
+/// host GC step, so the old-gen reclaim cycle must complete from the allocator
+/// hook (`gc_check_trigger`) alone. A single call — what every allocation does —
+/// must drive the full reclaim cycle to completion and return the dead old block,
+/// not leave it stalled mid-flight as bounded mutator-assist stepping does.
+#[test]
+fn check_trigger_drives_old_reclaim_to_completion_without_host_stepping() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(live));
+    let dead_old_size = allocate_unreachable_old_for_reclaim();
+    let freed_before = GC_STATS.with(|stats| stats.borrow().total_freed_bytes);
+    let collections_before = gc_collection_count();
+
+    // Old-gen reclaim pressure is due, but the host never steps GC.
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+    gc_check_trigger();
+
+    assert!(
+        !gc_budgeted_cycle_active(),
+        "old-reclaim cycle must not be left stalled mid-flight"
+    );
+    let mut status = JsGcStepResult::default();
+    assert_eq!(js_gc_step_status(&mut status), JS_GC_STEP_STATUS_IDLE);
+    assert!(
+        gc_collection_count() > collections_before,
+        "a full collection must have completed"
+    );
+    let freed_after = GC_STATS.with(|stats| stats.borrow().total_freed_bytes);
+    assert!(
+        freed_after.saturating_sub(freed_before) >= dead_old_size,
+        "gc_check_trigger must reclaim unreachable old-arena bytes under reclaim pressure"
+    );
+    assert_eq!(
+        js_shadow_slot_get(0) & POINTER_MASK,
+        live as u64,
+        "live root must survive the reclaim"
+    );
+}

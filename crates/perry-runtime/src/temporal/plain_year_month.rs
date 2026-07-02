@@ -3,7 +3,9 @@
 //! A calendar year + month (e.g. a billing period), no day/time/timezone.
 
 use super::dispatch::{self, boolean, ok_or_throw, raw_arg, string, undefined};
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::PlainYearMonth;
 
@@ -47,7 +49,7 @@ pub fn construct(args: &[f64]) -> f64 {
 /// (read in spec order with `constrain` overflow). No recognized field, a
 /// Symbol, or any non-string primitive → TypeError.
 fn coerce_ym(v: f64) -> PlainYearMonth {
-    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref(v) {
+    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref_or_subclass(v) {
         return ym.clone();
     }
     let jv = JSValue::from_bits(v.to_bits());
@@ -81,7 +83,7 @@ pub fn from_static(args: &[f64]) -> f64 {
         let _ = super::options::overflow(opts);
         return wrap(ym);
     }
-    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref(item) {
+    if let Some(TemporalValue::PlainYearMonth(ym)) = temporal_value_ref_or_subclass(item) {
         let _ = super::options::overflow(opts);
         return wrap(ym.clone());
     }
@@ -155,7 +157,20 @@ pub fn call(recv: f64, ym: &PlainYearMonth, name: &str, args: &[f64]) -> f64 {
         "toString" => {
             string(&ym.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
         }
-        "toJSON" | "toLocaleString" => string(&ym.to_string()),
+        "toJSON" => string(&ym.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(ym.calendar().identifier());
+            let epoch_ms =
+                crate::date::components_to_timestamp(ym.year(), ym.month() as u32, 1, 0, 0, 0)
+                    as f64
+                    * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainYearMonth,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

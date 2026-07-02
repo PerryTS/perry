@@ -96,9 +96,46 @@ pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key
     f64::from_bits(if deleted { TAG_TRUE } else { TAG_FALSE })
 }
 
+/// Map a metadata `target` to a GC-stable key, folding a class's prototype onto
+/// the class itself.
+///
+/// TypeScript's `emitDecoratorMetadata` stores instance-member `design:type` on
+/// `Class.prototype`, and class-transformer reads it back with
+/// `Reflect.getMetadata("design:type", SomeClass.prototype, prop)`
+/// (TransformOperationExecutor). Perry instead emits that metadata against the
+/// class constructor (`ClassRef`), and several existing tests
+/// (`test_decorators_legacy_property_metadata.ts`) read it back off the class.
+/// To satisfy BOTH access shapes we treat a class's prototype and its
+/// constructor as one metadata bucket: any class-prototype target — the
+/// synthetic `class_prototype_ref` value or the live decl-prototype heap object
+/// — folds onto the stable class-constructor key (`INT32_TAG | class_id`).
+///
+/// This is the runtime "compatibility shim" alternative to re-targeting the
+/// emit (REFLECT-METADATA-SCOPING.md, Task B). It is also GC-safe: the
+/// decl-prototype object is a *movable* heap object (`class_decl_prototype_value`
+/// allocates and roots it; the GC slot is rewritten on evacuation), so keying on
+/// its raw bits would go stale — folding onto the class id sidesteps that with
+/// no dedicated GC scanner. Non-prototype targets (constructors, method `.value`
+/// closures, plain objects) pass through unchanged.
+fn normalize_target_bits(target: f64) -> u64 {
+    // Synthetic class-prototype ref → fold onto the class constructor key.
+    if let Some(cid) = crate::object::class_prototype_ref_id(target) {
+        return crate::object::class_constructor_ref_value(cid).to_bits();
+    }
+    // Live decl-prototype heap object → fold onto the class constructor key.
+    let bits = target.to_bits();
+    if (bits >> 48) == (POINTER_TAG >> 48) {
+        let ptr = (bits & POINTER_MASK) as usize;
+        if let Some(cid) = crate::object::class_id_for_decl_prototype_object(ptr) {
+            return crate::object::class_constructor_ref_value(cid).to_bits();
+        }
+    }
+    bits
+}
+
 fn make_metadata_key(key: f64, target: f64, property_key: f64) -> Option<MetadataKey> {
     Some(MetadataKey {
-        target_bits: target.to_bits(),
+        target_bits: normalize_target_bits(target),
         key: metadata_key_part(key)?,
         property_key: metadata_property_key_part(property_key)?,
     })
@@ -173,7 +210,7 @@ fn metadata_key_part(value: f64) -> Option<String> {
 fn get_metadata_in_prototype_chain(key: &str, target: f64, property_key: Option<&String>) -> f64 {
     let mut current = target;
     loop {
-        let current_bits = current.to_bits();
+        let current_bits = normalize_target_bits(current);
         let found = REFLECT_METADATA.with(|store| {
             store
                 .borrow()
@@ -210,7 +247,7 @@ fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -
         let mut current = target;
 
         loop {
-            let current_bits = current.to_bits();
+            let current_bits = normalize_target_bits(current);
             for metadata_key in store.keys() {
                 if metadata_key.target_bits == current_bits
                     && metadata_key.property_key == wanted_property_key
@@ -245,4 +282,60 @@ fn metadata_keys_for(target: f64, property_key: f64, include_prototypes: bool) -
 
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     f64::from_bits(POINTER_TAG | ((arr as u64) & POINTER_MASK))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn register_test_class(cid: u32) {
+        let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(cid);
+    }
+
+    // A class's synthetic prototype-ref and its live decl-prototype heap object
+    // both fold onto the class-constructor key, so `getMetadata(design:type,
+    // SomeClass.prototype, prop)` (class-transformer) finds metadata stored
+    // against `ClassRef(SomeClass)` (Perry's emit).
+    #[test]
+    fn synthetic_prototype_ref_folds_onto_constructor_key() {
+        let cid = 0x4242;
+        register_test_class(cid);
+        let ctor_key = crate::object::class_constructor_ref_value(cid).to_bits();
+
+        let proto_ref = crate::object::class_prototype_ref_value(cid);
+        assert_eq!(normalize_target_bits(proto_ref), ctor_key);
+
+        // The constructor ref already IS the key — must pass through unchanged.
+        let ctor_ref = crate::object::class_constructor_ref_value(cid);
+        assert_eq!(normalize_target_bits(ctor_ref), ctor_key);
+    }
+
+    #[test]
+    fn decl_prototype_heap_object_folds_onto_constructor_key() {
+        let cid = 0x5151;
+        register_test_class(cid);
+        let fake_proto_ptr: usize = 0x1_0000; // arbitrary; only used as a map key
+        {
+            let mut guard = crate::object::CLASS_DECL_PROTOTYPE_OBJECTS.write().unwrap();
+            guard
+                .get_or_insert_with(std::collections::HashMap::new)
+                .insert(cid, fake_proto_ptr);
+        }
+        let target = f64::from_bits(POINTER_TAG | (fake_proto_ptr as u64 & POINTER_MASK));
+        assert_eq!(
+            normalize_target_bits(target),
+            crate::object::class_constructor_ref_value(cid).to_bits()
+        );
+    }
+
+    #[test]
+    fn unrelated_heap_pointer_passes_through_unchanged() {
+        // A heap pointer that is not a registered decl-prototype object is left
+        // alone (e.g. metadata keyed directly on a plain object/instance).
+        let target = f64::from_bits(POINTER_TAG | 0x0AB_CDEF);
+        assert_eq!(normalize_target_bits(target), target.to_bits());
+    }
 }

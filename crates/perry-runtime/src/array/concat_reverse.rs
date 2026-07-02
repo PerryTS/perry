@@ -347,6 +347,11 @@ fn reverse_throw_type_error(message: &[u8]) -> ! {
 /// `value`. Returns the same array pointer.
 #[no_mangle]
 pub extern "C" fn js_array_fill(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // #5552: `fill` writes the same source into every slot — a uniquely-owned
+    // (refcount==1) string would alias the source AND every filled slot to each
+    // other, so a later `s += x` corrupts them all. Demote once to shared (no-op
+    // for SSO / non-string; mirrors `js_array_push_f64`, #5548).
+    crate::string::js_string_addref_if_heap_string(value);
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
@@ -388,6 +393,9 @@ pub extern "C" fn js_array_fill_range(
     start: f64,
     end: f64,
 ) -> *mut ArrayHeader {
+    // #5552: demote a uniquely-owned source string once before it fills the
+    // range (no-op for SSO / non-string). See `js_array_fill`.
+    crate::string::js_string_addref_if_heap_string(value);
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
@@ -472,6 +480,11 @@ pub extern "C" fn js_array_fill_generic(
     has_end: i32,
     end: f64,
 ) -> f64 {
+    // #5552: demote a uniquely-owned source string once before any slot write.
+    // The array receiver delegates to `js_array_fill`/`_range` (which also
+    // demote — idempotent), but the generic object-receiver loop below writes
+    // `value` into every index directly, so the demote must happen here too.
+    crate::string::js_string_addref_if_heap_string(value);
     let receiver_value = JSValue::from_bits(receiver.to_bits());
     if receiver_value.is_null() || receiver_value.is_undefined() {
         throw_fill_nullish_receiver();

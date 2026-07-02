@@ -115,8 +115,18 @@ pub(super) fn try_local_array_methods(
                     false
                 };
                 let is_user_class_instance = match type_info {
+                    // A class instance OR an interface-typed value is the
+                    // receiver's own object — its method must be dispatched, not
+                    // the array fast path. Interfaces aren't classes (so
+                    // `lookup_class` misses them); without `is_interface_type`,
+                    // an interface-typed receiver with e.g. an own `push` folded
+                    // to `Expr::ArrayPush`, read the object header as an
+                    // ArrayHeader, and silently dropped the call (follow-up to
+                    // #5139, which fixed only `any`-typed receivers).
                     Some(Type::Named(name)) => {
-                        ctx.lookup_class(name).is_some() || is_imported_class_name(name)
+                        ctx.lookup_class(name).is_some()
+                            || ctx.is_interface_type(name)
+                            || is_imported_class_name(name)
                     }
                     Some(Type::Generic { base, .. }) => {
                         !builtin_generic_bases.contains(&base.as_str())

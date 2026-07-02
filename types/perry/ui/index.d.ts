@@ -406,6 +406,39 @@ export function Spacer(): Widget;
 /** Visual separator line. */
 export function Divider(): Widget;
 
+/**
+ * Banner ad size keys (#867). Values match Google Mobile Ads' standard
+ * `AdSize` constants. `"adaptive"` requests an adaptive banner sized to
+ * the device; the rest are fixed. A plain string-literal union (not a
+ * runtime enum) so it needs no value backing in the native module.
+ */
+export type AdSizeKey =
+  | "banner"
+  | "large-banner"
+  | "medium-rectangle"
+  | "full-banner"
+  | "leaderboard"
+  | "adaptive";
+
+/**
+ * In-app banner ad (#867). Place it in a layout like any other widget:
+ *
+ * ```ts
+ * VStack(0, [MyContent(), AdBanner("ca-app-pub-xxx/yyy", "banner")])
+ * ```
+ *
+ * Reserves a banner-sized slot (`size`) in the layout on every platform.
+ * Live ad rendering — a `GADBannerView` (iOS) / `AdView` (Android) — lands
+ * when the platform Google Mobile Ads SDK is linked; until then (and
+ * always on macOS, which has no Ads SDK) the widget is a layout
+ * placeholder. Both arguments are required — pass an `AdSizeKey` for `size`.
+ *
+ * The App ID must be configured in `perry.toml` under `[ads]`
+ * (`ios_app_id` / `android_app_id`); the compiler writes it into the
+ * platform manifest at build time.
+ */
+export function AdBanner(unitId: string, size: AdSizeKey): Widget;
+
 /** Indeterminate or determinate progress indicator. */
 export function ProgressView(): Widget;
 
@@ -418,6 +451,46 @@ export function ZStack(): Widget;
  * stateful color/path API is tracked in perry-ui-test.
  */
 export function Canvas(width: number, height: number): Canvas;
+
+/**
+ * Render-surface host for an external GPU renderer (issue #2395).
+ *
+ * `BloomView(width, height)` reserves a native render-surface view in the Perry
+ * UI view tree. Perry UI does not draw into it — pass the handle returned by
+ * `bloomViewGetNativeHandle(view)` to a renderer such as the Bloom engine
+ * (`attachToNSView` / `attachToSurface` / …), which builds its surface on the
+ * view and drives frames. Available on all native targets (Windows HWND,
+ * macOS/iOS/visionOS native view, GTK4 widget, Android SurfaceView; tvOS real
+ * view, watchOS links as a no-op).
+ */
+export function BloomView(width: number, height: number): Widget;
+
+/**
+ * The `BloomView`'s native render-surface handle as a number — the platform's
+ * view/window pointer: `HWND` on Windows, `NSView*`/`UIView*` on Apple,
+ * `GtkWidget*` on GTK4, `ANativeWindow*` on Android. Hand this to the Bloom
+ * engine's attach call (`attachToNSView` / `attachToUIView` / `attachToSurface`,
+ * all forwarding to `bloom_attach_native`).
+ */
+export function bloomViewGetNativeHandle(view: Widget): number;
+
+/**
+ * @deprecated Renamed to {@link bloomViewGetNativeHandle} in #5519 — the handle
+ * is no longer Windows-only (it's an `NSView*`/`UIView*`/`GtkWidget*`/
+ * `ANativeWindow*` on the other platforms). This alias still works and returns
+ * the same value.
+ */
+export function bloomViewGetHwnd(view: Widget): number;
+
+/**
+ * Register a one-shot frame callback (requestAnimationFrame-style). The
+ * callback receives `(timestampMs, deltaMs)`. Re-register from inside the
+ * callback to keep a loop running. Returns an id usable with `cancelFrame`.
+ */
+export function onFrame(callback: (timestampMs: number, deltaMs: number) => void): number;
+
+/** Cancel a pending `onFrame` callback by its id. */
+export function cancelFrame(id: number): void;
 
 /** Dropdown picker. */
 export function Picker(onChange: (index: number) => void): Widget;
@@ -1770,6 +1843,23 @@ export function onActivate(callback: () => void): void;
  */
 export function appSetTimer(intervalMs: number, callback: () => void): void;
 export function appSetTimer(app: Widget, intervalMs: number, callback: () => void): void;
+
+/**
+ * Set the application activation policy. Call before `App()`.
+ *
+ * - `"regular"` (default): normal app — dock icon, app-switcher entry,
+ *   main window auto-presented at launch.
+ * - `"accessory"`: menu-bar / status-item app — **no dock icon**, no
+ *   app-switcher entry, and on macOS the launch window is **not**
+ *   auto-presented (open windows on demand from the tray instead). The
+ *   macOS equivalent of `LSUIElement`.
+ * - `"background"`: fully background (`NSApplicationActivationPolicy.Prohibited`);
+ *   also suppresses the launch window on macOS.
+ *
+ * Windows: `accessory`/`background` hide the taskbar button. Linux/GTK4:
+ * maps to the equivalent hint. No-op on mobile/TV backends.
+ */
+export function appSetActivationPolicy(policy: "regular" | "accessory" | "background"): void;
 
 // ---------------------------------------------------------------------------
 // Embed

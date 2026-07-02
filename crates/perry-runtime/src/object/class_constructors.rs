@@ -142,9 +142,167 @@ pub extern "C" fn js_class_capture_value(class_id: u32, index: u32) -> f64 {
     })
 }
 
-/// Keepalive anchor (generated-code-only callee).
+/// #5437: read one slot of a class's decl-site capture snapshot, falling back
+/// to `fallback` (the value the `new`-site appended as the capture arg) when
+/// NO snapshot was registered for `class_id`.
+///
+/// The W6 fix (member-/bare-`new` of a function-nested capturing class) prefers
+/// the authoritative decl-site snapshot over the `new`-site appended cap arg
+/// because the bundle's multi-level capture chain can materialize a mis-boxed
+/// value into that appended arg. But the snapshot only exists for classes that
+/// reach the `RegisterClassCaptures` decl-site. An inline anonymous class
+/// (`new class { m(){ return capturedLocal } }`) capturing a local whose
+/// initializer derives from a `require(...)` result has NO registered snapshot
+/// — so the bare snapshot read returned `undefined`, dropping the (correct)
+/// appended cap arg. Falling back to `fallback` when the snapshot is absent
+/// keeps W6 (snapshot wins when present) while restoring the appended value for
+/// the snapshot-less case.
+#[no_mangle]
+pub extern "C" fn js_class_capture_value_or(class_id: u32, index: u32, fallback: f64) -> f64 {
+    CLASS_CAPTURE_VALUES.with(|m| {
+        match m.borrow().get(&class_id) {
+            // A snapshot exists for this class. The recorded slot is
+            // authoritative WHEN IT HOLDS A REAL VALUE (W6: the bundle's
+            // multi-level capture chain can materialize a mis-boxed value into
+            // the `new`-site appended `fallback`, so the decl-site snapshot of
+            // a stable require-result must win over it).
+            //
+            // #5437 (hoisted-class stale snapshot): the decl-site snapshot is
+            // taken at the class's DECLARATION position — and because class
+            // declarations hoist to the top of the enclosing function body,
+            // that runs BEFORE a captured local assigned LATER in the same body
+            // (`class f { m(){ return cache } } const cache = a || await foo()`
+            // — the `RegisterClassCaptures` statement is emitted before the
+            // captured local's `Let` binding). At that point the captured slot
+            // is still `undefined` (TDZ), so the snapshot recorded `undefined`
+            // while the bare-`new f(LocalGet…)` site appended the CORRECT
+            // post-assignment local. Returning the `undefined` snapshot dropped
+            // that live value — every method reading the captured local then
+            // saw `undefined` (e.g. `cache.get(…)` → `Cannot read properties of
+            // undefined`).
+            //
+            // Resolve by SLOT value: an `undefined` snapshot slot carries no
+            // information, so fall back to the `new`-site appended value; a slot
+            // holding a real value stays authoritative (keeps W6). An entirely
+            // absent slot (out-of-range index) also falls back. Same shape as
+            // the require-derived getSpan fix (no snapshot → fallback), extended
+            // to the snapshot-present-but-`undefined`-slot case.
+            //
+            // #5437 (captured-`undefined` tag-loss, Next.js dynamic/API routes):
+            // a capture whose value is *genuinely* `undefined` (the bundle's
+            // `let t_ = process.env.X ? fn : void 0` debug logger, `undefined`
+            // by default) records `TAG_UNDEFINED` in the snapshot — which is the
+            // CORRECT value, not a TDZ artifact. At giant-module scale the
+            // `new`-site appended `fallback` for that same capture materializes
+            // as a tag-stripped raw word `0x0000_0000_0000_0001` (the low bits of
+            // `TAG_UNDEFINED` with the `0x7FFC` NaN-box tag stripped by a
+            // multi-level capture mis-box). Blindly preferring that `fallback`
+            // over the `undefined` snapshot handed `t_` the non-callable `0x1`,
+            // so `null == t_` was false → `t_(…)` was called → "value is not a
+            // function" → route init aborted → HTTP 500.
+            //
+            // A legitimate captured value is ALWAYS either NaN-boxed (top 16 bits
+            // ≥ 0x7FF9 for ptr/string/int32/bigint/SSO/special) or a normal
+            // IEEE-754 double (non-zero biased exponent). A `fallback` whose top
+            // 16 bits are all zero is therefore a tag-stripped/mis-boxed raw word,
+            // NEVER a real captured JSValue — so it must not override the
+            // snapshot. When the snapshot slot is `undefined` and the fallback is
+            // such a corrupt word, the snapshot's `undefined` is authoritative.
+            // (A valid fallback over an `undefined` snapshot still wins, keeping
+            // the hoisted-class/TDZ fix above.)
+            Some(v) => match v.get(index as usize).copied() {
+                Some(bits) if bits != crate::value::TAG_UNDEFINED => f64::from_bits(bits),
+                slot => {
+                    if fallback_is_tag_stripped(fallback) {
+                        // Corrupt fallback — trust the snapshot (its `undefined`
+                        // for an undefined-valued capture, or `undefined` for an
+                        // absent slot).
+                        f64::from_bits(slot.unwrap_or(crate::value::TAG_UNDEFINED))
+                    } else {
+                        fallback
+                    }
+                }
+            },
+            // No snapshot registered: use the `new`-site appended cap value —
+            // unless it is a tag-stripped/mis-boxed raw word, in which case the
+            // only safe interpretation is `undefined` (calling a `0x1` throws).
+            None => {
+                if fallback_is_tag_stripped(fallback) {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                } else {
+                    fallback
+                }
+            }
+        }
+    })
+}
+
+/// #5437 (cross-module member-`new`, param-first): inverse of
+/// `js_class_capture_value_or` — the LIVE `param` (the value the `new`-site
+/// appended as the capture arg) wins WHENEVER IT IS PRESENT; the decl-site
+/// snapshot is only consulted when `param` is `undefined`.
+///
+/// This is the correct policy for the synthesized constructor's capture
+/// rebind. A SAME-module `new C(...)` supplies the current (possibly mutated)
+/// outer as `param` — and that must NOT be overridden by a stale decl-site
+/// snapshot taken when the class was declared:
+///
+/// ```ignore
+/// let x = "a"; class C { constructor(){ this.x = x } } x = "b"; new C();
+/// // node: this.x === "b" (the live param), NOT the "a" decl-site snapshot.
+/// ```
+///
+/// A CROSS-MODULE `new ns.C(...)` routes to the runtime construct path
+/// (`construct_registered_class_ref`) which supplies NO capture args, so the
+/// synthesized cap param arrives `undefined`. In that case — and only that
+/// case — we recover the captured value from the class's own decl-site
+/// snapshot (the ctor body is compiled in the class's home module, so
+/// `class_id` resolves to the real registered snapshot there). If no snapshot
+/// (or no slot) exists either, the result is `undefined` — same as the param.
+#[no_mangle]
+pub extern "C" fn js_param_or_class_capture_value(param: f64, class_id: u32, index: u32) -> f64 {
+    if param.to_bits() != crate::value::TAG_UNDEFINED {
+        return param;
+    }
+    // param is `undefined` (cross-module construct dropped the cap arg):
+    // recover from the decl-site snapshot when one is registered for this
+    // class; otherwise stay `undefined`.
+    CLASS_CAPTURE_VALUES.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .and_then(|v| v.get(index as usize).copied())
+            .map(f64::from_bits)
+            .unwrap_or(param)
+    })
+}
+
+/// A legitimate JSValue is either NaN-boxed (top 16 bits ≥ 0x7FF9 — the boxed
+/// tags: SSO/BIGINT/special/POINTER/INT32/STRING) or a normal IEEE-754 double.
+/// A NON-ZERO value whose top 16 bits are all zero is a positive subnormal
+/// (< 2^-996) — a magnitude no program meaningfully captures — and is in
+/// practice the `0x7FFC_…_0001 → 0x0000_…_0001` signature of a captured
+/// `undefined` (or any heap pointer) that lost its NaN-box tag through a
+/// low-bits extraction at giant-module scale. Such a word is never a real
+/// captured value, so the capture-snapshot fallback must reject it. See #5437.
+///
+/// `+0.0`/`-0.0` are excluded: the number `0` is a legitimate captured value
+/// (its bits are `0x0000_…_0000` / `0x8000_…_0000`, the latter has a non-zero
+/// top 16), and a TDZ fallback that is genuinely `0` must still win.
+#[inline]
+pub(crate) fn fallback_is_tag_stripped(fallback: f64) -> bool {
+    let bits = fallback.to_bits();
+    (bits >> 48) == 0 && bits != 0
+}
+
+/// Keepalive anchors (generated-code-only callees).
 #[used]
 static KEEP_JS_CLASS_CAPTURE_VALUE: extern "C" fn(u32, u32) -> f64 = js_class_capture_value;
+#[used]
+static KEEP_JS_CLASS_CAPTURE_VALUE_OR: extern "C" fn(u32, u32, f64) -> f64 =
+    js_class_capture_value_or;
+#[used]
+static KEEP_JS_PARAM_OR_CLASS_CAPTURE_VALUE: extern "C" fn(f64, u32, u32) -> f64 =
+    js_param_or_class_capture_value;
 
 /// `super(...spread)` — invoke the closest registered ancestor constructor
 /// of `child_cid` on the EXISTING `this`, with args from the materialized
@@ -220,6 +378,35 @@ pub unsafe extern "C" fn js_super_construct_apply(
         }
         cur = next;
         depth += 1;
+    }
+    // No registered Perry ancestor constructor. A `class X extends
+    // Temporal.<Type>` heritage records its parent VALUE (the Temporal ctor
+    // closure) at decl time but no class-id edge, so the walk above finds
+    // nothing. Recover that value and, if it is a Temporal constructor, run it
+    // and stash the returned cell as the subclass instance's brand — the
+    // `super(...spread)` counterpart of the `js_fetch_or_value_super` branch
+    // that handles non-spread `super(a, b)`. (#5587)
+    #[cfg(feature = "temporal")]
+    {
+        let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
+        if crate::object::global_this::temporal_ctor_kind(parent_val).is_some() {
+            let this_box = crate::value::js_nanbox_pointer(this_raw);
+            let n = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            } as usize;
+            let mut flat: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                flat.push(crate::array::js_array_get_f64(arr, i as u32));
+            }
+            crate::object::global_this::temporal_subclass_super(
+                parent_val,
+                this_box,
+                flat.as_ptr(),
+                flat.len(),
+            );
+        }
     }
     undef
 }
@@ -349,6 +536,62 @@ static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC: unsafe extern "C" fn(
     *const f64,
     usize,
 ) -> f64 = js_super_method_call_dynamic;
+
+/// `super.method(...spread)` dispatch where the argument count is dynamic.
+/// Codegen flattens every argument (regular args plus every spread-expanded
+/// element) into a single JS array `args_array`, then routes here. We
+/// materialise that array into a contiguous flat `f64` buffer and forward to
+/// `js_super_method_call_dynamic`, so a `super.emit(event, ...args)` forwarding
+/// a rest param to a native base (EventEmitter) delivers the spread elements as
+/// individual arguments instead of one array. Without this the plain
+/// `SuperMethodCall` lowering passed the spread operand as ONE positional arg.
+///
+/// # Safety
+/// `name_ptr` must be valid for `name_len` bytes. `args_array` is a NaN-boxed
+/// array pointer (or any non-array value, treated as zero args).
+#[no_mangle]
+pub unsafe extern "C" fn js_super_method_call_dynamic_apply(
+    child_class_id: u32,
+    name_ptr: *const u8,
+    name_len: usize,
+    this_value: f64,
+    args_array: f64,
+) -> f64 {
+    let arr =
+        (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    let n = if arr.is_null() {
+        0usize
+    } else {
+        crate::array::js_array_length(arr) as usize
+    };
+    let mut flat: Vec<f64> = Vec::with_capacity(n);
+    for i in 0..n {
+        flat.push(crate::array::js_array_get_f64(arr, i as u32));
+    }
+    let (args_ptr, args_len) = if flat.is_empty() {
+        (std::ptr::null(), 0usize)
+    } else {
+        (flat.as_ptr(), flat.len())
+    };
+    js_super_method_call_dynamic(
+        child_class_id,
+        name_ptr,
+        name_len,
+        this_value,
+        args_ptr,
+        args_len,
+    )
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC_APPLY: unsafe extern "C" fn(
+    u32,
+    *const u8,
+    usize,
+    f64,
+    f64,
+) -> f64 = js_super_method_call_dynamic_apply;
 
 /// Run the constructor of class `parent_cid` (or its nearest ctor-bearing
 /// ancestor) on the EXISTING `this`, taking arguments from a flat f64 buffer —

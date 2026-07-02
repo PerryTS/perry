@@ -1,6 +1,30 @@
 use super::*;
 
 pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
+    // ========== perry (embedded-asset API, #5731) ==========
+    // `readEmbedded(path)` takes the NaN-boxed path string as-is (decoded
+    // runtime-side via `decode_path_value`, like the fs APIs) and returns a
+    // `*mut BufferHeader` (NaN-boxed POINTER → a `Buffer`).
+    NativeModSig {
+        module: "perry",
+        has_receiver: false,
+        method: "readEmbedded",
+        class_filter: None,
+        runtime: "js_perry_read_embedded",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    // `embeddedFiles()` — zero-arg, returns a fresh `*mut ArrayHeader` of
+    // `{ name, size, type }` objects (NaN-boxed POINTER by NR_PTR).
+    NativeModSig {
+        module: "perry",
+        has_receiver: false,
+        method: "embeddedFiles",
+        class_filter: None,
+        runtime: "js_perry_embedded_files",
+        args: &[],
+        ret: NR_PTR,
+    },
     // ========== perry/thread (parallelMap, parallelFilter, spawn) ==========
     // Runtime expects both args as NaN-boxed f64 values and returns the same
     // — no unboxing/reboxing needed on either side. Closure is a POINTER_TAG'd

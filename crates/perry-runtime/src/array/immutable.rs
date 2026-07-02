@@ -234,6 +234,11 @@ pub extern "C" fn js_array_with(
     index: f64,
     value: f64,
 ) -> *mut ArrayHeader {
+    // #5552: the replacement `value` is stored into the new array's slot — demote
+    // a uniquely-owned (refcount==1) string to shared so a later `s += x` on the
+    // source local can't corrupt it. No-op for SSO / non-string. The cloned
+    // elements come from `arr` and are already shared. (Mirrors #5548.)
+    crate::string::js_string_addref_if_heap_string(value);
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);

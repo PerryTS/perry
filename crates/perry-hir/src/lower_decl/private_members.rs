@@ -80,6 +80,8 @@ pub fn lower_private_method(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
@@ -190,6 +192,7 @@ pub fn lower_private_method(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.exit_type_param_scope();
 
     let func_id = ctx.fresh_func();
@@ -232,6 +235,8 @@ pub fn lower_private_getter(
 ) -> Result<Function> {
     let name = format!("get_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
     ctx.define_local("this".to_string(), Type::Any);
 
@@ -250,6 +255,7 @@ pub fn lower_private_getter(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
@@ -276,6 +282,8 @@ pub fn lower_private_setter(
 ) -> Result<Function> {
     let name = format!("set_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
     ctx.define_local("this".to_string(), Type::Any);
 
@@ -326,6 +334,7 @@ pub fn lower_private_setter(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
@@ -368,11 +377,16 @@ pub fn lower_private_prop(
 
     // Lower initializer expression if present — field-initializer context for
     // the direct-eval `arguments` early error (see `lower_class_prop`).
+    // Also set `in_nonarrow_fn` so a direct eval in the initializer allows
+    // `new.target` (ES2025 §sec-performeval-rules-in-initializer: the eval
+    // runs "inside a function" for new.target purposes).
     // NamedEvaluation: an anonymous function initializer takes the private
     // field's name including the `#` (`static #field = function(){}` →
     // `.name === "#field"`, test262 static-field-anonymous-function-name).
     let saved_field_init = ctx.in_class_field_init;
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_class_field_init = true;
+    ctx.in_nonarrow_fn = true;
     let init = prop
         .value
         .as_ref()
@@ -388,6 +402,7 @@ pub fn lower_private_prop(
         })
         .transpose();
     ctx.in_class_field_init = saved_field_init;
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
     Ok(ClassField {

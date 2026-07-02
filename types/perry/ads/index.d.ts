@@ -125,10 +125,10 @@ export declare function js_ads_rewarded_show(): Promise<string>;
  *                            picks a height based on the device's
  *                            width.
  *
- * v1 exposes the handle directly; perry/ui `<AdBanner>` widget
- * integration so the banner can sit inside the declarative
- * layout tree is a follow-up (#867). The MVP returns `0` since
- * no SDK is linked.
+ * This raw-handle FFI is the secondary banner path; the primary
+ * surface is the declarative `perry/ui` `<AdBanner>` widget, which
+ * sits in the layout tree. This entry returns `0` until the real
+ * SDK is linked.
  */
 export declare function js_ads_banner_create(
   unitId: string,
@@ -141,3 +141,30 @@ export declare function js_ads_banner_create(
  * and any associated network connections.
  */
 export declare function js_ads_banner_destroy(handle: number): void;
+
+/**
+ * Result returned by `js_ads_request_consent`. `status` reports the
+ * user's tracking / personalised-ads consent state:
+ *   - `"authorized"`     — tracking allowed (iOS ATT granted / UMP
+ *                          personalised consent obtained)
+ *   - `"denied"`         — user declined
+ *   - `"not-determined"` — no decision yet (the prompt hasn't shown,
+ *                          or the SDK isn't linked)
+ *   - `"restricted"`     — blocked by device policy (parental
+ *                          controls, MDM)
+ */
+export type AdConsentResult = {
+  status: "authorized" | "denied" | "not-determined" | "restricted";
+  /** Set when the consent request itself failed. */
+  error?: string;
+};
+
+/**
+ * Request user consent for personalised ads / tracking. Resolves to
+ * a JSON-stringified [`AdConsentResult`]. Drives iOS App Tracking
+ * Transparency (`ATTrackingManager.requestTrackingAuthorization`) and
+ * the Android User Messaging Platform consent form. Call this **before**
+ * loading any ads so requests comply with GDPR / ATT; on platforms
+ * without the SDK it resolves `{ status: "not-determined" }`.
+ */
+export declare function js_ads_request_consent(): Promise<string>;

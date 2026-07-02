@@ -72,6 +72,7 @@ impl LoweringContext {
             type_param_scopes: Vec::new(),
             type_param_constraints: Vec::new(),
             native_instances: Vec::new(),
+            param_native_hints: HashMap::new(),
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
@@ -83,6 +84,7 @@ impl LoweringContext {
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
+            class_display_names: HashMap::new(),
             gen_param_prologue_len: HashMap::new(),
             assignment_inferred_name: None,
             closure_source_text: HashMap::new(),
@@ -122,6 +124,7 @@ impl LoweringContext {
             native_instances_index: HashMap::new(),
             module_native_instances_index: HashMap::new(),
             func_return_native_instances_index: HashMap::new(),
+            prescan_protected_native_params: std::collections::HashMap::new(),
             native_modules_index: HashMap::new(),
             module_shadow_stack: Vec::new(),
             class_statics_index: HashMap::new(),
@@ -134,6 +137,7 @@ impl LoweringContext {
             namespace_import_sources: std::collections::HashMap::new(),
             generator_func_names: HashSet::new(),
             async_generator_func_names: HashSet::new(),
+            nested_generator_forward_referenced: HashSet::new(),
             iterator_func_for_class: std::collections::HashMap::new(),
             proxy_locals: HashSet::new(),
             builtin_proto_method_locals: HashMap::new(),
@@ -148,6 +152,7 @@ impl LoweringContext {
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             forward_class_names: std::collections::HashSet::new(),
+            forward_class_decl_depth: std::collections::HashMap::new(),
             class_renames: std::collections::HashMap::new(),
             next_class_rename_id: 0,
             module_class_decl_names: std::collections::HashSet::new(),
@@ -163,6 +168,8 @@ impl LoweringContext {
             object_static_method_aliases: HashMap::new(),
             array_static_method_aliases: HashMap::new(),
             is_entry_module: false,
+            saw_global_this_expr: false,
+            reassigned_top_level_identifiers: HashSet::new(),
             module_strict: false,
             strict_mode_stack: Vec::new(),
             is_external_module: false,
@@ -170,6 +177,7 @@ impl LoweringContext {
             fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
             expr_lower_depth: 0,
             prelowered_member_receiver: None,
+            in_nonarrow_fn: false,
         }
     }
 
@@ -415,6 +423,16 @@ impl LoweringContext {
             self.next_class_rename_id += 1;
             self.class_renames.insert(name.to_string(), unique);
         }
+    }
+
+    /// Is `name` a user-declared `interface`? Interfaces are not classes, so
+    /// `lookup_class` returns `None` for them — but an interface-typed value is
+    /// still the object's own type, whose methods must dispatch to its own
+    /// members, never to an Array/builtin fast-path intrinsic. Used by the
+    /// array-only-method fold to recognize interface receivers (follow-up to
+    /// #5139, which covered only `any`-typed receivers).
+    pub(crate) fn is_interface_type(&self, name: &str) -> bool {
+        self.interfaces.iter().any(|(n, _)| n == name)
     }
 
     /// Issue #562: look up the `(module, class)` tuple from a class's
@@ -786,6 +804,24 @@ impl LoweringContext {
         self.locals.lookup_index(name)
     }
 
+    /// The function-scope depth at which the nearest local binding of `name`
+    /// was declared, or `None` if there is no such binding. A binding's depth
+    /// is the number of `enter_scope` (function/closure-boundary) marks that
+    /// precede-or-equal its position in the locals stack — i.e. how deeply
+    /// nested the function it lives in is. Used to resolve a bare-ident
+    /// reference between a same-named `class` and a captured outer local by JS
+    /// nearest-binding rules: the binding at the GREATER depth (nearer the
+    /// reference) wins.
+    pub(crate) fn local_decl_scope_depth(&self, name: &str) -> Option<usize> {
+        let pos = self.lookup_local_index(name)?;
+        let depth = self
+            .scope_local_marks
+            .iter()
+            .filter(|&&mark| mark <= pos)
+            .count();
+        Some(depth)
+    }
+
     /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a
     /// module-var the top-level pre-scan registered for `const ns =
     /// require("<native>")`. After this, a bare read of `name` resolves to its
@@ -999,6 +1035,7 @@ impl LoweringContext {
             extends_name: None,
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields,
             constructor: Some(constructor),
             methods: Vec::new(),
@@ -1183,12 +1220,16 @@ impl LoweringContext {
             .map(|(root, sub)| (root.as_str(), sub.as_str()))
     }
 
+    /// Register `local_name` as a native instance of `module_name`/`class_name`.
+    /// Returns `false` (a no-op) when the package is a `perry.compilePackages`
+    /// override (#5137) — callers that gate a side effect on successful
+    /// registration (e.g. `protect_native_param`) must check this.
     pub(crate) fn register_native_instance(
         &mut self,
         local_name: String,
         module_name: String,
         class_name: String,
-    ) {
+    ) -> bool {
         // #5137: if the user opted this package into `perry.compilePackages`,
         // its real npm source is being compiled and the binding resolves to
         // the compiled-from-source class. Registering a native instance here
@@ -1200,7 +1241,7 @@ impl LoweringContext {
         // is used. `is_native_module` already makes the same back-off for the
         // import-resolution side (#665).
         if is_compile_package_override(&module_name) {
-            return;
+            return false;
         }
         // Push the new index onto this name's shadow stack (innermost last).
         let idx = self.native_instances.len();
@@ -1210,6 +1251,7 @@ impl LoweringContext {
             .push(idx);
         self.native_instances
             .push((local_name, module_name, class_name));
+        true
     }
 
     /// Shadow any prior native-instance tag for `local_name` by pushing a
@@ -1237,9 +1279,36 @@ impl LoweringContext {
     /// saw `e.map`/`e.length`/`e.constructor` all read 0 while `e[0]` and
     /// `Array.prototype.map.call(e)` worked → `(number).join is not a function`).
     pub(crate) fn shadow_native_instance_if_present(&mut self, name: &str) {
+        // A pre-scan registered this exact param name as a native instance for
+        // the callback now being lowered (e.g. `wsId` for `server.on('upgrade',
+        // (req, wsId, head) => …)`). That tag is the FRESH, intended one — the
+        // param IS the native instance — so its own param binding must NOT
+        // tombstone it. One-shot: consume the protection so a later, unrelated
+        // param of the same name still shadows a genuinely stale tag.
+        // Consume only when this binding is at the depth the pre-scan anchored
+        // the protection to (the callback's own param scope). A same-named
+        // binding at any other depth must NOT consume it; `exit_scope` drops a
+        // never-consumed entry when the callback scope unwinds.
+        if self.prescan_protected_native_params.get(name).copied() == Some(self.scope_depth) {
+            self.prescan_protected_native_params.remove(name);
+            return;
+        }
         if self.lookup_native_instance(name).is_some() {
             self.shadow_native_instance(name.to_string());
         }
+    }
+
+    /// Mark `name` as a pre-scan-designated native-instance param so the very
+    /// next `shadow_native_instance_if_present(name)` (the callback's own param
+    /// binding) skips tombstoning it. The pre-scan runs in the CALLER's scope,
+    /// one level above the callback, so anchor to `scope_depth + 1` (the
+    /// callback's param scope): the consume matches at exactly that depth, and a
+    /// never-consumed entry is dropped when the callback scope exits — it can't
+    /// linger into the caller scope and shadow a later, unrelated same-named
+    /// binding. See `prescan_protected_native_params`.
+    pub(crate) fn protect_native_param(&mut self, name: String) {
+        self.prescan_protected_native_params
+            .insert(name, self.scope_depth + 1);
     }
 
     /// Truncate `native_instances` back to `mark`, keeping the
@@ -1459,6 +1528,12 @@ impl LoweringContext {
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
+        // Drop any pre-scan param protections registered in a scope deeper than
+        // the one we just returned to — their expected consumer (the callback's
+        // param binding) never fired, so they must not linger and skip a later
+        // same-named binding's tombstone.
+        self.prescan_protected_native_params
+            .retain(|_, depth| *depth <= self.scope_depth);
         self.scope_local_marks.pop();
         // #wall5: restore native-module shadowing for this scope.
         if let Some(m) = self.scope_module_shadow_marks.pop() {

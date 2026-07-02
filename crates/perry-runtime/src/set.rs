@@ -1212,6 +1212,33 @@ pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
 /// omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg: f64) {
+    js_set_foreach_impl(
+        set,
+        callback,
+        this_arg,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+}
+
+/// `Set.prototype.forEach` for a `class … extends Set` subclass instance: the
+/// 3rd callback argument and the `self === collection` identity must be the
+/// SUBCLASS instance (`collection`), not the hidden backing set. Iteration runs
+/// over `set` (the backing). `collection` is a NaN-boxed value.
+pub(crate) fn js_set_foreach_with_collection(
+    set: *const SetHeader,
+    callback: f64,
+    this_arg: f64,
+    collection: f64,
+) {
+    js_set_foreach_impl(set, callback, this_arg, collection);
+}
+
+fn js_set_foreach_impl(
+    set: *const SetHeader,
+    callback: f64,
+    this_arg: f64,
+    collection_override: f64,
+) {
     // ECMA-262 Set.prototype.forEach step 4: a non-callable callback throws a
     // TypeError before iterating (and before any null-set early return).
     crate::array::js_validate_array_callback(callback);
@@ -1223,20 +1250,29 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg:
     let set_handle = scope.root_raw_const_ptr(set);
     let callback_handle = scope.root_nanbox_f64(callback);
     let this_handle = scope.root_nanbox_f64(this_arg);
+    let has_override = collection_override.to_bits() != crate::value::TAG_UNDEFINED;
+    let collection_handle = scope.root_nanbox_f64(collection_override);
     unsafe {
-        let set = set_handle.get_raw_const_ptr::<SetHeader>();
-        let size = (*set).size as usize;
-        if size == 0 {
-            return;
-        }
-        // The Set itself is the third callback argument / `self === s`.
-        let set_value = crate::value::js_nanbox_pointer(set as i64);
-
-        for i in 0..size {
+        // ECMA-262 24.2.3.6: Set.prototype.forEach iterates [[SetData]] in
+        // insertion order, re-reading the live entry count each step. Entries
+        // appended during the callback (`set.add` inside the callback) MUST be
+        // visited, so the loop bound is re-evaluated against `(*set).size` every
+        // iteration rather than snapshotting the initial size — mirrors
+        // `js_map_foreach_impl`.
+        let mut i = 0usize;
+        loop {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
             if i >= (*set).size as usize {
                 break;
             }
+            // The Set itself is the third callback argument / `self === s`.
+            // Re-derive each step from a rooted handle so a GC during a prior
+            // callback never bakes in a stale (relocated) pointer.
+            let set_value = if has_override {
+                collection_handle.get_nanbox_f64()
+            } else {
+                crate::value::js_nanbox_pointer(set as i64)
+            };
             let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
             let args = [value, value, set_value];
@@ -1245,6 +1281,7 @@ pub extern "C" fn js_set_foreach(set: *const SetHeader, callback: f64, this_arg:
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
+            i += 1;
         }
     }
 }

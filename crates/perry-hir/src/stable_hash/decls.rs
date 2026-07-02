@@ -17,6 +17,7 @@ impl SH for Class {
             extends,
             extends_name,
             extends_expr,
+            heritage_lexically_shadowed,
             native_extends,
             fields,
             constructor,
@@ -39,6 +40,7 @@ impl SH for Class {
         extends.hash(h);
         extends_name.hash(h);
         extends_expr.hash(h);
+        heritage_lexically_shadowed.hash(h);
         native_extends.hash(h);
         fields.hash(h);
         constructor.hash(h);

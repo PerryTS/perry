@@ -13,7 +13,8 @@ use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
-    ctor_body_has_value_return, ctor_body_uses_this, node_stream_parent_kind,
+    ctor_body_has_value_return, ctor_body_uses_new_target, ctor_body_uses_this,
+    node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -35,6 +36,7 @@ pub(crate) fn bind_inline_constructor_params(
     ctx: &mut FnCtx<'_>,
     params: &[Param],
     lowered_args: &[String],
+    capture_fill: Option<CaptureFill>,
 ) -> InlineConstructorScope {
     let saved = InlineConstructorScope {
         locals: ctx.locals.clone(),
@@ -43,7 +45,8 @@ pub(crate) fn bind_inline_constructor_params(
     };
 
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
-    let values = inline_constructor_param_values(ctx, params, lowered_args);
+    let values =
+        inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for (param, arg_val) in params.iter().zip(values.iter()) {
         let boxed_param = ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none();
         let slot = ctx
@@ -76,6 +79,62 @@ fn inline_constructor_param_values(
     params: &[Param],
     lowered_args: &[String],
 ) -> Vec<String> {
+    inline_constructor_param_values_with_class(ctx, params, lowered_args, None)
+}
+
+/// Where a synthesized `__perry_cap_<id>` param's value comes from when the
+/// `new` site did not supply it as an appended arg.
+#[derive(Clone, Copy)]
+pub(crate) struct CaptureFill {
+    /// The constructing class's id, used to read its DECL-SITE capture
+    /// snapshot (`js_class_capture_value(cid, slot)`).
+    cid: u32,
+    /// `true` when `lowered_args` does NOT contain appended cap values — the
+    /// member-callee `new ns.C(...)` path. Then ALL `lowered_args` are user
+    /// args and EVERY cap param fills from the snapshot. `false` for the
+    /// bare-identifier `new C(...)` path, where the HIR appended the caps as
+    /// trailing args (tail-split keeps binding them); the snapshot then only
+    /// backfills a cap the HIR didn't append.
+    caps_absent_from_args: bool,
+}
+
+impl CaptureFill {
+    /// Snapshot-only BACKFILL for a cap param the caller's args did not
+    /// supply: the `lowered_args` still carry their appended cap values
+    /// (tail-split keeps binding them). Used by the `super(...)` inline path,
+    /// which explicitly forwards parent caps as args.
+    pub(crate) fn backfill(cid: u32) -> Self {
+        CaptureFill {
+            cid,
+            caps_absent_from_args: false,
+        }
+    }
+}
+
+/// As [`inline_constructor_param_values`], but fills a synthesized
+/// `__perry_cap_<id>` param that the `new` site did not supply from the
+/// class's DECL-SITE capture snapshot (`js_class_capture_value(cid, slot)`)
+/// instead of `undefined`.
+///
+/// #5437 (W6): a member-callee construct `new ns.C()` of a function-nested
+/// class that captured an enclosing local is statically routed to
+/// `lower_new("C", [])` (the `#740` object-field-alias arm in
+/// `expr/new_dynamic.rs`) — the captures are NOT appended as trailing args
+/// (that only happens for the bare-identifier `new C()` HIR arm). With no
+/// cap args the cap params bound to `undefined` and every method reading a
+/// captured local saw `undefined`. The bare-`new C()` HIR-append cannot be
+/// reused for `new ns.C()`: at the outer (member) `new` site the captured
+/// enclosing local is OUT OF SCOPE, so `LocalGet(cid)` would itself read
+/// `undefined`. The decl-site snapshot (registered at the class's
+/// declaration by `js_class_register_capture_values`) holds the correct
+/// captured values. `fill = None` keeps the prior `undefined` fill (no
+/// behavior change for non-capturing/unknown classes).
+fn inline_constructor_param_values_with_class(
+    ctx: &mut FnCtx<'_>,
+    params: &[Param],
+    lowered_args: &[String],
+    capture_fill: Option<CaptureFill>,
+) -> Vec<String> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     // Synthesized `__perry_cap_<id>` capture params are always TRAILING
     // params, and `Expr::New` sites always append the capture values after
@@ -85,25 +144,82 @@ fn inline_constructor_param_values(
     // bundle), so positional binding put the user arg into the capture
     // slot. Bind capture params from the args TAIL and user params from
     // the head.
-    let n_caps = params
-        .iter()
-        .filter(|p| {
-            p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+    //
+    // #5437: when a decl-site snapshot is available (`capture_fill = Some`),
+    // EVERY synthesized cap param is filled from that snapshot — the
+    // authoritative decl-site capture value — regardless of whether the `new`
+    // site appended cap args. This is what closes W6: the bundle's bare-`new
+    // uS(...)` appends a MIS-BOXED `uw` cap (the multi-level capture chain
+    // materialized the wrong value), while `uS`'s decl-site snapshot holds the
+    // correct module-exports object; preferring the snapshot makes
+    // `new uw.SharedCacheControls` resolve.
+    //
+    // The split between user args and the (now ignored) appended cap args
+    // still matters for the USER params:
+    //   - member-callee `new ns.C(...)`: caps are NOT appended, so ALL
+    //     `lowered_args` are user args → `n_caps = 0`. (`new ns.C("ARG")`
+    //     binds the user param to `"ARG"`, the cap to the snapshot.)
+    //   - bare-identifier `new C(...)`: the HIR appended the caps as trailing
+    //     args, so strip them (tail-split) to recover the leading user args;
+    //     the stripped cap values are discarded in favour of the snapshot.
+    let caps_absent = matches!(
+        capture_fill,
+        Some(CaptureFill {
+            caps_absent_from_args: true,
+            ..
         })
-        .count()
-        .min(lowered_args.len());
+    );
+    let n_caps = if caps_absent {
+        0
+    } else {
+        params
+            .iter()
+            .filter(|p| {
+                p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+            })
+            .count()
+            .min(lowered_args.len())
+    };
     let user_len = lowered_args.len() - n_caps;
     let (user_args, cap_args) = lowered_args.split_at(user_len);
     let mut cap_iter = cap_args.iter();
 
     let mut out = Vec::with_capacity(params.len());
     let mut visible_index = 0usize;
+    // The cap-slot index of the NEXT cap param: the index of the value in
+    // the decl-site snapshot (registered in `captures_vec` / cap-param
+    // declaration order, which is the same order they appear here).
+    let mut cap_slot = 0u32;
     for param in params {
         if param.name.starts_with("__perry_cap_")
             && !param.is_rest
             && param.arguments_object.is_none()
         {
-            out.push(cap_iter.next().cloned().unwrap_or_else(|| undef.clone()));
+            let slot = cap_slot;
+            cap_slot += 1;
+            // Consume the appended cap arg so the tail stays aligned. When a
+            // decl-site snapshot is registered for `cid`, it is authoritative
+            // (W6: the appended arg may be a mis-boxed multi-level capture);
+            // otherwise (e.g. an inline anonymous class capturing a
+            // `require(...)`-derived local — #5437 OTel `trace`) NO snapshot is
+            // registered, so fall back to the appended cap arg rather than
+            // dropping it to `undefined`.
+            let appended = cap_iter.next();
+            out.push(match capture_fill {
+                Some(CaptureFill { cid, .. }) => {
+                    let fallback = appended.cloned().unwrap_or_else(|| undef.clone());
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_class_capture_value_or",
+                        &[
+                            (I32, &cid.to_string()),
+                            (I32, &slot.to_string()),
+                            (DOUBLE, &fallback),
+                        ],
+                    )
+                }
+                None => appended.cloned().unwrap_or_else(|| undef.clone()),
+            });
         } else if param.arguments_object.is_some() {
             out.push(pack_lowered_args_array(ctx, user_args));
         } else if param.is_rest {
@@ -229,6 +345,44 @@ fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) ->
         .contains_key(&(class.name.clone(), ctor_method_name))
 }
 
+/// #2768: true when the standalone `<class>_constructor` symbol's body reads
+/// `new.target` — either the class's OWN ctor body, or an ancestor ctor body
+/// it reaches through `super(...)`. The symbol is a separately compiled
+/// function whose only `new.target` source is the runtime cell, and a
+/// `super(...)` call inlines the parent ctor body into that same symbol, so an
+/// ancestor that reads `new.target` (e.g. an abstract-class guard in a base)
+/// still observes the cell. Gating the cell write on the WHOLE chain keeps
+/// `new Child()` correct when only the inherited body reads `new.target`, while
+/// a chain with no reader anywhere stays on the zero-overhead fast path. The
+/// walk follows `extends_name` through the codegen class map; an unresolved
+/// parent name just stops the walk, and a depth cap guards a cyclic graph.
+fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
+    let reads = |c: &perry_hir::Class| {
+        c.constructor
+            .as_ref()
+            .is_some_and(|f| ctor_body_uses_new_target(&f.body))
+    };
+    if reads(class) {
+        return true;
+    }
+    let mut parent = class.extends_name.as_deref();
+    let mut depth = 0;
+    while let Some(parent_name) = parent {
+        depth += 1;
+        if depth > 64 {
+            break;
+        }
+        let Some(pc) = ctx.classes.get(parent_name).copied() else {
+            break;
+        };
+        if reads(pc) {
+            return true;
+        }
+        parent = pc.extends_name.as_deref();
+    }
+    false
+}
+
 /// Emit a call to the shared standalone `<class>_constructor` symbol and
 /// return the raw value it produced. The standalone ctor function returns
 /// `undefined` for an ordinary constructor (implicit `return this`) or the
@@ -241,6 +395,7 @@ fn call_local_constructor_symbol(
     class: &perry_hir::Class,
     obj_box: &str,
     lowered_args: &[String],
+    caps_absent_from_args: bool,
 ) -> Option<String> {
     let ctor_method_name = format!("{}_constructor", class.name);
     let ctor_name = ctx
@@ -288,8 +443,16 @@ fn call_local_constructor_symbol(
         }
         found
     };
+    let capture_fill = ctx
+        .class_ids
+        .get(&class.name)
+        .copied()
+        .map(|cid| CaptureFill {
+            cid,
+            caps_absent_from_args,
+        });
     let mut ctor_values = if let Some(params) = effective_params {
-        inline_constructor_param_values(ctx, &params, lowered_args)
+        inline_constructor_param_values_with_class(ctx, &params, lowered_args, capture_fill)
     } else {
         lowered_args.to_vec()
     };
@@ -306,6 +469,54 @@ fn call_local_constructor_symbol(
     }
     Some(ctx.block().call(DOUBLE, &ctor_name, &ctor_args))
 }
+
+/// Emit the `js_gc_init_typed_shape_layout` call that registers the freshly
+/// constructed instance's raw-f64 / pointer slot masks with the GC so the
+/// typed-feedback class-field fast path engages. Must run AFTER the constructor
+/// body has set the declared fields to their numeric values (the runtime
+/// validates each raw-f64 slot currently holds a plain double before promoting).
+/// No-op for classes without an inline-keys shape global. Refs the standalone
+/// `<class>_constructor` symbol path, which previously returned before reaching
+/// this — leaving every numeric class field permanently on the by-name hashmap
+/// fallback (10M `counter.increment()` ran ~640ns/call instead of slot-direct).
+fn emit_typed_shape_layout_init(ctx: &mut FnCtx<'_>, class_name: &str, obj_handle: &str) {
+    let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() else {
+        return;
+    };
+    let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
+    let slot_count_str = typed_layout.slot_count.to_string();
+    let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
+    let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
+    let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
+        )
+    };
+    let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
+        )
+    };
+    ctx.block().call_void(
+        "js_gc_init_typed_shape_layout",
+        &[
+            (I64, obj_handle),
+            (I32, &slot_count_str),
+            (PTR, &raw_mask_ref),
+            (I32, &raw_mask_word_count_str),
+            (PTR, &pointer_mask_ref),
+            (I32, &pointer_mask_word_count_str),
+        ],
+    );
+}
+
+pub(crate) use super::capture_writeback::emit_class_capture_writeback;
 
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
@@ -328,6 +539,30 @@ fn call_local_constructor_symbol(
 ///   enclosing function, not the constructor body)
 /// - No method dispatch or vtables — those land in Phase C.2/C.3
 pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) -> Result<String> {
+    // Bare-identifier `new C(...)` path: the HIR `Expr::New` arm appended the
+    // class captures as trailing `LocalGet` args, so caps are PRESENT in
+    // `args`.
+    lower_new_impl(ctx, class_name, args, false)
+}
+
+/// Member-callee `new ns.C(...)` construct (#5437): the captures were NOT
+/// appended at the `new` site (the captured enclosing local is out of scope
+/// there), so every synthesized `__perry_cap_*` ctor param fills from the
+/// class's decl-site capture snapshot instead. All of `args` are USER args.
+pub(crate) fn lower_new_member_captured(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+) -> Result<String> {
+    lower_new_impl(ctx, class_name, args, true)
+}
+
+fn lower_new_impl(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    caps_absent_from_args: bool,
+) -> Result<String> {
     // Built-in Web classes that the runtime provides constructors for.
     // These are checked BEFORE the ctx.classes lookup because the user
     // code may shadow the name — if they do, the class lookup below
@@ -372,6 +607,24 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         }
         if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
             return Ok(val);
+        }
+        // Aliased built-in import: a minified bundle renames a node built-in
+        // constructor (`import { AsyncLocalStorage as xQ5 } from "async_hooks";
+        // new xQ5()`). The syntactic callee is the alias `xQ5`, so the
+        // canonical-name arms in `lower_builtin_new` (keyed on
+        // `"AsyncLocalStorage"`) never fired and `new xQ5()` fell through to the
+        // empty-object placeholder — the instance had no `.run`/`.getStore`, so
+        // `xQ5().getStore()` threw `TypeError: getStore is not a function`.
+        // Recover the original export name and retry. The alias is only present
+        // here when it was NOT already a user-defined class (the enclosing
+        // `!ctx.classes.contains_key(class_name)` guard), so a renamed import
+        // can't shadow a real local class.
+        if let Some(original) = ctx.imported_class_original_names.get(class_name).cloned() {
+            if original != class_name {
+                if let Some(val) = lower_builtin_new(ctx, &original, args)? {
+                    return Ok(val);
+                }
+            }
         }
     }
 
@@ -667,7 +920,12 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         } else {
             // Compile-time layout constants.
             const GC_HEADER_SIZE: u64 = 8;
-            const OBJECT_HEADER_SIZE: u64 = 24;
+            // arm64_32 watchOS: `size_of::<ObjectHeader>()` is 24 on 64-bit but
+            // 20 on ILP32 (4-byte `keys_array` pointer). Derive from the target
+            // triple so the inline alloc size and field-region base match the
+            // target-compiled runtime (no-op on 64-bit; see `target_layout`).
+            let object_header_size: u64 =
+                crate::target_layout::object_header_size_bytes(ctx.target_triple);
             const FIELD_SLOT_SIZE: u64 = 8;
             const MIN_FIELD_SLOTS: u64 = 8;
             const GC_TYPE_OBJECT: u64 = 2;
@@ -680,8 +938,14 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             const OBJECT_TYPE_REGULAR: u64 = 1;
 
             let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-            let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
-            let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
+            let payload_size = object_header_size + alloc_field_count * FIELD_SLOT_SIZE;
+            // Round the whole allocation up to FIELD_SLOT_SIZE (8). The inline
+            // bump allocator's offset invariant (below) requires every
+            // allocation to be a multiple of 8; on ILP32 `object_header_size`
+            // is 20, so an unpadded total is 4-skewed (e.g. 92) and would
+            // misalign the next bump. No-op on 64-bit (8 + 24 + 8·n is already
+            // 8-aligned → 96 for ≤8 fields).
+            let total_size = (GC_HEADER_SIZE + payload_size).next_multiple_of(FIELD_SLOT_SIZE);
             let total_size_str = total_size.to_string();
 
             // Lazy: allocate the per-function arena-state slot on the
@@ -819,7 +1083,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             // crashed with "Cannot read properties of undefined". Slots start at
             // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
             for i in 0..alloc_field_count {
-                let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
+                let slot_off = GC_HEADER_SIZE + object_header_size + i * FIELD_SLOT_SIZE;
                 let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
                 // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
                 blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
@@ -942,7 +1206,66 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // function ("value is not a function" on `new Chalk(...).red(...)`).
         // `js_ctor_return_override` returns `obj_box` for an `undefined`/
         // primitive (base) return, so ordinary ctors are unaffected.
-        if let Some(ctor_ret) = call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args) {
+        //
+        // #2768/new.target: the standalone `<class>_constructor` symbol is a
+        // separate compiled function, so its only `new.target` source is the
+        // runtime cell — which this path never set, leaving `new.target ===
+        // undefined` for a base class. Set the cell to this class's ref (the
+        // `INT32_TAG | class_id` value `Expr::ClassRef` produces) around the
+        // call and restore it after, but ONLY when the ctor actually reads
+        // `new.target`, so the common ctor keeps the zero-overhead fast path.
+        // The gate spans the WHOLE super(...) chain, not just the leaf's own
+        // body: the symbol inlines `super(...)` into itself, so an ancestor
+        // ctor that reads `new.target` (e.g. an abstract-class guard in a base)
+        // observes the same cell — `new Child()` where only `Base` reads
+        // `new.target` would otherwise see `undefined` instead of `Child`.
+        // ponytail: a throw inside the ctor skips the restore, leaving the cell
+        // set — same edge case the runtime construct paths already have; fix
+        // holistically if it bites.
+        let saved_new_target = if ctor_chain_uses_new_target(ctx, class) {
+            ctx.class_ids.get(class_name).map(|&cid| {
+                let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+                let class_ref = double_literal(f64::from_bits(
+                    crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
+                ));
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &class_ref)]);
+                prev
+            })
+        } else {
+            None
+        };
+        if let Some(ctor_ret) = call_local_constructor_symbol(
+            ctx,
+            class,
+            &obj_box,
+            &lowered_args,
+            caps_absent_from_args,
+        ) {
+            if let Some(prev) = &saved_new_target {
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
+            }
+            // The constructor body has run and set the declared fields; register
+            // the typed raw-f64/pointer slot layout so class-field accesses hit
+            // the slot-direct fast path instead of the by-name hashmap fallback.
+            // The inline-ctor path does this at its tail (below); this
+            // standalone-symbol path returns here, so it must do it too.
+            emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
+            // Write-back: propagate constructor mutations to outer captured locals.
+            // The standalone constructor symbol receives captured values by value
+            // and stores mutations to `this.__perry_cap_*` fields, but never
+            // updates the outer local's alloca slot. Read the fields back here so
+            // the enclosing scope sees the updated values (e.g. `++called` in a
+            // subclass constructor is visible after `new SubClass(...)` returns).
+            // When `caps_absent_from_args` is true (member-callee `new ns.C()`
+            // path), the HIR `args` slice contains ONLY user args — the cap args
+            // were NOT appended. Passing `args` to `emit_class_capture_writeback`
+            // would let the position-based lookup misidentify a user `LocalGet` as
+            // a cap arg and write to the wrong outer slot. Fall back to suffix-based
+            // lookup (empty slice) in that case.
+            let writeback_args = if caps_absent_from_args { &[][..] } else { args };
+            emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -958,6 +1281,10 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 ],
             );
             return Ok(final_box);
+        }
+        if let Some(prev) = &saved_new_target {
+            ctx.block()
+                .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
         }
         return Ok(obj_box);
     }
@@ -1090,10 +1417,17 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // `LocalGet` codegen doesn't return 0.0. Locals/local_types are
     // saved-and-restored around the whole inlined ctor flow below; we
     // mirror that here so the ctor params don't leak out of `new`.
-    let mut saved_scope_for_ctor = class
-        .constructor
-        .as_ref()
-        .map(|ctor| bind_inline_constructor_params(ctx, &ctor.params, &lowered_args));
+    let ctor_capture_fill = ctx
+        .class_ids
+        .get(class_name)
+        .copied()
+        .map(|cid| CaptureFill {
+            cid,
+            caps_absent_from_args,
+        });
+    let mut saved_scope_for_ctor = class.constructor.as_ref().map(|ctor| {
+        bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, ctor_capture_fill)
+    });
 
     if let Some(stop_at) = inherited_ctor_class.clone() {
         apply_field_initializers_recursive(ctx, class_name, FieldInitMode::UpToInclusive(stop_at))?;
@@ -1157,8 +1491,19 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         while let Some(pname) = parent_name {
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
-                    let saved_scope =
-                        bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
+                    // #5437: fill any unfilled parent cap param from the
+                    // parent's decl-site capture snapshot.
+                    let parent_capture_fill =
+                        ctx.class_ids.get(pname).copied().map(|cid| CaptureFill {
+                            cid,
+                            caps_absent_from_args,
+                        });
+                    let saved_scope = bind_inline_constructor_params(
+                        ctx,
+                        &parent_ctor.params,
+                        &lowered_args,
+                        parent_capture_fill,
+                    );
 
                     // Push the parent class name so `this` inside the
                     // parent ctor body resolves field names via the
@@ -1479,8 +1824,97 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
+                found_inherited_ctor = true;
             }
         } // end !found_inherited_ctor
+
+        // A no-own-ctor class whose parent is a DYNAMIC runtime value
+        // (`class D extends <fn/value> {}`, captured as `extends_expr`) gets
+        // an implicit default derived ctor `constructor(...args){ super(...args) }`.
+        // The inline `new` path above only finds inherited ctors that live in
+        // `ctx.classes` / `imported_class_ctors`; a parent that resolves to a
+        // plain function value at runtime (zod 4's `$constructor` pattern, where
+        // a class extends another `$constructor`-returned function) matches none
+        // of those, so without this branch `super(...)` is never emitted and the
+        // parent function body never runs on the new instance — its
+        // `this.<field> = …` / `Object.defineProperty(this, …)` writes are lost,
+        // and (when the parent function returns its own `this`) the derived
+        // instance is left uninitialized. Mirrors the synthesized-default-ctor
+        // dynamic-parent super in `codegen/method.rs` (the standalone-symbol
+        // path) and the explicit `Expr::SuperCall` dynamic-parent arm in
+        // `expr/this_super_call.rs`: resolve the decl-time-registered parent
+        // value and dispatch it on `this` via `js_fetch_or_value_super`, which
+        // binds IMPLICIT_THIS to the instance for the duration of the call.
+        //
+        // #5657: a native BUILTIN base (`class X extends ArrayBuffer / Map /
+        // Promise / %TypedArray% / RegExp / Function / …`) is also captured as
+        // `extends_expr` (a bare `ArrayBuffer` Ident doesn't resolve through
+        // `lookup_class`), but its parent VALUE is a builtin constructor that
+        // rejects being *called* as a plain function — `js_fetch_or_value_super`
+        // would route it through `js_native_call_value`, throwing "X is not a
+        // function" / "Constructor X requires 'new'". Perry can't give a subclass
+        // instance the builtin's internal slots, so `super()` to such a base is a
+        // best-effort no-op (the instance is already allocated with the correct
+        // dynamic-parent prototype chain, so `instanceof` holds). Skip the
+        // dispatch for those names — mirroring the identical guard the explicit
+        // `Expr::SuperCall` arm already applies via `is_other_builtin_constructor_name`
+        // (`expr/this_super_call.rs`). Request/Response/Error are deliberately NOT
+        // in that set: they DO need the dispatch (native fetch-handle attach /
+        // callable error thunk), so they keep running it. This is a fast-path
+        // skip on the textual name; an ALIASED builtin parent (`const AB =
+        // ArrayBuffer; class X extends AB {}`) whose `extends_name` isn't a known
+        // builtin still emits the call, but the runtime backstops it by value —
+        // `js_fetch_or_value_super` no-ops the same builtin set via
+        // `is_uncallable_builtin_super_parent` (perry-runtime, kept in lockstep).
+        let parent_is_uncallable_builtin = class
+            .extends_name
+            .as_deref()
+            .map(crate::expr::is_other_builtin_constructor_name)
+            .unwrap_or(false);
+        if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
+            if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
+                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let parent_val = ctx.block().call(
+                    DOUBLE,
+                    "js_get_dynamic_parent_value",
+                    &[(I32, &cid.to_string())],
+                );
+                let (args_ptr, args_len) = if lowered_args.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                    for (i, a_val) in lowered_args.iter().enumerate() {
+                        let slot = ctx
+                            .block()
+                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                        ctx.block().store(DOUBLE, a_val, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg,
+                        lowered_args.len(),
+                        buf_reg
+                    ));
+                    (ptr_reg, lowered_args.len().to_string())
+                };
+                // Bug #5587: in the no-own-ctor path, `this_stack` was never
+                // pushed for this `new` call, so `last()` would return the
+                // outer function's `this` (or undef at module scope). Use
+                // `obj_box` — the freshly-allocated object — directly.
+                let this_box = obj_box.clone();
+                let _ = ctx.block().call(
+                    DOUBLE,
+                    "js_fetch_or_value_super",
+                    &[
+                        (DOUBLE, &parent_val),
+                        (DOUBLE, &this_box),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                );
+            }
+        }
     }
 
     // Now that the parent body chain has run (setting `this.config`, etc.),
@@ -1506,8 +1940,17 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // super + applies SelfOnly) or has an explicit body. Drizzle's
     // `BetterSQLiteSession` (explicit ctor) and arrow-field cross-
     // module classes are both load-bearing. Refs #420 / #618 followup.
-    if !has_own_ctor && has_extends && !has_imported_ctor {
-        if builtin_parent_runtime.is_some() || fetch_parent_runtime.is_some() {
+    // `extends_expr` (dynamic-parent, e.g. zod 4's `$constructor`) classes also
+    // need their own field initializers re-applied here — AFTER the parent body
+    // ran via `js_fetch_or_value_super` above. ECMAScript runs derived-class
+    // field initializers after `super()` returns; `has_extends` only covers
+    // static `extends_name`, so include the `extends_expr` case (SelfOnly,
+    // mirroring the explicit-`SuperCall` dynamic-parent arm in this_super_call.rs).
+    if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
+        if builtin_parent_runtime.is_some()
+            || fetch_parent_runtime.is_some()
+            || (class.extends_expr.is_some() && !has_extends)
+        {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
         } else if let Some(stop_at) = inherited_ctor_class {
             apply_field_initializers_recursive(
@@ -1519,39 +1962,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
-    if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
-        let slot_count_str = typed_layout.slot_count.to_string();
-        let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
-        let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
-        let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
-            "null".to_string()
-        } else {
-            format!(
-                "@{}",
-                crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
-            )
-        };
-        let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
-            "null".to_string()
-        } else {
-            format!(
-                "@{}",
-                crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
-            )
-        };
-        ctx.block().call_void(
-            "js_gc_init_typed_shape_layout",
-            &[
-                (I64, &obj_handle),
-                (I32, &slot_count_str),
-                (PTR, &raw_mask_ref),
-                (I32, &raw_mask_word_count_str),
-                (PTR, &pointer_mask_ref),
-                (I32, &pointer_mask_word_count_str),
-            ],
-        );
-    }
+    emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the
     // shared after-block, then apply the spec return-override at construction

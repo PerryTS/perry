@@ -144,6 +144,87 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices))
         }
 
+        // -------- super.method(...spread) --------
+        // The plain `SuperMethodCall` arm passes each argument positionally, so
+        // a `...rest` spread would be delivered as ONE array argument. When the
+        // resolved super target is a NATIVE base (EventEmitter.prototype.emit
+        // and friends) forwarding a rest param via `super.emit(event, ...args)`
+        // delivered `[payload]` to the listener instead of `payload`. Flatten
+        // every argument (regular + spread-expanded) into a single JS array,
+        // then dispatch through `js_super_method_call_dynamic_apply` — the
+        // runtime helper materialises the array into a flat f64 buffer and
+        // forwards to the same parent-chain resolution used by the non-spread
+        // dynamic path (which handles both native-prototype and user-class
+        // JS parents).
+        Expr::SuperMethodCallSpread { method, args } => {
+            use perry_hir::CallArg;
+            let Some(current_class_name) = ctx.class_stack.last().cloned() else {
+                for a in args {
+                    match a {
+                        CallArg::Expr(e) | CallArg::Spread(e) => {
+                            let _ = lower_expr(ctx, e)?;
+                        }
+                    }
+                }
+                return Ok(double_literal(0.0));
+            };
+            let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+            if cid == 0 {
+                for a in args {
+                    match a {
+                        CallArg::Expr(e) | CallArg::Spread(e) => {
+                            let _ = lower_expr(ctx, e)?;
+                        }
+                    }
+                }
+                return Ok(double_literal(0.0));
+            }
+            let this_box = match ctx.this_stack.last().cloned() {
+                Some(slot) => ctx.block().load(DOUBLE, &slot),
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
+            // Build a single args array containing every argument in source
+            // order, expanding spreads via array-like-to-array + concat (the
+            // same machinery the CallSpread method-apply path uses).
+            let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) => {
+                        let v = lower_expr(ctx, e)?;
+                        acc_handle = ctx.block().call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &acc_handle), (DOUBLE, &v)],
+                        );
+                    }
+                    CallArg::Spread(e) => {
+                        let part_box = lower_expr(ctx, e)?;
+                        let part_handle =
+                            ctx.block()
+                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                        acc_handle = ctx.block().call(
+                            I64,
+                            "js_array_concat",
+                            &[(I64, &acc_handle), (I64, &part_handle)],
+                        );
+                    }
+                }
+            }
+            let args_array = nanbox_pointer_inline(ctx.block(), &acc_handle);
+            let name_global = emit_string_literal_global(ctx, method);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_super_method_call_dynamic_apply",
+                &[
+                    (I32, &cid.to_string()),
+                    (PTR, &name_global),
+                    (I64, &method.len().to_string()),
+                    (DOUBLE, &this_box),
+                    (DOUBLE, &args_array),
+                ],
+            ))
+        }
+
         // -------- super.<prop> as a value (issue #774) --------
         // Walk the parent-class chain. If a parent declares a method
         // with the requested name, materialize it as a closure value

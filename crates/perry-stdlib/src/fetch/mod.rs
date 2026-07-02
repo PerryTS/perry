@@ -15,7 +15,10 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 // Web Fetch `Headers` FFI — split out to keep this file under the 2,000-line
 // lint gate (#1649). The child module sees mod.rs's private items via its
 // `use super::*`.
+mod abort_bridge;
+pub use abort_bridge::*;
 mod headers;
+mod request_handle;
 pub use headers::*;
 
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
@@ -104,6 +107,9 @@ fn alloc_fetch_handle_id() -> usize {
 }
 
 #[cfg(test)]
+mod headers_json_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -119,6 +125,32 @@ mod tests {
         assert!((FETCH_HANDLE_ID_START..FETCH_HANDLE_ID_END).contains(&id));
         assert_ne!(native_id as usize, id);
         crate::common::drop_handle(native_id);
+    }
+
+    /// `string_from_header` must treat a handle-band value (a Fetch / native
+    /// registry id, not a `StringHeader` pointer) as "not a string" and return
+    /// `None` WITHOUT dereferencing it. Regression for the doctor / mcp-list
+    /// startup SIGSEGV: `fetch()` called with a non-string first argument (a
+    /// `Request`/`Headers` object) passed the bare handle id into the
+    /// `url_ptr` `*StringHeader` slot, and reading `(*ptr).byte_len` at `id+4`
+    /// dereferenced an unmapped low address.
+    #[test]
+    fn string_from_header_rejects_handle_band_ids() {
+        use perry_runtime::value::addr_class;
+        for &id in &[
+            1usize,                                  // common native handle
+            addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
+            addr_class::FETCH_HANDLE_BAND_START + 2, // a fetch handle id
+            addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
+        ] {
+            assert!(addr_class::is_handle_band(id));
+            // Must return None without dereferencing the bogus pointer.
+            let r = unsafe { string_from_header(id as *const StringHeader) };
+            assert!(
+                r.is_none(),
+                "handle-band id {id:#x} must be rejected, got {r:?}"
+            );
+        }
     }
 }
 
@@ -196,6 +228,20 @@ pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Stri
     // NaN-boxed TAG_UNDEFINED (0x7FFC_0000_0000_0001) unboxes to 0x1
     // after POINTER_MASK. Treat any pointer below page size as invalid.
     if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    // A handle-band value (`< 0x100000`: Web Fetch Headers/Request/Response/Blob
+    // ids, net/http small handles, zlib/proxy ids) is a registry id, NOT a
+    // `StringHeader` pointer. It reaches here when `fetch()` is called with a
+    // non-string first argument such as a `Request`/`Headers` object — the
+    // codegen passes the bare handle id into the `url_ptr` `*StringHeader`
+    // slot. Reading `(*ptr).byte_len` at `id + 4` then dereferences an
+    // unmapped low address → SIGSEGV (the doctor / mcp-list startup crash at
+    // the fetch-handle address). The `< 0x1000` floor above only catches the
+    // TAG_UNDEFINED `0x1` remnant; widen it to the whole handle band so any
+    // native handle is treated as "not a string" (`None`) rather than
+    // dereferenced.
+    if perry_runtime::value::addr_class::is_handle_band(ptr as usize) {
         return None;
     }
     let len = (*ptr).byte_len as usize;
@@ -493,7 +539,11 @@ pub unsafe extern "C" fn js_fetch_post(
         }
     };
 
-    let body = string_from_header(body_ptr).unwrap_or_default();
+    // Probe the buffer/typed-array registry before falling back to a string read
+    // so a binary body (Buffer / Uint8Array / typed array / ArrayBuffer) is sent
+    // byte-for-byte instead of being shifted left 12 bytes by the StringHeader
+    // data offset (#5757). `reqwest::Body` accepts `Vec<u8>` directly.
+    let body = fetch_request_body_bytes(body_ptr).unwrap_or_default();
     let content_type =
         string_from_header(content_type_ptr).unwrap_or_else(|| "application/json".to_string());
 
@@ -562,92 +612,45 @@ pub unsafe extern "C" fn js_fetch_with_options(
     body_ptr: *const StringHeader,
     headers_json_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
+    // Consume the pending `AbortSignal` (stashed by the fetch thunk / codegen)
+    // on the main thread BEFORE allocating the promise, so a GC during the
+    // allocation can't move the still-TLS-stashed signal before we read it.
+    let abort_state = abort_bridge::take_pending_signal_watch();
+
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
 
-    let url = match string_from_header(url_ptr) {
-        Some(u) => u,
-        None => {
-            let err_msg = "Invalid URL";
-            let err_bits = fetch_error_bits(err_msg);
+    // An already-aborted signal rejects the request up front; otherwise keep the
+    // optional watch to race the request against.
+    let abort_watch = match abort_bridge::watch_or_reject(abort_state, promise_ptr) {
+        Some(watch) => watch,
+        None => return promise,
+    };
+
+    // `fetch(Request)` form: callers (axios/gaxios / any WHATWG-fetch) build a
+    // `Request` object and call `fetch(request, init)`; its handle id lands in
+    // the `url_ptr` slot. Recover url/method/body/headers from the Request
+    // registry so the request is dispatched (`init` members override).
+    let inputs = match request_handle::resolve_fetch_inputs(
+        string_from_header(url_ptr),
+        string_from_header(method_ptr),
+        // Read the body as raw bytes (binary bodies probe the buffer/typed-array
+        // registry first) so a Buffer/Uint8Array body isn't corrupted by a lossy
+        // StringHeader read (#5757).
+        fetch_request_body_bytes(body_ptr),
+        string_from_header(headers_json_ptr),
+        url_ptr as usize,
+    ) {
+        Ok(inputs) => inputs,
+        Err(err_bits) => {
             queue_promise_resolution(promise_ptr, false, err_bits);
             return promise;
         }
     };
 
-    let method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
-    let body = string_from_header(body_ptr);
-    let headers_json = string_from_header(headers_json_ptr).unwrap_or_else(|| "{}".to_string());
-
-    // Parse headers from JSON
-    let custom_headers: HashMap<String, String> =
-        serde_json::from_str(&headers_json).unwrap_or_default();
-
-    spawn(async move {
-        let client = HTTP_CLIENT.clone();
-        let mut request = match method.to_uppercase().as_str() {
-            "POST" => client.post(&url),
-            "PUT" => client.put(&url),
-            "DELETE" => client.delete(&url),
-            "PATCH" => client.patch(&url),
-            "HEAD" => client.head(&url),
-            _ => client.get(&url), // Default to GET
-        };
-
-        // Add custom headers
-        for (key, value) in &custom_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-
-        // Add body if present
-        if let Some(b) = body {
-            request = request.body(b);
-        }
-
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-
-                let headers = headers_from_header_map(response.headers());
-
-                let body = response.bytes().await.unwrap_or_default().to_vec();
-
-                // Store response
-                let response_id = alloc_fetch_handle_id();
-
-                FETCH_RESPONSES.lock().unwrap().insert(
-                    response_id,
-                    FetchResponse {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        body_present: true,
-                        body_used: false,
-                        type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
-                        cached_headers_id: None,
-                        cached_body_stream_id: None,
-                    },
-                );
-
-                // Return response handle
-                let result_bits = handle_to_f64(response_id).to_bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
-            }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
-        }
-    });
+    // Dispatch + abort handling live in `abort_bridge::run_request` (keeps this
+    // file under the line-size lint gate).
+    spawn(abort_bridge::run_request(promise_ptr, abort_watch, inputs));
 
     promise
 }
@@ -1120,7 +1123,10 @@ fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore
 struct RequestRecord {
     url: String,
     method: String,
-    body: Option<String>,
+    /// Raw body bytes, stored verbatim so a binary (Buffer/Uint8Array) body
+    /// survives byte-for-byte through `arrayBuffer()`/`text()` (#5483). `text()`
+    /// / `json()` still decode lossily via `from_utf8_lossy`, matching Node.
+    body: Option<Vec<u8>>,
     body_used: bool,
     headers: HeadersStore,
     destination: String,
@@ -1849,7 +1855,7 @@ fn consume_request_body(handle: f64) -> Result<Vec<u8>, &'static str> {
         return Err(BODY_ALREADY_USED_MESSAGE);
     }
     req.body_used = true;
-    Ok(body.into_bytes())
+    Ok(body)
 }
 
 /// request.text() -> Promise<string>. Mirrors `js_fetch_response_text`: the

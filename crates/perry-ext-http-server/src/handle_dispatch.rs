@@ -111,6 +111,7 @@ extern "C" {
     fn js_node_http_im_complete(handle: i64) -> i32;
     fn js_node_http_im_aborted(handle: i64) -> i32;
     fn js_node_http_im_destroyed(handle: i64) -> i32;
+    fn js_node_http_im_readable(handle: i64) -> i32;
     fn js_node_http_im_add_header_line(handle: i64, field: f64, value: f64, dest: f64);
     fn js_node_http_im_signal(handle: i64) -> f64;
     fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader;
@@ -869,6 +870,15 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "complete" => bool_value(js_node_http_im_complete(handle) != 0),
         "aborted" => bool_value(js_node_http_im_aborted(handle) != 0),
         "destroyed" => bool_value(js_node_http_im_destroyed(handle) != 0),
+        // `req.readable` — true while the request stream can still yield body
+        // bytes (not yet complete, destroyed, or aborted). Node exposes this on
+        // the Readable; `req.socket` aliases the request handle, so on-finished's
+        // `isFinished()` reads `socket.readable` here. Without it `readable` was
+        // `undefined`, making `!socket.readable` true → on-finished reported the
+        // request finished → express body-parser skipped JSON/urlencoded parsing
+        // and `@Body()` resolved to `undefined`.
+        "readable" => bool_value(js_node_http_im_readable(handle) != 0),
+        "readableEnded" => bool_value(js_node_http_im_complete(handle) != 0),
         "socket" | "connection" => crate::request::incoming_socket_override(handle)
             .unwrap_or_else(|| handle_to_pointer_f64(handle)),
         "signal" => js_node_http_im_signal(handle),

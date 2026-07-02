@@ -881,8 +881,19 @@ pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 /// `js_closure_unbind_this` clones it and clears slot 0 so `this` becomes undefined.
 pub const CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
 
-/// Extract the real capture count (masking out the CAPTURES_THIS_FLAG).
+/// Flag stored in bit 30 of `capture_count` marking a closure whose captured
+/// `this` slot is LEXICAL and must never be re-bound by `Function.prototype.call`
+/// / method dispatch (`clone_closure_rebind_this`). Set per-closure (on the
+/// header itself) by `js_generator_attach_prototype` for the generator
+/// state-machine `next`/`return`/`throw` step closures: their `this` is the
+/// generator BODY's receiver, fixed at generator-creation time, and the `yield*`
+/// delegation desugar (`next.call(iter, v)`) would otherwise clobber it with the
+/// iterator object. Capture counts never approach 2^30, so bit 30 is free.
+pub const NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
+
+/// Extract the real capture count (masking out the flag bits stored in the
+/// two high bits: `CAPTURES_THIS_FLAG` and `NO_THIS_REBIND_FLAG`).
 #[inline(always)]
 pub fn real_capture_count(capture_count: u32) -> u32 {
-    capture_count & !CAPTURES_THIS_FLAG
+    capture_count & !(CAPTURES_THIS_FLAG | NO_THIS_REBIND_FLAG)
 }

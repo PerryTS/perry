@@ -1,31 +1,193 @@
-## v0.5.1198 — feat(codegen): representation-aware type lowering + native-ABI material evidence gate
+## v0.5.1211 — fix(intl): #5840 — Intl.DateTimeFormat dayPeriod-only formatting (6 test262 cases)
 
-Merges the representation-aware type-lowering track (`codex/type-lowering-runtime-20260616`)
-into `main`. Builds on the earlier #5291 landing; the most recent integration was #5462 (the
-material evidence gate). Merged via PR #5466.
+Fixes the `dayPeriod`-only subcluster of the #5840 DateTimeFormat worklist: `new Intl.DateTimeFormat('en', {dayPeriod: 'long'})` (with no other date/time component options) silently fell back to the default `M/D/YYYY` date string in both `format` and `formatToParts`, because `dtf_primary_mask` (`crates/perry-runtime/src/intl/date_collator.rs`) never counted `dayPeriod` toward its "has a time-dimension field" bit, and neither `format_components` nor `build_parts_from_components` had any dayPeriod rendering path at all — `dayPeriod` was only ever emitted as a byproduct of the AM/PM 12-hour clock.
 
-**Type lowering.** Native representations (i32 / u32 / f64 / i128-BigInt / StringRef) with
-runtime-guarded fast/fallback splits for scalar params, number-keyed `Map`/`Set`, typed string
-and i32 methods, and packed numeric array loops (f64 + i32 loop versioning). The fast i32/u32
-array paths are gated on the declared element type (`Int32[]` / `PerryU32`), so plain `number[]`
-arrays always take the f64 path. Small-BigInt literals lower to native i128.
+- Added `day_period_string(hour, style)`: `en` CLDR day-period boundaries at hour granularity (`0-11` morning, `12` noon, `13-17` afternoon, `18-20` evening, `21-23` night; `narrow` abbreviates only "noon" → "n", matching real ICU `en` data — verified empirically against `node`).
+- `dtf_primary_mask` now sets `BIT_TIME` when `dayPeriod` is set, so a dayPeriod-only DTF is no longer misclassified as "no primary fields" and forced through the Temporal-default fallback path.
+- `format_components`/`build_parts_from_components` both thread a new `day_period_opt` parameter through: dayPeriod-only renders just the period text (one part in `formatToParts`); dayPeriod combined with a numeric `hour` renders `"<hour> <period>"` (`[hour, literal " ", dayPeriod]` in `formatToParts`), replacing the default AM/PM suffix. Behavior is unchanged when `day_period_opt` is `None`.
+- Fixes: `prototype/format/dayPeriod-{long,narrow,short}-en.js`, `prototype/formatToParts/dayPeriod-{long,narrow,short}-en.js`. Verified via `scripts/test262_subset.py --dir intl402/DateTimeFormat` (run under `TZ=UTC` — Perry's DTF hardcodes a `UTC` default timeZone while `Date`'s local-component constructor honors the real host offset, so a non-UTC dev box shows an unrelated pre-existing hour-shift on `new Date(y,m,d,h,...)`-based cases; CI runs UTC) with zero regressions (45 remaining failures, exactly the other 45 of the original 51-case worklist).
 
-**Material evidence gate.** A differential A/B CI gate (typed vs `any`-typed control fixtures)
-that recomputes speedups and instruction-counter reductions from real `-O3` IR plus GC-trace
-counts, with anti-gaming guards (positive-control-baseline requirement, manifest-identity check,
-trace-enabled requirement). Backed by 185 codegen regression tests, negative/invalidation tests,
-and a 101-symbol release-sentinel `nm` check. Heavy packet runs on tag pushes / opt-in PR labels;
-ordinary PRs run the lighter structural + unit gates.
+## v0.5.1210 — fix(hir+codegen+runtime): #5833 — global-code declaration-instantiation cluster (4 test262 cases)
 
-**Merge notes.** `main` had carried an earlier version of this code (#5291) and evolved it
-further, so this was a semantic merge across the shared codegen/runtime surface. Resolutions
-preferred the feature branch where it strictly superseded, and folded in main-only changes
-including the `Set.add` write-back SIGSEGV bugfix (Next.js turbopack `loadedChunks.add`), the
-#5334 class-field-set barrier-elision / fallback-outlining, and the size-optimize feature gating.
-One HEAD-only IR-shape regression test (`boxed_local_slot_uses_i64_js_value_bits_until_helper_edges`)
-was updated to assert the box-bits ABI invariant (no raw `double` operand reaches a bits helper)
-rather than one exact instruction sequence, since main's constant lowering now folds the
-`undefined` slot default straight to i64 bits. Follow-ups tracked in #5464.
+Closes 4 of the 6 `language/global-code` + `language/identifier-resolution` cases from the #5833 worklist (the remaining `decl-var.js`/`S10.4.1_A1_T1.js` need a live-synced `var` → `globalThis` reflection, a materially larger change — left as a follow-up rather than folded into this PR).
+
+- **Reassigned top-level `class` bindings were silently immutable** (`decl-lex.js`): a top-level `class Foo {}` never allocated a real local slot — every bare read re-derived `Expr::ClassRef` from the class registry, and `expr_assign.rs`'s "class/function binding, don't shadow with an implicit local" special case (added for Drizzle's `sql || (sql = {})` idiom, #420) silently dropped any assignment. `Foo = 5; console.log(Foo)` printed the frozen class-id value instead of `5`. Fix: `stmt.rs`'s top-level `Decl::Class` arm now seeds a real mutable local **only for classes that are actually reassigned somewhere in the module** (reusing the existing whole-module "assigned via simple identifier target" scan, `collect_assigned_function_binding_candidates`, stashed on `ctx.reassigned_top_level_identifiers`). Scoping to reassigned-only was required after a naive "always seed a local" version broke `export default Widget;` (#665), which pattern-matches `Expr::ClassRef` after lowering a bare class-name identifier.
+- **Top-level `function` reflection used the wrong `configurable` attribute** (`decl-func.js`): `emit_script_global_function_decls` (entry.rs) reflected a Script's bare top-level function declarations onto `globalThis` via a plain `js_object_set_field_by_name` — which creates a configurable property. GlobalDeclarationInstantiation's `CreateGlobalFunctionBinding` runs with `D = false` for a Script (only sloppy-eval's Annex B.3.3.3 path uses `D = true`), so the reflected property must be non-configurable. Added `js_object_set_field_by_name_nonconfigurable` (mirrors the existing `_nonenum` sibling used for `super(message)`) and switched the reflection call site to it.
+- **The reflection gate missed top-level `this`** (also `decl-func.js`, surfaced while fixing the above): `Module::references_global_this` was a plain substring scan for the literal token `globalThis`, so a program that reads the global object only through top-level `this` (Test262's `verifyProperty(this, ...)` idiom, under `PERRY_GLOBAL_SCRIPT_THIS`) never tripped the gate and the reflection silently never ran at all. Now OR'd with a new `ctx.saw_global_this_expr` flag, set whenever lowering produces `Expr::GlobalThisExpr` from a top-level `this`.
+- **No early SyntaxError for a restricted-global lexical collision** (`decl-lex-restricted-global.js`): `let undefined;` at Script top level must throw before any statement runs (GlobalDeclarationInstantiation step 5c, `HasRestrictedGlobalProperty`). Added a static check in `lower_module_full` — only `undefined`/`NaN`/`Infinity` are non-configurable value properties of a pristine global object, so this is a plain compile-time name check against the entry module's own top-level lexical names (scoped to the entry module compiled as a Script; an ES module or a non-entry module never reaches GlobalDeclarationInstantiation regardless of syntax).
+- `identifier-resolution/assign-to-global-undefined.js` was already passing — the strict-mode `undeclared = (this.undeclared = 5)` ReferenceError-on-unresolvable-assignment ordering was correct; no code change needed, just verification.
+
+New test: `crates/perry-hir/tests/issue_5833_global_code_cluster.rs` (6 cases — reassigned/never-reassigned class binding shape, restricted-global rejection + its entry-module/ordinary-name/non-entry-module guards).
+
+## v0.5.1209 — fix(hir): #5592 — indirect eval in class field initializers folds to global-scope IIFE
+
+`eval_is_module_top_global` in `const_fold_fn.rs` blocked the completion-IIFE fold with a `ctx.current_class.is_none()` guard. Class field initializers at module top level do not create a new variable environment — `scope_depth` stays 0 and the enclosing scope is still the global scope in global-script mode. The guard was overly conservative: class *methods* are already excluded by the `scope_depth == 0` check (methods call `enter_scope()`). Removing the `current_class` guard fixes four test262 cases: `language/{statements,expressions}/class/elements/{,private-}indirect-eval-contains-arguments`. Two regression tests added to `issue_5579_indirect_eval_global_completion.rs`.
+
+## v0.5.1208 — test(net): #5540 — lock in Map-stored `socket.write()` from a `setInterval` callback reaching the wire
+
+Issue #5540 reported that `socket.write(buf)` was silently dropped (no `sendto`, bytes never hit the wire) when the socket was reached through a property of a `Map`-stored object **and** the write was issued from a timer (`setInterval`) callback — the exact pattern `@perryts/mysql`'s deferred flush pump uses (`CONN_STATES.get(id).sock.write(bytes)`), so password auth timed out. It was distinct from #5021 (write-from-`'data'`-handler) and #91 (Map-retrieved write from a `'data'` handler), both already fixed.
+
+**Verified resolved on the production path.** The report was filed against compiler 0.5.1182 with the runtime reporting `process.versions.perry = 0.4.71` (a stale runtime). The entire `perry-ext-net` crate — through which the well-known flip now routes every `net` import unconditionally — was introduced afterward (#5692). Its handle property-dispatch extension (`js_ext_net_handle_property_dispatch`) resolves a dynamic `entry.sock.write` value-read to a bound method that enqueues through the twin-free `js_ext_net_socket_write` symbol, so the write reaches ext-net's own socket registry instead of a bundled twin's empty one (mirrors the #5021 / #5010 symbol-collision fixes). The Map-retrieved-property + timer-callback shape now reaches the wire on the dynamic dispatch path (confirmed via `--trace hir`: the call lowers to a nested-`PropertyGet` callee, i.e. property-get → bound-method → call, not a fused `NativeMethodCall`).
+
+- **Regression test** (`test-files/test_issue_5540_sock_write_map_from_timer.ts`): stores `{ sock: any }` in a `Map`, primes a write through the closure-captured `const` socket, then on the priming echo kicks a one-shot `setInterval` whose callback performs the Map-retrieved `entry.sock.write(LARGE_PAYLOAD)` (105 bytes, matching the dropped auth-packet size). Asserts the echo of that write comes back. Runs against the parity-harness echo server (port 17891) and is byte-for-byte identical under `node --experimental-strip-types`. Strace confirms the `sendto(…, 105)` fires.
+
+## v0.5.1207 — fix(runtime): #5589 — generic `Array.prototype.{pop,shift,push,unshift}` over primitive/array-like receivers + `ToObject` of symbol/string
+
+Closes 7 `built-ins/Array` test262 cases (#5589, "exotic length/index, prototype-as-receiver"). These are the spec-generic stack/queue mutators reached only through the explicit `Array.prototype.<m>.call/apply(recv, …)` (and bound-local) form, where `recv` may be a primitive or a plain array-like object.
+
+- **HIR routing** (`lower/expr_call/intrinsics/apply_call.rs`): `pop`/`shift`/`push`/`unshift` now join `sort`/`splice`/`concat`/… in the `.call`/`.apply` generic-receiver list, lowering to `Expr::ArrayLikeMethod` instead of synthesizing a `(recv).<m>()` member call. The synthesized form threw `<m> is not a function` on a primitive receiver — so `Array.prototype.pop.call(true)` crashed instead of returning `undefined` (test262 `{pop,shift,unshift}/call-with-boolean`).
+- **Codegen** (`expr/logical_collections.rs`, `runtime_decls/arrays.rs`): new `Expr::ArrayLikeMethod` arms + extern decls for `js_arraylike_{pop,shift,push,unshift}` (pop/shift nullary; push/unshift variadic via an alloca buffer, mirroring splice/concat).
+- **Runtime** (`array/generic.rs`): `js_arraylike_{pop,shift,push,unshift}` forward to the existing `array_proto_mutator` engine — real array → dense helper, plain array-like object → live `Get`/`Set`/`Delete`. A boolean/number primitive boxes to a fresh wrapper (length 0), so `push`/`unshift` return `ToLength(len) + count` (e.g. `unshift.call(true)` → `0`) rather than `undefined`. A **primitive `string`** receiver boxes to a `String` exotic whose indices/`length` are non-writable, so every mutator's internal `Set(O,"length",…,true)`/`DeletePropertyOrThrow` fails with a **TypeError** — restored via an up-front guard (test262 `{pop,push,shift,unshift}/throws-with-string-receiver`; previously these "passed" only by accident, via the wrong-but-throwing `(string).pop is not a function`).
+- **`ToObject` of a symbol** (`array/generic.rs::to_object`): a symbol is `POINTER_TAG`-shaped, so it was caught by the generic pointer early-return and passed through unboxed; now boxed before that branch so `[].sort.call(Symbol())` returns an `instanceof Symbol` wrapper (test262 sort/call-with-primitive). BigInt already boxed correctly.
+
+Newly passing: `prototype/{pop,shift,unshift}/call-with-boolean`, `prototype/{pop,push,unshift}/throws-with-string-receiver`, `prototype/sort/call-with-primitive`. No regressions in the `built-ins/Array` test262 subset.
+
+## v0.5.1206 — release: cargo-test + iOS simctl gate fixes + runtime/codegen batch
+
+Supersedes the unshipped v0.5.1205 (whose simctl gate failed on an iOS build break).
+Rolls up the fixes that landed on main after the v0.5.1204 changelog entry:
+
+- **fix(ui-ios)**: `adbanner.rs` referenced `crate::string_header::StringHeader`, a
+  module that exists only in `perry-ui-macos`. Now uses `perry_runtime::string::StringHeader`
+  like every sibling file. `perry-ui-ios` is Apple-only and excluded from `cargo-test`,
+  so this only surfaced in the tag-time simctl build. (#5645)
+- **fix(stdlib)**: auto-opt link break — `dispatch_http` path refs after the
+  dispatch-module split (#1435). (#5639)
+- **test**: `blocklist_addsubnet_prefix` called `TempDir::join` (no such method) — an
+  E0599 that broke the full-workspace cargo-test gate (red on the nightly cron since
+  2026-06-20; the per-PR scoped run never builds `tests/*.rs`, so it went undetected).
+  Now `dir.path().join(...)`. (#5641)
+- **fix(net,http,tls)**: #1781 — handle SSO short strings in value conversion. (#5638)
+- **fix(runtime)**: bind inherited prototype-accessor methods to the receiver. (#5637)
+- **fix**: #5594 — Annex B.3.3.3 global eval function-declaration binding. (#5636)
+- **fix(temporal)**: #5580 — read era/eraYear for non-ISO calendars in
+  PlainDateTime/ZonedDateTime/PlainMonthDay field bags. (#5635)
+- **fix(runtime)**: #5592 — `class X extends <Proxy>` segfault. (#5634)
+- **fix(runtime)**: #5591 — string-coercing a class/object method no longer segfaults. (#5633)
+
+## v0.5.1204 — fix(codegen,runtime): #5437 — require-derived captured local must not drop to undefined when no decl-site snapshot exists
+
+Follow-up to the #5437 W6 `CaptureFill` fix (v0.5.1202). That fix made `inline_constructor_param_values_with_class` always read a cap param from the decl-site snapshot `js_class_capture_value(cid, slot)` whenever the class is in `ctx.class_ids`. But a snapshot only exists for classes that reach a `RegisterClassCaptures` decl-site; an **inline anonymous class capturing a `require()`-derived local** (`const h = require(s).x`) gets a `cid` with **no registered snapshot**, so `js_class_capture_value` returned `TAG_UNDEFINED` → the captured value read `undefined` inside methods. In the Next.js bundle this surfaced as `trace.getSpan` on undefined (the OTel tracer captured a `require("@opentelemetry/api")`-derived `trace`).
+
+Fix: new FFI `js_class_capture_value_or(cid, slot, fallback)` returns the snapshot slot when a snapshot is registered (W6 case: authoritative) and otherwise returns `fallback` — the new-site appended cap arg. The `CaptureFill` arm in `lower_call/new.rs` now passes the appended cap value as the fallback. Keeps W6 (snapshot wins when present) and restores the correct captured value for the snapshot-less inline-class case. Minimal repro under `w6-repro/otel/`; regression test `issue_5437_require_derived_capture`. Bundle: the `getSpan` throw is gone, W6 stays fixed (undefined-ctor 0), and the render advances past the tracer to a deeper `IncrementalCache` cache-store wall.
+
+## v0.5.1203 — fix(inline): never inline a function whose only param-capturing closure lives in an array-method callback (caps `can()` 500 on `GET /admin`)
+
+Layout-sensitive miscompile in the same family as #5485: an authenticated `GET /admin` in the perry-compiled Skelpo CMS returned HTTP 500 — `TypeError: Cannot read properties of undefined (reading 'includes')` in `permissions/check.ts` `can()`, because `ctx.caps` was read as a **number** on a subsequent `can()` call (the first call saw it as an object). Adding any `console.log` to `admin/layout.tsx` made the bug vanish — the classic "perturb codegen, heisenbug hides" tell.
+
+Root cause — three facts that only bite in combination:
+
+1. The `{ userId: 0, caps: c }` object literals in `layout.tsx` lower to a synthesized shape class `new __AnonShape_…(0, c)`; reading `ctx.caps` is a class-field GET.
+2. `AdminPage` is `async` and uses `c` (the `caps ?? {…}` local) **after an `await`**, so the async-state-machine transform heap-**boxes** `c` (it must survive the await; reads go through `js_box_get`). The sidebar's `visibleTypes(c, allTypes)` filter callback `(t) => can({ userId: 0, caps: allCaps }, 'read', t.slug)` is a closure capturing the (un-boxed) param `allCaps`.
+3. `visibleTypes`'s body is `return xs.filter(…).filter(…).map(…)` — its only param-capturing closure lives inside an **array-method callback**, lowered to dedicated `Expr::ArrayFilter` / `Expr::ArrayMap` HIR nodes (not `Expr::Call`).
+
+`is_inlinable` (`inline/analysis.rs`) is supposed to reject any function whose body contains a closure capturing one of its params — when such a function is inlined, the closure literal is duplicated with its captures remapped to the caller's locals, but codegen compiles the closure body **once**, keyed on its `func_id`, under the **original** capture ids (so it bakes in a fixed value-representation per capture: boxed iff that id is in the module-wide boxed set). But the gate's helper `body_contains_closure_capturing` (`inline/closure_analysis.rs`) was a hand-rolled `Expr` walker that only matched a fixed set of variants (`Call`, `Binary`, `PropertyGet`, …) and silently returned `false` for `Expr::ArrayFilter`/`ArrayMap`/etc. So `visibleTypes` slipped through and got inlined into the async `AdminPage`. The inlined copy remapped the closure capture `allCaps` (unboxed) → the caller's `c` (boxed across the await), so the closure-creation site forwarded a **raw box pointer** (the "transitively-captured box" path) while the single shared closure body still read its capture as a plain value. That untagged heap address was then stored into the AnonShape's `caps` slot and read back as an `f64` → `typeof === 'number'`, and `ctx.caps.global` was `undefined`. (Confirmed via `--trace llvm`: the inlined closure-creation does `js_closure_get_capture_f64(idx=c)` with **no** `js_box_get`, then stores the box pointer into the capture buffer; the shared body reads it back without `js_box_get`. Decoding the bad `f64` gave `0x000005019bfef758` — a heap address with the `POINTER_TAG` 0x7ffd… stripped.) `console.log` in `layout.tsx` masked it by perturbing escape/box analysis so the closure was no longer singleton-shared the same way.
+
+Fix (transform-only, `inline/closure_analysis.rs`): reimplement `body_contains_closure_capturing` on top of the existing exhaustive `collect_closure_captured_local_ids` (which walks the HIR via `perry_hir::walker` and therefore sees closures inside **any** Expr, present and future) and test for an intersection with the param ids. `is_inlinable` now correctly rejects `visibleTypes`, so it stays a real (non-inlined) call whose closure body and creation site agree on the capture's box-state. `GET /admin` → 200, the dashboard + caps-gated sidebar render, with **no** CMS changes and no logging hacks. Regression: `inline::closure_analysis::tests::{detects_capture_inside_array_filter_callback, detects_capture_inside_array_map_callback, detects_capture_inside_plain_call_arg, ignores_closure_not_capturing_any_param}`. Minimal standalone repro: an `async` FC that, after an `await`, calls a helper whose body is `xs.filter(t => can({ caps: c }, …))` capturing the boxed local — reproduces the exact "caps read as number" before the fix, prints correctly after.
+## v0.5.1202 — revert: #5546 + #5553 (#5437 module-default wrapper auto-call machinery) — wrong layer, proven cannot close W6
+
+Reverts the auto-call wrapper-resolve machinery (#5546) and its boot-crash patch (#5553). A rigorous follow-up disproved the approach: the #5437 throw (`new uw.SharedCacheControls`) fails because the captured `uw` reads a **mis-boxed closure** at request time, whereas `uw` is a correct `module.exports` **object** at every point where the registration/auto-call could fire (the `require`, the class-capture store). So registering module-default wrappers is a guaranteed no-op for this bug — the value that throws never passes through a registration site. The machinery also introduced a regression (auto-calling a CJS function-export wrapper, e.g. `debug`, on the `_interop_require_default` `.__esModule` probe → boot crash; #5553 patched that symptom but the core approach can't close W6). Removing it cleans the dead + risky auto-call path off `main`. The real root — the class-capture materialization mis-boxing the pointer (the scale-emergent captured-pointer mis-box class, CLAUDE.md "captured pointer values must be NaN-boxed before storing") — is tracked under #5437 for a dedicated fix at the capture-store layer.
+
+## v0.5.1201 — fix(runtime): #5437 — CJS-interop probe on a module-default wrapper must not auto-call it (boot-crash fix for #5546)
+
+Follow-up to #5546. That change registers CJS module-default wrapper closures and, on a property miss, auto-calls the wrapper (`js_closure_call0`) to obtain `module.exports`. But for a CJS module whose `module.exports` **is a function** (e.g. `debug` → `createDebug`), the wrapper *is* that function, and the ubiquitous `_interop_require_default(require("debug"))` interop reads `.__esModule` off it → property miss → the fallback **called the module's function with no args** as a side effect → e.g. `enabled(undefined)` → `undefined.length` → threw at module-init (server exits at boot). This regressed the Next.js bundle from serving (HTTP 500) to crashing at boot (HTTP 000) and could break other SWC/Babel-compiled-CJS programs.
+
+Fix (runtime-only, `object/field_get_set.rs`): on a registered module-default wrapper, short-circuit the two CJS-interop probe keys **before** the auto-call — `.__esModule` → `undefined` (a function-export CJS module is not an ES module), `.default` → the wrapper itself (interop default of a non-ESM module is `module.exports`); both also added to the auto-call exclusion list. Genuine non-`default` member reads (the #5437 `SharedCacheControls` path) are unaffected. Regression test `module_default_wrapper_interop_probe_does_not_call_wrapper` (a wrapper that `panic!`s if called, asserting the probe keys resolve without invoking it). Bundle: server boots/serves again (the `.length` boot crash is gone).
+
+## v0.5.1200 — fix(codegen+runtime): #5437 Next.js W6 — captured CJS module-default wrapper closure resolves exports
+
+The Next.js standalone (turbopack `app-page-turbo`) render threw `TypeError: undefined is not a constructor` at `new uw.SharedCacheControls(...)` inside the `IncrementalCache` constructor. Root: `let uw = require(".../shared-cache-controls.external.js")` is a lazy/function-local require whose value-read takes the `imported_vars` default-getter path (`dyn_extern_i18n.rs`), which for a CJS `Object.defineProperty(exports, …)` module returns the module-default **wrapper closure** (the un-called IIFE), not `module.exports`. The class captured that closure by-value into a `__perry_cap_` field, so `uw.SharedCacheControls` read the closure → `undefined` → `new undefined()` threw. (Diverged only at giant-bundle scale; the import getter resolves the real object everywhere else.)
+
+Fix (5 files, +235): a `MODULE_DEFAULT_WRAPPER_FUNCPTRS` runtime registry + `js_register_module_default_wrapper_value` FFI; codegen at the imported-var default-getter site registers the wrapper, **gated to `origin_suffix == "default" && name.starts_with("_lazyreq_")`** so a genuine `export default <function>` is never auto-called; and a runtime fallback in the closure property-read path that, for a *registered* wrapper closure on a property miss, calls it once (`js_closure_call0`) → `module.exports` → re-reads the property (guarded against self-return / undefined / null). Regression test `module_default_wrapper_property_read_resolves_exports`.
+
+Bundle: the W6 render throw is eliminated (undefined-ctor 1→0, deterministic); the render now advances past W6 to a separate downstream wall (a `.length` read on undefined). Code-only; no behavioral change for non-`defineProperty`-CJS default imports.
+
+## v0.5.1199 — feat(ui): BloomView live-render plumbing on every backend (#5519)
+
+Perry-UI side of #5519 (live `BloomView` rendering on all platforms; the engine
+side landed in Bloom-Engine/engine#71 as the platform-neutral `bloom_attach_native`).
+
+- **Rename** `bloomViewGetHwnd` → `bloomViewGetNativeHandle`, keeping
+  `bloomViewGetHwnd` as a deprecated alias (both dispatch rows route to the same
+  `perry_ui_bloomview_get_hwnd` runtime symbol). The name is platform-neutral now
+  that the handle is an `NSView*` / `UIView*` / `GtkWidget*` / `ANativeWindow*`,
+  not only an HWND. Updated `crates/perry-dispatch/src/ui_table.rs`,
+  `crates/perry-api-manifest/src/entries.rs`, `types/perry/ui/index.d.ts`, and
+  regenerated `docs/api/perry.d.ts` + `docs/src/api/reference.md`.
+- **Sizing**: the non-Windows backends created the view but ignored the requested
+  size, so the renderer's surface came up 0×0 and nothing drew. `BloomView(w, h)`
+  now pins the size — macOS/iOS/visionOS/tvOS via Auto Layout
+  (`set_width`/`set_height` + `translatesAutoresizingMaskIntoConstraints = false`),
+  GTK4 already used `set_size_request`, Android via `LayoutParams`, Windows already
+  reserved a fixed-size child window.
+- **tvOS**: promoted the 0-handle stub to a real `UIView` (new
+  `crates/perry-ui-tvos/src/widgets/bloomview.rs`), mirroring iOS.
+- **Android**: switched the host widget from `android.view.View` to
+  `android.view.SurfaceView`, and `bloomViewGetNativeHandle` now returns the real
+  `ANativeWindow*` (via NDK `ANativeWindow_fromSurface` on the view's
+  `SurfaceHolder.getSurface()`) instead of echoing the registry token. Returns 0
+  until the surface is ready (laid out / `surfaceCreated`).
+- **Input/focus**: the host view is now focusable so a focused `BloomView` can
+  receive keyboard/pointer events for the attached engine to consume (macOS
+  `acceptsFirstResponder` via a `PerryBloomView` subclass; iOS/tvOS/visionOS
+  `userInteractionEnabled`; GTK `set_focusable`/`set_can_target`; Android
+  `setFocusable`/`setFocusableInTouchMode`).
+- **Demo**: `examples/bloomview_embed_demo.ts` renders a live Bloom scene inside a
+  Perry UI window — `BloomView` + `bloomViewGetNativeHandle` + the engine's
+  `attachToNSView`, driven from `onFrame`. Verified on macOS: the integrated
+  binary (Perry UI + Bloom engine) links and runs the attach/frame loop; iOS
+  cross-compiles. Android/GTK/Windows/tvOS/visionOS are best-effort (no local
+  cross-toolchain), mirroring established per-backend patterns.
+
+## v0.5.1198 — fix(packaging): ship `libperry_ui_android.a` to Windows installs so `perry/ui` android apps link (#4823)
+
+A Windows user (discussion #4823) with the NDK/SDK and Rust android targets
+installed could not build a `perry/ui` app for android — `perry --target
+android` got through the "runtime-only" link step and then failed with:
+
+```
+Error: perry/ui imported but libperry_ui_android.a not found. Build with:
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z tls-model=global-dynamic" cargo build --release -p perry-ui-android --target aarch64-linux-android
+```
+
+Root cause was a packaging gap, not user error. Two distinct holes:
+
+- **WinGet/Scoop zip** — the Windows release leg cross-compiled and staged
+  only `libperry_runtime.a` / `libperry_stdlib.a` for `aarch64-linux-android`
+  (#872), never `libperry_ui_android.a`. So the runtime-only link succeeded
+  but any app importing `perry/ui` couldn't resolve the UI backend. The UI lib
+  *was* built — but only inside the standalone `perry-cross-aarch64-linux-android`
+  bundle (#1083), which a binary-install user has no reason to know about.
+- **npm** — `stage-npm.sh` flattened libs into `lib/` and dropped the
+  `aarch64-linux-android/release/` subdir entirely, so npm packages shipped
+  *no* android cross-libs at all; android builds from an npm install were
+  wholly unsupported.
+
+Fixes (the two options the maintainer approved):
+
+1. **(`release-packages.yml`)** The Windows `build:` leg now also cross-builds
+   `perry-ui-android` (`cargo build --profile dist` for the staticlib — the
+   global-dynamic TLS rustflag only matters at the consumer's final cdylib
+   link, mirroring the ubuntu cross-bundle leg; the UI crate is already a
+   staticlib so it needs no `-static` wrapper) and stages
+   `libperry_ui_android.a` into the zip's `aarch64-linux-android/release/`.
+   It is **best-effort**: a native non-zero exit is caught via `$LASTEXITCODE`
+   (pwsh native failures aren't terminating errors) so a finicky aws-lc-rs
+   cross-build can't sink the release; the staging is `Test-Path`-guarded.
+2. **(`stage-npm.sh`)** A new `stage_android_cross_libs` helper stages all
+   three android archives into the Windows npm package under
+   `bin/aarch64-linux-android/release/` (the layout `library_search.rs` probes,
+   already inside the `files` allowlist), compressed to `.a.zst` like the rest.
+   Each lib is sourced from the Windows build artifact first, falling back to
+   the `perry-cross-aarch64-linux-android` bundle the npm-publish job already
+   downloads — so the UI lib is backfilled from the authoritative ubuntu build
+   even if the best-effort Windows cross-build was skipped. This also enables
+   npm-installed android builds for the first time.
+
+Also improved the link-time error message (`link/mod.rs`) for android: it now
+points binary-install users (no source tree) at dropping the prebuilt
+`libperry_ui_android.a` from `perry-cross-aarch64-linux-android.tar.gz` before
+falling back to the from-source `cargo build` instruction.
 
 ## v0.5.1197 — feat(runtime): #2656 — make WeakMap/WeakSet actually weak
 

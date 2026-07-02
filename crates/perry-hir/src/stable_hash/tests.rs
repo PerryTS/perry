@@ -265,6 +265,7 @@ fn module_metadata_affects_hash() {
         extends: None,
         extends_name: None,
         extends_expr: None,
+        heritage_lexically_shadowed: false,
         native_extends: None,
         fields: vec![],
         constructor: None,

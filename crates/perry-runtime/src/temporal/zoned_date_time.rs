@@ -52,10 +52,17 @@ fn require_ns(v: f64) -> i128 {
 fn timezone_arg(v: f64) -> TimeZone {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
-        return ok_or_throw(TimeZone::try_from_str(&dispatch::read_string(v)));
+        // `ToTemporalTimeZoneIdentifier` (strict): only IANA names and UTC-offset
+        // strings are accepted. An ISO-datetime string like
+        // "1997-12-04T12:34[+01:00]" must throw a RangeError.
+        // Use `try_from_identifier_str` (not `try_from_str`, which also accepts
+        // ISO datetime strings by extracting their bracket annotation).
+        return ok_or_throw(TimeZone::try_from_identifier_str(&dispatch::read_string(v)));
     }
-    crate::fs::validate::throw_range_error_with_code(
-        "Temporal.ZonedDateTime requires a time-zone identifier string",
+    // Every non-string primitive (null, boolean, number, bigint, symbol, undefined)
+    // is a TypeError per `ToTemporalTimeZoneIdentifier`.
+    crate::object::throw_object_type_error(
+        b"Temporal.ZonedDateTime timeZone must be a string identifier",
     )
 }
 
@@ -69,6 +76,7 @@ fn calendar_arg(v: f64) -> Calendar {
 
 /// `new Temporal.ZonedDateTime(epochNanoseconds: bigint, timeZone, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     let ns = require_ns(raw_arg(args, 0));
     let tz = timezone_arg(raw_arg(args, 1));
     // Constructor calendar arg is a strict identifier (an ISO date string is a
@@ -87,6 +95,13 @@ fn coerce_zdt(v: f64) -> ZonedDateTime {
 /// consulted for the string + property-bag forms).
 fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
     if let Some(TemporalValue::ZonedDateTime(z)) = temporal_value_ref(v) {
+        // The result is a clone, but `ToTemporalZonedDateTime` still performs
+        // `GetOptionsObject` and reads disambiguation → offset → overflow in spec
+        // order, so a bad options type (TypeError) or invalid option value
+        // (RangeError) is observed *before* the instance is cloned.
+        let _ = super::options::disambiguation(opts);
+        let _ = super::options::offset_option(opts);
+        let _ = super::options::overflow(opts);
         return z.clone();
     }
     if let Some(partial) = super::options::zoned_partial(v) {
@@ -105,11 +120,25 @@ fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
         // Parse the string BEFORE reading options (spec order: an invalid string
-        // throws a RangeError before any option is touched).
+        // throws a RangeError before `GetOptionsObject` — which would otherwise
+        // throw a TypeError for a non-object options value). `from_utf8` couples
+        // parsing with offset interpretation, so validate the string structurally
+        // with a lenient offset disambiguation (`Ignore` never rejects on an
+        // offset mismatch) and discard the result; only a malformed IXDTF string
+        // throws here. The real parse below applies the requested options.
         let s = dispatch::read_string(v);
+        let _ = ok_or_throw(ZonedDateTime::from_utf8(
+            s.as_bytes(),
+            Disambiguation::Compatible,
+            OffsetDisambiguation::Ignore,
+        ));
+        // Now read + validate options in spec order: disambiguation, offset,
+        // overflow. `overflow` carries no effect for the string form but is still
+        // read (a bad value is a RangeError — `overflow-invalid-string`).
         let disambiguation =
             super::options::disambiguation(opts).unwrap_or(Disambiguation::Compatible);
         let offset = super::options::offset_option(opts).unwrap_or(OffsetDisambiguation::Reject);
+        let _ = super::options::overflow(opts);
         return ok_or_throw(ZonedDateTime::from_utf8(
             s.as_bytes(),
             disambiguation,
@@ -222,11 +251,21 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
                 z.to_ixdtf_string(offset, time_zone, calendar, rounding),
             ))
         }
-        "toJSON" | "toLocaleString" => string(&z.to_string()),
+        "toJSON" => string(&z.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(z.calendar().identifier());
+            let epoch_ms = z.epoch_milliseconds() as f64;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::ZonedDateTime,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::zoned_fields(obj);
+            let fields = super::options::zoned_fields(obj, z.calendar());
             let opts = raw_arg(args, 1);
             wrap(ok_or_throw(z.with(
                 fields,

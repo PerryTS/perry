@@ -19,10 +19,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
     let normalized = module.strip_prefix("node:").unwrap_or(module);
     match normalized {
         // ── HTTP server (Hyper) ───────────────────────────────────────
-        // `http-server` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-fastify` (v0.5.572) so the
-        // well-known flip can route to perry-ext-fastify.
-        "fastify" => &["bundled-fastify"],
+        // fastify needs no perry-stdlib feature: the in-stdlib adapter was
+        // removed, so `import 'fastify'` is served entirely by the external
+        // perry-ext-fastify crate via the well-known flip (which links the
+        // wrapper and enables `external-fastify-pump`). See optimized_libs.rs.
+        "fastify" => &[],
 
         // ── Web Streams API ──────────────────────────────────────────
         // Per-binding gate `bundled-streams` (v0.5.572) — the

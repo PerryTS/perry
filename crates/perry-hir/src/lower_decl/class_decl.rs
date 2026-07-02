@@ -93,6 +93,15 @@ fn runtime_instance_accessor_names(members: &[ast::ClassMember]) -> crate::Class
                     ast::PropName::Ident(i) => i.sym.to_string(),
                     ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
                     ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
+                    // #5592: a computed accessor key (`get [expr]()` /
+                    // `set [expr](v)`) isn't statically known. Mark the class so
+                    // `obj.prototype.<x> = v` writes route through the generic
+                    // setter-invoking path rather than a name-keyed prototype
+                    // monkey-patch.
+                    ast::PropName::Computed(_) => {
+                        accessor_names.has_computed = true;
+                        continue;
+                    }
                     _ => continue,
                 };
                 match m.kind {
@@ -346,6 +355,19 @@ pub fn lower_class_decl(
     // Enter type parameter scope for resolving T, U, etc. in member types
     ctx.enter_type_param_scope(&type_params);
 
+    // #5437: does the parent Ident resolve to an in-scope lexical local that
+    // shadows a same-named native/built-in parent? Computed here (same `ctx`
+    // scope state the heritage routing below uses, before the body lowers any
+    // new locals) so codegen can prefer the dynamic local over a NAME-keyed
+    // built-in special case (Error/Request/Response/Event/CustomEvent/streams).
+    let heritage_lexically_shadowed = match class_decl.class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => {
+            let n = ident.sym.to_string();
+            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+        }
+        _ => false,
+    };
+
     // Handle extends clause
     let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
         class_decl.class.super_class
@@ -404,7 +426,16 @@ pub fn lower_class_decl(
                 }
                 _ => None,
             };
-            if native_parent.is_some() {
+            // A lexical local shadowing the parent name must win over the native
+            // parent — the in-scope local IS the real parent value. Check it
+            // BEFORE `native_parent` so `const EventEmitter = …; class X extends
+            // EventEmitter {}` binds to the local via the dynamic `extends_expr`
+            // path, not the native `events` parent. ESM imports are not in
+            // `ctx.locals`, so genuine native subclassing is unchanged. Mirrors
+            // the class-expression arm below.
+            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
+                && ctx.locals.lookup(&parent_name).is_some();
+            if native_parent.is_some() && !locally_shadowed {
                 // Keep `extends_name` populated alongside `native_extends`
                 // so SuperCall codegen + downstream chain walks still
                 // see the parent name (mirrors how stream-class
@@ -412,7 +443,32 @@ pub fn lower_class_decl(
                 // path while the native_extends carries the (module,
                 // class) tag for the runtime shim).
                 (None, Some(parent_name), native_parent, None)
+            } else if locally_shadowed {
+                // Lexical local shadow → dynamic parent via `extends_expr` (the
+                // in-scope local value), invoked by `super()` through
+                // `js_fetch_or_value_super`. See the class-expression arm below
+                // for the full rationale (Next.js p-queue `PQueue`).
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (None, Some(parent_name), None, None),
+                }
             } else {
+                // #5437 (Next.js NodeNextRequest cross-module heritage): a
+                // minified bundle declares the SAME class name in several
+                // turbopack factory closures (`class f{...}` appears 3× in one
+                // chunk). Phase-1.5 disambiguates the duplicate sibling by
+                // renaming it (`f` -> `f$0`) in this body's scope, and the
+                // class registers under that unique name — but the child's
+                // `extends f` was binding to the RAW name, which `lookup_class`
+                // resolves to the FIRST (wrong) `f`. The parent-chain walk then
+                // pulls the wrong class's fields into `packed_keys`, dropping
+                // the real parent's `method`/`url`/`body` (NodeNextRequest's
+                // `e.url` read undefined -> `Invalid URL` 500 on dynamic page
+                // routes). Resolve the parent name through the active
+                // scope-local renames so heritage binds to the same disambiguated
+                // class the parent decl registered under. Identity for
+                // non-colliding names, so unaffected classes keep their parent.
+                let parent_name = ctx.resolve_class_name(&parent_name);
                 let parent_cid = ctx.lookup_class(&parent_name);
                 if parent_cid.is_none() {
                     // Issue #711 part 2: the Ident doesn't resolve to
@@ -989,8 +1045,17 @@ pub fn lower_class_decl(
                 // such method right after static field init, so they
                 // run once at module startup.
                 let scope_mark = ctx.enter_scope();
-                let body = lower_block_stmt(ctx, &block.body)?;
+                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+                ctx.in_nonarrow_fn = true;
+                // A static block is its own var-scope (OrdinaryFunctionCreate
+                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
+                // only lowers nested statements without hoisting `var`s to this
+                // boundary, so a `var` declared in one block leaked into the
+                // next block/module scope instead of staying local (test262
+                // static-init-scope-var-close.js).
+                let body = lower_fn_body_block_stmt(ctx, &block.body)?;
                 ctx.exit_scope(scope_mark);
+                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
                 let block_idx = static_methods
                     .iter()
@@ -1131,36 +1196,68 @@ pub fn lower_class_decl(
 
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
+        // Pull each top-level `this.<ident> = …` field name out of one ctor
+        // statement-expression. Minified bundles (Next.js `BaseNextRequest`'s
+        // `constructor(a,b,c){this.method=a,this.url=b,this.body=c}`) collapse
+        // every ctor assignment into ONE comma-`Seq` expression-statement, so a
+        // scan that only matched `Expr::Assign` detected ZERO fields — the
+        // parent's `method`/`url`/`body` never entered `packed_keys`, leaving
+        // the subclass instance allocated with too-few inline slots so the
+        // captured-class shape prepends `__perry_cap_*` over the (missing) real
+        // slots and `e.url` reads undefined ("Invalid URL" 500 on dynamic page
+        // routes). Descend through `Seq` (and the `Paren`/`Assign`-result-chain
+        // wrappers minifiers emit) so each comma-separated `this.x = …` is
+        // recognised the same as a standalone assignment statement.
+        fn collect_this_field_assigns(expr: &ast::Expr, out: &mut Vec<String>) {
+            match expr {
+                ast::Expr::Assign(assign) => {
+                    // A chained assignment's RHS can itself be `this.x = …`
+                    // (`this.a = this.b = v`): the inner `this.b = v` evaluates
+                    // (and creates `b`'s slot) BEFORE the outer assignment to
+                    // `this.a`, so collect the RHS first to keep Object.keys in
+                    // the same insertion order Node produces (`b` then `a`).
+                    collect_this_field_assigns(&assign.right, out);
+                    if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(mem)) =
+                        &assign.left
+                    {
+                        if let ast::Expr::This(_) = &*mem.obj {
+                            if let ast::MemberProp::Ident(prop_ident) = &mem.prop {
+                                out.push(prop_ident.sym.to_string());
+                            }
+                        }
+                    }
+                }
+                ast::Expr::Seq(seq) => {
+                    for e in &seq.exprs {
+                        collect_this_field_assigns(e, out);
+                    }
+                }
+                ast::Expr::Paren(p) => collect_this_field_assigns(&p.expr, out),
+                _ => {}
+            }
+        }
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 if let Some(ref body) = ctor.body {
                     for stmt in &body.stmts {
                         if let ast::Stmt::Expr(expr_stmt) = stmt {
-                            if let ast::Expr::Assign(assign) = &*expr_stmt.expr {
-                                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(
-                                    mem,
-                                )) = &assign.left
+                            let mut names: Vec<String> = Vec::new();
+                            collect_this_field_assigns(&expr_stmt.expr, &mut names);
+                            for fname in names {
+                                if !declared_field_names.contains(&fname)
+                                    && !inherited_field_names.contains(&fname)
+                                    && !accessor_names.contains_any(&fname)
+                                    && !method_names.contains(&fname)
                                 {
-                                    if let ast::Expr::This(_) = &*mem.obj {
-                                        if let ast::MemberProp::Ident(prop_ident) = &mem.prop {
-                                            let fname = prop_ident.sym.to_string();
-                                            if !declared_field_names.contains(&fname)
-                                                && !inherited_field_names.contains(&fname)
-                                                && !accessor_names.contains_any(&fname)
-                                                && !method_names.contains(&fname)
-                                            {
-                                                fields.push(ClassField {
-                                                    name: fname,
-                                                    key_expr: None,
-                                                    ty: Type::Any,
-                                                    init: None,
-                                                    is_private: false,
-                                                    is_readonly: false,
-                                                    decorators: Vec::new(),
-                                                });
-                                            }
-                                        }
-                                    }
+                                    fields.push(ClassField {
+                                        name: fname,
+                                        key_expr: None,
+                                        ty: Type::Any,
+                                        init: None,
+                                        is_private: false,
+                                        is_readonly: false,
+                                        decorators: Vec::new(),
+                                    });
                                 }
                             }
                         }
@@ -1286,6 +1383,7 @@ pub fn lower_class_decl(
         extends_name,
         native_extends,
         extends_expr,
+        heritage_lexically_shadowed,
         fields,
         constructor,
         methods,
@@ -1349,6 +1447,17 @@ pub fn lower_class_from_ast(
 
     ctx.enter_type_param_scope(&type_params);
 
+    // #5437: parent Ident shadowed by an in-scope lexical local? (See the
+    // matching computation in `lower_class_decl`.) Lets codegen prefer the
+    // dynamic local over a NAME-keyed built-in special case.
+    let heritage_lexically_shadowed = match class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => {
+            let n = ident.sym.to_string();
+            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+        }
+        _ => false,
+    };
+
     let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
         class.super_class
     {
@@ -1389,9 +1498,62 @@ pub fn lower_class_from_ast(
                 }
                 _ => None,
             };
-            if native_parent.is_some() {
+            // A lexical local binding shadowing the parent name must win over the
+            // native/static parent — the in-scope local IS the real parent value.
+            // Check it BEFORE `native_parent` so e.g. `const EventEmitter = …;
+            // const C = class extends EventEmitter {}` routes through the dynamic
+            // `extends_expr` path (the local) instead of recording the native
+            // `events` parent. ESM imports are NOT in `ctx.locals`, so genuine
+            // `extends EventEmitter` (imported) still takes the native path.
+            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
+                && ctx.locals.lookup(&parent_name).is_some();
+            if native_parent.is_some() && !locally_shadowed {
                 (None, Some(parent_name), native_parent, None)
+            } else if locally_shadowed {
+                // #5437 (Next.js p-queue `PQueue` inside a minified bundle): a
+                // class EXPRESSION whose parent Ident is an IN-SCOPE LOCAL
+                // (`const t = require("events"); … class extends t {…}`) must
+                // bind to that LEXICAL local — not to an unrelated module-global
+                // class that happens to share the (minified, single-letter)
+                // name. The static `lookup_class(parent_name)` path keys
+                // codegen's `super()` on a module-wide `HashMap<name, &Class>`;
+                // in a turbopack chunk dozens of distinct webpack-factory
+                // classes are all named `t`/`u`/`i`, so that map keeps ONE `t`
+                // (whichever registered last) and `super()` inlines the WRONG
+                // class's constructor. The bundle's p-queue `PQueue extends t`
+                // (eventemitter3) resolved `t` to superstruct's `StructError`
+                // base, so `new PQueue()` ran StructError's destructuring ctor
+                // on the (undefined) options arg → "Cannot convert undefined or
+                // null to object" → HTTP 500 on the dynamic page routes.
+                //
+                // When the parent name is bound by a local in THIS body's scope,
+                // route through the dynamic `extends_expr` path: lower the Ident
+                // as a runtime value (the lexically-correct local), register the
+                // parent edge dynamically, and let `super()` invoke the real
+                // parent value via `js_fetch_or_value_super` (which already
+                // tolerates native / closure / class-ref / builtin parents).
+                // Gated on `!class_renames.contains_key` so the #5437
+                // sibling-rename path above still wins when a scope-local class
+                // rename exists (that disambiguation is exact). Pure-Ident
+                // module-global heritage (no shadowing local) is unaffected —
+                // `ctx.locals.lookup` returns `None` for a class name.
+                // Do NOT set a static `extends` (parent_cid) here: the only
+                // candidate would be `lookup_class(parent_name)`, which is the
+                // wrong same-named module-global class we are deliberately
+                // avoiding (wiring it would mis-route inherited-method / vtable
+                // dispatch to that class's members). The dynamic `extends_expr`
+                // path registers the correct parent edge at runtime via
+                // `RegisterClassParentDynamic` + `function_class_id`.
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (None, Some(parent_name), None, None),
+                }
             } else {
+                // #5437: resolve the parent through active scope-local class
+                // renames so a class EXPRESSION extending a disambiguated
+                // same-named sibling (`f` -> `f$0`) binds to the right class.
+                // See the matching fix in `lower_class_decl` above.
+                let parent_name = ctx.resolve_class_name(&parent_name);
                 let parent_cid = ctx.lookup_class(&parent_name);
                 if parent_cid.is_none() {
                     // Issue #711 part 2: see the parallel arm in
@@ -1661,8 +1823,17 @@ pub fn lower_class_from_ast(
             }
             ast::ClassMember::StaticBlock(block) => {
                 let scope_mark = ctx.enter_scope();
-                let body = lower_block_stmt(ctx, &block.body)?;
+                let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+                ctx.in_nonarrow_fn = true;
+                // A static block is its own var-scope (OrdinaryFunctionCreate
+                // per ClassStaticBlockDefinitionEvaluation): `lower_block_stmt`
+                // only lowers nested statements without hoisting `var`s to this
+                // boundary, so a `var` declared in one block leaked into the
+                // next block/module scope instead of staying local (test262
+                // static-init-scope-var-close.js).
+                let body = lower_fn_body_block_stmt(ctx, &block.body)?;
                 ctx.exit_scope(scope_mark);
+                ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
                 let block_idx = static_methods
                     .iter()
@@ -1784,6 +1955,7 @@ pub fn lower_class_from_ast(
         extends_name,
         native_extends,
         extends_expr,
+        heritage_lexically_shadowed,
         fields,
         constructor,
         methods,

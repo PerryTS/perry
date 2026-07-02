@@ -74,6 +74,21 @@ pub extern "C" fn perry_ui_canvas_create(width: f64, height: f64) -> i64 {
     widgets::canvas::create(width, height)
 }
 
+/// Create a BloomView render-surface host (issue #2395). Returns a widget
+/// handle; pair with `perry_ui_bloomview_get_hwnd` to embed an external GPU
+/// renderer (the Bloom engine) into the reserved child window.
+#[no_mangle]
+pub extern "C" fn perry_ui_bloomview_create(width: f64, height: f64) -> i64 {
+    widgets::bloomview::create(width, height)
+}
+
+/// Return the raw HWND value for a BloomView handle (as an integer), so user
+/// TypeScript can hand it to the Bloom package's `attachToHwnd`.
+#[no_mangle]
+pub extern "C" fn perry_ui_bloomview_get_hwnd(handle: i64) -> i64 {
+    widgets::bloomview::get_hwnd_value(handle)
+}
+
 /// Create a Form container.
 #[no_mangle]
 pub extern "C" fn perry_ui_form_create() -> i64 {

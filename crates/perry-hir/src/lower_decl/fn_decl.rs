@@ -68,6 +68,8 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
 
     // Pre-scan body for `arguments` references. If the function references
     // `arguments`, we synthesize a hidden raw-arguments parameter so
@@ -193,6 +195,28 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                     module.to_string(),
                     class.to_string(),
                 );
+            }
+        }
+    }
+
+    // Cross-function native-handle propagation: a parameter that receives a
+    // known native handle across a call boundary (e.g. the `("ws","Client")`
+    // upgrade `wsId` passed as `handleConnection(req, wsId)`) is untyped here,
+    // so the type-annotation loop above can't tag it. `pre_scan_cross_fn_native_params`
+    // recorded a `(fn_ident_span_lo, param_index) -> (module, class)` hint before
+    // any body lowered; apply it now (before the body lowers) so `wsId.send(...)`
+    // inside this function dispatches to `js_ws_send_client_i64` like the inline
+    // call. The key is this declaration's identifier span (not its name), so a
+    // hint seeded for a same-named but distinct function never leaks here. Only
+    // registers when the param isn't already a native instance, so an explicit
+    // annotation always wins.
+    if !ctx.param_native_hints.is_empty() {
+        let fn_span_lo = fn_decl.ident.span.lo.0;
+        for (idx, param) in params.iter().enumerate() {
+            if let Some((module, class)) = ctx.param_native_hints.get(&(fn_span_lo, idx)).cloned() {
+                if ctx.lookup_native_instance(&param.name).is_none() {
+                    ctx.register_native_instance(param.name.clone(), module, class);
+                }
             }
         }
     }
@@ -350,6 +374,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Exit type parameter scope
     ctx.exit_type_param_scope();

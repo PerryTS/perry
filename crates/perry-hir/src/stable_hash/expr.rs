@@ -97,6 +97,7 @@ impl SH for Expr {
             Expr::This => tag(h, 50),
             Expr::SuperCall(args) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
+            Expr::SuperMethodCallSpread { method, args } => { tag(h, 12509); method.hash(h); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::SuperPropertyGet { property } => { tag(h, 461); property.hash(h); }
             Expr::SuperPropertySet { parent_class_id, parent_class_name, key, value } => { tag(h, 12238); parent_class_id.hash(h); parent_class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ObjectSuperPropertyGet { home, key, receiver } => { tag(h, 12231); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
@@ -367,7 +368,7 @@ impl SH for Expr {
             Expr::ChildProcessSpawnBackground { command, args, log_file, env_json, } => { tag(h, 240); command.as_ref().hash(h); args.hash(h); log_file.as_ref().hash(h); env_json.hash(h); }
             Expr::ChildProcessGetProcessStatus(e) => { tag(h, 241); e.as_ref().hash(h); }
             Expr::ChildProcessKillProcess(e) => { tag(h, 242); e.as_ref().hash(h); }
-            Expr::FetchWithOptions { url, method, body, headers, headers_dynamic, } => { tag(h, 243); url.as_ref().hash(h); method.as_ref().hash(h); body.as_ref().hash(h); headers.hash(h); if let Some(hd) = headers_dynamic { tag(h, 1); hd.as_ref().hash(h); } else { tag(h, 0); } }
+            Expr::FetchWithOptions { url, method, body, headers, headers_dynamic, signal, } => { tag(h, 243); url.as_ref().hash(h); method.as_ref().hash(h); body.as_ref().hash(h); headers.hash(h); if let Some(hd) = headers_dynamic { tag(h, 1); hd.as_ref().hash(h); } else { tag(h, 0); } if let Some(s) = signal { tag(h, 1); s.as_ref().hash(h); } else { tag(h, 0); } }
             Expr::FetchGetWithAuth { url, auth_header } => { tag(h, 244); url.as_ref().hash(h); auth_header.as_ref().hash(h); }
             Expr::FetchPostWithAuth { url, auth_header, body, } => { tag(h, 245); url.as_ref().hash(h); auth_header.as_ref().hash(h); body.as_ref().hash(h); }
             Expr::NetCreateServer { options, connection_listener, } => { tag(h, 246); options.hash(h); connection_listener.hash(h); }
@@ -442,10 +443,15 @@ impl SH for Expr {
             Expr::Sequence(es) => { tag(h, 309); es.hash(h); }
             Expr::DateNow => tag(h, 310),
             Expr::DateNew(es) => { tag(h, 311); es.hash(h); }
-            Expr::BoxedPrimitiveNew { kind, arg } => {
+            Expr::BoxedPrimitiveNew {
+                kind,
+                arg,
+                arg_present,
+            } => {
                 tag(h, 12017);
                 (*kind as u8).hash(h);
                 arg.as_ref().hash(h);
+                arg_present.hash(h);
             }
             Expr::DateGetTime(e) => { tag(h, 312); e.as_ref().hash(h); }
             Expr::DateToISOString(e) => { tag(h, 313); e.as_ref().hash(h); }
@@ -546,7 +552,7 @@ impl SH for Expr {
             Expr::NewTarget => { tag(h, 12271); }
             Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
-            Expr::RegExpDynamic { pattern, flags } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } }
+            Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
             Expr::RegExpTest { regex, string } => { tag(h, 384); regex.as_ref().hash(h); string.as_ref().hash(h); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }
             Expr::StringMatchAll { string, regex } => { tag(h, 386); string.as_ref().hash(h); regex.as_ref().hash(h); }
@@ -637,7 +643,7 @@ impl SH for Expr {
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassCaptures { class_name, captures } => { tag(h, 12241); class_name.hash(h); for c in captures { c.hash(h); } }
-            Expr::ClassCaptureValue { class_name, index } => { tag(h, 12242); class_name.hash(h); index.hash(h); }
+            Expr::ClassCaptureValue { class_name, index, fallback, prefer_fallback } => { tag(h, 12242); class_name.hash(h); index.hash(h); fallback.hash(h); prefer_fallback.hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
             Expr::RegisterClassComputedMethod { class_name, key_expr, method_name, is_static, param_count, has_rest } => { tag(h, 12233); class_name.hash(h); key_expr.as_ref().hash(h); method_name.hash(h); is_static.hash(h); param_count.hash(h); has_rest.hash(h); }
             Expr::RegisterClassComputedAccessor { class_name, key_expr, getter_name, setter_name, is_static } => { tag(h, 12234); class_name.hash(h); key_expr.as_ref().hash(h); getter_name.hash(h); setter_name.hash(h); is_static.hash(h); }
@@ -655,7 +661,7 @@ impl SH for Expr {
             Expr::WebAssemblyInstantiate(bytes) => { tag(h, 12028); bytes.as_ref().hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
             Expr::DynamicImport { paths, arg, byte_offset, deferred_error, synchronous } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); byte_offset.hash(h); deferred_error.hash(h); synchronous.hash(h); }
-            Expr::WorkerNew { paths, filename, options } => {
+            Expr::WorkerNew { paths, filename, options, is_eval } => {
                 tag(h, 12055);
                 for p in paths { p.hash(h); }
                 filename.as_ref().hash(h);
@@ -666,6 +672,7 @@ impl SH for Expr {
                     }
                     None => false.hash(h),
                 }
+                is_eval.hash(h);
             }
         }
     }

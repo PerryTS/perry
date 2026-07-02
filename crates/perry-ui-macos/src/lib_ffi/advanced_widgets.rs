@@ -68,8 +68,10 @@ pub extern "C" fn perry_ui_qrcode_set_data(handle: i64, data_ptr: i64) {
 
 /// Create a Picker (dropdown). style: 0=dropdown, 1=segmented. Returns widget handle.
 #[no_mangle]
-pub extern "C" fn perry_ui_picker_create(label_ptr: i64, on_change: f64, style: i64) -> i64 {
-    widgets::picker::create(label_ptr as *const u8, on_change, style)
+pub extern "C" fn perry_ui_picker_create(on_change: f64) -> i64 {
+    // Single `Closure` arg to match the dispatch-table ABI; a 3-arg
+    // signature mis-binds `on_change` on the Windows x64 ABI (issue #5491).
+    widgets::picker::create(std::ptr::null(), on_change, 0)
 }
 
 /// Add an item to a Picker.

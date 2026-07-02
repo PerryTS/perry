@@ -1184,6 +1184,14 @@ fn get_reference(name: &str, env: &EvalEnv) -> f64 {
 }
 
 fn eval_property_path(expr: &str, env: &EvalEnv) -> Option<f64> {
+    let expr = expr.trim();
+    // Peel a trailing computed accessor (`a.b["k"]`) and read through it after
+    // resolving the receiver expression. Recurses so chained accessors work.
+    if let Some((object_expr, accessor)) = split_trailing_computed(expr) {
+        let object = eval_property_path(object_expr, env)?;
+        let key = computed_key_name(accessor, env)?;
+        return Some(get_object_field(object, &key));
+    }
     let mut parts = expr.split('.');
     let first = parts.next()?.trim();
     if first.is_empty() {
@@ -1200,8 +1208,67 @@ fn eval_property_path(expr: &str, env: &EvalEnv) -> Option<f64> {
     Some(value)
 }
 
+/// Split a trailing computed-member accessor off a member-access expression,
+/// e.g. `globalThis.M["/a/b"]` -> (`globalThis.M`, `["/a/b"]`). Returns `None`
+/// when the expression does not end in a top-level `[...]` accessor.
+fn split_trailing_computed(expr: &str) -> Option<(&str, &str)> {
+    let trimmed = expr.trim_end();
+    if !trimmed.ends_with(']') {
+        return None;
+    }
+    let bytes = trimmed.as_bytes();
+    let mut depth = 0_i32;
+    let mut quote = None::<u8>;
+    let mut open = None;
+    for idx in (0..bytes.len()).rev() {
+        let ch = bytes[idx];
+        if let Some(q) = quote {
+            // Walking backwards through a quoted span: a quote char that is not
+            // backslash-escaped closes (opens, in reverse) the span.
+            if ch == q && (idx == 0 || bytes[idx - 1] != b'\\') {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            b'\'' | b'"' | b'`' => quote = Some(ch),
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(idx);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    if open == 0 {
+        return None;
+    }
+    Some((trimmed[..open].trim(), &trimmed[open..]))
+}
+
+/// Evaluate the key inside a `[...]` accessor to a property name string.
+fn computed_key_name(accessor: &str, env: &EvalEnv) -> Option<String> {
+    let inner = accessor.trim();
+    let inner = inner.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let value = eval_expr(inner, env);
+    Some(coerce_to_string(value))
+}
+
 fn set_reference(lhs: &str, value: f64, env: &mut EvalEnv) {
     let lhs = lhs.trim();
+    if let Some((object_expr, accessor)) = split_trailing_computed(lhs) {
+        if let (Some(object), Some(key)) = (
+            eval_property_path(object_expr, env),
+            computed_key_name(accessor, env),
+        ) {
+            set_object_field(object, &key, value);
+        }
+        return;
+    }
     if let Some((head, tail)) = lhs.rsplit_once('.') {
         if let Some(object) = eval_property_path(head, env) {
             set_object_field(object, tail.trim(), value);
@@ -1215,10 +1282,174 @@ fn set_reference(lhs: &str, value: f64, env: &mut EvalEnv) {
     }
 }
 
+/// Rewrite a JS object/array literal into strict JSON so the runtime JSON
+/// parser can build it. Next.js serializes the RSC manifest payload with
+/// `JSON.stringify` (already strict JSON), but the broader contract accepts
+/// plain object literals too, so we quote bare identifier keys (`{a:1}` ->
+/// `{"a":1}`) and normalize single-quoted strings to double-quoted. Returns
+/// `None` if the text is not a well-formed literal we can normalize.
+fn normalize_literal_to_json(expr: &str) -> Option<String> {
+    let bytes = expr.as_bytes();
+    let mut out = String::with_capacity(expr.len() + 8);
+    let mut i = 0;
+    // Tracks whether the next bare-identifier run is in a key position (right
+    // after `{` or a `,` while inside an object). The brace stack records the
+    // kind of each open container: `true` = object, `false` = array.
+    let mut object_stack: Vec<bool> = Vec::new();
+    let mut expect_key = false;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        match ch {
+            b' ' | b'\t' | b'\n' | b'\r' => {
+                out.push(ch as char);
+                i += 1;
+            }
+            b'"' | b'\'' => {
+                // Copy a quoted string, re-emitting as a double-quoted JSON
+                // string. Track escapes so a quote inside the string doesn't end
+                // it early.
+                let quote = ch;
+                out.push('"');
+                i += 1;
+                while i < bytes.len() {
+                    let c = bytes[i];
+                    if c == b'\\' && i + 1 < bytes.len() {
+                        // `\'` is valid inside a JS single-quoted string but is
+                        // NOT a legal JSON escape, so it would make an otherwise
+                        // valid literal like `{name: 'can\'t'}` fail JSON
+                        // parsing. Emit a plain apostrophe; pass every
+                        // JSON-valid escape (\\, \", \n, …) through unchanged.
+                        if bytes[i + 1] == b'\'' {
+                            out.push('\'');
+                        } else {
+                            out.push('\\');
+                            out.push(bytes[i + 1] as char);
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    if c == quote {
+                        i += 1;
+                        break;
+                    }
+                    if c == b'"' {
+                        out.push('\\');
+                    }
+                    out.push(c as char);
+                    i += 1;
+                }
+                out.push('"');
+                expect_key = false;
+            }
+            b'{' => {
+                out.push('{');
+                object_stack.push(true);
+                expect_key = true;
+                i += 1;
+            }
+            b'[' => {
+                out.push('[');
+                object_stack.push(false);
+                expect_key = false;
+                i += 1;
+            }
+            b'}' | b']' => {
+                out.push(ch as char);
+                object_stack.pop();
+                expect_key = false;
+                i += 1;
+            }
+            b',' => {
+                out.push(',');
+                expect_key = object_stack.last().copied().unwrap_or(false);
+                i += 1;
+            }
+            b':' => {
+                out.push(':');
+                expect_key = false;
+                i += 1;
+            }
+            c if c == b'_' || c == b'$' || c.is_ascii_alphabetic() => {
+                // Bare identifier run. In key position, JSON-quote it. As a value
+                // it can only be a literal keyword (true/false/null); anything
+                // else (a context reference) is outside what we normalize here.
+                let start = i;
+                while i < bytes.len() {
+                    let c = bytes[i];
+                    if c == b'_' || c == b'$' || c.is_ascii_alphanumeric() {
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let ident = &expr[start..i];
+                if expect_key {
+                    out.push('"');
+                    out.push_str(ident);
+                    out.push('"');
+                    expect_key = false;
+                } else if matches!(ident, "true" | "false" | "null") {
+                    out.push_str(ident);
+                } else {
+                    return None;
+                }
+            }
+            _ => {
+                out.push(ch as char);
+                i += 1;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Parse an object/array literal expression into a value. Tries strict JSON
+/// first (the common Next.js manifest case), then a lenient JS-literal->JSON
+/// normalization. Returns `None` when the text is not a literal we can build.
+fn eval_object_or_array_literal(expr: &str) -> Option<f64> {
+    let trimmed = expr.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    let attempt = |text: &str| -> Option<f64> {
+        let ptr = string_ptr(text);
+        match unsafe { crate::json::js_json_parse_result(ptr) } {
+            Ok(value) => Some(f64::from_bits(value.bits())),
+            Err(_) => None,
+        }
+    };
+    if let Some(value) = attempt(trimmed) {
+        return Some(value);
+    }
+    let normalized = normalize_literal_to_json(trimmed)?;
+    attempt(&normalized)
+}
+
+fn is_truthy(value: f64) -> bool {
+    crate::value::js_is_truthy(value) != 0
+}
+
 fn eval_expr(expr: &str, env: &EvalEnv) -> f64 {
     let expr = strip_wrapping_parens(expr);
     if expr.is_empty() {
         return undefined_value();
+    }
+    // Logical operators bind looser than comparison/arithmetic, so resolve them
+    // first. `find_top_level_operator` returns the last top-level occurrence,
+    // which yields correct left-associative short-circuit grouping.
+    if let Some(idx) = find_top_level_operator(expr, "||") {
+        let left = eval_expr(&expr[..idx], env);
+        if is_truthy(left) {
+            return left;
+        }
+        return eval_expr(&expr[idx + 2..], env);
+    }
+    if let Some(idx) = find_top_level_operator(expr, "&&") {
+        let left = eval_expr(&expr[..idx], env);
+        if !is_truthy(left) {
+            return left;
+        }
+        return eval_expr(&expr[idx + 2..], env);
     }
     if let Some(idx) = find_top_level_operator(expr, "===") {
         let left = eval_expr(&expr[..idx], env);
@@ -1252,6 +1483,9 @@ fn eval_expr(expr: &str, env: &EvalEnv) -> f64 {
     }
     if let Ok(n) = expr.parse::<f64>() {
         return number_value(n);
+    }
+    if let Some(value) = eval_object_or_array_literal(expr) {
+        return value;
     }
     eval_property_path(expr, env).unwrap_or_else(undefined_value)
 }

@@ -972,6 +972,7 @@ impl WasmModuleEmitter {
                 body,
                 headers,
                 headers_dynamic,
+                signal,
             } => {
                 self.collect_strings_in_expr(url);
                 self.collect_strings_in_expr(method);
@@ -982,6 +983,9 @@ impl WasmModuleEmitter {
                 }
                 if let Some(hd) = headers_dynamic {
                     self.collect_strings_in_expr(hd);
+                }
+                if let Some(s) = signal {
+                    self.collect_strings_in_expr(s);
                 }
             }
             Expr::FetchGetWithAuth { url, auth_header } => {

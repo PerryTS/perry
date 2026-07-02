@@ -90,6 +90,65 @@ fn invoke_host_wake_callback() {
     }
 }
 
+// ============================================================================
+// #5779 — Idle-kick callback (tokio lost-unpark recovery).
+//
+// Perry runs JS on the main thread, which is NOT a tokio worker; it parks on
+// the condvar below while the shared tokio runtime drives async I/O on its
+// worker pool. A task scheduled from the main thread (the canonical case: an
+// in-process HTTP server's per-request `oneshot::Sender::send` of the response,
+// fired from `res.end()` inside the main-thread request pump) relies on tokio
+// unparking a worker to run it. When *every* worker is parked and the I/O
+// reactor is blocked in `kevent`/`epoll_wait`, that remote unpark can be lost
+// under load — the woken task is enqueued but no worker is roused to drain it.
+// The task is stranded forever: the response is never written, so the fetch
+// client future never completes, and the main thread's 1-second idle re-check
+// finds nothing to do (it already shipped the response) and re-parks. Permanent
+// deadlock — exactly the in-process server-and-fetch hang in #5779.
+//
+// The fix: just before the main thread sleeps on its idle condvar, give it a
+// chance to poke the runtime so a worker is roused to drain any
+// enqueued-but-stranded task. perry-stdlib registers a callback here that
+// schedules a task on the shared runtime whenever async client work is in
+// flight. Because the kick fires right before the sleep, the drained task's own
+// completion notify wakes the main thread immediately — so recovery latency is
+// a worker hop, and even a fully missed wake self-heals within the 1s idle cap.
+// (perry-stdlib's kick task does real work, not an empty `spawn(async {})`,
+// which was measured not to reliably rouse a parked worker — see its
+// `stdlib_idle_kick`.)
+//
+// Registration is opt-in and the slot is a single atomic load when unset, so
+// embedders that never register pay nothing. The callback runs on the main
+// thread only (from `js_wait_for_event`'s pre-sleep path, never the hot
+// NOTIFIED fast path).
+// ============================================================================
+
+/// Idle-kick callback, stored as a raw fn pointer for a trivial C FFI surface.
+/// Null disables the kick.
+static IDLE_KICK_CALLBACK: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Register the idle-kick callback (see module-level #5779 note). Passing
+/// `cb = NULL` clears it. Invoked on the main thread immediately before it
+/// blocks on the idle condvar; the implementation must be cheap and must not
+/// re-enter `js_wait_for_event`.
+#[no_mangle]
+pub extern "C" fn js_register_idle_kick(cb: Option<extern "C" fn()>) {
+    let cb_ptr = cb.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
+    IDLE_KICK_CALLBACK.store(cb_ptr, Ordering::Release);
+}
+
+#[inline]
+fn invoke_idle_kick() {
+    let cb_ptr = IDLE_KICK_CALLBACK.load(Ordering::Acquire);
+    if cb_ptr.is_null() {
+        return;
+    }
+    // SAFETY: the slot only ever holds a `extern "C" fn()` installed by
+    // `js_register_idle_kick`; re-checked non-null right above.
+    let cb: extern "C" fn() = unsafe { std::mem::transmute(cb_ptr) };
+    cb();
+}
+
 struct Pump {
     /// `true` iff a producer notified since the last consumer reset.
     flag: Mutex<bool>,
@@ -395,6 +454,14 @@ pub extern "C" fn js_wait_for_event() {
         }
         return;
     }
+    // #5779: we are about to sleep on the idle condvar. If async client work is
+    // in flight, kick the tokio runtime so a worker is roused to drain any task
+    // that was scheduled but whose worker-unpark was lost while every worker was
+    // parked. Done *before* registering as a waiter / sleeping so the kicked
+    // task's completion notify still wakes us via the NOTIFIED re-check below or
+    // the cvar — no lost wake. The callback no-ops cheaply when nothing is in
+    // flight (and is absent until perry-stdlib registers it).
+    invoke_idle_kick();
     // Slow path: take the cvar mutex and sleep on it. Mark ourselves
     // as a waiter first so concurrent notifiers go through the
     // mutex+cvar path (they won't see our wait if we registered after
@@ -777,5 +844,85 @@ mod tests {
         );
 
         NOTIFIED.swap(false, Ordering::Acquire);
+    }
+
+    static KICK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+    /// Idle-kick test stub: count invocations and immediately notify so the
+    /// pending `wait_timeout` shortcuts instead of sleeping the full idle cap
+    /// — mirrors the real callback's effect (a drained task's completion notify
+    /// wakes the main thread), keeping the test fast and deterministic.
+    extern "C" fn counting_kick() {
+        KICK_COUNT.fetch_add(1, Ordering::Release);
+        js_notify_main_thread();
+    }
+
+    /// #5779: the idle kick must run on the pre-sleep slow path so a parked
+    /// main thread can rouse a stranded tokio worker before blocking. Forcing
+    /// a real (budget > 0) wait with no prior notify must invoke the callback.
+    #[test]
+    fn idle_kick_fires_before_blocking_sleep() {
+        let _g = SERIAL.lock().unwrap();
+        // Drain any stale notify so the first attempt below can reach the
+        // slow path rather than returning via the fast path.
+        js_wait_for_event();
+        js_register_idle_kick(Some(counting_kick));
+
+        // Retry to stay robust against a parallel (non-event_pump) test that
+        // sets NOTIFIED or schedules a sooner timer — either of which would
+        // divert this call off the slow path. A working wiring fires on the
+        // first clean attempt; a broken one never does.
+        let mut fired = false;
+        for _ in 0..50 {
+            crate::timer::js_timer_tick();
+            NOTIFIED.store(false, Ordering::Release);
+            KICK_COUNT.store(0, Ordering::Release);
+            js_wait_for_event();
+            if KICK_COUNT.load(Ordering::Acquire) >= 1 {
+                fired = true;
+                break;
+            }
+        }
+
+        js_register_idle_kick(None);
+        NOTIFIED.swap(false, Ordering::Acquire);
+        assert!(
+            fired,
+            "idle kick was never invoked on the pre-sleep path — a stranded \
+             tokio worker would never be roused (the #5779 deadlock)"
+        );
+    }
+
+    /// #5779: the kick must NOT run on the NOTIFIED fast path — there is work
+    /// to drain, the main thread is not about to block, and kicking the
+    /// runtime on every hot async tick would be pure overhead.
+    #[test]
+    fn idle_kick_skipped_on_notified_fast_path() {
+        let _g = SERIAL.lock().unwrap();
+        js_wait_for_event(); // drain
+        js_register_idle_kick(Some(counting_kick));
+
+        // A pre-set NOTIFIED makes the next wait return via the fast path. A
+        // racing parallel notify could only *add* a fast-path return, never
+        // force the slow path here, so observing at least one clean fast-path
+        // return with no kick is deterministic across retries.
+        let mut clean_fast_path = false;
+        for _ in 0..50 {
+            KICK_COUNT.store(0, Ordering::Release);
+            js_notify_main_thread();
+            js_wait_for_event();
+            if KICK_COUNT.load(Ordering::Acquire) == 0 {
+                clean_fast_path = true;
+                break;
+            }
+        }
+
+        js_register_idle_kick(None);
+        NOTIFIED.swap(false, Ordering::Acquire);
+        assert!(
+            clean_fast_path,
+            "idle kick fired on the NOTIFIED fast path — it must only run \
+             when the main thread is about to block"
+        );
     }
 }

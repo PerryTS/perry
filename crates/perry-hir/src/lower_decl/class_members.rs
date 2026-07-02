@@ -15,6 +15,8 @@ pub fn lower_constructor(
     ctor: &ast::Constructor,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Track that we're inside a constructor body so `new.target` can resolve
@@ -210,6 +212,7 @@ pub fn lower_constructor(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.in_constructor_class = saved_ctor_class;
 
     Ok(Function {
@@ -469,6 +472,8 @@ pub fn lower_class_method_with_name(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
@@ -641,6 +646,7 @@ pub fn lower_class_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // Exit method's type param scope
     ctx.exit_type_param_scope();
@@ -710,6 +716,8 @@ pub fn lower_getter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance getters
@@ -747,6 +755,7 @@ pub fn lower_getter_method_with_name(
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
@@ -788,6 +797,8 @@ pub fn lower_setter_method_with_name(
     name: String,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
+    ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
 
     // Add 'this' for instance setters
@@ -805,6 +816,17 @@ pub fn lower_setter_method_with_name(
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
+        // #5703: a setter with a defaulted parameter (`set a(_ = expr)`) must
+        // apply the default when invoked with `undefined` (e.g. `C.a =
+        // undefined`). Previously the setter param dropped its default
+        // (`default: None`) and emitted no prologue, so the default expression
+        // never ran. Mirror the constructor/method path: lower the default
+        // BEFORE defining the param local so its references resolve to the
+        // enclosing scope rather than the param or the body's hoisted `var`s —
+        // i.e. the separate parameter/body VariableEnvironment the spec
+        // mandates (test262 scope-*-setter-paramsbody-var-open) — then emit the
+        // `if (param === undefined) param = <default>` prologue below.
+        let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
@@ -812,7 +834,7 @@ pub fn lower_setter_method_with_name(
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: None,
+            default: param_default,
             decorators: Vec::new(),
             is_rest: false,
             arguments_object: None,
@@ -846,8 +868,20 @@ pub fn lower_setter_method_with_name(
         body = destructuring_stmts;
     }
 
+    // #5703: prepend `if (param === undefined) param = <default>` for a
+    // defaulted setter parameter, so an under-supplied / `undefined` assignment
+    // (`C.a = undefined`) applies the default. Runs before any destructuring
+    // prologue (which destructures the already-defaulted param).
+    let default_stmts = build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.append(&mut body);
+        body = new_body;
+    }
+
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     Ok(Function {
         id: ctx.fresh_func(),
@@ -909,12 +943,17 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     // Lower initializer expression if present. Mark the field-initializer
     // context so a direct `eval` in the initializer rejects `arguments`
     // (PerformEval early error — field initializers have no arguments object).
+    // Also set `in_nonarrow_fn` so a direct eval in the initializer allows
+    // `new.target` (ES2025 §sec-performeval-rules-in-initializer: the eval
+    // runs "inside a function" for new.target purposes).
     // NamedEvaluation: an anonymous function/arrow/class initializer takes
     // the field's name (`static fromArgs = function(){}` → `.name ===
     // "fromArgs"`, test262 elements/static-field-anonymous-function-name).
     // Computed keys (key_expr) have no compile-time name to confer.
     let saved_field_init = ctx.in_class_field_init;
+    let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_class_field_init = true;
+    ctx.in_nonarrow_fn = true;
     let init = prop
         .value
         .as_ref()
@@ -930,6 +969,7 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
         })
         .transpose();
     ctx.in_class_field_init = saved_field_init;
+    ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
     Ok(ClassField {

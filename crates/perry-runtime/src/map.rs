@@ -1786,6 +1786,33 @@ static KEEP_JS_MAP_FROM_ITERABLE: extern "C" fn(f64) -> *mut MapHeader = js_map_
 /// when omitted at the call site.
 #[no_mangle]
 pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg: f64) {
+    js_map_foreach_impl(
+        map,
+        callback,
+        this_arg,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+}
+
+/// `Map.prototype.forEach` for a `class … extends Map` subclass instance: the
+/// 3rd callback argument and the `self === collection` identity must be the
+/// SUBCLASS instance (`collection`), not the hidden backing map. The actual
+/// iteration runs over `map` (the backing). `collection` is a NaN-boxed value.
+pub(crate) fn js_map_foreach_with_collection(
+    map: *const MapHeader,
+    callback: f64,
+    this_arg: f64,
+    collection: f64,
+) {
+    js_map_foreach_impl(map, callback, this_arg, collection);
+}
+
+fn js_map_foreach_impl(
+    map: *const MapHeader,
+    callback: f64,
+    this_arg: f64,
+    collection_override: f64,
+) {
     // ECMA-262 Map.prototype.forEach step 4: a non-callable callback throws a
     // TypeError *before* iterating (and before any null-map early return).
     // Without this, a non-function callback either silently no-ops or — for a
@@ -1799,12 +1826,14 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg:
     let map_handle = scope.root_raw_const_ptr(map);
     let callback_handle = scope.root_nanbox_f64(callback);
     let this_handle = scope.root_nanbox_f64(this_arg);
+    // When a subclass instance is the observable receiver, root it too so it
+    // survives a GC triggered inside the callback.
+    let has_override = collection_override.to_bits() != crate::value::TAG_UNDEFINED;
+    let collection_handle = scope.root_nanbox_f64(collection_override);
     unsafe {
         let map = map_handle.get_raw_const_ptr::<MapHeader>();
         // The collection itself is the third callback argument and the
         // identity user code compares `self === m` against.
-        let map_value = crate::value::js_nanbox_pointer(map as i64);
-
         // ECMA-262 24.1.3.5: forEach iterates [[MapData]] in insertion order,
         // re-reading the live entry count each step. Entries appended during
         // the callback (`map.set` inside the callback) MUST be visited, so the
@@ -1818,6 +1847,14 @@ pub extern "C" fn js_map_foreach(map: *const MapHeader, callback: f64, this_arg:
             if i >= (*map).size as usize {
                 break;
             }
+            // Re-derive the collection identity each step from a rooted handle
+            // so a GC during a prior callback (which may relocate the backing
+            // map or the subclass instance) never bakes in a stale pointer.
+            let map_value = if has_override {
+                collection_handle.get_nanbox_f64()
+            } else {
+                crate::value::js_nanbox_pointer(map as i64)
+            };
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));

@@ -44,6 +44,29 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
     let jsval = JSValue::from_bits(bits);
+    // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
+    // symbol side-table, never the integer-index / stringify paths below (which
+    // would coerce the symbol's NaN-boxed bits to a garbage i32). The codegen
+    // routes all non-string-literal, unknown-receiver reads here, so the runtime
+    // owns the symbol triage that the codegen-side fallback used to do inline.
+    if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
+        return unsafe { crate::symbol::js_object_get_symbol_property(value, index) };
+    }
+    // #5525 hot fast path: `obj[i]` where `obj` is dynamically an owning numeric
+    // typed array and `i` a canonical index. bcryptjs's Blowfish core reaches
+    // its `Int32Array` P/S boxes through untyped `Array.<number>` params, so
+    // every one of its ~600M element reads lands here. Collapsing the deep
+    // dynamic-dispatch chain into a cached kind lookup + inline `load_at` is the
+    // bulk of the #5525 speedup; non-typed-array and exotic-key cases fall
+    // through to the full dispatch below unchanged.
+    if jsval.is_pointer() {
+        let raw_ptr = (bits & POINTER_MASK) as usize;
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_ptr) {
+            if let Some(v) = crate::typedarray::typed_array_fast_index_get(raw_ptr, kind, index) {
+                return v;
+            }
+        }
+    }
     if jsval.is_string() || jsval.is_short_string() {
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
         if s_ptr.is_null() {
@@ -206,6 +229,18 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
                 return f64::from_bits(TAG_UNDEFINED);
             }
             let arr = raw_ptr as *const crate::array::ArrayHeader;
+            // When any property descriptor is live, an array element read may
+            // resolve to an index accessor descriptor — own (`Object.define-
+            // Property(arr, "0", {get})`) or inherited from a polluted
+            // `Array.prototype`/`Object.prototype` — rather than the raw slot.
+            // Route through `js_array_get_f64`, which fires the getter and
+            // applies the out-of-bounds prototype fallback. The raw-slot fast
+            // path below is preserved for the common no-descriptor case so the
+            // hot dynamic-index path is unchanged. (test262 Object/define-
+            // Propert{y,ies} Array-index accessor reads.)
+            if crate::object::descriptors_in_use() {
+                return crate::array::js_array_get_f64(arr, idx_i32 as u32);
+            }
             let length = unsafe { (*arr).length };
             if (idx_i32 as u32) >= length {
                 return f64::from_bits(TAG_UNDEFINED);
@@ -262,6 +297,29 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // #5525: a Symbol *index* (`obj[sym] = v`) routes to the symbol side-table,
+    // mirroring the get side. Codegen sends all non-string-literal unknown-
+    // receiver writes here, so the runtime owns the symbol triage.
+    if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(obj, index, value);
+        }
+        return value;
+    }
+    // #5525 hot fast path mirroring `js_dyn_index_get` — an owning numeric
+    // typed array with a canonical index stores inline, skipping the dynamic
+    // setter chain. Placed before the `note_object_prototype_index_write`
+    // bookkeeping: that flag only governs plain-array hole/OOB reads, and a
+    // typed array is never a plain array, so the fast-path store does not need
+    // it (the slow path still flips it for the cases it owns).
+    if jsval.is_pointer() {
+        let raw_ptr = (bits & POINTER_MASK) as usize;
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_ptr) {
+            if crate::typedarray::typed_array_fast_index_set(raw_ptr, kind, index, value) {
+                return value;
+            }
+        }
+    }
     // `Object.prototype[i] = v` (computed write) makes the index visible
     // through every array's hole/OOB reads — flip the global flag.
     if jsval.is_pointer() {
@@ -339,6 +397,35 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     // pseudo-pointers from non-pointer dataflow must not be dereferenced.
     if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
         return value;
+    }
+    // #5579 / Issue #957 (set side): a STRING index (`obj["foo"] = v`) must
+    // route through the ordinary receiver-aware `[[Set]]`, NOT the numeric
+    // element path below. A NaN-boxed string index otherwise reached the
+    // element path — for an arguments object that meant `args["gp"] = v`
+    // clobbered `args[0]` (via `arguments_object_set_index`) and silently
+    // dropped the named property, so test262 propertyHelper's
+    // `isWritable(args, name)` (`args[name] = v` with an untyped `name`
+    // param) reported a writable property as non-writable.
+    // #5544 widened unknown-receiver string-key writes onto this helper,
+    // exposing the gap. `js_put_value_set` is the canonical `[[Set]]` the
+    // pre-#5544 path used: it invokes accessor setters with the correct
+    // receiver and honours data-property writability across arrays / arguments
+    // objects / plain objects / typed arrays, mirroring the IndexGet
+    // string-index arm above (`js_object_get_field_by_name_f64`). Numeric
+    // indices keep the fast element path below (gated by
+    // `finite_nonnegative_u32_index`, so NaN/fractional keys fall through to
+    // the ToString write instead of aliasing element 0), so the #5544 perf
+    // win stands.
+    let idx_top16 = index.to_bits() >> 48;
+    if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+        // `target`/`receiver` must be a tagged value, not the raw heap address
+        // (`obj` arrives as a module-slot raw I64 when top16 == 0).
+        let target = if jsval.is_pointer() {
+            obj
+        } else {
+            f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
+        };
+        return crate::proxy::js_put_value_set(target, index, value, target, 0);
     }
     if let Some(idx_u32) = finite_nonnegative_u32_index(index) {
         if unsafe {

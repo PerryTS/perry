@@ -21,6 +21,10 @@ pub(crate) fn ensure_gtk_init() {
 
 thread_local! {
     static APPS: RefCell<Vec<AppEntry>> = RefCell::new(Vec::new());
+    /// Activation policy set (via `appSetActivationPolicy`) before `App()`
+    /// builds the AppEntry. Handle-agnostic, mirroring the macOS backend, so
+    /// the synthetic 0 app-handle from the 1-arg TS form still works.
+    static PENDING_ACTIVATION_POLICY: RefCell<Option<String>> = const { RefCell::new(None) };
     /// Buffered keyboard shortcuts registered before the app is running.
     static PENDING_SHORTCUTS: RefCell<Vec<PendingShortcut>> = RefCell::new(Vec::new());
     /// Callback map for keyboard shortcuts.
@@ -118,7 +122,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             level: None,
             transparent: false,
             vibrancy: None,
-            activation_policy: None,
+            activation_policy: PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone()),
             window_state: None,
         });
         apps.len() as i64 // 1-based handle
@@ -243,13 +247,15 @@ pub fn app_run(_app_handle: i64) {
                     );
                 }
 
-                // Apply activation policy (skip taskbar for accessory/background).
-                // GTK4 doesn't have skip_taskbar_hint; best-effort via deletable=false
-                // which some compositors interpret as a utility window.
-                if let Some(ref policy) = entry.activation_policy {
-                    if policy == "accessory" || policy == "background" {
-                        window.set_deletable(false);
-                    }
+                // Accessory/background apps skip the taskbar. GTK4 has no
+                // skip_taskbar_hint; best-effort via deletable=false, which
+                // some compositors interpret as a utility window.
+                let suppress_window = matches!(
+                    entry.activation_policy.as_deref(),
+                    Some("accessory") | Some("background")
+                );
+                if suppress_window {
+                    window.set_deletable(false);
                 }
 
                 if let Some(root_handle) = entry.root_handle {
@@ -295,7 +301,12 @@ pub fn app_run(_app_handle: i64) {
                     }
                 }
 
-                window.present();
+                // Accessory/background apps stay window-less at launch (the
+                // tray / status notifier owns presentation); open windows on
+                // demand instead. Mirrors the macOS backend.
+                if !suppress_window {
+                    window.present();
+                }
             }
         });
 
@@ -549,6 +560,10 @@ pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
     if policy_str.is_empty() {
         return;
     }
+    // Stash handle-agnostically (mirrors macOS): `App()` reads this when it
+    // builds the AppEntry. Also set it on an existing entry if one is already
+    // registered, so a post-create call still takes effect.
+    PENDING_ACTIVATION_POLICY.with(|p| *p.borrow_mut() = Some(policy_str.to_string()));
     APPS.with(|a| {
         let mut apps = a.borrow_mut();
         let idx = (app_handle - 1) as usize;

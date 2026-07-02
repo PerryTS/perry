@@ -134,6 +134,179 @@ fn resolve_unresolved_param_local() {
     assert!(matches!(r, Resolution::Unresolved(_)));
 }
 
+// #5207: registry-object dynamic-import patterns. A const object literal maps
+// route/feature keys to relative chunk paths; member access resolves to the
+// union of the registry's (relative) value specifiers — the whole chunk set is
+// what we ingest, and the runtime dispatch picks the right one by path string.
+//   `const R = { a: "./chunk-a.js", b: "./chunk-b.js" };`
+fn open_chunk_registry() -> Expr {
+    Expr::Object(vec![
+        ("a".to_string(), Expr::String("./chunk-a.js".into())),
+        ("b".to_string(), Expr::String("./chunk-b.js".into())),
+    ])
+}
+
+// The same literal as Perry actually lowers a closed-shape object: a
+// `new __AnonShape_…(value0, value1)` whose args are the field values in order.
+fn closed_chunk_registry() -> Expr {
+    Expr::New {
+        class_name: "__AnonShape_deadbeef".to_string(),
+        args: vec![
+            Expr::String("./chunk-a.js".into()),
+            Expr::String("./chunk-b.js".into()),
+        ],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }
+}
+
+fn assert_resolves_both_chunks(arg: &Expr) {
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(5u32, open_chunk_registry());
+    let mut visiting = std::collections::HashSet::new();
+    match resolve_import_path_with_consts(arg, &consts, &mut visiting) {
+        Resolution::Set(v) => {
+            assert_eq!(v.len(), 2);
+            assert!(v.contains(&"./chunk-a.js".to_string()));
+            assert!(v.contains(&"./chunk-b.js".to_string()));
+        }
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
+fn resolve_registry_computed_key_enumerates_all() {
+    // `import(R[key])` with a runtime key — the core registry pattern.
+    assert_resolves_both_chunks(&Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(5)),
+        index: Box::new(Expr::LocalGet(99)), // not a known literal
+    });
+}
+
+#[test]
+fn resolve_registry_static_property_enumerates_all() {
+    // `import(R.a)` — over-approximate to the whole (relative) chunk set.
+    assert_resolves_both_chunks(&Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(5)),
+        property: "a".to_string(),
+    });
+}
+
+#[test]
+fn resolve_closed_shape_registry_enumerates_all() {
+    // The realistic lowering: a `new __AnonShape_…(…)` closed-shape literal.
+    let arg = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(5)),
+        index: Box::new(Expr::LocalGet(99)),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(5u32, closed_chunk_registry());
+    let mut visiting = std::collections::HashSet::new();
+    match resolve_import_path_with_consts(&arg, &consts, &mut visiting) {
+        Resolution::Set(v) => {
+            assert_eq!(v.len(), 2);
+            assert!(v.contains(&"./chunk-a.js".to_string()));
+            assert!(v.contains(&"./chunk-b.js".to_string()));
+        }
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
+fn resolve_non_relative_registry_defers() {
+    // A plain data object (non-module values) indexed for a non-import reason
+    // must stay deferred — never try to compile `"app"` / `"3000"` as modules.
+    let data = Expr::Object(vec![
+        ("name".to_string(), Expr::String("app".into())),
+        ("port".to_string(), Expr::String("3000".into())),
+    ]);
+    let arg = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(5)),
+        index: Box::new(Expr::LocalGet(99)),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(5u32, data);
+    let mut visiting = std::collections::HashSet::new();
+    assert!(matches!(
+        resolve_import_path_with_consts(&arg, &consts, &mut visiting),
+        Resolution::Unresolved(_)
+    ));
+}
+
+#[test]
+fn resolve_circular_registry_defers_without_overflow() {
+    // `const R5 = { a: R6[x] }; const R6 = { b: R5[y] };` — a circular registry
+    // is valid TS and reaches the resolver via the const map. The cross-call
+    // cycle guard must defer (Unresolved) instead of recursing forever.
+    let r5 = Expr::Object(vec![(
+        "a".to_string(),
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(6)),
+            index: Box::new(Expr::LocalGet(99)),
+        },
+    )]);
+    let r6 = Expr::Object(vec![(
+        "b".to_string(),
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(5)),
+            index: Box::new(Expr::LocalGet(99)),
+        },
+    )]);
+    let arg = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(5)),
+        index: Box::new(Expr::LocalGet(99)),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(5u32, r5);
+    consts.insert(6u32, r6);
+    let mut visiting = std::collections::HashSet::new();
+    assert!(matches!(
+        resolve_import_path_with_consts(&arg, &consts, &mut visiting),
+        Resolution::Unresolved(_)
+    ));
+}
+
+#[test]
+fn resolve_chained_distinct_registries_resolves() {
+    // `const A = { x: "./a.js" }; const B = { y: A.x }; import(B[k])` — distinct
+    // (non-cyclic) registries must still resolve through the indirection.
+    let a = Expr::Object(vec![("x".to_string(), Expr::String("./a.js".into()))]);
+    let b = Expr::Object(vec![(
+        "y".to_string(),
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "x".to_string(),
+        },
+    )]);
+    let arg = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(2)),
+        index: Box::new(Expr::LocalGet(99)),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(1u32, a);
+    consts.insert(2u32, b);
+    let mut visiting = std::collections::HashSet::new();
+    match resolve_import_path_with_consts(&arg, &consts, &mut visiting) {
+        Resolution::Set(v) => assert_eq!(v, vec!["./a.js"]),
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
+fn resolve_non_registry_member_access_defers() {
+    // `import(cfg.path)` where cfg is opaque — must keep deferring, not panic.
+    let arg = Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(7)),
+        property: "path".to_string(),
+    };
+    let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
+    let mut visiting = std::collections::HashSet::new();
+    assert!(matches!(
+        resolve_import_path_with_consts(&arg, &consts, &mut visiting),
+        Resolution::Unresolved(_)
+    ));
+}
+
 #[test]
 fn resolve_param_string_literal_union() {
     let arg = Expr::LocalGet(42);
@@ -554,6 +727,7 @@ fn worker_new_visitor_descends_into_closure_bodies() {
             paths: vec![],
             filename: Box::new(Expr::String("./worker.js".to_string())),
             options: None,
+            is_eval: false,
         })],
         captures: vec![],
         mutable_captures: vec![],

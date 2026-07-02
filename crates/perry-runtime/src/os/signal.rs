@@ -334,12 +334,30 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
     }
 }
 
+/// Whether a *pending, undelivered* signal is waiting to be drained.
+///
+/// Node semantics: a registered `process.on('SIGINT', …)` listener is
+/// ref-NEUTRAL — it does NOT keep the event loop alive on its own (the
+/// docs' own example calls `process.stdin.resume()` precisely because a
+/// signal listener alone won't keep the process running). The loop must
+/// only be held open when a signal has actually arrived and its
+/// listener callbacks still need to fire on the main thread.
+///
+/// Pre-fix this returned `listeners > 0`, so any CLI that installs a
+/// SIGINT/SIGTERM/SIGHUP handler at startup (the common graceful-shutdown
+/// pattern) pinned the event loop forever: once its real work drained,
+/// the loop had no microtasks/timers/async ops left, yet
+/// `js_stdlib_has_active_handles` kept returning 1 from this check and
+/// the program hung at idle instead of exiting. Now we gate on a pending
+/// signal so the listener registration alone no longer keeps the loop
+/// alive; a delivered signal still wakes the loop via the self-pipe
+/// notify and is drained by `js_process_signal_drain` on the next tick.
 pub(crate) fn has_active_process_signal_listeners() -> bool {
     #[cfg(unix)]
     {
-        PROCESS_SIGNAL_SLOTS
-            .iter()
-            .any(|slot| slot.listeners.load(Ordering::Acquire) > 0)
+        PROCESS_SIGNAL_SLOTS.iter().any(|slot| {
+            slot.pending.load(Ordering::Acquire) > 0 && slot.listeners.load(Ordering::Acquire) > 0
+        })
     }
     #[cfg(not(unix))]
     {

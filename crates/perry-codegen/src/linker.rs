@@ -69,12 +69,68 @@ fn ll_o0_threshold_bytes() -> usize {
         .unwrap_or(DEFAULT_LL_O0_THRESHOLD_BYTES)
 }
 
+/// For an oversized unit (one past `PERRY_LL_O0_THRESHOLD_BYTES`), the average
+/// IR bytes-per-function below which we size-optimize at `-Os` instead of
+/// dropping to `-O0`.
+///
+/// `-O0` exists purely to dodge the `#4880` pathology: a unit dominated by ONE
+/// enormous generated function (a multi-thousand-element data literal lowering
+/// to a single 800k-line function) makes LLVM's `-O1+`/`-Os` pipeline
+/// super-linear and effectively never finishes. But that pathology is *not* the
+/// common oversized case — a large minified bundle is tens of thousands of
+/// ordinary functions, none individually huge. Those compile fine at `-Os`,
+/// which emits ~30-50% less `__text` than `-O0` (no register-pressure-blind
+/// spilling, dead code folded) for only a ~2-3x clang-time cost that is well
+/// amortized across the bundle.
+///
+/// Average bytes-per-function cleanly separates the two: a pathological monolith
+/// is megabytes-per-function (the `#4880` 400k-element literal is ~9 MB/fn),
+/// whereas real bundles are ~20 KB/fn — a >100x gap. Staying conservative we
+/// keep `-O0` for any unit averaging above this cap, so a giant-literal unit
+/// (always few, very large functions) never reaches the `-Os` pipeline.
+/// Tunable via `PERRY_LL_SIZE_OPT_MAX_FN_BYTES`; `PERRY_LL_SIZE_OPT=0`/`off`
+/// forces the old `-O0` behavior, `=1`/`on` forces `-Os` regardless of density.
+const DEFAULT_LL_SIZE_OPT_MAX_FN_BYTES: usize = 256 * 1024;
+
+fn ll_size_opt_max_fn_bytes() -> usize {
+    std::env::var("PERRY_LL_SIZE_OPT_MAX_FN_BYTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_LL_SIZE_OPT_MAX_FN_BYTES)
+}
+
+/// Decide the clang opt flag for an oversized unit: `-Os` when the unit is many
+/// ordinary functions (size-optimize, big `__text` win), `-O0` when it is a
+/// pathological few-giant-function monolith (`#4880`). `ll_fn_count` is the
+/// number of `define` functions in the unit.
+fn oversized_opt_flag(ll_byte_size: usize, ll_fn_count: usize) -> &'static str {
+    match std::env::var("PERRY_LL_SIZE_OPT").as_deref() {
+        Ok("0") | Ok("off") | Ok("false") => return "-O0",
+        Ok("1") | Ok("on") | Ok("true") => return "-Os",
+        _ => {}
+    }
+    let avg_fn_bytes = ll_byte_size / ll_fn_count.max(1);
+    if avg_fn_bytes <= ll_size_opt_max_fn_bytes() {
+        "-Os"
+    } else {
+        "-O0"
+    }
+}
+
+/// Count `define` functions in an LLVM IR text unit. Cheap single scan; every
+/// function definition begins a line `define …`, always preceded by a newline
+/// (module header/target-triple lines come first).
+fn count_ll_functions(ll_text: &str) -> usize {
+    ll_text.match_indices("\ndefine ").count()
+}
+
 fn build_clang_compile_plan(
     clang: PathBuf,
     ll_path: PathBuf,
     obj_path: PathBuf,
     target_triple: Option<&str>,
     ll_byte_size: usize,
+    ll_fn_count: usize,
 ) -> ClangCompilePlan {
     let effective_target = target_triple
         .map(|s| s.to_string())
@@ -84,19 +140,27 @@ fn build_clang_compile_plan(
         .then(|| native_tuning_arg_for_host().to_string());
     let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
 
-    // #4880: fall back to -O0 for pathologically-large modules so a giant
-    // generated literal doesn't make `clang -c` super-linear (see
-    // DEFAULT_LL_O0_THRESHOLD_BYTES).
+    // #4880: oversized modules don't get the speed-tuned -O3 pipeline (it goes
+    // super-linear on giant generated functions). Instead size-optimize at -Os
+    // — which emits far less __text than -O0 — UNLESS the unit is a pathological
+    // few-giant-function monolith (giant data literal), in which case only -O0
+    // finishes in practical time. See DEFAULT_LL_O0_THRESHOLD_BYTES /
+    // oversized_opt_flag.
     let o0_threshold = ll_o0_threshold_bytes();
     let opt_flag = if o0_threshold > 0 && ll_byte_size > o0_threshold {
+        let flag = oversized_opt_flag(ll_byte_size, ll_fn_count);
         eprintln!(
-            "perry: module IR is {:.1} MB (> {:.1} MB); compiling it at -O0 instead of -O3 \
-             so LLVM's -O1+ pipeline doesn't blow up on the oversized function (#4880). \
-             Override with PERRY_LL_O0_THRESHOLD_BYTES.",
+            "perry: module IR is {:.1} MB (> {:.1} MB), {} functions \
+             (~{:.0} KB/fn); compiling at {} instead of -O3 so LLVM's -O1+ \
+             pipeline doesn't blow up on oversized functions (#4880). Override \
+             with PERRY_LL_O0_THRESHOLD_BYTES / PERRY_LL_SIZE_OPT.",
             ll_byte_size as f64 / (1024.0 * 1024.0),
             o0_threshold as f64 / (1024.0 * 1024.0),
+            ll_fn_count,
+            (ll_byte_size as f64 / ll_fn_count.max(1) as f64) / 1024.0,
+            flag,
         );
-        "-O0"
+        flag
     } else {
         "-O3"
     };
@@ -189,6 +253,7 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
         obj_path.clone(),
         target_triple,
         ll_text.len(),
+        count_ll_functions(ll_text),
     );
 
     // Pre-flight probe: capture clang's default Target: line once per process,
@@ -921,6 +986,7 @@ mod tests {
             PathBuf::from("/tmp/output.o"),
             None,
             0,
+            0,
         );
         assert!(plan.clang_args.contains(&"-fno-math-errno".to_string()));
         // Small module → optimized at -O3 (#4880).
@@ -935,9 +1001,30 @@ mod tests {
     }
 
     #[test]
-    fn compile_plan_downgrades_to_o0_for_oversized_module() {
-        // #4880: a module whose IR exceeds the threshold compiles at -O0
-        // (avoiding LLVM's super-linear -O1+ pipeline on a giant function).
+    fn compile_plan_size_optimizes_oversized_many_function_module() {
+        // An oversized unit made of many ordinary functions (a large minified
+        // bundle: low bytes-per-function) size-optimizes at -Os — far less
+        // __text than -O0 — rather than dropping to the speed pipeline or -O0.
+        let huge = ll_o0_threshold_bytes() + 1;
+        let many_funcs = huge / 1024; // ~1 KB/fn, well under the density cap
+        let plan = build_clang_compile_plan(
+            PathBuf::from("clang"),
+            PathBuf::from("/tmp/input.ll"),
+            PathBuf::from("/tmp/output.o"),
+            None,
+            huge,
+            many_funcs,
+        );
+        assert!(plan.clang_args.contains(&"-Os".to_string()));
+        assert!(!plan.clang_args.contains(&"-O3".to_string()));
+        assert!(!plan.clang_args.contains(&"-O0".to_string()));
+    }
+
+    #[test]
+    fn compile_plan_keeps_o0_for_oversized_giant_function_monolith() {
+        // #4880: an oversized unit dominated by a few giant generated functions
+        // (a multi-thousand-element data literal: megabytes-per-function) keeps
+        // -O0, the only opt level whose pipeline finishes in practical time.
         let huge = ll_o0_threshold_bytes() + 1;
         let plan = build_clang_compile_plan(
             PathBuf::from("clang"),
@@ -945,9 +1032,11 @@ mod tests {
             PathBuf::from("/tmp/output.o"),
             None,
             huge,
+            2, // ~3 MB/fn — far above the density cap
         );
         assert!(plan.clang_args.contains(&"-O0".to_string()));
         assert!(!plan.clang_args.contains(&"-O3".to_string()));
+        assert!(!plan.clang_args.contains(&"-Os".to_string()));
     }
 
     #[test]
@@ -957,6 +1046,7 @@ mod tests {
             PathBuf::from("/tmp/input.ll"),
             PathBuf::from("/tmp/output.o"),
             Some("x86_64-unknown-linux-gnu"),
+            0,
             0,
         );
         assert_eq!(plan.effective_target, "x86_64-unknown-linux-gnu");
@@ -979,6 +1069,7 @@ mod tests {
             PathBuf::from("/tmp/input.ll"),
             PathBuf::from("/tmp/output.o"),
             Some("x86_64-unknown-linux-gnu"),
+            0,
             0,
         );
         write_compile_plan_metadata(&plan, &temp).unwrap();

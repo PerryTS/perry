@@ -48,6 +48,7 @@ const KEY_COLLATION: &str = "collation";
 const KEY_HOURCYCLE: &str = "hourCycle";
 const KEY_NUMERIC: &str = "numeric";
 const KEY_NUMBERINGSYSTEM: &str = "numberingSystem";
+const KEY_FIRSTDAYOFWEEK: &str = "firstDayOfWeek";
 
 // ---- parsing ---------------------------------------------------------------
 
@@ -234,11 +235,63 @@ fn parse_unicode_extension(tokens: &[&str], i: &mut usize, p: &mut ParsedLocale)
 /// Insert a keyword, applying UTS-35 value canonicalization: an empty value or
 /// the literal `"true"` collapses to the boolean form (stored as `""`).
 fn insert_keyword(p: &mut ParsedLocale, key: String, vals: Vec<String>) {
-    let mut value = vals.join("-");
+    let mut value = canonicalize_keyword_value(&key, &vals.join("-"));
     if value == "true" {
         value.clear();
     }
     p.keywords.entry(key).or_insert(value);
+}
+
+/// Apply UTS-35 § 3.2.1 value canonicalization for the `-u-` keyword `key`
+/// (e.g. the deprecated calendar aliases `islamicc` → `islamic-civil`).
+fn canonicalize_keyword_value(key: &str, value: &str) -> String {
+    match (key, value) {
+        ("ca", "islamicc") => "islamic-civil".to_string(),
+        ("ca", "ethiopic-amete-alem") => "ethioaa".to_string(),
+        ("ca", "gregorian") => "gregory".to_string(),
+        ("ms", "imperial") => "uksystem".to_string(),
+        ("tz", "aqams") => "nzakl".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Canonicalize a parsed locale's base subtags per the CLDR language/variant
+/// aliases that diverge from plain RFC 5646 canonicalization (e.g. `mo` → `ro`).
+fn canonicalize_aliases(p: &mut ParsedLocale) {
+    if let Some(canon) = language_alias(&p.language) {
+        p.language = canon.to_string();
+    }
+    // Variant-keyed language aliases (CLDR `languageAlias` with a variant).
+    if p.language == "hy" {
+        if let Some(pos) = p.variants.iter().position(|v| v == "arevmda") {
+            p.variants.remove(pos);
+            p.language = "hyw".to_string();
+        } else if let Some(pos) = p.variants.iter().position(|v| v == "arevela") {
+            p.variants.remove(pos);
+        }
+    }
+}
+
+/// CLDR `languageAlias` replacements (deprecated/legacy codes → preferred).
+fn language_alias(lang: &str) -> Option<&'static str> {
+    Some(match lang {
+        "mo" => "ro",
+        "aar" => "aa",
+        "heb" => "he",
+        "ces" => "cs",
+        "deu" => "de",
+        "eng" => "en",
+        "fra" | "fre" => "fr",
+        "spa" => "es",
+        "rus" => "ru",
+        "zho" | "chi" => "zh",
+        "jpn" => "ja",
+        "in" => "id",
+        "iw" => "he",
+        "ji" => "yi",
+        "tl" => "fil",
+        _ => return None,
+    })
 }
 
 // ---- canonical serialization ----------------------------------------------
@@ -295,11 +348,15 @@ fn full_string(p: &ParsedLocale) -> String {
 
 // ---- options ---------------------------------------------------------------
 
+/// Read an Intl.Locale option per `GetOption(options, key, "string", …)`: only
+/// `undefined` (or a missing key) is absent — `null`, numbers, booleans and
+/// objects are coerced through `ToString` (so e.g. `{ script: null }` yields the
+/// structurally-valid script subtag `"null"`).
 fn get_opt_string(options: Option<*mut ObjectHeader>, key: &str) -> Option<String> {
     let obj = options?;
     let value = get_field(obj, key);
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_undefined() || js.is_null() {
+    if js.is_undefined() {
         None
     } else if js.is_any_string() {
         string_from_string_value(value)
@@ -322,6 +379,7 @@ fn apply_type_keyword(
                 "Value {raw} out of range for Intl.Locale options property {opt_name}"
             ));
         }
+        let value = canonicalize_keyword_value(key, &value);
         let canonical = if value == "true" {
             String::new()
         } else {
@@ -339,13 +397,15 @@ fn apply_enum_keyword(
     allowed: &[&str],
 ) {
     if let Some(raw) = get_opt_string(options, opt_name) {
-        let value = raw.to_ascii_lowercase();
-        if !allowed.contains(&value.as_str()) {
+        // `GetOption` validates the coerced string against the allowed set
+        // case-sensitively, so `"Upper"`/`"H12"` are rejected even though the
+        // canonical keyword values are lowercase.
+        if !allowed.contains(&raw.as_str()) {
             throw_range_error(&format!(
                 "Value {raw} out of range for Intl.Locale options property {opt_name}"
             ));
         }
-        p.keywords.insert(key.to_string(), value);
+        p.keywords.insert(key.to_string(), raw);
     }
 }
 
@@ -397,6 +457,55 @@ fn apply_options(p: &mut ParsedLocale, options: Option<*mut ObjectHeader>) {
             p.keywords.insert("kn".to_string(), kn.to_string());
         }
     }
+
+    // `firstDayOfWeek` is coerced to a String (so `null`/numbers/booleans pass
+    // through `ToString`), mapped through `WeekdayToString`, validated as a
+    // Unicode type sequence, then stored as the `fw` keyword.
+    if let Some(raw) = get_opt_string(options, "firstDayOfWeek") {
+        let normalized = weekday_to_string(&raw.to_ascii_lowercase());
+        if !valid_unicode_type(&normalized) {
+            throw_range_error(&format!(
+                "Value {raw} out of range for Intl.Locale options property firstDayOfWeek"
+            ));
+        }
+        let canonical = if normalized == "true" {
+            String::new()
+        } else {
+            normalized
+        };
+        p.keywords.insert("fw".to_string(), canonical);
+    }
+}
+
+/// UTS-35 `WeekdayToString`: map a numeric or named weekday to its lowercase
+/// `fw` keyword value; anything else passes through unchanged.
+fn weekday_to_string(s: &str) -> String {
+    match s {
+        "mon" | "1" => "mon",
+        "tue" | "2" => "tue",
+        "wed" | "3" => "wed",
+        "thu" | "4" => "thu",
+        "fri" | "5" => "fri",
+        "sat" | "6" => "sat",
+        "sun" | "7" | "0" => "sun",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Inverse of [`weekday_to_string`] for the named days: `fw` keyword → ISO
+/// weekday number (1 = Monday … 7 = Sunday). `None` for non-weekday values.
+fn weekday_name_to_num(s: &str) -> Option<u8> {
+    Some(match s {
+        "mon" => 1,
+        "tue" => 2,
+        "wed" => 3,
+        "thu" => 4,
+        "fri" => 5,
+        "sat" => 6,
+        "sun" => 7,
+        _ => return None,
+    })
 }
 
 // ---- instance construction -------------------------------------------------
@@ -430,13 +539,59 @@ fn make_locale_instance(proto_bits: u64, p: &ParsedLocale) -> f64 {
     }
     let numeric = p.keywords.get("kn").map(|v| v != "false").unwrap_or(false);
     set_internal_field(obj, KEY_NUMERIC, bool_value(numeric));
+    if let Some(fw) = p.keywords.get("fw").filter(|v| !v.is_empty()) {
+        set_internal_field(obj, KEY_FIRSTDAYOFWEEK, string_value(fw));
+    }
 
     // These native objects resolve methods from own properties, not the static
-    // prototype chain, so install bound `toString`/`maximize`/`minimize` on the
-    // instance (mirroring the other `Intl.*` constructors).
+    // prototype chain, so install bound `toString`/`maximize`/`minimize` (and
+    // the `Intl.Locale-info` getters) on the instance (mirroring the other
+    // `Intl.*` constructors).
     install_bound_instance_function(obj, "toString", locale_bound_to_string as *const u8, 0);
     install_bound_instance_function(obj, "maximize", locale_bound_maximize as *const u8, 0);
     install_bound_instance_function(obj, "minimize", locale_bound_minimize as *const u8, 0);
+    install_bound_instance_function(
+        obj,
+        "getCalendars",
+        locale_bound_get_calendars as *const u8,
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "getCollations",
+        locale_bound_get_collations as *const u8,
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "getHourCycles",
+        locale_bound_get_hour_cycles as *const u8,
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "getNumberingSystems",
+        locale_bound_get_numbering_systems as *const u8,
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "getTimeZones",
+        locale_bound_get_time_zones as *const u8,
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "getTextInfo",
+        locale_bound_get_text_info as *const u8,
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "getWeekInfo",
+        locale_bound_get_week_info as *const u8,
+        0,
+    );
 
     if JSValue::from_bits(proto_bits).is_pointer() {
         crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
@@ -457,6 +612,32 @@ extern "C" fn locale_bound_maximize(closure: *const ClosureHeader) -> f64 {
 extern "C" fn locale_bound_minimize(closure: *const ClosureHeader) -> f64 {
     let obj = captured_intl_object(closure, "minimize", KIND_LOCALE);
     transform_instance(obj, likely_subtags::minimize)
+}
+
+extern "C" fn locale_bound_get_calendars(closure: *const ClosureHeader) -> f64 {
+    calendars_of(captured_intl_object(closure, "getCalendars", KIND_LOCALE))
+}
+extern "C" fn locale_bound_get_collations(closure: *const ClosureHeader) -> f64 {
+    collations_of(captured_intl_object(closure, "getCollations", KIND_LOCALE))
+}
+extern "C" fn locale_bound_get_hour_cycles(closure: *const ClosureHeader) -> f64 {
+    hour_cycles_of(captured_intl_object(closure, "getHourCycles", KIND_LOCALE))
+}
+extern "C" fn locale_bound_get_numbering_systems(closure: *const ClosureHeader) -> f64 {
+    numbering_systems_of(captured_intl_object(
+        closure,
+        "getNumberingSystems",
+        KIND_LOCALE,
+    ))
+}
+extern "C" fn locale_bound_get_time_zones(closure: *const ClosureHeader) -> f64 {
+    time_zones_of(captured_intl_object(closure, "getTimeZones", KIND_LOCALE))
+}
+extern "C" fn locale_bound_get_text_info(closure: *const ClosureHeader) -> f64 {
+    text_info_of(captured_intl_object(closure, "getTextInfo", KIND_LOCALE))
+}
+extern "C" fn locale_bound_get_week_info(closure: *const ClosureHeader) -> f64 {
+    week_info_of(captured_intl_object(closure, "getWeekInfo", KIND_LOCALE))
 }
 
 /// Apply a likely-subtags transform to a live instance, returning a fresh
@@ -490,6 +671,7 @@ extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader, rest: f64)
     let Some(mut parsed) = parse_language_tag(&tag) else {
         throw_range_error(&format!("Incorrect locale information provided: {tag}"));
     };
+    canonicalize_aliases(&mut parsed);
 
     let options = object_ptr_from_value(options_value);
     if options.is_none() && !JSValue::from_bits(options_value.to_bits()).is_undefined() {
@@ -543,6 +725,146 @@ extern "C" fn locale_minimize_thunk(_closure: *const ClosureHeader) -> f64 {
     transform_instance(locale_this("minimize"), likely_subtags::minimize)
 }
 
+extern "C" fn locale_get_calendars_thunk(_closure: *const ClosureHeader) -> f64 {
+    calendars_of(locale_this("getCalendars"))
+}
+extern "C" fn locale_get_collations_thunk(_closure: *const ClosureHeader) -> f64 {
+    collations_of(locale_this("getCollations"))
+}
+extern "C" fn locale_get_hour_cycles_thunk(_closure: *const ClosureHeader) -> f64 {
+    hour_cycles_of(locale_this("getHourCycles"))
+}
+extern "C" fn locale_get_numbering_systems_thunk(_closure: *const ClosureHeader) -> f64 {
+    numbering_systems_of(locale_this("getNumberingSystems"))
+}
+extern "C" fn locale_get_time_zones_thunk(_closure: *const ClosureHeader) -> f64 {
+    time_zones_of(locale_this("getTimeZones"))
+}
+extern "C" fn locale_get_text_info_thunk(_closure: *const ClosureHeader) -> f64 {
+    text_info_of(locale_this("getTextInfo"))
+}
+extern "C" fn locale_get_week_info_thunk(_closure: *const ClosureHeader) -> f64 {
+    week_info_of(locale_this("getWeekInfo"))
+}
+
+// ---- Intl.Locale-info computations -----------------------------------------
+
+/// Build a JS `Array` of strings.
+fn string_array_value(items: &[String]) -> f64 {
+    let mut arr = crate::array::js_array_alloc(items.len() as u32);
+    for s in items {
+        arr = crate::array::js_array_push_f64(arr, string_value(s));
+    }
+    js_nanbox_pointer(arr as i64)
+}
+
+/// `CalendarsOfLocale`: the requested `ca` keyword if present, else the default.
+fn calendars_of(obj: *const ObjectHeader) -> f64 {
+    let p = parsed_from_instance(obj);
+    let list = match p.keywords.get("ca").filter(|v| !v.is_empty()) {
+        Some(ca) => vec![ca.clone()],
+        None => vec!["gregory".to_string()],
+    };
+    string_array_value(&list)
+}
+
+/// `CollationsOfLocale`: the `co` keyword (excluding `standard`/`search`) if
+/// present, else the default list.
+fn collations_of(obj: *const ObjectHeader) -> f64 {
+    let p = parsed_from_instance(obj);
+    let list = match p
+        .keywords
+        .get("co")
+        .filter(|v| !v.is_empty() && v.as_str() != "standard" && v.as_str() != "search")
+    {
+        Some(co) => vec![co.clone()],
+        None => vec!["emoji".to_string(), "eor".to_string()],
+    };
+    string_array_value(&list)
+}
+
+/// `HourCyclesOfLocale`: the `hc` keyword if it names a valid cycle, else `h12`.
+fn hour_cycles_of(obj: *const ObjectHeader) -> f64 {
+    let p = parsed_from_instance(obj);
+    let list = match p
+        .keywords
+        .get("hc")
+        .filter(|v| matches!(v.as_str(), "h11" | "h12" | "h23" | "h24"))
+    {
+        Some(hc) => vec![hc.clone()],
+        None => vec!["h12".to_string()],
+    };
+    string_array_value(&list)
+}
+
+/// `NumberingSystemsOfLocale`: the `nu` keyword if present, else `latn`.
+fn numbering_systems_of(obj: *const ObjectHeader) -> f64 {
+    let p = parsed_from_instance(obj);
+    let list = match p.keywords.get("nu").filter(|v| !v.is_empty()) {
+        Some(nu) => vec![nu.clone()],
+        None => vec!["latn".to_string()],
+    };
+    string_array_value(&list)
+}
+
+/// `TimeZonesOfLocale`: `undefined` when the tag carries no region subtag, else
+/// the (sorted) zones in common use for that region.
+fn time_zones_of(obj: *const ObjectHeader) -> f64 {
+    let p = parsed_from_instance(obj);
+    let Some(region) = p.region.as_deref() else {
+        return undefined();
+    };
+    let zones: Vec<String> = info::time_zones_for_region(region)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    string_array_value(&zones)
+}
+
+/// `getTextInfo`: an Object `{ direction }`, where direction follows the
+/// (maximized) script's writing direction.
+fn text_info_of(obj: *const ObjectHeader) -> f64 {
+    let mut p = parsed_from_instance(obj);
+    likely_subtags::maximize(&mut p);
+    let rtl = p
+        .script
+        .as_deref()
+        .map(info::is_rtl_script)
+        .unwrap_or(false);
+    let result = js_object_alloc(0, 1);
+    set_field(
+        result,
+        "direction",
+        string_value(if rtl { "rtl" } else { "ltr" }),
+    );
+    js_nanbox_pointer(result as i64)
+}
+
+/// `getWeekInfo`: an Object `{ firstDay, weekend }` with ISO weekday numbers.
+fn week_info_of(obj: *const ObjectHeader) -> f64 {
+    let p = parsed_from_instance(obj);
+    let region = {
+        let mut m = p.clone();
+        likely_subtags::maximize(&mut m);
+        m.region.unwrap_or_default()
+    };
+    let first_day = p
+        .keywords
+        .get("fw")
+        .and_then(|fw| weekday_name_to_num(fw))
+        .unwrap_or_else(|| info::first_day_of_week(&region));
+    let weekend = info::weekend(&region);
+
+    let result = js_object_alloc(0, 2);
+    set_field(result, "firstDay", first_day as f64);
+    let mut arr = crate::array::js_array_alloc(weekend.len() as u32);
+    for d in weekend {
+        arr = crate::array::js_array_push_f64(arr, d as f64);
+    }
+    set_field(result, "weekend", js_nanbox_pointer(arr as i64));
+    js_nanbox_pointer(result as i64)
+}
+
 /// Reconstruct a [`ParsedLocale`] from a live instance by re-parsing its stored
 /// canonical id — used by `maximize`/`minimize` to derive a fresh instance.
 fn parsed_from_instance(obj: *const ObjectHeader) -> ParsedLocale {
@@ -576,6 +898,9 @@ extern "C" fn getter_hour_cycle(_c: *const ClosureHeader) -> f64 {
 }
 extern "C" fn getter_numbering_system(_c: *const ClosureHeader) -> f64 {
     field_or_undefined(locale_this("numberingSystem"), KEY_NUMBERINGSYSTEM)
+}
+extern "C" fn getter_first_day_of_week(_c: *const ClosureHeader) -> f64 {
+    field_or_undefined(locale_this("firstDayOfWeek"), KEY_FIRSTDAYOFWEEK)
 }
 extern "C" fn getter_numeric(_c: *const ClosureHeader) -> f64 {
     let obj = locale_this("numeric");
@@ -654,6 +979,62 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
         0,
         false,
     );
+    install_function(
+        proto,
+        "getCalendars",
+        locale_get_calendars_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
+    install_function(
+        proto,
+        "getCollations",
+        locale_get_collations_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
+    install_function(
+        proto,
+        "getHourCycles",
+        locale_get_hour_cycles_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
+    install_function(
+        proto,
+        "getNumberingSystems",
+        locale_get_numbering_systems_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
+    install_function(
+        proto,
+        "getTimeZones",
+        locale_get_time_zones_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
+    install_function(
+        proto,
+        "getTextInfo",
+        locale_get_text_info_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
+    install_function(
+        proto,
+        "getWeekInfo",
+        locale_get_week_info_thunk as *const u8,
+        0,
+        0,
+        false,
+    );
 
     install_getter(proto, "baseName", getter_base_name as *const u8);
     install_getter(proto, "language", getter_language as *const u8);
@@ -664,6 +1045,11 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
     install_getter(proto, "collation", getter_collation as *const u8);
     install_getter(proto, "hourCycle", getter_hour_cycle as *const u8);
     install_getter(proto, "numeric", getter_numeric as *const u8);
+    install_getter(
+        proto,
+        "firstDayOfWeek",
+        getter_first_day_of_week as *const u8,
+    );
     install_getter(
         proto,
         "numberingSystem",
@@ -684,4 +1070,5 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
     set_builtin_attrs(ns_obj, "Locale", PropertyAttrs::new(true, false, true));
 }
 
+mod info;
 mod likely_subtags;

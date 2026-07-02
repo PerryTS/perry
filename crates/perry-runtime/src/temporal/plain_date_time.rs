@@ -6,7 +6,9 @@
 use super::dispatch::{
     self, boolean, field_u16, field_u8, ok_or_throw, raw_arg, string, undefined,
 };
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::{Calendar, PlainDateTime};
 
@@ -29,6 +31,7 @@ fn calendar_id_arg(v: f64) -> Calendar {
 
 /// `new Temporal.PlainDateTime(year, month, day, hour?, …, nanosecond?, calendar?)`.
 pub fn construct(args: &[f64]) -> f64 {
+    dispatch::require_construct(TYPE_NAME);
     // Each field is `ToIntegerWithTruncation`: a non-finite (`Infinity`/`NaN` /
     // absent required field) is a RangeError, a Symbol/BigInt a TypeError — not
     // a silently-mangled `as i32`/`0`. `try_new` = overflow "reject" (out-of-range
@@ -64,7 +67,7 @@ fn coerce_dt(v: f64) -> PlainDateTime {
 /// throws before options are read, and a bag reads its fields first). `opts` is
 /// `undefined` for `compare`/`until`/`since` (no options arg).
 fn coerce_dt_with_opts(v: f64, opts: f64) -> PlainDateTime {
-    match temporal_value_ref(v) {
+    match temporal_value_ref_or_subclass(v) {
         Some(TemporalValue::PlainDateTime(dt)) => {
             let dt = dt.clone();
             let _ = super::options::overflow(opts);
@@ -181,11 +184,29 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
             let (rounding, calendar) = super::options::pdt_to_string_options(raw_arg(args, 0));
             string(&ok_or_throw(dt.to_ixdtf_string(rounding, calendar)))
         }
-        "toJSON" | "toLocaleString" => string(&dt.to_string()),
+        "toJSON" => string(&dt.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(dt.calendar().identifier());
+            let epoch_ms = crate::date::components_to_timestamp(
+                dt.year(),
+                dt.month() as u32,
+                dt.day() as u32,
+                dt.hour() as u32,
+                dt.minute() as u32,
+                dt.second() as u32,
+            ) as f64
+                * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainDateTime,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::with_datetime_fields(obj);
+            let fields = super::options::with_datetime_fields(obj, dt.calendar());
             let overflow = super::options::overflow(raw_arg(args, 1));
             wrap(ok_or_throw(dt.with(fields, overflow)))
         }

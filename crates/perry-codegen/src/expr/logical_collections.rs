@@ -166,10 +166,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             body,
             headers,
             headers_dynamic,
+            signal,
         } => {
             let url_box = lower_expr(ctx, url)?;
             let method_box = lower_expr(ctx, method)?;
             let body_box = lower_expr(ctx, body)?;
+            // Lower `init.signal` (if any) up front so it can be stashed for
+            // `js_fetch_with_options` right before the call below.
+            let signal_box = match signal {
+                Some(s) => Some(lower_expr(ctx, s)?),
+                None => None,
+            };
 
             // Obtain the headers as a NaN-boxed object value, then JSON-stringify
             // it below. Two cases:
@@ -208,12 +215,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
 
             let blk = ctx.block();
-            // js_json_stringify(value: f64, indent: i32) -> i64 string handle.
-            let zero_i = "0".to_string();
+            // Stringify the headers value into the flat `{name:value}` JSON that
+            // `js_fetch_with_options` parses. Routed through
+            // `js_fetch_headers_to_json` (not the generic `js_json_stringify`) so
+            // a `Headers` instance — a fetch-band registry handle, e.g. `headers:
+            // new Headers(h)` — is read from its registry instead of being
+            // dereferenced as a heap pointer (the `js_json_stringify`-on-handle
+            // SIGSEGV; same #5559/#5560 handle-band family).
             let headers_str = blk.call(
                 I64,
-                "js_json_stringify",
-                &[(DOUBLE, &headers_obj_box), (I32, &zero_i)],
+                "js_fetch_headers_to_json",
+                &[(DOUBLE, &headers_obj_box)],
             );
 
             // The runtime takes raw StringHeader pointers (i64). Unbox each
@@ -222,6 +234,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let url_handle = unbox_to_i64(blk, &url_box);
             let method_handle = unbox_to_i64(blk, &method_box);
             let body_handle = unbox_to_i64(blk, &body_box);
+            // Stash the AbortSignal so `js_fetch_with_options` can cancel the
+            // request when it aborts (`controller.abort()` / `AbortSignal.timeout`).
+            if let Some(sig) = &signal_box {
+                blk.call_void("js_fetch_set_pending_signal", &[(DOUBLE, sig)]);
+            }
             let promise = blk.call(
                 I64,
                 "js_fetch_with_options",
@@ -445,6 +462,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_arraylike_splice"
                     } else {
                         "js_arraylike_concat"
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
+                    )
+                }
+                // pop() / shift(): no args, generic over a value receiver.
+                "pop" | "shift" => {
+                    let fname = if method == "pop" {
+                        "js_arraylike_pop"
+                    } else {
+                        "js_arraylike_shift"
+                    };
+                    blk.call(DOUBLE, fname, &[(DOUBLE, &recv_box)])
+                }
+                // push(...) / unshift(...): variadic — pass an alloca buffer of
+                // raw NaN-boxed doubles + count (mirrors splice/concat above).
+                "push" | "unshift" => {
+                    let n = arg_boxes.len();
+                    let (buf_reg, count_str) = if n == 0 {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf_reg = blk.next_reg();
+                        blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                        for (i, val) in arg_boxes.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                            blk.store(DOUBLE, val, &slot);
+                        }
+                        (buf_reg, format!("{}", n))
+                    };
+                    let fname = if method == "push" {
+                        "js_arraylike_push"
+                    } else {
+                        "js_arraylike_unshift"
                     };
                     blk.call(
                         DOUBLE,
@@ -820,25 +872,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // flags fall back to interning an empty string at codegen so
         // `js_regexp_new` always sees a real `StringHeader*`. Followup
         // to #957 / PR #959.
-        Expr::RegExpDynamic { pattern, flags } => {
+        Expr::RegExpDynamic {
+            pattern,
+            flags,
+            is_call,
+        } => {
             // Route through the full ECMAScript constructor: it handles a RegExp
             // pattern (copy / flag override), an `undefined`/`null` pattern
             // (`ToString` → `""`/`"null"`), an object pattern, and ToString-
             // coerced flags (an object flags → `"[object Object]"` → SyntaxError).
             // Passing the NaN-boxed values verbatim (NOT `unbox_str_handle`,
             // which mis-reads a non-string pattern as a StringHeader → garbage).
+            //
+            // The function-call form `RegExp(re)` (is_call) routes through
+            // `js_regexp_construct_call`, which applies the ECMA-262 22.2.4.1
+            // identity shortcut (a RegExp pattern + undefined flags returns the
+            // argument unchanged) before falling back to the same constructor.
+            // `new RegExp(re)` keeps `js_regexp_construct` so it always copies.
             let pattern_box = lower_expr(ctx, pattern)?;
             let flags_box = if let Some(flags_expr) = flags {
                 lower_expr(ctx, flags_expr)?
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            let ctor = if *is_call {
+                "js_regexp_construct_call"
+            } else {
+                "js_regexp_construct"
+            };
             let blk = ctx.block();
-            let result = blk.call(
-                I64,
-                "js_regexp_construct",
-                &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)],
-            );
+            let result = blk.call(I64, ctor, &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
 

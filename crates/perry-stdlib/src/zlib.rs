@@ -206,6 +206,52 @@ pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut
     }
 }
 
+// #5437 / project_autoopt_ffi_symbol_link_break: every zlib FFI entry point is
+// referenced ONLY from generated `.o` files (codegen-emitted calls), never from
+// within perry-stdlib itself. The auto-optimize whole-program LTO therefore
+// dead-strips them from the stdlib archive, breaking the link of any program
+// that uses zlib (surfaced by Next.js's resume-data-cache `inflateSync` once the
+// #5437 live-import fix makes that module reachable). `#[used]` keeps them.
+struct KeepZlibFfi([*const (); 32]);
+// SAFETY: a link-time keepalive anchor only — the pointers are never read or
+// dereferenced, so cross-thread sharing of the raw pointers is sound.
+unsafe impl Sync for KeepZlibFfi {}
+#[used]
+static KEEP_ZLIB_FFI: KeepZlibFfi = KeepZlibFfi([
+    js_zlib_brotli_compress as *const (),
+    js_zlib_brotli_compress_sync as *const (),
+    js_zlib_brotli_decompress as *const (),
+    js_zlib_brotli_decompress_sync as *const (),
+    js_zlib_create_brotli_compress as *const (),
+    js_zlib_create_deflate as *const (),
+    js_zlib_create_deflate_raw as *const (),
+    js_zlib_create_gunzip as *const (),
+    js_zlib_create_gzip as *const (),
+    js_zlib_create_inflate as *const (),
+    js_zlib_create_inflate_raw as *const (),
+    js_zlib_create_unzip as *const (),
+    js_zlib_create_zstd_compress as *const (),
+    js_zlib_create_zstd_decompress as *const (),
+    js_zlib_deflate as *const (),
+    js_zlib_deflate_raw as *const (),
+    js_zlib_deflate_raw_sync as *const (),
+    js_zlib_deflate_sync as *const (),
+    js_zlib_gunzip as *const (),
+    js_zlib_gunzip_sync as *const (),
+    js_zlib_gzip as *const (),
+    js_zlib_gzip_sync as *const (),
+    js_zlib_inflate as *const (),
+    js_zlib_inflate_raw as *const (),
+    js_zlib_inflate_raw_sync as *const (),
+    js_zlib_inflate_sync as *const (),
+    js_zlib_unzip as *const (),
+    js_zlib_unzip_sync as *const (),
+    js_zlib_zstd_compress as *const (),
+    js_zlib_zstd_compress_sync as *const (),
+    js_zlib_zstd_decompress as *const (),
+    js_zlib_zstd_decompress_sync as *const (),
+]);
+
 /// Inflate decompress data synchronously
 /// zlib.inflateSync(data) -> Buffer
 #[no_mangle]

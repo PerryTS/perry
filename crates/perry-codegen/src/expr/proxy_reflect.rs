@@ -357,13 +357,47 @@ fn is_numeric_string_key(key: &str) -> bool {
 }
 
 fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receiver: &Expr) -> bool {
-    if !same_side_effect_free_receiver(target, receiver) || !is_array_expr(ctx, target) {
+    if !same_side_effect_free_receiver(target, receiver) {
         return false;
     }
-    match key {
-        Expr::String(key) => is_numeric_string_key(key),
-        _ => true,
+    if is_array_expr(ctx, target) {
+        return match key {
+            Expr::String(key) => is_numeric_string_key(key),
+            _ => true,
+        };
     }
+    // #5525: `P[i] = v` where `P` is an *untyped* (`Type::Any`/`Type::Unknown`)
+    // receiver. The desugared `PutValueSet` otherwise falls through to the
+    // generic `js_put_value_set` ([[Set]] via `ordinary_set_with_receiver` →
+    // stringify-the-index object dispatch), which dominated the bcrypt write
+    // profile. Routing it to `index_set::lower` instead reaches that file's
+    // matching `recv_unknown` arm, which emits `js_dyn_index_set` — carrying the
+    // #5525 process-global typed-array kind cache + inline
+    // `typed_array_fast_index_set` fast path. This is the write counterpart of
+    // the IndexGet `recv_unknown → js_dyn_index_get` route that bcryptjs's
+    // Blowfish `Int32Array` P/S boxes (reached through untyped `Array.<number>`
+    // params) need. `js_dyn_index_set` carries the full spec dispatch (typed-
+    // array per-kind store, plain-array extend, object by-name set, symbol side-
+    // table) for the cases the fast path defers, so the only keys we keep off it
+    // are statically-known string-literals / symbols (their interned-handle /
+    // symbol-side-table routes below are already optimal). Every statically-
+    // typed receiver is unaffected — `recv_unknown` is false for them.
+    let recv_unknown = matches!(
+        crate::type_analysis::static_type_of(ctx, target),
+        None | Some(perry_types::Type::Any) | Some(perry_types::Type::Unknown)
+    );
+    // Mirror `index_set::lower`'s `recv_unknown` arm: keep statically-known
+    // string-literal / symbol keys on their dedicated routes; route everything
+    // else (numeric, runtime-string, or an unknown-typed index like bcryptjs's
+    // `off + 1` where `off` is an `any` param) to `index_set::lower`, which emits
+    // the `js_dyn_index_set` fast path. The earlier `is_numeric_expr(key)` gate
+    // missed `off + 1` and those ~4M hot `lr[...]` writes stayed on
+    // `js_put_value_set`.
+    let key_is_static_string_or_symbol = matches!(
+        key,
+        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+    ) || is_string_expr(ctx, key);
+    recv_unknown && !key_is_static_string_or_symbol
 }
 
 fn try_lower_process_env_put_value_set(
@@ -665,11 +699,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let t = lower_expr(ctx, target)?;
             let a = lower_expr(ctx, args)?;
             let nt = lower_expr(ctx, new_target)?;
-            Ok(ctx.block().call(
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_reflect_construct",
                 &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &nt)],
-            ))
+            );
+            // Write-back captured outer locals: when `target` is a
+            // statically-known user class, the constructor body stores
+            // mutations to `this.__perry_cap_*` but can't reach the
+            // caller's outer alloca slots. Read the fields back here
+            // (e.g. `++called` in a subclass constructor is visible
+            // after `Reflect.construct(Sub, args)` returns).
+            let class_name: Option<String> = match target.as_ref() {
+                Expr::ClassRef(cn) => Some(cn.clone()),
+                Expr::LocalGet(id) => ctx
+                    .local_id_to_name
+                    .get(id)
+                    .and_then(|name| ctx.local_class_aliases.get(name))
+                    .cloned(),
+                _ => None,
+            };
+            if let Some(cn) = class_name {
+                if let Some(class) = ctx.classes.get(cn.as_str()).copied() {
+                    let bits = ctx.block().bitcast_double_to_i64(&result);
+                    let inst_handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle, &[]);
+                }
+            }
+            Ok(result)
         }
         Expr::ReflectDefineProperty {
             target,

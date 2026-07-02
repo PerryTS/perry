@@ -59,8 +59,10 @@ Buckets
                  rejected, the compile rejection is *correct* and lands in
                  `pass` instead.)
 - skip         — couldn't assemble / needs an unsupported flag or `$262` host
-                 API. Excluded from the parity verdict — never charged against
-                 Perry.
+                 API, OR compiled but then hit a construct the AOT model can't
+                 evaluate at runtime (runtime-string `eval`/`new Function`,
+                 runtime-computed `import()`, `.wasm` import — #5593). Excluded
+                 from the parity verdict — never charged against Perry.
 
 Usage
 -----
@@ -92,6 +94,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 TEST262_DIR = REPO_ROOT / "test-compat" / "test262"
 PREAMBLE = TEST262_DIR / "preamble.js"
+# Node host shim: runs an assembled case as a *global script* (via
+# vm.runInThisContext) rather than a CommonJS module, matching a real Test262
+# host and Perry. Without it, module-scoped harness intrinsics are invisible to
+# global-scope indirect eval, so Node spuriously rejects Annex B eval cases
+# (#5346).
+HOST_RUNNER = TEST262_DIR / "host-run.cjs"
 # Feature tags Perry implements but the Node oracle cannot run (e.g. Temporal).
 # Cases tagged with one of these are judged in self-validating mode (#4792):
 # Perry-only, scored on whether the case's own `assert.*` self-checks throw.
@@ -129,6 +137,17 @@ _PATH_SKIP = re.compile(
 _HOST_DEP = re.compile(
     r"\$262\b|detachArrayBuffer|createRealm|evalScript|IsHTMLDDA|\bagent\."
 )
+
+# Cases that *compile* but, when run, reach a construct the AOT model
+# categorically cannot evaluate — a runtime-string `eval()` / `new Function()`,
+# a runtime-computed dynamic `import()`, or a `.wasm` import. Perry defers these
+# to a runtime throw carrying this sentinel (`PERRY_ALLOW_EVAL=1` only const-
+# folds *constant-string* eval, so the runtime-string probes — e.g. Annex B
+# B.3.3 sloppy block-function hoisting checked via `eval` — still defer). This
+# is a permanent AOT limitation, not a language-parity gap, so such a case
+# buckets as `skip` (excluded from the verdict) rather than being charged as a
+# `runtime-fail` (#5593).
+_AOT_DEFER = re.compile(r"cannot run in an ahead-of-time compiled binary")
 
 # Frontmatter flags that make a case un-runnable as a plain script under this
 # differential. `module` needs ESM loader semantics; the agent/Can-block flags
@@ -456,7 +475,8 @@ def main() -> int:
                 # the case's own `assert.*` self-checks (#4792).
                 out_bin = workdir / "case.out"
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                             PERRY_NO_AUTO_OPTIMIZE="1")
+                             PERRY_NO_AUTO_OPTIMIZE="1",
+                             PERRY_GLOBAL_SCRIPT_THIS="1")
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged), "-o",
                      str(out_bin)], c_env, args.timeout, cwd=str(workdir))
@@ -473,12 +493,21 @@ def main() -> int:
                           else "ran clean; expected a thrown error (negative)")
                 return (rel, cat, "runtime-fail", reason, False, True)
             # 1) Node is the oracle (negative cases legitimately exit != 0).
-            n_exit, n_out = run(["node", str(staged)], base_env, args.timeout)
+            n_exit, n_out = run(["node", str(HOST_RUNNER), str(staged)],
+                                base_env, args.timeout)
             node_clean = n_exit == 0
             # 2) Perry compile (permissive — unimplemented surfaces as a gap).
             out_bin = workdir / "case.out"
+            # Compile each case as a *global script* so module top-level
+            # `this` is `globalThis` — matching the Node oracle, which runs
+            # the assembled case via `vm.runInThisContext` (host-run.cjs,
+            # #5346/#5511). Without it, Perry models top-level `this` as the
+            # CJS `module.exports` `{}` and the global prop-desc cluster
+            # (`verifyProperty(this, "decodeURI", ...)`) spuriously fails
+            # against the script-mode oracle (#5579).
             c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                         PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1")
+                         PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1",
+                         PERRY_GLOBAL_SCRIPT_THIS="1")
             c_exit, c_out = run(
                 [str(args.perry_bin), "compile", str(staged), "-o",
                  str(out_bin)], c_env, args.timeout, cwd=str(workdir))
@@ -495,6 +524,10 @@ def main() -> int:
                     return (rel, cat, "pass", "", False, False)
                 return (rel, cat, "diff", first_line(p_out), False, False)
             if node_clean and not perry_clean:
+                if _AOT_DEFER.search(p_out):
+                    return (rel, cat, "skip",
+                            "AOT-deferred runtime eval/import (#5593)",
+                            False, False)
                 return (rel, cat, "runtime-fail", first_line(p_out),
                         False, False)
             if not node_clean and not perry_clean:

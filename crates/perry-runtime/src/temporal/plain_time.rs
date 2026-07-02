@@ -4,7 +4,9 @@
 //! the plain types.
 
 use super::dispatch::{self, field_u16, field_u8, ok_or_throw, raw_arg, string};
-use super::{alloc_temporal_cell, temporal_value_ref, TemporalValue};
+use super::{
+    alloc_temporal_cell, temporal_value_ref, temporal_value_ref_or_subclass, TemporalValue,
+};
 use crate::value::JSValue;
 use temporal_rs::options::ToStringRoundingOptions;
 use temporal_rs::PlainTime;
@@ -52,7 +54,7 @@ fn coerce_time_overflow(v: f64, overflow: temporal_rs::options::Overflow) -> Pla
     // its internal slot — NO observable property getter calls
     // (`argument-plaindatetime`'s fast-path assertion). Reading `hour`…`second`
     // off such a value as a bag (the old fallthrough) called the getters.
-    match temporal_value_ref(v) {
+    match temporal_value_ref_or_subclass(v) {
         Some(TemporalValue::PlainTime(t)) => return *t,
         Some(TemporalValue::PlainDateTime(dt)) => return dt.to_plain_time(),
         Some(TemporalValue::ZonedDateTime(z)) => return z.to_plain_time(),
@@ -107,7 +109,7 @@ pub fn from_static(args: &[f64]) -> f64 {
         let _ = super::options::overflow(opts);
         return wrap(t);
     }
-    match temporal_value_ref(item) {
+    match temporal_value_ref_or_subclass(item) {
         Some(TemporalValue::PlainTime(t)) => {
             let _ = super::options::overflow(opts);
             return wrap(*t);
@@ -190,10 +192,27 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
         "toString" => string(&ok_or_throw(t.to_ixdtf_string(
             super::options::to_string_rounding_options(raw_arg(args, 0)),
         ))),
-        "toJSON" | "toLocaleString" => string(
+        "toJSON" => string(
             &t.to_ixdtf_string(ToStringRoundingOptions::default())
                 .unwrap_or_default(),
         ),
+        "toLocaleString" => {
+            let epoch_ms = crate::date::components_to_timestamp(
+                1970,
+                1,
+                1,
+                t.hour() as u32,
+                t.minute() as u32,
+                t.second() as u32,
+            ) as f64
+                * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainTime,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

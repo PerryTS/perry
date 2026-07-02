@@ -4,6 +4,7 @@ mod concat_reverse;
 mod flat_clone;
 mod from_concat;
 mod generic;
+mod generic_mutators;
 mod header;
 mod immutable;
 mod indexing;
@@ -53,6 +54,9 @@ pub(crate) use self::generic::{
     non_array_object_receiver, object_pop as generic_object_pop,
     object_shift as generic_object_shift, object_sort, object_splice, plain_object_value,
 };
+pub use self::generic_mutators::{
+    js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
+};
 pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
@@ -68,7 +72,7 @@ pub use self::immutable::{
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
     array_prototype_addr, array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
-    note_array_proto_iterator_write, note_object_prototype_index_write,
+    note_array_proto_iterator_write, note_object_prototype_index_write, object_prototype_addr,
     object_prototype_addr_matches, object_prototype_has_index_flag,
 };
 pub use self::indexing::{
@@ -93,6 +97,7 @@ pub use self::iter_object::{
     ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::is_builtin_iterator_class_id;
+pub(crate) use self::iterator::iter_bt_dump;
 pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };
@@ -110,6 +115,7 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
+pub(crate) use self::push_pop::guard_writable_length;
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_hole, js_array_push_spread_f64, js_array_set_length,

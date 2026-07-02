@@ -36,9 +36,9 @@ use super::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
     find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime,
-    localize_stdlib_stub_symbols_for_windows, rust_target_triple, strip_duplicate_objects_from_lib,
-    strip_duplicate_objects_from_well_known_lib, windows_pe_subsystem_flag,
-    windows_subsystem_needs_ui, CompilationContext,
+    localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows, rust_target_triple,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+    windows_pe_subsystem_flag, windows_subsystem_needs_ui, CompilationContext,
 };
 
 mod build_and_run;
@@ -93,10 +93,8 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "perry_debug_trace_init_done",
     "perry_init_guard_check_and_set",
     // Plugin manager (perry-plugin)
-    "perry_plugin_abi_version",
     "perry_plugin_load",
     "perry_plugin_unload",
-    "perry_plugin_lookup_symbol",
     "perry_plugin_emit_hook",
     "perry_plugin_emit_event",
     "perry_plugin_invoke_tool",
@@ -112,14 +110,21 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "perry_plugin_list_plugins",
     "perry_plugin_list_hooks",
     "perry_plugin_list_tools",
-    "perry_plugin_plugin_count",
+    "perry_plugin_count",
     "perry_plugin_set_metadata",
     "perry_plugin_get_config",
-    "perry_plugin_subscribe_event",
-    "perry_plugin_unsubscribe_event",
-    "perry_plugin_emit_event_bus",
+    "perry_plugin_on",
+    "perry_plugin_off",
+    "perry_plugin_emit",
+    "perry_plugin_log",
+    "perry_plugin_set_config",
+    "perry_plugin_discover",
     "perry_plugin_init",
-    "perry_plugin_last_load_error",
+    // Process-wide class-field inline guard (perry-runtime/src/object/mod.rs).
+    // A `#[no_mangle] pub static`; not picked up by `llvm-nm` filter heuristics
+    // for every codebase, so list it explicitly so the plugin DLL can find it
+    // at LoadLibrary time.
+    "PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +157,42 @@ fn select_available_backend_link_metadata(
             pkg_config: backend.pkg_config.clone(),
         })
         .collect()
+}
+
+/// Windows system libraries that wgpu's graphics backends reference but
+/// the wgpu crate's own `#[link]` attrs don't cover (#5812 item 2):
+///
+/// - `d3dcompiler.lib` — the d3d12 backend calls `D3DCompile` (HLSL →
+///   DXBC shader compilation).
+/// - `opengl32.lib` — wgpu's gl backend (compiled in alongside
+///   d3d12/vulkan on Windows) calls the `wgl*` context entry points.
+///
+/// Without these, a Windows app linking a wgpu-backed native ext fails
+/// with LNK2019 unresolved externals. Keyed off the manifest's *declared*
+/// backends (not the `available` prebuilt flag): the unresolved symbols
+/// come from the main staticlib's references, and appending an
+/// unreferenced `.lib` is harmless on MSVC (only referenced objects are
+/// pulled). d3d12 is Windows-only, so its presence reliably signals the
+/// ext pulls wgpu's d3d12 + gl backends; vulkan-on-Windows still compiles
+/// the gl fallback, so it needs `opengl32` too. Returns the `.lib` names
+/// in link order.
+fn windows_wgpu_backend_syslibs(target_config: &super::TargetNativeConfig) -> Vec<&'static str> {
+    let has_d3d12 = target_config
+        .backends
+        .iter()
+        .any(|backend| backend.backend.as_str() == "d3d12");
+    let has_vulkan = target_config
+        .backends
+        .iter()
+        .any(|backend| backend.backend.as_str() == "vulkan");
+    let mut libs = Vec::new();
+    if has_d3d12 {
+        libs.push("d3dcompiler.lib");
+    }
+    if has_d3d12 || has_vulkan {
+        libs.push("opengl32.lib");
+    }
+    libs
 }
 
 #[cfg(test)]
@@ -237,6 +278,60 @@ mod native_package_selection_tests {
         let selection = select_available_backend_link_metadata(&tc);
 
         assert!(selection.is_empty());
+    }
+
+    /// #5812 item 2 — a d3d12 backend pulls both `D3DCompile`
+    /// (d3dcompiler.lib) and wgpu's gl fallback (opengl32.lib).
+    #[test]
+    fn d3d12_backend_appends_d3dcompiler_and_opengl32() {
+        let mut tc = target_config();
+        tc.backends.push(backend_config(NativeBackend::D3d12, true));
+        assert_eq!(
+            super::windows_wgpu_backend_syslibs(&tc),
+            vec!["d3dcompiler.lib", "opengl32.lib"]
+        );
+    }
+
+    /// vulkan-on-Windows still compiles wgpu's gl fallback (opengl32.lib)
+    /// but does not need d3dcompiler.
+    #[test]
+    fn vulkan_backend_appends_only_opengl32() {
+        let mut tc = target_config();
+        tc.backends
+            .push(backend_config(NativeBackend::Vulkan, true));
+        assert_eq!(
+            super::windows_wgpu_backend_syslibs(&tc),
+            vec!["opengl32.lib"]
+        );
+    }
+
+    /// The syslibs are keyed off *declared* backends, not the `available`
+    /// prebuilt flag — the unresolved symbols come from the main staticlib,
+    /// and an unreferenced `.lib` is harmless on MSVC.
+    #[test]
+    fn d3d12_backend_appends_syslibs_even_when_unavailable() {
+        let mut tc = target_config();
+        tc.backends
+            .push(backend_config(NativeBackend::D3d12, false));
+        assert_eq!(
+            super::windows_wgpu_backend_syslibs(&tc),
+            vec!["d3dcompiler.lib", "opengl32.lib"]
+        );
+    }
+
+    /// A non-graphics native lib (no wgpu backends) gets no extra syslibs.
+    #[test]
+    fn no_backends_appends_no_syslibs() {
+        let tc = target_config();
+        assert!(super::windows_wgpu_backend_syslibs(&tc).is_empty());
+    }
+
+    /// Metal is Apple-only and never triggers the Windows wgpu syslibs.
+    #[test]
+    fn metal_backend_appends_no_windows_syslibs() {
+        let mut tc = target_config();
+        tc.backends.push(backend_config(NativeBackend::Metal, true));
+        assert!(super::windows_wgpu_backend_syslibs(&tc).is_empty());
     }
 }
 

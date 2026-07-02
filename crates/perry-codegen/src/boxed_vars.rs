@@ -46,6 +46,48 @@ pub(crate) fn collect_boxed_vars(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
     boxed
 }
 
+/// Determine which *parameter* ids need heap-boxed storage. Mirrors the
+/// (captured AND mutated) rule of `collect_boxed_vars_scope`, but for
+/// function/closure parameters, which never appear in that function's
+/// `declared` (Stmt::Let) set and so were previously never boxed
+/// (boxed_vars.rs's standing "params … we don't box them yet" TODO).
+///
+/// #5521: bcryptjs `_crypt(b, salt, rounds, …)` reassigns `rounds =
+/// (1 << rounds) >>> 0` and the hoisted inner `next()` closure captures
+/// `rounds`. Unboxed, `next()` saw the stale pre-reassignment snapshot
+/// (the original log2 rounds, 12) instead of the live value (4096), so the
+/// key-schedule loop ran 12 iterations and produced a wrong hash.
+///
+/// A param is boxed when it is referenced inside some closure in `body`
+/// AND mutated — either inside a closure or in the enclosing scope. The
+/// synthesized `arguments` param is excluded: it carries its own
+/// mapped-box handling (`materialize_arguments_object`).
+pub(crate) fn collect_boxed_param_ids(
+    params: &[perry_hir::Param],
+    body: &[perry_hir::Stmt],
+) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    if params.is_empty() {
+        return out;
+    }
+    let mut closure_refs: HashSet<u32> = HashSet::new();
+    let mut closure_writes: HashSet<u32> = HashSet::new();
+    collect_closure_refs_and_writes_in_stmts(body, &mut closure_refs, &mut closure_writes);
+    let mut outer_writes: HashSet<u32> = HashSet::new();
+    collect_outer_writes_in_stmts(body, &mut outer_writes);
+    for p in params {
+        if p.arguments_object.is_some() {
+            continue;
+        }
+        if closure_refs.contains(&p.id)
+            && (closure_writes.contains(&p.id) || outer_writes.contains(&p.id))
+        {
+            out.insert(p.id);
+        }
+    }
+    out
+}
+
 fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     use perry_hir::Stmt;
     for s in stmts {
@@ -282,7 +324,7 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
 fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
     use perry_hir::Expr;
     match expr {
-        Expr::Closure { body, .. } => {
+        Expr::Closure { params, body, .. } => {
             // Each closure is its own lexical scope — run the scope
             // analysis on the body, then recurse into any closures
             // that appear inside it. Issue #633 followup: also collect
@@ -293,6 +335,10 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             // slot would skip `js_box_get`.
             let inner = collect_boxed_vars_scope(body);
             out.extend(inner);
+            // #5521: a closure parameter captured+mutated by a deeper
+            // nested closure needs the same param boxing as a top-level
+            // function param.
+            out.extend(collect_boxed_param_ids(params, body));
             collect_prealloc_box_ids_in_stmts(body, out);
             collect_nested_closure_boxed_vars_in_stmts(body, out);
         }

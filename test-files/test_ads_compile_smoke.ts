@@ -1,10 +1,10 @@
 // Compile-smoke for `perry/ads` (issue #867).
 //
-// References each of the six FFI entry points and prints the
-// result. The MVP stub resolves every promise-returning entry
-// with a structured failure shape and returns 0 from
-// banner_create on every platform, so the program exits 0 with
-// 5 printed JSON failure lines + 1 numeric handle line.
+// References each of the seven FFI entry points and prints the
+// result. On the build host (macOS native) the promise-returning
+// entries resolve a structured `{ error: "unsupported-platform" }`
+// shape (no Google Mobile Ads SDK on macOS) and banner_create returns
+// 0, so the program exits 0 with the JSON lines + 1 numeric handle.
 
 import {
   js_ads_interstitial_load,
@@ -13,6 +13,7 @@ import {
   js_ads_rewarded_show,
   js_ads_banner_create,
   js_ads_banner_destroy,
+  js_ads_request_consent,
 } from "perry/ads";
 
 async function main() {
@@ -33,6 +34,9 @@ async function main() {
 
   js_ads_banner_destroy(handle);
   console.log("banner_destroy: ok");
+
+  const consent = await js_ads_request_consent();
+  console.log("request_consent:", consent);
 }
 
 main();

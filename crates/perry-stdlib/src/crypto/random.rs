@@ -297,6 +297,13 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         "decapsulate" => pointer_value(js_crypto_decapsulate(arg(0), arg(1)) as *mut u8),
         "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid(arg(0))).bits()),
         "randomUUIDv7" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuidv7()).bits()),
+        // `crypto.randomBytes(size[, callback])`. Reached as a VALUE (named
+        // import / `util.promisify(crypto.randomBytes)`). The 2-arg async form
+        // must invoke `(err, buf)`; without the callback branch the
+        // promisified call returned the buffer synchronously and never
+        // settled, so the awaiting Promise hung. The 1-arg sync form returns
+        // the Buffer directly, matching Node.
+        "randomBytes" if args_len >= 2 => js_crypto_random_bytes_async(arg(0), arg(1)),
         "randomBytes" => {
             let buf = js_crypto_random_bytes_buffer(arg(0));
             f64::from_bits(JSValue::pointer(buf as *const u8).bits())
@@ -338,6 +345,29 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             bytes_ptr(3),
             arg(4),
         ) as *mut u8),
+        // `crypto.pbkdf2(password, salt, iterations, keylen, digest, callback)`
+        // reached as a VALUE — a named import (`import { pbkdf2 } from
+        // "crypto"`) or `util.promisify(crypto.pbkdf2)`. The direct
+        // `crypto.pbkdf2(...)` call site is special-cased in codegen
+        // (→ `js_crypto_pbkdf2_async_alg`), but the value-form routes here.
+        // Without this arm the call fell to `_ => undefined`, so the
+        // callback never fired and the awaiting (promisified) Promise hung
+        // forever. Node's async pbkdf2 requires the `digest` arg, so the
+        // callback is the 6th arg (index 5); we still tolerate a missing
+        // digest by treating the last arg as the callback.
+        "pbkdf2" => {
+            // The callback is always the final argument; the digest is the
+            // arg immediately before it when present (>= 6 args).
+            let (digest, callback) = if args_len >= 6 {
+                (str_ptr(4), arg(5))
+            } else {
+                // No digest supplied (rare) — pass a null digest pointer
+                // (the runtime defaults to SHA-256) and take the last arg
+                // as the callback.
+                (0i64, arg(args_len.saturating_sub(1)))
+            };
+            js_crypto_pbkdf2_async_alg(bytes_ptr(0), bytes_ptr(1), arg(2), arg(3), digest, callback)
+        }
         "scrypt" => {
             let callback = if args_len >= 5 { arg(4) } else { arg(3) };
             js_crypto_scrypt_async(bytes_ptr(0), bytes_ptr(1), arg(2), callback)
@@ -734,5 +764,104 @@ mod tests {
         let a = read_uuid_string(js_crypto_random_uuidv7());
         let b = read_uuid_string(js_crypto_random_uuidv7());
         assert_ne!(a, b, "consecutive v7 UUIDs must differ");
+    }
+
+    // Regression: the VALUE-form of async crypto (named-import bare call /
+    // `util.promisify(crypto.pbkdf2)`) routes through
+    // `js_crypto_native_dispatch`, NOT the direct `crypto.pbkdf2(...)`
+    // codegen fast-path. Before the fix, `js_crypto_native_dispatch` had no
+    // `"pbkdf2"` / 2-arg `"randomBytes"` arm, so the call returned `undefined`
+    // and the Node-style `(err, value)` callback never fired — the awaiting
+    // (promisified) Promise hung forever. These tests assert the callback IS
+    // invoked, with a null error and a non-null Buffer result.
+    use std::cell::Cell;
+    thread_local! {
+        static CB_FIRED: Cell<bool> = const { Cell::new(false) };
+        static CB_ERR_NULLISH: Cell<bool> = const { Cell::new(false) };
+        static CB_VALUE_PTR: Cell<bool> = const { Cell::new(false) };
+    }
+
+    extern "C" fn record_cb_thunk(
+        _closure: *const perry_runtime::ClosureHeader,
+        err: f64,
+        value: f64,
+    ) -> f64 {
+        CB_FIRED.with(|f| f.set(true));
+        let err_bits = err.to_bits();
+        CB_ERR_NULLISH.with(|f| {
+            f.set(
+                err_bits == perry_runtime::JSValue::null().bits()
+                    || err_bits == perry_runtime::JSValue::undefined().bits(),
+            )
+        });
+        CB_VALUE_PTR
+            .with(|f| f.set(perry_runtime::JSValue::from_bits(value.to_bits()).is_pointer()));
+        undefined()
+    }
+
+    fn make_record_callback() -> f64 {
+        perry_runtime::closure::js_register_closure_arity(record_cb_thunk as *const u8, 2);
+        let closure = perry_runtime::closure::js_closure_alloc(record_cb_thunk as *const u8, 0);
+        boxed_ptr(closure as *const u8)
+    }
+
+    fn reset_record() {
+        CB_FIRED.with(|f| f.set(false));
+        CB_ERR_NULLISH.with(|f| f.set(false));
+        CB_VALUE_PTR.with(|f| f.set(false));
+    }
+
+    fn js_str(s: &str) -> f64 {
+        let ptr = perry_runtime::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+    }
+
+    #[test]
+    fn native_dispatch_pbkdf2_value_form_fires_callback() {
+        reset_record();
+        let cb = make_record_callback();
+        // pbkdf2(password, salt, iterations, keylen, digest, callback)
+        let args = [
+            js_str("password"),
+            js_str("salt"),
+            1000.0,
+            32.0,
+            js_str("sha256"),
+            cb,
+        ];
+        let method = b"pbkdf2";
+        unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
+        }
+        assert!(CB_FIRED.with(|f| f.get()), "pbkdf2 callback must fire");
+        assert!(
+            CB_ERR_NULLISH.with(|f| f.get()),
+            "pbkdf2 callback err must be null/undefined"
+        );
+        assert!(
+            CB_VALUE_PTR.with(|f| f.get()),
+            "pbkdf2 callback must deliver a Buffer pointer"
+        );
+    }
+
+    #[test]
+    fn native_dispatch_random_bytes_value_form_fires_callback() {
+        reset_record();
+        let cb = make_record_callback();
+        // randomBytes(size, callback)
+        let args = [16.0, cb];
+        let method = b"randomBytes";
+        unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
+        }
+        assert!(CB_FIRED.with(|f| f.get()), "randomBytes callback must fire");
+        assert!(
+            CB_ERR_NULLISH.with(|f| f.get()),
+            "randomBytes callback err must be null/undefined"
+        );
+        assert!(
+            CB_VALUE_PTR.with(|f| f.get()),
+            "randomBytes callback must deliver a Buffer pointer"
+        );
     }
 }

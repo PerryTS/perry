@@ -417,6 +417,30 @@ pub enum Expr {
     ClassCaptureValue {
         class_name: String,
         index: u32,
+        /// #5437 (cross-module member-`new`): when present, codegen emits
+        /// `js_class_capture_value_or(cid, index, <fallback>)` — the decl-site
+        /// snapshot wins WHEN IT HOLDS A REAL VALUE, otherwise the fallback
+        /// (the `new`-site appended/synthesized cap arg) is used. The
+        /// synthesized constructor stashes its `__perry_cap_*` fields through
+        /// this form so a CROSS-MODULE `new ns.C(...)` — which routes to the
+        /// runtime construct path (`construct_registered_class_ref`) and
+        /// supplies NO cap args, leaving the cap params bound to garbage —
+        /// still recovers the captured value from the class's own decl-site
+        /// snapshot (the ctor body is compiled in the class's home module, so
+        /// `class_name` resolves to its real `class_id` there). `None` keeps
+        /// the plain snapshot read used by STATIC method prologue rebinds.
+        fallback: Option<Box<Expr>>,
+        /// #5437 (param-first rebind): when `true`, the `fallback` (the LIVE
+        /// `new`-site cap param) WINS whenever it is present; the decl-site
+        /// snapshot is consulted ONLY when the param is `undefined` (the
+        /// cross-module construct signal — that path drops the cap arg). Codegen
+        /// emits `js_param_or_class_capture_value(param, cid, index)`. This is
+        /// the correct policy for the synthesized constructor's capture rebind:
+        /// a SAME-module `new C(...)` supplies the current (possibly mutated)
+        /// outer, which must not be overridden by a stale decl-site snapshot.
+        /// `false` (default) keeps the snapshot-first
+        /// `js_class_capture_value_or` behavior used by every other caller.
+        prefer_fallback: bool,
     },
 
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the
@@ -571,6 +595,19 @@ pub enum Expr {
     SuperMethodCall {
         method: String,
         args: Vec<Expr>,
+    },
+
+    /// `super.method(...spread)` with one or more spread arguments. Mirrors
+    /// `SuperCallSpread` for the method-call shape: the plain `SuperMethodCall`
+    /// drops the spread marker and would pass the spread operand (an array) as
+    /// ONE positional argument, so a `super.emit(event, ...args)` forwarding a
+    /// rest param to a native base (EventEmitter) delivered `[payload]` instead
+    /// of `payload`. Codegen flattens every arg (regular + spread-expanded)
+    /// into a single args array and dispatches through the runtime super
+    /// helper, which already takes an args buffer.
+    SuperMethodCallSpread {
+        method: String,
+        args: Vec<CallArg>,
     },
 
     // Super property read (value form). super.<prop>. Resolved at
@@ -1438,6 +1475,10 @@ pub enum Expr {
         // serialized at runtime. When `Some`, it takes precedence over the
         // static `headers` pairs above. See #4932.
         headers_dynamic: Option<Box<Expr>>,
+        // The `init.signal` AbortSignal, when present, so the request can be
+        // aborted (`controller.abort()` / `AbortSignal.timeout`). Lowered to a
+        // `js_fetch_set_pending_signal` call emitted just before the fetch.
+        signal: Option<Box<Expr>>,
     },
     FetchGetWithAuth {
         // fetchWithAuth(url, authHeader) -> Promise<Response>
@@ -1727,6 +1768,17 @@ pub enum Expr {
     BoxedPrimitiveNew {
         kind: BoxedPrimitiveKind,
         arg: Box<Expr>,
+        // Whether an argument was syntactically given (`new String(x)`) vs.
+        // omitted (`new String()`). `arg` alone can't disambiguate an omitted
+        // argument from a present one that evaluates to `undefined` at
+        // runtime (e.g. `new String(x)` where `x` holds `undefined`) — both
+        // would otherwise collapse to the same NaN-boxed `undefined` value at
+        // the `js_boxed_*_new` runtime boundary. Only `BoxedPrimitiveKind::
+        // String` currently reads this (see `js_boxed_string_new`); Number/
+        // Boolean disambiguate implicitly because their present-arg coercion
+        // (`NumberCoerce`/`BooleanCoerce`) always produces a non-`undefined`
+        // primitive.
+        arg_present: bool,
     },
 
     // Date operations
@@ -2106,6 +2158,14 @@ pub enum Expr {
     RegExpDynamic {
         pattern: Box<Expr>,
         flags: Option<Box<Expr>>,
+        /// `true` when this came from the *function-call* form `RegExp(x)`
+        /// (not `new RegExp(x)`). Per ECMA-262 22.2.4.1, calling `RegExp` as a
+        /// function with a RegExp `pattern` and `undefined` `flags` returns the
+        /// argument unchanged (object identity) rather than constructing a copy
+        /// — so the call form lowers to `js_regexp_construct_call` (identity
+        /// shortcut) while `new` keeps `js_regexp_construct` (always a fresh
+        /// object). See #5586.
+        is_call: bool,
     },
     /// regex.test(string) -> boolean
     RegExpTest {
@@ -2573,6 +2633,10 @@ pub enum Expr {
         paths: Vec<String>,
         filename: Box<Expr>,
         options: Option<Box<Expr>>,
+        /// `true` when the Worker options carry `eval: true` — i.e. the first
+        /// argument is JS SOURCE, not a filename (Node eval-mode Worker, used by
+        /// e.g. `@perryts/threads`). Parsed from the options object at lowering.
+        is_eval: bool,
     },
 }
 

@@ -758,3 +758,179 @@ fn wide_object_index_reads_and_descriptor_writes() {
         assert_eq!(f64::from_bits(v43.bits()), 4343.0);
     }
 }
+
+/// #5736: `own_key_present` on a wide object (≥257 keys — e.g. a barrel
+/// `export *` namespace) must use the O(1) wide-key index rather than an O(n)
+/// keys_array scan, so `Object.values`/`Object.entries` (which re-check every
+/// own key) don't degrade to O(n²). Correctness must be preserved: present keys
+/// resolve, absent keys don't, and `Object.values` yields every value.
+#[test]
+fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let n = 600u32;
+        for i in 0..n {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        // Every present key is found through the wide-index probe.
+        for i in [0u32, 1, 42, 256, 257, 300, 599] {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            assert!(
+                own_key_present(obj, key),
+                "present key {name} must be found"
+            );
+        }
+        // Absent keys fall through the index miss to the linear scan → false.
+        for name in ["nope", "w600", "w-1", ""] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            assert!(
+                !own_key_present(obj, key),
+                "absent key {name:?} must not be found"
+            );
+        }
+        // `Object.values` must still enumerate every value exactly once.
+        let values = crate::object::js_object_values(obj as *const ObjectHeader);
+        assert_eq!(
+            crate::array::js_array_length(values),
+            n,
+            "Object.values must yield one value per key"
+        );
+        // Track each payload so a balanced duplicate/omission can't slip past a
+        // length+sum check: every value 0..n must appear exactly once.
+        let mut seen = vec![false; n as usize];
+        for i in 0..n {
+            let v = crate::array::js_array_get(values, i);
+            let num = f64::from_bits(v.bits());
+            let idx = num as usize;
+            assert_eq!(num, idx as f64, "Object.values must yield integer payloads");
+            assert!(
+                (idx as u32) < n,
+                "Object.values yielded out-of-range value {num}"
+            );
+            assert!(!seen[idx], "Object.values yielded duplicate value {idx}");
+            seen[idx] = true;
+        }
+        assert!(
+            seen.into_iter().all(|hit| hit),
+            "Object.values missed at least one value"
+        );
+    }
+}
+
+/// `js_object_to_string` must NOT dereference a handle-band value (a Web Fetch
+/// `Headers`/`Request`/`Response`/`Blob` registry id, or any other small native
+/// handle) as a heap pointer. Such ids are NaN-boxed as `POINTER_TAG` values but
+/// are not `GcHeader`-prefixed objects; reading the GC type byte at `id - 8` (or
+/// `(*ObjectHeader).class_id` at `id`) faults on unmapped low memory. This is
+/// the `claude -p` SIGSEGV (`EXC_BAD_ACCESS` at `0x3FFFB` == `0x40003 - 8`),
+/// where the SDK coerced a `Headers` handle to a string while building a
+/// request. The brand must fall through to the generic `[object Object]` tag.
+#[test]
+fn object_to_string_rejects_handle_band_ids() {
+    use crate::value::addr_class;
+    for &id in &[
+        addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
+        addr_class::FETCH_HANDLE_BAND_START + 3, // the 0x40003 from the crash
+        addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
+        1usize,                                  // common native handle
+    ] {
+        assert!(addr_class::is_handle_band(id));
+        let handle = crate::value::js_nanbox_pointer(id as i64);
+        // Must return a string brand without dereferencing the bogus pointer.
+        let result = unsafe { js_object_to_string(handle) };
+        let s = js_string_to_rust(JSValue::from_bits(result.to_bits()));
+        assert_eq!(
+            s, "[object Object]",
+            "handle-band id {id:#x} must brand as [object Object], got {s:?}"
+        );
+    }
+}
+
+/// #5437 — captured-`undefined` tag-loss on Next.js dynamic/API routes.
+///
+/// `js_class_capture_value_or` must NOT replace a snapshot whose slot is a
+/// genuinely-undefined capture (`TAG_UNDEFINED`) with a tag-stripped/mis-boxed
+/// raw-word `fallback` (`0x0000_0000_0000_0001` — `TAG_UNDEFINED` with its
+/// `0x7FFC` NaN-box tag stripped). The bundle's `let t_ = cond ? fn : void 0`
+/// debug logger is `undefined`; at giant-module scale the `new`-site appended
+/// fallback for it materialized as `0x1`, so the snapshot's correct `undefined`
+/// was discarded → `t_` became `0x1` → `null == t_` false → `t_(…)` called →
+/// "value is not a function" → route 500.
+#[test]
+fn class_capture_value_or_rejects_tag_stripped_fallback() {
+    const TAG_UNDEFINED: u64 = crate::value::TAG_UNDEFINED; // 0x7FFC_0000_0000_0001
+    const STRIPPED: u64 = 0x0000_0000_0000_0001; // tag-stripped undefined
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let stripped = f64::from_bits(STRIPPED);
+
+    // Case 1 (THE BUG): snapshot slot is genuinely `undefined`, fallback is the
+    // tag-stripped `0x1`. Must return `undefined`, NOT the corrupt fallback.
+    let cid_a: u32 = 0x5437_0001;
+    let snap_a = [TAG_UNDEFINED, TAG_UNDEFINED, TAG_UNDEFINED];
+    unsafe {
+        js_class_register_capture_values(cid_a, snap_a.as_ptr() as *const f64, snap_a.len());
+    }
+    let got = js_class_capture_value_or(cid_a, 1, stripped).to_bits();
+    assert_eq!(
+        got, TAG_UNDEFINED,
+        "undefined snapshot + tag-stripped fallback must yield undefined, got {got:#018x}"
+    );
+
+    // Case 2 (W6 — snapshot wins): a real pointer in the snapshot stays
+    // authoritative even when the fallback is a (different) real value.
+    let cid_b: u32 = 0x5437_0002;
+    let real_ptr = crate::value::POINTER_TAG | 0x1234_5678;
+    let snap_b = [real_ptr];
+    unsafe {
+        js_class_register_capture_values(cid_b, snap_b.as_ptr() as *const f64, snap_b.len());
+    }
+    let other = f64::from_bits(crate::value::POINTER_TAG | 0xDEAD);
+    let got_b = js_class_capture_value_or(cid_b, 0, other).to_bits();
+    assert_eq!(
+        got_b, real_ptr,
+        "non-undefined snapshot slot must win over the fallback (W6), got {got_b:#018x}"
+    );
+
+    // Case 3 (#5437 hoisted-class/TDZ — VALID fallback over undefined snapshot
+    // still wins): snapshot slot is `undefined` (class decl hoisted above the
+    // local's assignment) but the fallback is a legitimate NaN-boxed value.
+    let cid_c: u32 = 0x5437_0003;
+    let snap_c = [TAG_UNDEFINED];
+    unsafe {
+        js_class_register_capture_values(cid_c, snap_c.as_ptr() as *const f64, snap_c.len());
+    }
+    let valid_fb = crate::value::POINTER_TAG | 0xCAFE;
+    let got_c = js_class_capture_value_or(cid_c, 0, f64::from_bits(valid_fb)).to_bits();
+    assert_eq!(
+        got_c, valid_fb,
+        "undefined snapshot + VALID fallback must keep the fallback (TDZ fix), got {got_c:#018x}"
+    );
+
+    // Case 4 (no snapshot + tag-stripped fallback): with no registered snapshot
+    // a corrupt `0x1` fallback is not callable, so resolve to `undefined`.
+    let cid_d: u32 = 0x5437_0004; // never registered
+    let got_d = js_class_capture_value_or(cid_d, 0, stripped).to_bits();
+    assert_eq!(
+        got_d, TAG_UNDEFINED,
+        "no snapshot + tag-stripped fallback must yield undefined, got {got_d:#018x}"
+    );
+
+    // Case 5 (no snapshot + valid fallback): the appended cap value is used
+    // (getSpan/require-derived-capture path preserved).
+    let cid_e: u32 = 0x5437_0005; // never registered
+    let valid2 = crate::value::POINTER_TAG | 0xBEEF;
+    let got_e = js_class_capture_value_or(cid_e, 0, f64::from_bits(valid2)).to_bits();
+    assert_eq!(
+        got_e, valid2,
+        "no snapshot + valid fallback must use the fallback, got {got_e:#018x}"
+    );
+
+    // Sanity: `0.0` (the number zero) is a legitimate captured value and must
+    // NOT be treated as a tag-stripped word.
+    assert!(!fallback_is_tag_stripped(0.0_f64));
+    assert!(fallback_is_tag_stripped(stripped));
+    assert!(!fallback_is_tag_stripped(undef));
+}

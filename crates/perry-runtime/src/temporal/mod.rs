@@ -210,6 +210,16 @@ pub fn alloc_temporal_cell(value: TemporalValue) -> f64 {
 /// then read the `GcHeader.obj_type`.
 #[inline]
 pub fn is_temporal_cell_addr(addr: usize) -> bool {
+    // #5625: small typed arrays and `Buffer`s are raw-`alloc`'d off the GC heap
+    // with NO `GcHeader` prefix, so the word at `addr - GC_HEADER_SIZE` is
+    // unrelated heap memory that can coincidentally hold the `GC_TYPE_TEMPORAL`
+    // tag (observed: a 4-element typed array whose stale back-read obj_type was
+    // 18 → `<TA>.slice()` mis-routed through Temporal dispatch and deref'd a
+    // garbage cell). They are never `TemporalCell`s; reject them via the side
+    // tables first, exactly as `crate::date::is_date_cell_addr` does.
+    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
+        return false;
+    }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
         Some(header) => header.obj_type == crate::gc::GC_TYPE_TEMPORAL,
         None => false,
@@ -245,10 +255,49 @@ pub fn temporal_value_ref<'a>(value: f64) -> Option<&'a TemporalValue> {
     unsafe { Some(&*(*(addr as *const TemporalCell)).value) }
 }
 
+/// Like [`temporal_value_ref`] but also resolves `class X extends Temporal.<Type>`
+/// subclass instances by reading the stashed `__perry_temporal_cell__` field.
+/// Use this in `ToTemporalXxx` coercions so `compare`/`from`/`until`/`since`
+/// use internal slots instead of property getters. (#5587)
+#[cfg(feature = "temporal")]
+#[inline]
+#[allow(clippy::needless_lifetimes)]
+pub fn temporal_value_ref_or_subclass<'a>(value: f64) -> Option<&'a TemporalValue> {
+    temporal_value_ref(value).or_else(|| {
+        let bits = value.to_bits();
+        if !crate::value::JSValue::from_bits(bits).is_pointer() {
+            return None;
+        }
+        let addr = (bits & NANBOX_PTR_MASK) as usize;
+        unsafe { crate::object::temporal_subclass_cell(addr) }.and_then(temporal_value_ref)
+    })
+}
+
 /// The brand sub-kind of a Temporal value, or `None` if not a Temporal cell.
 #[inline]
 pub fn temporal_kind(value: f64) -> Option<TemporalKind> {
     temporal_value_ref(value).map(TemporalValue::kind)
+}
+
+/// The calendar identifier string of a Temporal value that carries a calendar
+/// (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay, ZonedDateTime),
+/// or `None` for types without a calendar (Instant, PlainTime, Duration) or
+/// non-Temporal values.
+#[cfg(feature = "temporal")]
+pub fn temporal_calendar_id(value: f64) -> Option<&'static str> {
+    match temporal_value_ref(value)? {
+        TemporalValue::PlainDate(d) => Some(d.calendar().identifier()),
+        TemporalValue::PlainDateTime(dt) => Some(dt.calendar().identifier()),
+        TemporalValue::PlainYearMonth(ym) => Some(ym.calendar().identifier()),
+        TemporalValue::PlainMonthDay(md) => Some(md.calendar().identifier()),
+        TemporalValue::ZonedDateTime(z) => Some(z.calendar().identifier()),
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "temporal"))]
+pub fn temporal_calendar_id(_value: f64) -> Option<&'static str> {
+    None
 }
 
 /// Drop the embedded `temporal_rs` value when a Temporal cell is swept,
@@ -271,6 +320,65 @@ pub unsafe fn finalize_temporal_cell_for_gc(cell: *mut TemporalCell) {
 /// resolves without the engine.
 #[cfg(not(feature = "temporal"))]
 pub unsafe fn finalize_temporal_cell_for_gc(_cell: *mut TemporalCell) {}
+
+/// Convert a Temporal value to epoch milliseconds for Intl.DateTimeFormat.
+///
+/// Each Temporal type maps its fields to a Unix timestamp (UTC):
+/// - `Instant`/`ZonedDateTime`: direct epoch_milliseconds()
+/// - `PlainDate`/`PlainDateTime`: treat as UTC midnight / UTC wall-clock time
+/// - `PlainTime`: use epoch base date 1970-01-01 with the time fields
+/// - `PlainYearMonth`: use day=1 for the epoch base
+/// - `PlainMonthDay`: use year=1970 for the epoch base
+/// - `Duration`: no epoch representation → `None`
+#[cfg(feature = "temporal")]
+pub fn temporal_to_epoch_ms(tv: &TemporalValue) -> Option<f64> {
+    let secs: i64 = match tv {
+        TemporalValue::Instant(i) => return Some(i.epoch_milliseconds() as f64),
+        TemporalValue::ZonedDateTime(z) => return Some(z.epoch_milliseconds() as f64),
+        TemporalValue::PlainDate(d) => crate::date::components_to_timestamp(
+            d.year(),
+            d.month() as u32,
+            d.day() as u32,
+            0,
+            0,
+            0,
+        ),
+        TemporalValue::PlainDateTime(dt) => crate::date::components_to_timestamp(
+            dt.year(),
+            dt.month() as u32,
+            dt.day() as u32,
+            dt.hour() as u32,
+            dt.minute() as u32,
+            dt.second() as u32,
+        ),
+        TemporalValue::PlainTime(t) => crate::date::components_to_timestamp(
+            1970,
+            1,
+            1,
+            t.hour() as u32,
+            t.minute() as u32,
+            t.second() as u32,
+        ),
+        TemporalValue::PlainYearMonth(ym) => {
+            crate::date::components_to_timestamp(ym.year(), ym.month() as u32, 1, 0, 0, 0)
+        }
+        TemporalValue::PlainMonthDay(md) => crate::date::components_to_timestamp(
+            1970,
+            md.month_code().to_month_integer() as u32,
+            md.day() as u32,
+            0,
+            0,
+            0,
+        ),
+        TemporalValue::Duration(_) => return None,
+    };
+    Some(secs as f64 * 1000.0)
+}
+
+#[cfg(not(feature = "temporal"))]
+pub fn temporal_to_epoch_ms(_tv: &TemporalValue) -> Option<f64> {
+    match *_tv {}
+}
 
 /// Render a Temporal value as its canonical ISO-8601 / IXDTF string — the form
 /// `toString` and `toJSON` use. Returns `None` only if `value` is not a

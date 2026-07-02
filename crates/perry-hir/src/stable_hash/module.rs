@@ -19,6 +19,8 @@ impl SH for Module {
             enums,
             globals,
             functions,
+            script_global_functions,
+            references_global_this,
             init,
             exported_native_instances,
             exported_func_return_native_instances,
@@ -33,6 +35,7 @@ impl SH for Module {
             init_kind,
             async_step_closures,
             closure_display_names,
+            class_display_names,
             closure_source_text,
             async_generator_funcs,
             gen_param_prologue_len,
@@ -46,6 +49,11 @@ impl SH for Module {
         enums.hash(h);
         globals.hash(h);
         functions.hash(h);
+        // #5579: both drive the globalThis function-reflection codegen, so
+        // they participate in the stable hash (else a cached object could omit
+        // the reflection or emit it under the wrong gate).
+        script_global_functions.hash(h);
+        references_global_this.hash(h);
         init.hash(h);
         exported_native_instances.hash(h);
         exported_func_return_native_instances.hash(h);
@@ -72,6 +80,15 @@ impl SH for Module {
             closure_display_names.iter().map(|(k, v)| (*k, v)).collect();
         display_pairs.sort_unstable_by_key(|(k, _)| *k);
         for (id, name) in display_pairs {
+            id.hash(h);
+            name.hash(h);
+        }
+        // #5592: class `.name` overrides drive js_register_class_name codegen,
+        // so they participate in the stable hash.
+        let mut class_name_pairs: Vec<(u32, &String)> =
+            class_display_names.iter().map(|(k, v)| (*k, v)).collect();
+        class_name_pairs.sort_unstable_by_key(|(k, _)| *k);
+        for (id, name) in class_name_pairs {
             id.hash(h);
             name.hash(h);
         }

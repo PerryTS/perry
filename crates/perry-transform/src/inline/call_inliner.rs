@@ -1198,17 +1198,59 @@ pub fn inline_calls_in_expr(
             ));
         }
         Expr::Sequence(exprs) => {
-            for item in exprs {
-                hoisted.extend(inline_calls_in_expr(
-                    item,
+            // A comma-sequence evaluates its elements left-to-right; element
+            // `i>0` runs only AFTER the side effects of elements `0..i`. Inline
+            // setup statements (the `let <param> = <arg>` arg-bindings) bubble
+            // up to *before the enclosing statement*, so hoisting a later
+            // element's setup would move its arg reads ahead of the earlier
+            // stores those reads depend on. For an esbuild `__esm` schema
+            // factory — one big comma-sequence of `Global = ctor({...})`
+            // assignments where a later object literal reads an
+            // earlier-assigned schema var (`C31 = KP({ k: YE7.optional() })`) —
+            // that reorders the read of `YE7` ahead of its store, yielding
+            // `undefined` and a `Cannot read properties of undefined` throw.
+            //
+            // Only the first element is evaluated before any sibling side
+            // effect, so only its setup may safely hoist. For later elements,
+            // inline into a candidate clone and commit only when it needs no
+            // hoisted setup (a pure substitution stays in place); otherwise
+            // leave the element as its original runtime call — always correct,
+            // just un-inlined. Mirrors the clone-and-revert guard the
+            // short-circuit `Logical` / `Conditional` arms already use.
+            for (idx, item) in exprs.iter_mut().enumerate() {
+                if idx == 0 {
+                    hoisted.extend(inline_calls_in_expr(
+                        item,
+                        func_candidates,
+                        method_candidates,
+                        local_types,
+                        exact_receiver_facts,
+                        next_local_id,
+                        enclosing_class,
+                        class_field_types,
+                    ));
+                    continue;
+                }
+                let before_facts = exact_receiver_facts.clone();
+                let mut candidate = item.clone();
+                let mut candidate_facts = before_facts.clone();
+                let item_hoisted = inline_calls_in_expr(
+                    &mut candidate,
                     func_candidates,
                     method_candidates,
                     local_types,
-                    exact_receiver_facts,
+                    &mut candidate_facts,
                     next_local_id,
                     enclosing_class,
                     class_field_types,
-                ));
+                );
+                if item_hoisted.is_empty() {
+                    *item = candidate;
+                    *exact_receiver_facts = candidate_facts;
+                } else {
+                    *exact_receiver_facts = before_facts;
+                    invalidate_exact_receivers_for_expr(item, exact_receiver_facts);
+                }
             }
         }
         // Descend into closure bodies. Without this, the inliner never

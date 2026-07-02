@@ -62,13 +62,21 @@ fn top16(bits: u64) -> u64 {
 /// from `Boolean.prototype` and pass a `Boolean` wrapper to `fn`. Strings keep
 /// their dedicated code-unit path; symbols / bigints (no indexed properties)
 /// are returned as-is and read as an empty array-like.
-fn to_object(recv: f64) -> f64 {
+pub(super) fn to_object(recv: f64) -> f64 {
     let b = recv.to_bits();
     if b == TAG_UNDEFINED || b == TAG_NULL {
         let msg = b"Cannot convert undefined or null to object";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err = crate::error::js_typeerror_new(s);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    // A symbol is `POINTER_TAG`-shaped (heap-allocated), so it must be boxed
+    // BEFORE the generic pointer early-return below — otherwise `ToObject` would
+    // pass it through unchanged and a method returning `ToObject(this)` (e.g.
+    // `[].sort.call(Symbol())`) yields the raw symbol, not an `instanceof
+    // Symbol` wrapper (test262 sort/call-with-primitive).
+    if unsafe { crate::symbol::js_is_symbol(recv) } != 0 {
+        return crate::builtins::js_boxed_symbol_new(recv);
     }
     // Already a heap object / array / closure.
     if top16(b) == 0x7FFD {
@@ -82,7 +90,7 @@ fn to_object(recv: f64) -> f64 {
     // object, so `obj instanceof String` is true. (test262
     // Array.prototype.{every,some,reduce,reduceRight,...}/15.4.4.*-1-7.)
     if is_string_value(b) {
-        return crate::builtins::js_boxed_string_new(recv);
+        return crate::builtins::js_boxed_string_new(recv, 1);
     }
     if b == TAG_TRUE || b == crate::value::TAG_FALSE {
         return crate::builtins::js_boxed_boolean_new(recv);
@@ -93,7 +101,14 @@ fn to_object(recv: f64) -> f64 {
     if top16(b) == 0x7FFE || JSValue::from_bits(b).is_number() {
         return crate::builtins::js_boxed_number_new(recv);
     }
-    // Symbol / BigInt — no indexed properties; treated as an empty array-like.
+    // BigInt boxes into a `BigInt` wrapper object (`ToObject`): no indexed
+    // properties (still an empty array-like for the read/iterate methods), but a
+    // method that *returns* `ToObject(this)` — `[].sort.call(0n)` — must yield an
+    // object that is `instanceof BigInt` (test262 sort/call-with-primitive).
+    // (Symbols are handled above, before the pointer early-return.)
+    if JSValue::from_bits(b).is_bigint() {
+        return crate::builtins::js_boxed_bigint_new(recv);
+    }
     recv
 }
 
@@ -130,7 +145,7 @@ fn to_length(v: f64) -> i64 {
 /// its `length <= capacity` bound, then `(*arr).length` / the element buffer
 /// read `field_count` / inline slots as garbage (see `normalize_array_receiver`).
 #[inline]
-fn as_real_array(recv: f64) -> *mut ArrayHeader {
+pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
     let b = recv.to_bits();
     if top16(b) != 0x7FFD {
         return ptr::null_mut();
@@ -160,7 +175,7 @@ fn as_real_array(recv: f64) -> *mut ArrayHeader {
 }
 
 #[inline]
-fn is_string_value(bits: u64) -> bool {
+pub(super) fn is_string_value(bits: u64) -> bool {
     let t = top16(bits);
     // Heap string (0x7FFF) or small-string-optimised inline string (0x7FF9).
     t == 0x7FFF || t == 0x7FF9
@@ -247,7 +262,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
 }
 
 /// `LengthOfArrayLike(ToObject(recv))`.
-fn al_length(recv: f64) -> i64 {
+pub(super) fn al_length(recv: f64) -> i64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { (*arr).length as i64 };
@@ -1710,7 +1725,7 @@ fn arg_or_undef(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
 
 /// Dense-array branch of [`array_proto_mutator`]. Reuses the existing dense
 /// runtime helpers (matching the `js_native_call_method` array arms).
-unsafe fn real_array_mutator(
+pub(super) unsafe fn real_array_mutator(
     arr: *mut ArrayHeader,
     method: &str,
     args_ptr: *const f64,
@@ -1724,6 +1739,12 @@ unsafe fn real_array_mutator(
             nanbox_arr(arr)
         }
         "push" => {
+            // Spec §23.1.3.21 step 6 calls Set(O,"length",…) even with 0 args,
+            // so frozen / non-writable-length throws regardless of arg count.
+            if crate::array::array_is_frozen(arr) {
+                crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+            }
+            crate::array::guard_writable_length(arr);
             let mut a = arr;
             for i in 0..args_len {
                 a = crate::array::js_array_push_f64(a, arg_or_undef(args_ptr, args_len, i));
@@ -1731,12 +1752,11 @@ unsafe fn real_array_mutator(
             crate::array::js_array_length(a) as f64
         }
         "unshift" => {
-            if args_len == 0 || args_ptr.is_null() {
-                crate::array::js_array_length(arr) as f64
-            } else {
-                let r = crate::array::js_array_unshift_variadic(arr, args_ptr, args_len as u32);
-                crate::array::js_array_length(r) as f64
-            }
+            // Route everything through js_array_unshift_variadic so the
+            // frozen / non-writable-length guards fire even for 0-arg calls.
+            let count = if args_ptr.is_null() { 0 } else { args_len };
+            let r = crate::array::js_array_unshift_variadic(arr, args_ptr, count as u32);
+            crate::array::js_array_length(r) as f64
         }
         "sort" => {
             let cmp =

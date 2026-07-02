@@ -1190,12 +1190,7 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
             None if is_static_path_join_call(callee) => {
                 resolve_static_path_args(args, consts, param_literals, local_literals, visiting)
             }
-            None => Resolution::Unresolved(
-                "path argument is not statically resolvable (supported: string literals, \
-                 ternaries of resolvable arms, template literals with const-local \
-                 interpolations, and references to module-level const string locals)"
-                    .to_string(),
-            ),
+            None => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
         },
         Expr::PathJoin(left, right) | Expr::PathResolveJoin(left, right) => {
             let left = resolve_import_path_with_context(
@@ -1349,14 +1344,139 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
             visiting.remove(id);
             resolved
         }
-        _ => Resolution::Unresolved(
-            "path argument is not statically resolvable (supported: string literals, \
-             ternaries of resolvable arms, template literals with const-local \
-             interpolations, and references to module-level const string locals)"
-                .to_string(),
-        ),
+        // #5207 registry-object pattern: `const R = { a: "./chunk-a.js", … };
+        // import(R[key])` / `import(R.a)`. Bundlers (and hand-written lazy-load
+        // tables) map a route/feature key to a statically-knowable chunk path
+        // through a const object literal — the exact "enumerate with a registry
+        // object" shape the over-cap note already advertises. Either member form
+        // resolves to the union of the registry's value specifiers (the whole
+        // chunk set is what we want to ingest, and the runtime dispatch still
+        // picks the right one by path string).
+        //
+        // Guard rail: this only fires when *every* value resolves to a relative
+        // module specifier (`./…` / `../…`). That keeps it a strict
+        // deferrals-into-compiles change — a plain data object indexed for a
+        // non-module reason (`const cfg = { name: "app", port: "3000" };
+        // import(cfg[k])`) has non-relative values, so it stays deferred exactly
+        // as before instead of trying to compile `"app"`/`"3000"` as modules.
+        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+            // Record every const-local id on the registry's indirection chain in
+            // the *outer* `visiting` set so a value that member-accesses back
+            // into this (or an enclosing) registry is caught as a cycle rather
+            // than recursing forever — `const R5 = { a: R6[x] }; const R6 = { b:
+            // R5[y] }` is valid TS and would otherwise overflow the stack. The
+            // chain ids are removed again before returning so sibling
+            // resolutions still see those bindings.
+            let mut chain_ids: Vec<u32> = Vec::new();
+            let resolved = match object_registry_values(object, consts, visiting, &mut chain_ids) {
+                Some(values) => resolve_registry_value_union(
+                    &values,
+                    consts,
+                    param_literals,
+                    local_literals,
+                    visiting,
+                ),
+                None => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
+            };
+            for id in &chain_ids {
+                visiting.remove(id);
+            }
+            resolved
+        }
+        _ => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
     }
 }
+
+/// True for a relative module specifier (`./x`, `../x`). Registry-object
+/// dynamic-import resolution (#5207) only over-approximates to values that look
+/// like relative chunk paths, so a non-module data object stays deferred.
+fn is_relative_specifier(s: &str) -> bool {
+    s.starts_with("./") || s.starts_with("../") || s == "." || s == ".."
+}
+
+/// #5207: collect the candidate value expressions of a const object-literal
+/// "registry", following `const`-local indirection (`const R = { … };
+/// import(R[k])`). Handles both object-literal HIR shapes: open-shape literals
+/// kept as [`Expr::Object`], and closed-shape literals lowered to
+/// `new __AnonShape_…(value0, value1, …)` (the constructor args are the field
+/// values in declaration order — see `lower::expr_object`). Returns `None` for
+/// anything that isn't statically one of those, so member access on an opaque
+/// binding falls back to deferral.
+///
+/// Every traversed `LocalGet` id is inserted into `visiting` (and pushed onto
+/// `chain_ids` so the caller can undo it) — a binding already in `visiting`
+/// breaks the chain with `None`. Sharing the resolver's `visiting` set is what
+/// makes cycle detection span the recursion back through
+/// [`resolve_registry_value_union`], not just a single indirection chain.
+fn object_registry_values<'a, V: Borrow<Expr>>(
+    object: &'a Expr,
+    consts: &'a std::collections::HashMap<u32, V>,
+    visiting: &mut std::collections::HashSet<u32>,
+    chain_ids: &mut Vec<u32>,
+) -> Option<Vec<&'a Expr>> {
+    match object {
+        Expr::Object(entries) => Some(entries.iter().map(|(_, v)| v).collect()),
+        Expr::New {
+            class_name, args, ..
+        } if class_name.starts_with("__AnonShape_") => Some(args.iter().collect()),
+        Expr::LocalGet(id) => {
+            if !visiting.insert(*id) {
+                return None;
+            }
+            chain_ids.push(*id);
+            object_registry_values(consts.get(id)?.borrow(), consts, visiting, chain_ids)
+        }
+        _ => None,
+    }
+}
+
+/// #5207: resolve a registry's value expressions to the union of their module
+/// specifiers, but only when *every* value resolves to a relative specifier.
+/// Any non-relative or unresolvable value collapses the whole site to
+/// `Unresolved` so it keeps deferring (no false compile of a non-module string).
+fn resolve_registry_value_union<V: Borrow<Expr>>(
+    values: &[&Expr],
+    consts: &std::collections::HashMap<u32, V>,
+    param_literals: &std::collections::HashMap<u32, Vec<String>>,
+    local_literals: &std::collections::HashMap<u32, Vec<String>>,
+    visiting: &mut std::collections::HashSet<u32>,
+) -> Resolution {
+    let mut out: Vec<String> = Vec::new();
+    for value in values {
+        match resolve_import_path_with_context(
+            value,
+            consts,
+            param_literals,
+            local_literals,
+            visiting,
+        ) {
+            Resolution::Set(set) => {
+                for s in set {
+                    if !is_relative_specifier(&s) {
+                        return Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string());
+                    }
+                    if !out.contains(&s) {
+                        out.push(s);
+                    }
+                }
+            }
+            Resolution::Unresolved(reason) => return Resolution::Unresolved(reason),
+        }
+    }
+    if out.is_empty() {
+        Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string())
+    } else {
+        Resolution::Set(out)
+    }
+}
+
+/// Shared "couldn't statically resolve this dynamic import() specifier"
+/// message used by the resolver's fall-through arms.
+const NOT_STATICALLY_RESOLVABLE: &str =
+    "path argument is not statically resolvable (supported: string literals, \
+     ternaries of resolvable arms, template literals with const-local \
+     interpolations, const object-literal registries indexed by a known or \
+     computed key, and references to module-level const string locals)";
 
 fn static_string_replace_target<'a>(callee: &'a Expr, args: &[Expr]) -> Option<&'a Expr> {
     if args.len() < 2 {

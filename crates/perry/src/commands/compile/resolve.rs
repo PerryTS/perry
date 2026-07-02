@@ -41,8 +41,8 @@ mod native_library;
 mod tsconfig_paths;
 pub(crate) use native_library::validate_native_library_manifest_value;
 pub(super) use native_library::{
-    has_perry_native_library, has_perry_native_module, parse_native_library_manifest,
-    validate_abi_version,
+    ergonomic_export_alias, has_perry_native_library, has_perry_native_module,
+    parse_native_library_manifest, validate_abi_version,
 };
 #[cfg(test)]
 use native_library::{split_module_spec, PERRY_FFI_ABI_VERSION};

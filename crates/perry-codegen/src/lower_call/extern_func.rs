@@ -70,7 +70,7 @@ fn record_native_abi_return(
     );
 }
 
-fn lower_buffer_and_len_param(
+pub(super) fn lower_buffer_and_len_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     js_argument_index: usize,
@@ -414,7 +414,7 @@ fn build_pod_temp_from_object_value(
     data_slot
 }
 
-fn lower_manifest_pod_param(
+pub(super) fn lower_manifest_pod_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     pod: &NativePodAbi,
@@ -649,7 +649,7 @@ fn record_native_abi_pod_view_param(
     );
 }
 
-fn lower_manifest_pod_view_param(
+pub(super) fn lower_manifest_pod_view_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     pod: &NativePodAbi,
@@ -786,7 +786,7 @@ fn materialize_native_handle_return(
     boxed
 }
 
-fn lower_manifest_param(
+pub(super) fn lower_manifest_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
     js_argument_index: usize,
@@ -841,6 +841,28 @@ fn lower_manifest_param(
                 &native,
                 Some(("js_native_abi_check_string_ptr", "string")),
                 "string.checked_pointer",
+            );
+            lowered.push(ptr_val);
+            arg_types.push(PTR);
+        }
+        NativeAbiType::Json => {
+            // #5626: the JS argument (object/array/primitive) is serialized to
+            // a JSON string at the call site, then passed through the same
+            // single `string` ABI slot as `NativeAbiType::String`. The native
+            // side receives a `*const StringHeader` and `serde_json`-decodes it.
+            // `type_hint` 0 == TYPE_UNKNOWN (let the runtime classify the value).
+            let blk = ctx.block();
+            let raw_ptr = blk.call(I64, "js_json_stringify", &[(DOUBLE, val), (I32, "0")]);
+            let ptr_val = blk.inttoptr(I64, &raw_ptr);
+            let native = LoweredValue::native_handle(raw_ptr);
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_json_stringify", "json_serialized_string")),
+                "json.stringified_pointer",
             );
             lowered.push(ptr_val);
             arg_types.push(PTR);
@@ -1043,6 +1065,18 @@ pub fn try_lower_extern_func_call(
     else {
         return Ok(None);
     };
+    // Issue #5621: ergonomic camelCase native-library exports. When a
+    // `perry.nativeLibrary` package exposes a spec-faithful camelCase
+    // binding (`requestAdapter`) over a snake_case `js_<pkg>_*` FFI symbol
+    // (`js_webgpu_request_adapter`), the CLI driver records the
+    // binding → symbol mapping in `ffi_aliases`. Rewrite `name` to the
+    // manifest symbol up front so every `ffi_signatures` lookup below hits
+    // and codegen emits the call (and `declare`) against the real FFI
+    // symbol — instead of routing through the package's throwing TS
+    // wrapper body or a bare extern to the alias. Exact-match raw exports
+    // (`@perryts/storekit`) carry no alias and pass through unchanged.
+    let aliased_symbol = ctx.ffi_aliases.get(name).cloned();
+    let name: &String = aliased_symbol.as_ref().unwrap_or(name);
     // Issue #1317: when `name` is bound to a named import from a Node
     // submodule Perry recognizes but doesn't yet back with a real impl
     // (`node:timers/promises`, `node:readline/promises`,
@@ -1568,6 +1602,23 @@ pub fn try_lower_extern_func_call(
                 abi_slot_index += 1;
             }
         }
+
+        // Issue #5812 item 4 — pad omitted trailing manifest params with
+        // defined null/zero sentinels so the emitted call/declaration has
+        // the same ABI slot count the native function reads (otherwise it
+        // reads an uninitialized register — the win64 `read_string` crash).
+        // See `omitted_native_params::pad_omitted_native_params`.
+        if let Some((manifest_params, _)) = manifest_sig.as_ref() {
+            super::omitted_native_params::pad_omitted_native_params(
+                ctx,
+                manifest_params,
+                args.len(),
+                abi_slot_index,
+                &mut lowered,
+                &mut arg_types,
+            )?;
+        }
+
         let arg_slices: Vec<(crate::types::LlvmType, &str)> = arg_types
             .iter()
             .zip(lowered.iter())

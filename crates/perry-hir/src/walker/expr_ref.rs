@@ -587,7 +587,11 @@ where
                 f(c);
             }
         }
-        Expr::ClassCaptureValue { .. } => {}
+        Expr::ClassCaptureValue { fallback, .. } => {
+            if let Some(fb) = fallback {
+                f(fb);
+            }
+        }
         Expr::RegisterClassStaticSymbol {
             key_expr,
             value_expr,
@@ -858,7 +862,7 @@ where
                 }
             }
         }
-        Expr::SuperCallSpread(args) => {
+        Expr::SuperCallSpread(args) | Expr::SuperMethodCallSpread { args, .. } => {
             for a in args {
                 match a {
                     CallArg::Expr(e) | CallArg::Spread(e) => f(e),
@@ -1074,7 +1078,11 @@ where
             f(regex);
             f(string);
         }
-        Expr::RegExpDynamic { pattern, flags } => {
+        Expr::RegExpDynamic {
+            pattern,
+            flags,
+            is_call: _,
+        } => {
             f(pattern);
             if let Some(flags_box) = flags {
                 f(flags_box);
@@ -1433,6 +1441,7 @@ where
             body,
             headers,
             headers_dynamic,
+            signal,
         } => {
             f(url);
             f(method);
@@ -1442,6 +1451,9 @@ where
             }
             if let Some(hd) = headers_dynamic {
                 f(hd);
+            }
+            if let Some(s) = signal {
+                f(s);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {

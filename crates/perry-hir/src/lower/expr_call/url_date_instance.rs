@@ -313,8 +313,16 @@ pub(super) fn try_url_date_weakref_instance(
                         return Ok(Ok(Expr::DateToLocaleTimeString(Box::new(date_expr))));
                     }
                     "toLocaleString" => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::DateToLocaleString(Box::new(date_expr))));
+                        // Only fold zero-arg calls to the fast DateToLocaleString
+                        // path.  Calls with locale/options must fall through so
+                        // arguments are preserved — both Temporal types and Date
+                        // itself now handle locale/options on the generic path
+                        // (Date via the `date_to_locale_string_opts` thunk, #5800).
+                        if args.is_empty() {
+                            let date_expr = lower_expr(ctx, &member.obj)?;
+                            return Ok(Ok(Expr::DateToLocaleString(Box::new(date_expr))));
+                        }
+                        // fall through to generic method call with args intact
                     }
                     "getTimezoneOffset" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;

@@ -1050,6 +1050,30 @@ pub unsafe fn dispatch_buffer_method(
         // user code, so this is always false (matches Node when `buf` is
         // a Buffer instance rather than `Buffer.prototype`).
         "isPrototypeOf" => i32_bool(0),
-        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+        // A `Uint8Array` / `Uint8ClampedArray` (and Node `Buffer`, a Uint8Array
+        // subclass) reaches this buffer dispatcher via the dynamic
+        // `(ta as any).method(...)` path — `handle_methods` routes a
+        // registered-buffer receiver here before the `%TypedArray%.prototype`
+        // tower. The arms above only implement the Node `Buffer` API surface, so
+        // the inherited `%TypedArray%.prototype` iteration methods
+        // (`every`/`some`/`map`/`forEach`/`find`/`reduce`/…) fell through to this
+        // catch-all and silently returned `undefined` — never validating the
+        // callback (#5591: `every`/`some` must throw a `TypeError` for a
+        // non-callable callback) nor iterating. Delegate any method the Buffer
+        // API doesn't claim to the shared uint8 typed-array dispatcher (it
+        // validates callbacks and reads the typed store); it returns `None` for
+        // names it doesn't implement, preserving the `undefined` fallback.
+        _ => {
+            if super::typed_array_proto_thunks::is_typed_array_buffer(addr) {
+                if let Some(r) = super::typed_array_proto_thunks::dispatch_uint8_buffer_method(
+                    addr,
+                    method_name,
+                    args,
+                ) {
+                    return r;
+                }
+            }
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
     }
 }

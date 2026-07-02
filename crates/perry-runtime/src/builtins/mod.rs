@@ -104,7 +104,7 @@ pub(crate) use globals::{drain_queued_microtasks_count, queued_microtasks_pendin
 pub use numbers::{
     js_is_finite, js_is_nan, js_number_coerce, js_number_is_finite, js_number_is_integer,
     js_number_is_nan, js_number_is_safe_integer, js_parse_float, js_parse_int, js_string_coerce,
-    js_to_integer_or_infinity,
+    js_to_integer_or_infinity, reject_symbol_to_string,
 };
 
 #[cfg(test)]

@@ -14,7 +14,7 @@
 //! 3. The conversion callbacks run on the main thread during js_stdlib_process_pending
 
 use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
@@ -253,12 +253,62 @@ where
     RUNTIME.block_on(future)
 }
 
+/// #5779 idle-kick liveness counters. `ISSUED` bumps on the main thread each
+/// time a kick fires; `RAN` bumps inside the spawned task once a worker has
+/// actually polled it. Exposed for the regression test below.
+static IDLE_KICKS_ISSUED: AtomicU64 = AtomicU64::new(0);
+static IDLE_KICKS_RAN: AtomicU64 = AtomicU64::new(0);
+
+/// #5779 — idle-kick callback registered with perry-runtime's event pump.
+///
+/// Invoked on the main thread immediately before it blocks on the idle
+/// condvar (see `event_pump::js_register_idle_kick`). When async work is in
+/// flight, schedule a task on the shared runtime so a worker is roused to
+/// drain anything that was enqueued from the main thread but whose
+/// worker-unpark was lost while every worker was parked — the canonical case
+/// being an in-process HTTP server's per-request response `oneshot::send`,
+/// fired from `res.end()` inside the main-thread request pump. Without this,
+/// that serve task strands forever, its response is never written, and the
+/// matching in-process `fetch()` never settles (#5779).
+///
+/// The spawned task does **real work** (a release atomic store): an empty
+/// `spawn(async {})` was measured to *not* reliably rouse a parked worker on
+/// the multi-thread runtime (sequential in-process server+fetch deadlocked
+/// 8/8 runs), whereas a task with a genuine side effect forces a real
+/// scheduler round that wakes a worker and drains the stranded task (0
+/// deadlocks across no-load + fully-loaded stress). The store also serves as
+/// a memory barrier publishing the main thread's prior enqueue.
+///
+/// Gated on `EXT_BLOCKING_TASKS_INFLIGHT` so a fully idle process (no fetch,
+/// no in-flight client request) lets the runtime sleep undisturbed and the
+/// kick costs a single atomic load per idle tick. We deliberately do **not**
+/// bump the inflight gate for the kick task itself — it must not keep the
+/// event loop alive on its own.
+extern "C" fn stdlib_idle_kick() {
+    if EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    IDLE_KICKS_ISSUED.fetch_add(1, Ordering::Relaxed);
+    RUNTIME.spawn(async {
+        IDLE_KICKS_RAN.fetch_add(1, Ordering::Release);
+    });
+}
+
 /// Queue a promise resolution to be processed later
 /// NOTE: Only use this for simple values (numbers, booleans, undefined, null)
 /// that don't involve pointer allocations. For complex values like arrays,
 /// objects, or strings, use queue_deferred_resolution instead.
 pub fn queue_promise_resolution(promise_ptr: usize, is_success: bool, result_bits: u64) {
     ensure_gc_scanner_registered();
+    // The await busy-pump only drains PENDING_RESOLUTIONS via the registered
+    // STDLIB_PUMP_FN. Callers that queue a resolution *without* a preceding
+    // `spawn` (e.g. `js_fetch_with_options`'s early "Invalid URL" reject when
+    // `fetch()` is handed a non-string first arg such as a `Request` object)
+    // would otherwise leave the pump unregistered: `js_stdlib_has_active_handles`
+    // reports the pending entry so the awaiter keeps waiting, but nothing ever
+    // drains it → the awaited Promise stays pending forever (deadlock). Register
+    // the pump here so every queued resolution is guaranteed to be processed.
+    ensure_pump_registered();
     {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         pending.push(PendingResolution {
@@ -283,6 +333,10 @@ where
     F: FnOnce() -> u64 + Send + 'static,
 {
     ensure_gc_scanner_registered();
+    // Same pump-registration guarantee as `queue_promise_resolution` (above):
+    // a deferred resolution queued without a preceding `spawn` must still be
+    // drained by the await busy-pump.
+    ensure_pump_registered();
     {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         pending.push(DeferredResolution {
@@ -315,6 +369,9 @@ pub fn ensure_pump_registered() {
             fn js_stdlib_init_dispatch();
         }
         ensure_gc_scanner_registered();
+        // #5779 — recover from lost tokio worker-unparks while the main
+        // thread is parked (in-process HTTP server + fetch deadlock).
+        perry_runtime::event_pump::js_register_idle_kick(Some(stdlib_idle_kick));
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
@@ -530,27 +587,14 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += unsafe { js_ext_zlib_process_pending() };
     }
 
-    // Process pending fastify requests. With the bundled-fastify
-    // adapter, `app.listen()` used to block the main TS thread inside
-    // its own inner event loop forever, so an `await app.listen(...)`
-    // never returned and no subsequent user code (in-process `fetch`,
-    // `app.close()`, etc.) ever ran. The pump now mirrors how
-    // perry-ext-http-server handles dispatch (#604): `listen()` returns
-    // immediately and the per-server mpsc is drained here on each tick.
-    //
-    // Two activation paths:
-    //   * `http-server` — the bundled adapter (`perry-stdlib::fastify`)
-    //     is compiled in. Call its pump directly.
-    //   * `external-fastify-pump` — the well-known flip routed
-    //     `import 'fastify'` to perry-ext-fastify and stripped
-    //     `bundled-fastify`. The symbol is provided by the external
-    //     crate; declare and call it via extern. Mirrors how
-    //     `external-net-pump` and `external-ws-pump` work.
-    #[cfg(feature = "http-server")]
-    {
-        count += crate::fastify::js_fastify_process_pending();
-    }
-    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    // Process pending fastify requests. `listen()` returns immediately and the
+    // per-server mpsc is drained here each tick (#604), so an `await
+    // app.listen(...)` resumes and subsequent user code (in-process `fetch`,
+    // `app.close()`, async route handlers) runs. fastify is served exclusively by
+    // the external perry-ext-fastify crate (the in-stdlib adapter was removed);
+    // the well-known flip enables `external-fastify-pump` and the symbol is
+    // provided by that crate. Mirrors `external-net-pump` / `external-ws-pump`.
+    #[cfg(feature = "external-fastify-pump")]
     {
         extern "C" {
             fn js_fastify_process_pending() -> i32;
@@ -710,23 +754,14 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
             return 1;
         }
     }
-    // Bundled-fastify — keep the loop alive while any FastifyServerHandle
-    // is in the "listening" state. Paired with
-    // `js_fastify_process_pending` in `js_stdlib_process_pending` above
-    // (closes the compat-sweep timeout for `await app.listen(...)` +
-    // in-process `fetch`).
-    #[cfg(feature = "http-server")]
-    {
-        if crate::fastify::js_fastify_has_active_handles() != 0 {
-            return 1;
-        }
-    }
-    // External fastify (perry-ext-fastify) — when the well-known flip
-    // routes `import 'fastify'` to perry-ext-fastify and strips
-    // `bundled-fastify`, the symbol below is provided by the external
-    // crate at link time. Mirrors the `external-{net,ws,http-server}-pump`
-    // arms above.
-    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    // External fastify (perry-ext-fastify) — keep the loop alive while any
+    // FastifyServerHandle is "listening". Paired with `js_fastify_process_pending`
+    // in `js_stdlib_process_pending` above (closes the compat-sweep timeout for
+    // `await app.listen(...)` + in-process `fetch`). The in-stdlib adapter was
+    // removed; the well-known flip enables `external-fastify-pump` and the symbol
+    // is provided by perry-ext-fastify at link time. Mirrors the
+    // `external-{net,ws,http-server}-pump` arms above.
+    #[cfg(feature = "external-fastify-pump")]
     {
         extern "C" {
             fn js_fastify_has_active() -> i32;
@@ -868,6 +903,42 @@ mod tests {
     fn clear_pending() {
         PENDING_RESOLUTIONS.lock().unwrap().clear();
         PENDING_DEFERRED.lock().unwrap().clear();
+    }
+
+    /// #5779: when async work is in flight the idle kick must schedule a task
+    /// that a worker actually runs — an empty `spawn(async {})` was observed
+    /// not to reliably rouse a parked worker, leaving the in-process
+    /// server+fetch deadlock unrecovered. Bump the in-flight gate (restoring
+    /// it after, so a parallel test's count is preserved), fire the kick, and
+    /// drive the runtime until the kick task records that it ran.
+    #[test]
+    fn idle_kick_schedules_a_task_that_runs() {
+        let issued_before = IDLE_KICKS_ISSUED.load(Ordering::Relaxed);
+        let ran_before = IDLE_KICKS_RAN.load(Ordering::Acquire);
+
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
+        stdlib_idle_kick();
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
+
+        assert!(
+            IDLE_KICKS_ISSUED.load(Ordering::Relaxed) > issued_before,
+            "kick must fire when async work is in flight"
+        );
+        // Give the worker pool real wall-clock time to schedule and run the
+        // kick task (a tight `yield_now` loop spins the calling thread faster
+        // than a worker is scheduled, so use timed sleeps — up to ~2s).
+        RUNTIME.block_on(async {
+            for _ in 0..200 {
+                if IDLE_KICKS_RAN.load(Ordering::Acquire) > ran_before {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
+        assert!(
+            IDLE_KICKS_RAN.load(Ordering::Acquire) > ran_before,
+            "the kick's spawned task never executed on a worker"
+        );
     }
 
     #[test]

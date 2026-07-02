@@ -23,6 +23,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+pub mod abi_trampoline;
 pub mod app_group;
 pub mod arena;
 pub mod array;
@@ -49,6 +50,7 @@ pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
 pub mod dns_resolver;
+pub mod embedded;
 pub mod error;
 pub mod event_pump;
 pub mod event_target;

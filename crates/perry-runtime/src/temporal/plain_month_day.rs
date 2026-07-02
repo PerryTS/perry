@@ -129,7 +129,25 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
         "toString" => {
             string(&md.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
         }
-        "toJSON" | "toLocaleString" => string(&md.to_string()),
+        "toJSON" => string(&md.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(md.calendar().identifier());
+            let epoch_ms = crate::date::components_to_timestamp(
+                1970,
+                md.month_code().to_month_integer() as u32,
+                md.day() as u32,
+                0,
+                0,
+                0,
+            ) as f64
+                * 1000.0;
+            crate::intl::temporal_locale_string(
+                epoch_ms,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                crate::intl::TemporalLocaleCtx::PlainMonthDay,
+            )
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
@@ -140,7 +158,7 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
         "toPlainDate" => {
             let obj =
                 super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "toPlainDate");
-            let year = super::options::to_plain_date_year_field(obj);
+            let year = super::options::to_plain_date_year_field(obj, md.calendar());
             alloc_temporal_cell(TemporalValue::PlainDate(ok_or_throw(
                 md.to_plain_date(Some(year)),
             )))

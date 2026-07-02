@@ -456,7 +456,7 @@ pub unsafe extern "C" fn js_pg_client_query(
                 .connection
                 .as_mut()
                 .ok_or_else(|| "Connection already closed".to_string())?;
-            sqlx::query(&sql)
+            sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
                 .fetch_all(conn)
                 .await
                 .map_err(|e| format!("Query failed: {}", e))
@@ -508,7 +508,7 @@ pub unsafe extern "C" fn js_pg_client_query_params(
                 .connection
                 .as_mut()
                 .ok_or_else(|| "Connection already closed".to_string())?;
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
             for p in &param_values {
                 query = match p {
                     ParamValue::Null => query.bind(Option::<String>::None),
@@ -653,7 +653,7 @@ pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u
             let wrapper = get_handle_mut::<PgPoolHandle>(pool_handle)
                 .ok_or_else(|| "Invalid pool handle".to_string())?;
             let pool = wrapper.ensure_pool().await?;
-            sqlx::query(&sql)
+            sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
                 .fetch_all(pool)
                 .await
                 .map_err(|e| format!("Query failed: {}", e))

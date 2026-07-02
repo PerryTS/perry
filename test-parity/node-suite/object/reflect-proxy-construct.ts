@@ -126,3 +126,90 @@ show("proxy class empty handler newTarget", () => {
   const instance: any = Reflect.construct(Wrapped, ["y"], Child);
   return [instance instanceof Child, instance instanceof Thing, instance.child()];
 });
+
+class CtorNewTarget {
+  ntName: string;
+  constructor() {
+    this.ntName = (new.target as any)?.name ?? "undefined";
+  }
+}
+class OtherNewTarget {}
+
+show("Reflect.construct new.target inside class ctor", () => {
+  const a: any = Reflect.construct(CtorNewTarget, [], OtherNewTarget);
+  return a.ntName;
+});
+
+show("ClassRef new new.target inside class ctor", () => {
+  const Ref: any = CtorNewTarget;
+  const a: any = new Ref();
+  return a.ntName;
+});
+
+show("static new new.target inside base class ctor", () => {
+  return new CtorNewTarget().ntName;
+});
+
+function freeProbe(): string {
+  return (new.target as any) === undefined ? "undef" : "leaked";
+}
+class CallsFreeProbe {
+  probed: string;
+  constructor() {
+    this.probed = freeProbe();
+  }
+}
+
+show("free fn called from static-new ctor sees undefined new.target", () => {
+  return new CallsFreeProbe().probed;
+});
+
+// #2768: a subclass whose OWN ctor body never reads `new.target` still runs the
+// inherited base ctor (via `super()`) inlined into its standalone symbol. The
+// base reads `new.target`, so `new Child()` must observe `Child`, not undefined
+// — the symbol-call new.target gate must span the whole super(...) chain.
+class NtBase {
+  ntName: string;
+  constructor() {
+    this.ntName = (new.target as any)?.name ?? "undefined";
+  }
+}
+class NtChild extends NtBase {
+  extra: number;
+  constructor() {
+    super();
+    this.extra = 1;
+  }
+}
+class NtNoCtorChild extends NtBase {}
+
+show("static new on own-ctor subclass: base ctor sees leaf new.target", () => {
+  return new NtChild().ntName;
+});
+
+show("static new on no-own-ctor subclass: base ctor sees leaf new.target", () => {
+  return new NtNoCtorChild().ntName;
+});
+
+// An abstract-class guard living in the base must still fire for `new Base()`
+// but NOT for `new Sub()` whose own ctor forwards through `super()`.
+class AbstractBase {
+  constructor() {
+    if (new.target === AbstractBase) throw new TypeError("abstract");
+  }
+}
+class ConcreteSub extends AbstractBase {
+  tag: number;
+  constructor() {
+    super();
+    this.tag = 7;
+  }
+}
+
+show("abstract-base guard: new Sub() does not trip base new.target guard", () => {
+  return new ConcreteSub().tag;
+});
+
+show("abstract-base guard: new Base() trips base new.target guard", () => {
+  return new AbstractBase();
+});
