@@ -870,6 +870,11 @@ pub extern "C" fn js_throw_math_constructor_type_error() -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_throw_json_constructor_type_error() -> f64 {
+    throw_builtin_not_constructor("JSON")
+}
+
+#[no_mangle]
 pub extern "C" fn js_throw_illegal_constructor_type_error() -> f64 {
     let message = b"Illegal constructor";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
