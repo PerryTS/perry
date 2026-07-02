@@ -358,9 +358,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 op,
                 BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow
             ) && (!crate::type_analysis::is_numeric_expr(ctx, left)
-                || !crate::type_analysis::is_numeric_expr(ctx, right)
-                || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left)
-                || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right))
+                || !crate::type_analysis::is_numeric_expr(ctx, right))
             {
                 let helper = match op {
                     BinaryOp::Sub => "js_dynamic_sub",

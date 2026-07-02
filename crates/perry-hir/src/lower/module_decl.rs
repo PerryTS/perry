@@ -17,6 +17,7 @@ use crate::ir::*;
 // Topical sub-modules extracted from this file (issue #1435 — pure code move).
 mod namespace;
 mod native_default_import;
+mod reexports;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -24,6 +25,7 @@ pub(crate) use namespace::lower_namespace_as_class;
 use native_default_import::{
     is_cjs_style_native_default_import, node_submodule_default_export_key,
 };
+use reexports::imported_binding_reexport;
 
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
@@ -1473,29 +1475,9 @@ pub(crate) fn lower_module_decl(
                             continue;
                         }
 
-                        if let Some((source, imported)) = module.imports.iter().find_map(|import| {
-                            if import.is_native {
-                                return None;
-                            }
-                            import
-                                .specifiers
-                                .iter()
-                                .find_map(|specifier| match specifier {
-                                    ImportSpecifier::Named {
-                                        imported,
-                                        local: imported_local,
-                                    } if imported_local == &local => {
-                                        Some((import.source.clone(), imported.clone()))
-                                    }
-                                    ImportSpecifier::Default {
-                                        local: imported_local,
-                                    } if imported_local == &local => {
-                                        Some((import.source.clone(), "default".to_string()))
-                                    }
-                                    ImportSpecifier::Namespace { .. } => None,
-                                    _ => None,
-                                })
-                        }) {
+                        if let Some((source, imported)) =
+                            imported_binding_reexport(&module.imports, &local)
+                        {
                             module.exports.push(Export::ReExport {
                                 source,
                                 imported,

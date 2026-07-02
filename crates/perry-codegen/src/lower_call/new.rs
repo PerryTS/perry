@@ -13,8 +13,9 @@ use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
-    ctor_body_has_value_return, ctor_body_uses_new_target, ctor_body_uses_this,
-    node_stream_parent_kind,
+    ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
+    effective_constructor_param_count, local_constructor_symbol_exists, map_set_default_super_kind,
+    node_stream_parent_kind, restore_imported_ctor_new_target, set_imported_ctor_new_target,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -80,25 +81,6 @@ fn inline_constructor_param_values(
     lowered_args: &[String],
 ) -> Vec<String> {
     inline_constructor_param_values_with_class(ctx, params, lowered_args, None)
-}
-
-fn map_set_default_super_kind<'a>(
-    classes: &std::collections::HashMap<String, &'a perry_hir::Class>,
-    mut parent: Option<&'a str>,
-) -> Option<i32> {
-    while let Some(name) = parent {
-        match name {
-            "Map" => return Some(0),
-            "Set" => return Some(1),
-            _ => {}
-        }
-        let class = classes.get(name)?;
-        if class.constructor.is_some() {
-            return None;
-        }
-        parent = class.extends_name.as_deref();
-    }
-    None
 }
 
 /// Where a synthesized `__perry_cap_<id>` param's value comes from when the
@@ -323,108 +305,6 @@ fn marshal_imported_ctor_args(
         }
         out.truncate(param_count.max(out.len()));
         out
-    }
-}
-
-/// The effective constructor arity for `new <class>(...)`: the class's own
-/// ctor params, else — for a subclass with no own ctor — the closest
-/// ancestor-with-a-ctor's param count (the synthesized default ctor forwards
-/// `super(...args)`). Matches the standalone-ctor signature emitted in
-/// `codegen/artifacts.rs`, so callers pass the right number of args.
-fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> usize {
-    if let Some(ctor) = class.constructor.as_ref() {
-        return ctor.params.len();
-    }
-    let mut parent = class.extends_name.as_deref();
-    while let Some(pname) = parent {
-        if let Some(ctor) = ctx.imported_class_ctors.get(pname) {
-            if ctor.stops_constructor_walk() {
-                return ctor.param_count;
-            }
-        }
-        match ctx.classes.get(pname).copied() {
-            Some(pc) => {
-                if let Some(pctor) = pc.constructor.as_ref() {
-                    return pctor.params.len();
-                }
-                parent = pc.extends_name.as_deref();
-            }
-            None => break,
-        }
-    }
-    0
-}
-
-/// True when the standalone `<class>_constructor` symbol exists (so the
-/// recursion-guard / capture-collision redirect can call it instead of
-/// inlining). Mirrors the lookup in `call_local_constructor_symbol`.
-fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
-    let ctor_method_name = format!("{}_constructor", class.name);
-    ctx.methods
-        .contains_key(&(class.name.clone(), ctor_method_name))
-}
-
-/// #2768: true when the standalone `<class>_constructor` symbol's body reads
-/// `new.target` — either the class's OWN ctor body, or an ancestor ctor body
-/// it reaches through `super(...)`. The symbol is a separately compiled
-/// function whose only `new.target` source is the runtime cell, and a
-/// `super(...)` call inlines the parent ctor body into that same symbol, so an
-/// ancestor that reads `new.target` (e.g. an abstract-class guard in a base)
-/// still observes the cell. Gating the cell write on the WHOLE chain keeps
-/// `new Child()` correct when only the inherited body reads `new.target`, while
-/// a chain with no reader anywhere stays on the zero-overhead fast path. The
-/// walk follows `extends_name` through the codegen class map; an unresolved
-/// parent name just stops the walk, and a depth cap guards a cyclic graph.
-fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
-    let reads = |c: &perry_hir::Class| {
-        c.constructor
-            .as_ref()
-            .is_some_and(|f| ctor_body_uses_new_target(&f.body))
-    };
-    if reads(class) {
-        return true;
-    }
-    let mut parent = class.extends_name.as_deref();
-    let mut depth = 0;
-    while let Some(parent_name) = parent {
-        depth += 1;
-        if depth > 64 {
-            break;
-        }
-        let Some(pc) = ctx.classes.get(parent_name).copied() else {
-            break;
-        };
-        if reads(pc) {
-            return true;
-        }
-        parent = pc.extends_name.as_deref();
-    }
-    false
-}
-
-fn set_imported_ctor_new_target(
-    ctx: &mut FnCtx<'_>,
-    constructed_class_name: &str,
-    ctor: &crate::codegen::ImportedCtor,
-) -> Option<String> {
-    if !ctor.uses_new_target {
-        return None;
-    }
-    ctx.class_ids.get(constructed_class_name).map(|&cid| {
-        let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
-        let class_ref = double_literal(f64::from_bits(
-            crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
-        ));
-        ctx.block()
-            .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &class_ref)]);
-        prev
-    })
-}
-
-fn restore_imported_ctor_new_target(ctx: &mut FnCtx<'_>, saved: Option<String>) {
-    if let Some(prev) = saved {
-        ctx.block()
-            .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &prev)]);
     }
 }
 
@@ -1927,7 +1807,6 @@ fn lower_new_impl(
             .unwrap_or(false);
         if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
             if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
-                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let parent_val = ctx.block().call(
                     DOUBLE,
                     "js_get_dynamic_parent_value",

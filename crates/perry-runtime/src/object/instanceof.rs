@@ -274,9 +274,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             }
         }
     }
-    if let Some(result) = ordinary_function_has_instance(value, type_ref) {
-        return result;
-    }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFE {
@@ -442,6 +439,9 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         } else {
             f64::from_bits(TAG_FALSE)
         };
+    }
+    if let Some(result) = ordinary_function_has_instance(value, type_ref) {
+        return result;
     }
     js_instanceof_dynamic_tail(value, type_ref)
 }
