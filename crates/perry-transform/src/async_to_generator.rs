@@ -233,6 +233,14 @@ pub fn transform_async_to_generator(module: &mut Module) {
                     &mut next_func_id,
                 );
             }
+            for member in &mut class.computed_members {
+                rewrite_async_closures_in_stmts(
+                    &mut member.function.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
         }
     }
 }
