@@ -1,3 +1,7 @@
+## v0.5.1214 — setPrototypeOf cycle walk must not advance past chain end (#5866)
+
+Fixes the #5763 regression that broke `Object.setPrototypeOf(obj, proto)` for every acyclic prototype chain of ≥2 links ("Cannot convert undefined or null to object"): the OrdinarySetPrototypeOf Floyd walk advanced the hare past the chain end, and fed exotic `undefined` prototype reports back into the next advance. Every transpiled `__extends` (`setPrototypeOf(Derived, Base)` — a 3-link function proto chain) threw; comment-json's `__extends` + its `{ __proto__: [] }` feature test killed Next.js server boot. The hare now freezes at null (the tortoise completes the membership walk alone, so cycle detection is unchanged) and `undefined` ends the walk like null. e2e regression suite: `crates/perry/tests/issue_5763_setprototypeof_chain_end.rs` (chains of length 2/4, the `__extends` statics link, the feature-test evaluation, and a genuine-cycle negative), byte-for-byte vs `node --experimental-strip-types`.
+
 ## v0.5.1213 — representation-aware type lowering + native-ABI material evidence gate (#5466)
 
 Lands the type-lowering track on main (builds on #5291; integrates #5462's
