@@ -215,21 +215,36 @@ pub fn synthesize_class_captures(
         let mut id_map: std::collections::HashMap<LocalId, LocalId> =
             std::collections::HashMap::new();
         let mut prologue: Vec<Stmt> = Vec::new();
-        for &outer_id in &captures_vec {
+        for (index, &outer_id) in captures_vec.iter().enumerate() {
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             let ty = captured_outer_types
                 .get(&outer_id)
                 .cloned()
                 .unwrap_or(Type::Any);
+            // FIELD-FIRST with a decl-site-snapshot fallback: the
+            // `this.__perry_cap_*` stash is written by the constructor AFTER
+            // `super()` returns, but a method can run EARLIER — a base-class
+            // constructor may virtual-dispatch into this class's override
+            // (Next.js: base `Server`'s ctor calls `this.getHasStaticDir()`,
+            // the `NextNodeServer` override, which reads the module-level
+            // `_fs` interop binding through its cap field → it read
+            // `undefined` and threw at boot, #5437). When the field is still
+            // undefined, fall back to the class's decl-site capture snapshot
+            // (same machinery as the ctor param rebinds above).
             prologue.push(Stmt::Let {
                 id: new_id,
                 name: format!("__perry_cap_{}", outer_id),
                 ty,
                 mutable: true,
-                init: Some(Expr::PropertyGet {
-                    object: Box::new(Expr::This),
-                    property: format!("__perry_cap_{}", outer_id),
+                init: Some(Expr::ClassCaptureValue {
+                    class_name: name.to_string(),
+                    index: index as u32,
+                    fallback: Some(Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: format!("__perry_cap_{}", outer_id),
+                    })),
+                    prefer_fallback: true,
                 }),
             });
         }
