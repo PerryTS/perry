@@ -945,6 +945,62 @@ pub(crate) fn js_promise_attach_handlers(
     }
     mark_rejection_handled(promise);
     unsafe {
+        // The inline handler slots are single-valued. Combinators reach here
+        // with USER promises (`promise_resolve_for_combinator` returns the
+        // input promise identity), so an unconditional store clobbered any
+        // reaction attached earlier: `p.then(cb); Promise.all([p])` lost
+        // `cb`, and two combinators sharing one pending input destroyed each
+        // other's forwarder — the loser's remaining-count never reached zero,
+        // a permanent hang on shared chunk promises (#5437 family). Mirror
+        // `js_promise_then`: the first reaction takes the slot, later ones
+        // divert to the overflow table (pending) or dispatch as their own
+        // inline task (settled). `next` stays null throughout — these
+        // callers own their settlement.
+        let slot_occupied = !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
+        if slot_occupied {
+            let context = capture_context();
+            match (*promise).state {
+                PromiseState::Pending => {
+                    push_overflow_reaction(
+                        promise,
+                        on_fulfilled,
+                        on_rejected,
+                        ptr::null_mut(),
+                        context,
+                    );
+                }
+                PromiseState::Fulfilled => {
+                    if !on_fulfilled.is_null() {
+                        let value = (*promise).value;
+                        TASK_QUEUE.with(|q| {
+                            q.borrow_mut().push_back(Task::Inline(
+                                on_fulfilled,
+                                value,
+                                ptr::null_mut(),
+                                true,
+                                context,
+                            ));
+                        });
+                    }
+                }
+                PromiseState::Rejected => {
+                    if !on_rejected.is_null() {
+                        let reason = (*promise).reason;
+                        TASK_QUEUE.with(|q| {
+                            q.borrow_mut().push_back(Task::Inline(
+                                on_rejected,
+                                reason,
+                                ptr::null_mut(),
+                                false,
+                                context,
+                            ));
+                        });
+                    }
+                }
+            }
+            return;
+        }
+
         store_promise_closure_slot(
             promise,
             std::ptr::addr_of_mut!((*promise).on_fulfilled),
@@ -1069,23 +1125,43 @@ pub extern "C" fn js_promise_finally(
     unsafe {
         match (*promise).state {
             PromiseState::Pending => {
-                store_promise_closure_slot(
-                    promise,
-                    std::ptr::addr_of_mut!((*promise).on_fulfilled),
-                    fulfill_wrap,
-                );
-                store_promise_closure_slot(
-                    promise,
-                    std::ptr::addr_of_mut!((*promise).on_rejected),
-                    reject_wrap,
-                );
-                // Wrappers own next; runner must not touch it.
-                store_promise_next_slot(
-                    promise,
-                    std::ptr::addr_of_mut!((*promise).next),
-                    ptr::null_mut(),
-                );
-                set_promise_callback_context(promise);
+                // The slots are single-valued: if a reaction is already
+                // registered (`p.then(cb); p.finally(end)` while pending, or
+                // two pending `.finally()`s), the old unconditional store
+                // overwrote its wrapper AND nulled `promise.next`, so the
+                // earlier callback never ran and its chained promise never
+                // settled. Divert later reactions to the overflow table; the
+                // wrapper owns its `next` (null here), matching the settled
+                // arms below.
+                let slot_occupied =
+                    !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
+                if slot_occupied {
+                    push_overflow_reaction(
+                        promise,
+                        fulfill_wrap,
+                        reject_wrap,
+                        ptr::null_mut(),
+                        capture_context(),
+                    );
+                } else {
+                    store_promise_closure_slot(
+                        promise,
+                        std::ptr::addr_of_mut!((*promise).on_fulfilled),
+                        fulfill_wrap,
+                    );
+                    store_promise_closure_slot(
+                        promise,
+                        std::ptr::addr_of_mut!((*promise).on_rejected),
+                        reject_wrap,
+                    );
+                    // Wrappers own next; runner must not touch it.
+                    store_promise_next_slot(
+                        promise,
+                        std::ptr::addr_of_mut!((*promise).next),
+                        ptr::null_mut(),
+                    );
+                    set_promise_callback_context(promise);
+                }
             }
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
