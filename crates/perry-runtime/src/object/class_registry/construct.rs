@@ -216,6 +216,19 @@ pub unsafe extern "C" fn js_new_function_construct(
             );
         }
     }
+    // `new boundFn(...)` — delegate entirely to the newTarget-aware path,
+    // which unwinds the bind chain to the real target before re-dispatching
+    // (see `unwrap_bound_construct_chain`). `new`'s implicit newTarget is
+    // `func_value` itself, matching spec step "If NewTarget is not present,
+    // set newTarget to F" for a plain `new`. Bypasses everything below —
+    // primitive/proxy/non-constructable/native-module checks all re-run on
+    // the UNWRAPPED target, which is what they need to see (a bound wrapper
+    // around `Date`, a bound wrapper around a non-constructor, etc.).
+    if is_bound_function_closure_value(func_value) {
+        return js_new_function_construct_with_new_target(
+            func_value, args_ptr, args_len, func_value,
+        );
+    }
     // `new (new String(""))` / `new (new Number(1))` — a boxed primitive WRAPPER
     // object is an ordinary object, never a constructor, so `new` on it throws
     // `TypeError` (Test262 `S15.5.5_A2`). Without this it fell through to the
@@ -1023,6 +1036,12 @@ fn constructor_class_ref_id(value: f64) -> Option<u32> {
 /// (non-arrow, non-builtin-method) function closures; false for primitives,
 /// arrow functions, and non-constructable builtin functions (e.g. `eval`).
 pub(crate) fn js_value_is_constructor(value: f64) -> bool {
+    // A bound function is a constructor iff its ultimate target is (10.4.1.3
+    // BoundFunctionExoticObjects don't have their own [[Construct]] slot
+    // independent of the target's constructibility) — resolve through any
+    // number of `.bind()` layers first so the checks below (class ref,
+    // proxy, arrow, non-constructable builtin) see the real callee.
+    let value = resolve_bound_target(value);
     if constructor_class_ref_id(value).is_some() {
         return true;
     }
@@ -1033,6 +1052,18 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
         return false;
     }
     if is_arrow_function_value(value) {
+        return false;
+    }
+    // %Function.prototype% itself is callable but has no [[Construct]] slot
+    // (ECMA-262 20.2.3) — `is_non_constructable_builtin_function_value` only
+    // covers the separate "reified builtin closure" registry (`eval`, a
+    // reified `.apply`/`.call`/`.bind` value, …), not this singleton, so it
+    // needs its own check here too (mirrors `js_new_function_construct`'s
+    // dedicated `is_function_prototype_object_value` guard). Without this, a
+    // bound wrapper around it — `Function.prototype.bind()` — would resolve
+    // through `resolve_bound_target` to Function.prototype and read back as
+    // constructible.
+    if super::super::global_this::is_function_prototype_object_value(value) {
         return false;
     }
     if is_non_constructable_builtin_function_value(value) {
@@ -1101,6 +1132,103 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
     }
     // A pointer we don't recognize as callable: stay conservative (no throw).
     false
+}
+
+/// Whether `value` is itself a `Function.prototype.bind` result (not
+/// recursive — a single-layer tag check).
+///
+/// `get_valid_func_ptr` re-validates the address range and `CLOSURE_MAGIC`
+/// tag itself before touching `func_ptr`, so it's safe to call on ANY
+/// pointer-shaped `JSValue` — including a small-handle-band id (Fetch/ws/
+/// proxy registry ids) or an otherwise-invalid heap address — without a
+/// separate `is_closure_ptr` pre-check. A prior version of this helper
+/// dereferenced `(*ptr).type_tag` directly first, which is exactly the
+/// unguarded-pointer-shaped-value read this codebase has been bitten by
+/// before (#4740-class SIGSEGV on a mis-boxed/handle-band value).
+fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureHeader> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if crate::closure::get_valid_func_ptr(ptr) == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+        Some(ptr as *mut crate::closure::ClosureHeader)
+    } else {
+        None
+    }
+}
+
+fn is_bound_function_closure_value(value: f64) -> bool {
+    bound_function_target_ptr(value).is_some()
+}
+
+/// Walk through any number of `Function.prototype.bind` wrapper layers to the
+/// ultimate non-bound target. Returns `value` unchanged when it isn't a bound
+/// closure (including when it isn't a closure at all) — cheap no-op on the
+/// overwhelmingly common non-bound path.
+fn resolve_bound_target(value: f64) -> f64 {
+    let mut cur = value;
+    loop {
+        let Some(ptr) = bound_function_target_ptr(cur) else {
+            return cur;
+        };
+        cur = crate::closure::js_closure_get_capture_f64(ptr, 0);
+    }
+}
+
+/// Unwind a `Function.prototype.bind` construct chain of any depth per
+/// `BoundFunctionExoticObjects.[[Construct]]` (10.4.1.2): each layer
+/// prepends its own bound args to the call-time args before delegating to
+/// its target, and resets `newTarget` to the unwrapped target whenever it
+/// `SameValue`s the layer being unwound (so a plain `new boundFn()` — where
+/// `newTarget` starts out equal to `boundFn` itself — cascades all the way
+/// down to the ultimate target, while a `Reflect.construct(boundFn, args,
+/// OtherCtor)` leaves `OtherCtor` untouched).
+///
+/// Returns `None` (no-op, no allocation) when `func_value` isn't a bound
+/// closure. Otherwise returns `(target, combined_args, resolved_new_target)`
+/// — the caller should re-dispatch construction on `target` with these.
+unsafe fn unwrap_bound_construct_chain(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    new_target: f64,
+) -> Option<(f64, Vec<f64>, f64)> {
+    let mut cur = func_value;
+    let mut nt = new_target;
+    let mut unwrapped = false;
+    let mut args: Vec<f64> = if args_ptr.is_null() {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    };
+    loop {
+        let Some(ptr) = bound_function_target_ptr(cur) else {
+            break;
+        };
+        unwrapped = true;
+        let target = crate::closure::js_closure_get_capture_f64(ptr, 0);
+        if nt.to_bits() == cur.to_bits() {
+            nt = target;
+        }
+        let bound_args_ptr =
+            crate::closure::js_closure_get_capture_ptr(ptr, 2) as *const crate::array::ArrayHeader;
+        if !bound_args_ptr.is_null() {
+            let n = crate::array::js_array_length(bound_args_ptr) as usize;
+            let mut prefix: Vec<f64> = Vec::with_capacity(n + args.len());
+            for i in 0..n {
+                prefix.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
+            }
+            prefix.extend(args);
+            args = prefix;
+        }
+        cur = target;
+    }
+    if unwrapped {
+        Some((cur, args, nt))
+    } else {
+        None
+    }
 }
 
 fn class_object_class_id(value: f64) -> Option<u32> {
@@ -1224,6 +1352,24 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     } else {
         new_target
     };
+    // Unwind any `Function.prototype.bind` wrapper chain BEFORE the
+    // `nt == func_value` shortcut below — a plain `new boundFn()` arrives
+    // here with `nt == func_value == boundFn`, and re-dispatching that
+    // through `js_new_function_construct(boundFn, ...)` would just loop back
+    // into this same bound closure. Unwrapping first replaces `func_value`
+    // with the real (non-bound) target and resolves `nt` per
+    // `BoundFunctionExoticObjects.[[Construct]]`, so the shortcut below (and
+    // everything after it) sees the real target either way.
+    if let Some((target, combined_args, resolved_nt)) =
+        unwrap_bound_construct_chain(func_value, args_ptr, args_len, nt)
+    {
+        let (ptr, len) = if combined_args.is_empty() {
+            (std::ptr::null::<f64>(), 0usize)
+        } else {
+            (combined_args.as_ptr(), combined_args.len())
+        };
+        return js_new_function_construct_with_new_target(target, ptr, len, resolved_nt);
+    }
     if nt.to_bits() == func_value.to_bits() {
         return js_new_function_construct(func_value, args_ptr, args_len);
     }
@@ -1282,6 +1428,17 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     }
     if !is_callable_function_value(func_value) {
         return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    // %Function.prototype% has no [[Construct]] slot (ECMA-262 20.2.3) but
+    // isn't covered by `is_non_constructable_builtin_function_value` (a
+    // separate "reified builtin closure" registry) — reachable here directly
+    // via `Reflect.construct(Function.prototype, …, distinctNewTarget)`, or
+    // after `unwrap_bound_construct_chain` resolves a bound wrapper down to
+    // it with a non-cascading newTarget.
+    if super::super::global_this::is_function_prototype_object_value(func_value)
+        || super::super::global_this::is_function_prototype_object_value(nt)
+    {
+        throw_non_constructable_builtin_function();
     }
     if is_non_constructable_builtin_function_value(func_value)
         || is_non_constructable_builtin_function_value(nt)

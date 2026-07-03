@@ -36,10 +36,9 @@ pub(super) use rsa::Oaep;
 pub(super) use rsa::{BigUint as RsaBigUint, RsaPrivateKey, RsaPublicKey};
 pub(super) use sha1::Sha1;
 pub(super) use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512, Sha512_256};
-pub(super) use sha3::{
-    digest::{ExtendableOutput, XofReader},
-    Shake128, Shake256,
-};
+// SHAKE128/256 moved out of `sha3`'s root into the separate `shake` crate
+// as of sha3 0.12 (RustCrypto/hashes#869).
+pub(super) use shake::{ExtendableOutput, Shake128, Shake256, XofReader};
 
 /// Helper to extract string from StringHeader pointer
 pub(super) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {

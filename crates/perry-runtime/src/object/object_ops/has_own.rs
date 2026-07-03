@@ -234,6 +234,75 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(TAG_FALSE);
         }
 
+        // `%Function.prototype%` is an ordinary object — `is_closure_ptr` is
+        // false for it, so the closure branch above never sees it — but it's
+        // installed with a full set of generic `Object.prototype` methods as
+        // real own data properties so they dispatch when called directly on
+        // it. Per spec (20.2.3) it only *inherits* these from
+        // `Object.prototype`; they are not its own (test262 built-ins/
+        // Function/prototype/S15.3.4_A4) — UNLESS user code has since
+        // overwritten the slot (`Object.defineProperty(Function.prototype,
+        // "valueOf", …)`), which per spec DOES create a genuine own property.
+        // Distinguish the two by checking whether the currently-installed
+        // value is still the exact install-time thunk closure: an explicit
+        // redefine always stores a different value (a new closure, or a
+        // non-function entirely), never literally the same `func_ptr`.
+        if super::super::global_this::is_function_prototype_object_value(obj_value) {
+            if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
+                // `install_noop_proto_methods` (the actual installer Function.
+                // prototype goes through) backs most of `OBJECT_PROTO_METHODS`
+                // with the shared `global_this_builtin_noop_thunk` — only
+                // `isPrototypeOf` and the four Annex B accessor helpers get a
+                // dedicated per-method thunk there. `object_prototype_has_own_
+                // property_thunk` et al. are real thunks too, but they're wired
+                // up only for `Object.prototype` itself (a different install
+                // call site), never for `Function.prototype` — so comparing
+                // against them here would always mismatch and defeat the
+                // still-default check entirely.
+                let expected_thunk: Option<*const u8> = match key {
+                    "hasOwnProperty" | "propertyIsEnumerable" | "toLocaleString" | "valueOf" => {
+                        Some(super::super::global_this::global_this_builtin_noop_thunk as *const u8)
+                    }
+                    "isPrototypeOf" => Some(
+                        super::super::global_this::object_prototype_is_prototype_of_thunk
+                            as *const u8,
+                    ),
+                    "__defineGetter__" => Some(
+                        super::super::global_this::object_prototype_define_getter_thunk
+                            as *const u8,
+                    ),
+                    "__defineSetter__" => Some(
+                        super::super::global_this::object_prototype_define_setter_thunk
+                            as *const u8,
+                    ),
+                    "__lookupGetter__" => Some(
+                        super::super::global_this::object_prototype_lookup_getter_thunk
+                            as *const u8,
+                    ),
+                    "__lookupSetter__" => Some(
+                        super::super::global_this::object_prototype_lookup_setter_thunk
+                            as *const u8,
+                    ),
+                    _ => None,
+                };
+                if let Some(expected) = expected_thunk {
+                    let current = js_object_get_field_by_name(obj, key_str);
+                    let still_default_shim = if current.is_pointer() {
+                        let cur_ptr = current.as_pointer::<u8>() as usize;
+                        crate::closure::is_closure_ptr(cur_ptr)
+                            && crate::closure::get_valid_func_ptr(
+                                cur_ptr as *const crate::closure::ClosureHeader,
+                            ) == expected
+                    } else {
+                        false
+                    };
+                    if still_default_shim {
+                        return f64::from_bits(TAG_FALSE);
+                    }
+                }
+            }
+        }
+
         if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
             let present = super::super::native_module::read_native_module_name(obj)
                 .as_deref()
