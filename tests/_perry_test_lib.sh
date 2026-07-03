@@ -49,10 +49,13 @@ perry_run() {
     cat > "$_PT_SRC"
     local bin="$_PT_TMPDIR/out"
     local args=(compile --no-cache)
-    if [[ -f "$REPO_ROOT/target/debug/libperry_runtime.a" && -f "$REPO_ROOT/target/debug/libperry_stdlib.a" ]]; then
-        export PERRY_RUNTIME_DIR="$REPO_ROOT/target/debug"; args+=(--no-auto-optimize)
-    elif [[ -f "$REPO_ROOT/target/release/libperry_runtime.a" && -f "$REPO_ROOT/target/release/libperry_stdlib.a" ]]; then
-        export PERRY_RUNTIME_DIR="$REPO_ROOT/target/release"; args+=(--no-auto-optimize)
+    # Link the prebuilt static libs only from the SAME target dir as the
+    # selected perry binary, so a release binary never pairs with debug libs
+    # (or vice versa). If that dir has no libs, leave PERRY_RUNTIME_DIR unset
+    # and let perry build/link its own runtime.
+    local perry_dir; perry_dir="$(cd "$(dirname "$PERRY")" && pwd)"
+    if [[ -f "$perry_dir/libperry_runtime.a" && -f "$perry_dir/libperry_stdlib.a" ]]; then
+        export PERRY_RUNTIME_DIR="$perry_dir"; args+=(--no-auto-optimize)
     fi
     "$PERRY" "${args[@]}" "$_PT_SRC" -o "$bin" > "$_PT_TMPDIR/compile.log" 2>&1 || {
         echo "FAIL: compile failed"; sed 's/^/    /' "$_PT_TMPDIR/compile.log" | tail -80; exit 1
