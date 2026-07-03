@@ -67,6 +67,13 @@ crates/perry-runtime/src/node_vm.rs
 # bodies. The file is 2018 lines (18 over the gate). A structural split of the
 # generator for-of lowering into a sibling module is tracked as a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs
+# Promise reaction-slot occupancy fix (#5867) added ~120 net lines of
+# correctness code + rationale comments across js_promise_then /
+# js_promise_attach_handlers / js_promise_finally; the file is 2008 lines
+# (8 over the gate). The topical split — the #1545 value-read thunks + spec
+# finally-wrapper tail (~790 lines) into a sibling module — is a mechanical
+# cut deferred to a focused follow-up, same pattern as body_stmt.rs above.
+crates/perry-runtime/src/promise/then.rs
 # --- Representation-aware type lowering (#5466 / #5464) ---
 # These files crossed the gate on the type-lowering branch (native i32/u32/f64/
 # i128/StringRef reps, guarded fast/fallback splits, and the material-evidence
