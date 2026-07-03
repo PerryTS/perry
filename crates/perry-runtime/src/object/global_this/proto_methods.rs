@@ -72,7 +72,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ("propertyIsEnumerable", 1),
             ],
         );
-        if !matches!(builtin_name, "Number") {
+        if !matches!(builtin_name, "Number" | "BigInt") {
             install_noop_proto_methods(proto_obj, &[("toLocaleString", 0)]);
         }
         return;
