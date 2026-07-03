@@ -543,7 +543,7 @@ pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Opti
         // S15.2.4.7_A8 regressions caught after the initial fix).
         | "toString" | "valueOf" | "hasOwnProperty" | "isPrototypeOf"
         | "propertyIsEnumerable" | "toLocaleString"
-    ) || prop.as_bytes().first().is_some_and(|b| b.is_ascii_digit())
+    ) || crate::object::canonical_array_index(prop).is_some()
         || crate::object::reified_function_method_name(prop).is_some()
     {
         return None;
