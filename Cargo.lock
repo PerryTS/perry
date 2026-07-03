@@ -6068,7 +6068,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.0",
  "sha3 0.10.9",
- "sha3 0.11.0",
+ "sha3 0.12.0",
  "sha3-utils",
  "spki 0.7.3",
  "sqlx",
@@ -7816,6 +7816,17 @@ checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
  "digest 0.11.3",
  "keccak 0.2.0",
+]
+
+[[package]]
+name = "sha3"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
+dependencies = [
+ "digest 0.11.3",
+ "keccak 0.2.0",
+ "sponge-cursor",
 ]
 
 [[package]]
