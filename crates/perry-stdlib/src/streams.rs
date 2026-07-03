@@ -1842,6 +1842,9 @@ pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
     if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.reader_handle = None;
     }
+    // #5437: the reader instance is done — drop any expando entries keyed by
+    // its handle id so the table doesn't retain them for the process lifetime.
+    expando::stream_expando_clear(reader_id);
     f64::from_bits(TAG_UNDEFINED)
 }
 
