@@ -402,8 +402,10 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
     // Boolean/BigInt was passed directly to `.apply` (test262
     // apply/argarray-not-object). Nullish was already handled above; a real
     // Array and an arguments object were handled above too, so anything left
-    // that isn't an Object must be a primitive.
-    if !value.is_pointer() {
+    // that isn't an Object must be a primitive. A `Symbol` is POINTER_TAG'd
+    // like a real heap object, so `!value.is_pointer()` alone doesn't catch
+    // it — check `js_is_symbol` explicitly.
+    if !value.is_pointer() || crate::symbol::js_is_symbol(args_array) != 0 {
         throw_type_error_message(b"CreateListFromArrayLike called on non-object");
     }
     generic_array_like_to_vec(args_array)
