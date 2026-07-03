@@ -1812,6 +1812,7 @@ mod tests;
 // Test-only `perry_ffi_*` async-bridge shims so the lib test links without the
 // host stdlib archive (mirrors perry-ext-net / perry-ext-http-server).
 #[cfg(test)]
+#[cfg(test)]
 mod test_async_shims;
 
 // Suppress unused-import warnings for FFI-only types.

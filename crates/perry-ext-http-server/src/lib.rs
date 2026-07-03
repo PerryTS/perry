@@ -70,6 +70,7 @@ mod response;
 mod response_fast;
 mod server;
 #[cfg(test)]
+#[cfg(test)]
 mod test_async_shims;
 mod tls;
 mod types;
