@@ -2668,9 +2668,30 @@ pub fn run_with_parse_cache(
                         source_prefix.clone()
                     };
 
-                    import_function_prefixes
-                        .insert(exported_name.clone(), effective_prefix.clone());
-                    if local_name != exported_name {
+                    // Issue #<TBD>: only key by `exported_name` in the
+                    // no-rename case (`local_name == exported_name`), where
+                    // the HIR's `ExternFuncRef` genuinely carries that
+                    // string. In the aliased case (#35/#321 above:
+                    // `ExternFuncRef` carries the LOCAL name, unique per
+                    // import site), inserting under `exported_name` too is
+                    // not just redundant — `exported_name` is whatever the
+                    // ORIGIN module happens to call it, so it can collide
+                    // with an unrelated LOCAL alias elsewhere in the same
+                    // file. Concrete repro: `import { a as n, c as a } from
+                    // "./x"; import { a as t } from "./y"` — the second
+                    // specifier's exported name "a" overwrote the first
+                    // import's *local* alias "a" (from `c as a`), silently
+                    // repointing `ExternFuncRef { name: "a" }` at module y
+                    // instead of x. Only inserting the ALIASED case under
+                    // `local_name` (never also under `exported_name`) keeps
+                    // every key in this map unique per file — local names
+                    // can't collide with each other (each `let`/import
+                    // binding needs a distinct identifier), but exported
+                    // names from different source modules can and do.
+                    if local_name == exported_name {
+                        import_function_prefixes
+                            .insert(exported_name.clone(), effective_prefix.clone());
+                    } else {
                         import_function_prefixes
                             .insert(local_name.clone(), effective_prefix.clone());
                     }
