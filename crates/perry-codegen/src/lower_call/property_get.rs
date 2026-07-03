@@ -117,10 +117,11 @@ pub fn try_lower_property_get_method_call(
             // js_native_call_method fallback handles it correctly via
             // js_string_replace_string.
             "replace" if args.len() == 2 && matches!(&args[1], Expr::Closure { .. }) => true,
-            // trim / case-conversion methods are also common schema-builder
-            // method names (ZodString.trim(), .toUpperCase(), .toLowerCase()).
-            // Let runtime dispatch choose so Any-typed library objects keep their
-            // own methods while real strings still use String.prototype methods.
+            // trim / case-conversion names are also commonly defined as their
+            // own methods on Any-typed library/builder objects. Let runtime
+            // dispatch choose by receiver shape so those objects keep their own
+            // methods while real strings still use String.prototype methods
+            // (same treatment as `slice`/`indexOf`/`normalize` above).
             "trim" | "trimStart" | "trimEnd" | "toLowerCase" | "toUpperCase"
             | "toLocaleLowerCase" | "toLocaleUpperCase" => false,
             // `slice` exists on strings, arrays, buffers, and Blob-like

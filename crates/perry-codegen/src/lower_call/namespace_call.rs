@@ -301,6 +301,10 @@ pub fn try_lower_namespace_member_call(
         .or_else(|| ctx.imported_func_param_counts.get(property))
         .copied()
         .unwrap_or_else(|| {
+            // No arity metadata for this re-exported function. When it's a
+            // renamed re-export (origin != property) called with no args, pad a
+            // single `undefined` so a 1-param callee still receives a slot;
+            // otherwise fall back to the actual arg count.
             if args.is_empty() && origin_suffix != property {
                 1
             } else {

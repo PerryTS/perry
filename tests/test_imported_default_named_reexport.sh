@@ -52,6 +52,10 @@ const ctx = { defaultError: "fallback" };
 console.log(JSON.stringify({ direct: defaultMap(issue, ctx), reexport: defaultErrorMap(issue, ctx) }));
 JS
 
+if ! command -v node >/dev/null 2>&1; then
+    echo "SKIP: node binary not found"
+    exit 0
+fi
 node "$TMPDIR/main.js" >"$TMPDIR/node.txt"
 "$PERRY" compile --no-cache --no-auto-optimize "$TMPDIR/main.js" \
     -o "$TMPDIR/main" >"$TMPDIR/compile.log" 2>&1 || {

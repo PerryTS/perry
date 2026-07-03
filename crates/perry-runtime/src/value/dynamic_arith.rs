@@ -249,6 +249,10 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
     }
+    // Unlike `- * / %`, `+` intentionally does NOT `dynamic_number_operand`
+    // (ToNumber) its operands: string concatenation is handled by the `+`
+    // lowering before reaching here, so any non-number that survives to this
+    // point is already meant to add numerically.
     numify_arith_operand(a) + numify_arith_operand(b)
 }
 

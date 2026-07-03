@@ -32,6 +32,10 @@ console.log(JSON.stringify({
 }));
 TS
 
+if ! command -v node >/dev/null 2>&1; then
+    echo "SKIP: node binary not found"
+    exit 0
+fi
 node "$TMPDIR/main.ts" > "$TMPDIR/expected.log"
 
 BIN="$TMPDIR/out"

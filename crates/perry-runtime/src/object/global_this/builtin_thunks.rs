@@ -440,11 +440,6 @@ pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: 
     // cannot compile a code string built from runtime data. Throwing lets
     // feature-detecting libraries take their non-`Function` fallback without
     // polluting stderr for handled probes.
-    let _body = if args_len > 0 {
-        arg_str(args_len - 1)
-    } else {
-        String::new()
-    };
     super::super::object_ops::throw_object_type_error(
         b"Function: dynamic code generation from a runtime string is not supported \
           in an ahead-of-time compiled binary",

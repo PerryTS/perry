@@ -19,6 +19,10 @@ const getter = makeGetter();
 console.log(JSON.stringify(getter()));
 TS
 
+if ! command -v node >/dev/null 2>&1; then
+    echo "SKIP: node binary not found"
+    exit 0
+fi
 node "$SRC" > "$TMPDIR/expected.txt"
 
 if [ -x "$ROOT/target/debug/perry" ]; then

@@ -33,6 +33,10 @@ error.add("item");
 console.log(JSON.stringify(error.items));
 TS
 
+if ! command -v node >/dev/null 2>&1; then
+    echo "SKIP: node binary not found"
+    exit 0
+fi
 node "$SRC" > "$TMPDIR/expected.txt"
 
 if [ -x "$ROOT/target/debug/perry" ]; then

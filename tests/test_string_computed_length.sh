@@ -33,7 +33,7 @@ console.log(JSON.stringify({
   directLength: short["length"],
   boxedLength: read(new String(short), lengthKey),
   char: read(short, indexKey),
-  nonCanonical: read(short, nonCanonicalIndexKey),
+  nonCanonical: String(read(short, nonCanonicalIndexKey)),
 }));
 TS
 
@@ -60,7 +60,7 @@ fi
 }
 
 cat > "$TMPDIR/expected.log" <<'EOF_EXPECTED'
-{"shortLength":3,"longLength":26,"directLength":3,"boxedLength":3,"char":"b"}
+{"shortLength":3,"longLength":26,"directLength":3,"boxedLength":3,"char":"b","nonCanonical":"undefined"}
 EOF_EXPECTED
 
 if ! diff -u "$TMPDIR/expected.log" "$TMPDIR/run.log"; then
