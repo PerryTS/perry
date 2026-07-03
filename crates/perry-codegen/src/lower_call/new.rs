@@ -1915,8 +1915,20 @@ fn lower_new_impl(
                 class_name,
                 FieldInitMode::BetweenExclusiveTo(stop_at),
             )?;
-        } else {
+        } else if class
+            .extends_name
+            .as_deref()
+            .map(|p| ctx.classes.contains_key(p))
+            .unwrap_or(false)
+        {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
+        } else {
+            // Extends a builtin (Error/Array/Map/Set/…) with no user-class
+            // ancestor: the leaf IS the root of the user chain, so AfterRoot
+            // (chain[1..]) drops its own fields. Apply the leaf's initializers
+            // after the builtin super-init, mirroring the explicit-super()
+            // SelfOnly arm in this_super_call.rs.
+            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
         }
     }
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
