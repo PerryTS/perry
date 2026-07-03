@@ -6070,6 +6070,7 @@ dependencies = [
  "sha3 0.10.9",
  "sha3 0.12.0",
  "sha3-utils",
+ "shake",
  "spki 0.7.3",
  "sqlx",
  "thiserror 1.0.69",
