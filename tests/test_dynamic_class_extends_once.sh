@@ -18,6 +18,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 cat > "$TMPDIR/main.ts" <<'TS'
 let count = 0;
+const order: string[] = [];
 
 function parent() {
   count++;
@@ -26,6 +27,11 @@ function parent() {
 
 function make() {
   return class Child extends parent() {
+    static before = order.push("before");
+    static {
+      order.push("block");
+    }
+    static after = order.push("after");
     static observed = count;
   };
 }
@@ -34,12 +40,13 @@ const Child = make();
 console.log(JSON.stringify({
   count,
   observed: (Child as any).observed,
+  order,
   construct: new Child() instanceof Child,
 }));
 TS
 
 cat > "$TMPDIR/expected.log" <<'LOG'
-{"count":1,"observed":1,"construct":true}
+{"count":1,"observed":1,"order":["before","block","after"],"construct":true}
 LOG
 
 BIN="$TMPDIR/out"

@@ -333,26 +333,23 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         .lookup_class_captures(&class.name)
                         .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
                         .unwrap_or_default();
-                    let mut named_statics = Vec::new();
-                    let mut symbol_statics = Vec::new();
-                    for sf in &class.static_fields {
-                        if let Some(init) = &sf.init {
-                            if let Some(key) = &sf.key_expr {
-                                symbol_statics.push((key.clone(), init.clone()));
-                            } else {
-                                named_statics.push((sf.name.clone(), init.clone()));
-                            }
-                        }
-                    }
+                    let class_local = ctx
+                        .lookup_local_in_current_scope(&class_name)
+                        .unwrap_or_else(|| ctx.define_local(class_name.clone(), Type::Any));
+                    let (mut named_statics, symbol_statics, fresh_static_init_stmts) =
+                        crate::lower_decl::build_fresh_class_static_init(
+                            &class_decl.class.body,
+                            &class.name,
+                            &class.static_fields,
+                            &class.static_methods,
+                            class_local,
+                        );
                     if let Some((parent_id, _)) = parent_value_local {
                         named_statics.push((
                             "__perry_parent_value".to_string(),
                             Expr::LocalGet(parent_id),
                         ));
                     }
-                    let class_local = ctx
-                        .lookup_local_in_current_scope(&class_name)
-                        .unwrap_or_else(|| ctx.define_local(class_name.clone(), Type::Any));
                     result.push(Stmt::Let {
                         id: class_local,
                         name: class_name.clone(),
@@ -365,6 +362,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }),
                         mutable: false,
                     });
+                    result.extend(fresh_static_init_stmts);
                 }
                 // Static field initializers + static blocks for a
                 // function-nested class. The module-level path
@@ -375,9 +373,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // silently stayed at their zero default — only top-level
                 // classes initialized. Interleaved in source order (see
                 // `build_interleaved_static_init_stmts`), with lexical `this`
-                // in field initializers bound to the class ref. Fresh dynamic
-                // class values carry static fields in their snapshot, so only
-                // replay static blocks for that path.
+                // in field initializers bound to the class ref.
                 if !bind_fresh_class_value {
                     result.extend(crate::lower_decl::build_interleaved_static_init_stmts(
                         &class_decl.class.body,
@@ -385,16 +381,6 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         &class.static_fields,
                         &class.static_methods,
                     ));
-                } else {
-                    for sm in &class.static_methods {
-                        if sm.name.starts_with("__perry_static_init_") {
-                            result.push(Stmt::Expr(Expr::StaticMethodCall {
-                                class_name: class.name.clone(),
-                                method_name: sm.name.clone(),
-                                args: Vec::new(),
-                            }));
-                        }
-                    }
                 }
                 ctx.pending_classes.push(class);
                 // #5251 follow-up — a function-nested `class X { … }` whose
