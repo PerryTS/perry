@@ -1650,13 +1650,10 @@ unsafe fn string_header_as_str<'a>(s: *const StringHeader) -> &'a str {
 /// Exact-precision rendering of a `BigInt` magnitude for the "standard"
 /// notation `"decimal"` style — mirrors the `_ =>` (default) arm of
 /// [`number_parts_core`], but starts from the BigInt's own exact base-10
-/// digit string instead of an `f64`-converted magnitude. `f64` can't exactly
-/// represent integers past 2^53, which silently corrupts large `BigInt`
-/// digits (test262 intl402/BigInt/prototype/toLocaleString expects
-/// `90071992547409910n` to round-trip exactly). Every step below
-/// (`round_to_significant`/`round_fraction_or_increment`/
-/// `push_grouped_integer`) already operates on digit strings, not `f64`, so
-/// only the initial magnitude extraction needed to change.
+/// digit string instead of an `f64`-converted one, which can't exactly
+/// represent integers past 2^53 (test262 expects `90071992547409910n` to
+/// round-trip exactly). Every downstream step operates on digit strings, not
+/// `f64`, so only the magnitude extraction needed to change.
 fn bigint_number_parts_exact(
     r: &NfResolved,
     negative: bool,
@@ -1668,11 +1665,10 @@ fn bigint_number_parts_exact(
     set_round_ctx(&r.rounding_mode, negative);
 
     let mut parts: Vec<(&'static str, String)> = Vec::new();
-    let (mut i_out, f_out) = if r.use_sig {
-        round_to_significant(abs_digits, "", r.min_sig, r.max_sig)
-    } else {
-        round_fraction_or_increment(abs_digits, "", r)
-    };
+    // `compact_round` also has the `compact_both` roundingPriority tie-break
+    // branch, unreachable here (only set for `notation == "compact"`) but
+    // reusing it keeps this in lockstep with that helper regardless.
+    let (mut i_out, f_out) = compact_round(abs_digits, "", r);
     while (i_out.len() as u32) < r.min_int {
         i_out.insert(0, '0');
     }
@@ -1697,30 +1693,28 @@ fn bigint_number_parts_exact(
 /// `BigInt.prototype.toLocaleString(locales?, options?)` — ECMA-402
 /// sec-bigint.prototype.tolocalestring (#5845). Builds a real
 /// `Intl.NumberFormat` from `locales`/`options` via the same `make_instance`
-/// path `new Intl.NumberFormat(...)` uses, so option/locale validation and
-/// resolution (and the exceptions they throw) match exactly. Only the
-/// "standard" notation `"decimal"` style renders from the BigInt's exact
-/// digit string; percent/currency/unit and scientific/engineering/compact
-/// notation fall back to the same `f64` coercion
-/// `Intl.NumberFormat.prototype.format` itself uses (`nf_coerce_number`), so
-/// `x.toLocaleString(...)` stays self-consistent with
-/// `new Intl.NumberFormat(...).format(x)` even where it's lossy for BigInts
-/// past 2^53 (test262 returns-same-results-as-NumberFormat.js) — no test in
-/// scope needs exact output through those styles, only agreement with
-/// `.format()`.
+/// path `new Intl.NumberFormat(...)` uses, so validation/resolution (and the
+/// exceptions they throw) match exactly. Only the "standard" notation
+/// `"decimal"` style renders from the BigInt's exact digit string; other
+/// styles/notations fall back to the same `f64` coercion
+/// `Intl.NumberFormat.prototype.format` uses (`nf_coerce_number`), so
+/// `toLocaleString` stays self-consistent with `format()` there too, even
+/// where both are lossy for BigInts past 2^53.
 pub(crate) fn bigint_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
     let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
     let negative = unsafe { crate::bigint::js_bigint_is_negative(ptr) } != 0;
     let digits_ptr = crate::bigint::js_bigint_to_string(ptr);
+    // Copy into an owned `String` right away — `digits_ptr` is GC-managed and
+    // `make_instance` below allocates, which can move/free it.
     let digits = unsafe { string_header_as_str(digits_ptr) };
-    let abs_digits = digits.strip_prefix('-').unwrap_or(digits);
+    let abs_digits = digits.strip_prefix('-').unwrap_or(digits).to_string();
 
     let nf_obj_value = make_instance(std::ptr::null(), KIND_NUMBER, locales, options);
     let nf_obj = object_ptr_from_value(nf_obj_value).expect("make_instance returns a valid object");
     let r = nf_load(nf_obj);
 
     let out = if r.style == "decimal" && r.notation == "standard" {
-        let mut parts = bigint_number_parts_exact(&r, negative, abs_digits);
+        let mut parts = bigint_number_parts_exact(&r, negative, &abs_digits);
         transliterate_parts_digits(&mut parts, &r.numbering_system);
         parts.iter().map(|(_, v)| v.as_str()).collect()
     } else {
