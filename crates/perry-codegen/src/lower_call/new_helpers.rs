@@ -301,6 +301,7 @@ pub(super) fn map_set_default_super_kind<'a>(
 ) -> Option<i32> {
     // Bound the walk like `ctor_chain_uses_new_target` above: a cyclic
     // `extends` graph of constructorless classes would otherwise loop forever.
+    // Keep this bound in sync with the twin in codegen/method.rs.
     let mut depth = 0usize;
     while let Some(name) = parent {
         depth += 1;

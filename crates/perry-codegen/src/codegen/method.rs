@@ -252,7 +252,8 @@ fn map_set_default_super_kind<'a>(
         }
         parent = class.extends_name.as_deref();
         depth += 1;
-        if depth > 32 {
+        // Keep this bound in sync with the twin in lower_call/new_helpers.rs.
+        if depth > 64 {
             break;
         }
     }
