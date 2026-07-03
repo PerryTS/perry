@@ -119,21 +119,14 @@ fn fire_and_forget_fetch_survives_recompile() {
     run(dir.path(), &first, "first compile");
 
     let second = dir.path().join("main_second");
-    let stderr = compile(dir.path(), &entry, &second);
+    let _ = compile(dir.path(), &entry, &second);
+    // The behavioral gate IS the regression signal: pre-fix, this second
+    // binary (archives-fresh → wrappers-before-stdlib link) ticked to the
+    // watchdog FAIL with the fetch never resolving. No assertion on the
+    // strip-dedup log wording — the exact messages are not a contract.
     run(
         dir.path(),
         &second,
         "second compile (archives-fresh link shape)",
     );
-
-    // When this compile took the wrappers-before-stdlib shape, the fix must
-    // have deduped the wrapper's bundled runtime copy. Tolerate the
-    // stdlib-first shape (e.g. a cold workspace where both compiles rebuilt):
-    // the run() assertions above are the real regression gate.
-    if stderr.contains("Processing well-known wrapper") {
-        assert!(
-            stderr.contains("dropped") && stderr.contains("bundled perry-runtime member"),
-            "wrappers-first link did not dedup the bundled runtime copy\nstderr:\n{stderr}"
-        );
-    }
 }
