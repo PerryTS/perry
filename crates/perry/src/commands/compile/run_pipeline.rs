@@ -2507,6 +2507,23 @@ pub fn run_with_parse_cache(
                                         compute_module_prefix(origin_path, &ctx.project_root);
                                     import_function_prefixes
                                         .insert(export_name.clone(), origin_prefix.clone());
+                                    // Issue #5922 (companion to #680): also
+                                    // register under the per-namespace key so
+                                    // `Context.foo` and `Option.foo` resolve to
+                                    // their own sources even when two
+                                    // namespace-reexport targets imported into
+                                    // the same file happen to export a member
+                                    // with the same bare name. Without this,
+                                    // codegen's `expr/static_method.rs` (plus
+                                    // `namespace_call.rs` / `property_get.rs`
+                                    // for lowercase-receiver call/read forms)
+                                    // fall through to the flat
+                                    // `import_function_prefixes`, which the
+                                    // last-registered namespace silently wins.
+                                    namespace_member_prefixes.insert(
+                                        (local_name.clone(), export_name.clone()),
+                                        origin_prefix.clone(),
+                                    );
                                     // Issue #678: surface origin-name overrides
                                     // for the NamespaceReExport branch too.
                                     if let Some(origin_name) = all_module_export_origin_names

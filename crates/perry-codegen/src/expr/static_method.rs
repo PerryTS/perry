@@ -209,8 +209,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
                 }
-                if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
-                {
+                // Issue #5922 (companion to #680): prefer the per-namespace
+                // map so `Context.a` and `Option.a` resolve to their own
+                // sources even when both namespaces export a member with
+                // the same bare name. Falls back to the flat
+                // `import_function_prefixes` for namespaces with no
+                // overlapping conflicts (e.g. plain `import * as X`, which
+                // this branch also serves).
+                let source_prefix_opt = ctx
+                    .namespace_member_prefixes
+                    .get(&(class_name.to_string(), method_name.to_string()))
+                    .cloned()
+                    .or_else(|| ctx.import_function_prefixes.get(method_name).cloned());
+                if let Some(source_prefix) = source_prefix_opt {
                     // Issue #678 followup: V8-fallback namespace member route —
                     // the origin module emits no native symbol, so dispatch
                     // through the runtime bridge.
