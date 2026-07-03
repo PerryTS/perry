@@ -633,6 +633,18 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         lift_logical_with_await_rhs(expr, next_id, hoisted);
         return;
     }
+    // A sequence like `this.l = new L, this.p = await this.l.start()`
+    // would otherwise have the await hoisted above the containing
+    // statement, evaluating the awaited operand BEFORE the sequence's
+    // earlier operands ran — the awaited receiver reads its
+    // pre-assignment value (issue #5925; minifiers emit this shape
+    // constantly). Lift the non-final operands to statements first, in
+    // evaluation order, then continue with the final operand.
+    if matches!(expr, Expr::Sequence(_)) && expr_contains_await(expr) {
+        lift_sequence_with_await(expr, next_id, hoisted);
+        hoist_awaits_in_expr_full(expr, next_id, hoisted);
+        return;
+    }
     // Recurse into children first (innermost-first hoisting).
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
@@ -765,11 +777,47 @@ fn hoist_awaits_avoiding_top_level(
         lift_logical_with_await_rhs(expr, next_id, hoisted);
         return;
     }
+    // Top-level sequence with an await, e.g. the minified
+    // `this.l = new L, this.p = await this.l.start();` — see the matching
+    // note in `hoist_awaits_in_expr_full` (issue #5925). Lift the earlier
+    // operands to statements, then re-process the final operand as the new
+    // top-level expression (it may itself be a directly-handled await).
+    if matches!(expr, Expr::Sequence(_)) && expr_contains_await(expr) {
+        lift_sequence_with_await(expr, next_id, hoisted);
+        hoist_awaits_avoiding_top_level(expr, next_id, hoisted);
+        return;
+    }
     // Outer is NOT an await. Children may contain awaits which ARE
     // nested — fully hoist them.
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
     });
+}
+
+/// Lift a sequence (comma) expression's non-final operands into statements
+/// pushed onto `hoisted`, leaving `expr` as the final operand (issue #5925).
+///
+/// Each lifted operand is itself fully hoisted first, so awaits inside
+/// earlier operands suspend in evaluation order, before anything in the
+/// final operand. With the operands lifted, the `let __await_N = await …`
+/// the caller hoists for the final operand lands AFTER them — preserving JS
+/// comma semantics (`a = new X, b = await a.m()` must run the assignment
+/// before evaluating `a.m()`), where previously the await jumped the whole
+/// sequence.
+fn lift_sequence_with_await(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
+    let Expr::Sequence(ops) = expr else {
+        return;
+    };
+    let mut ops = std::mem::take(ops);
+    let Some(last) = ops.pop() else {
+        *expr = Expr::Undefined;
+        return;
+    };
+    for mut op in ops {
+        hoist_awaits_in_expr_full(&mut op, next_id, hoisted);
+        hoisted.push(Stmt::Expr(op));
+    }
+    *expr = last;
 }
 
 /// Returns true if either branch of `expr` (assumed `Expr::Conditional`)
