@@ -103,7 +103,10 @@ console.log("DONE");
         out.contains("post.call: declaration"),
         "the block-declared function must be the one actually called\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
 
 #[test]
@@ -145,7 +148,10 @@ console.log("DONE");
     );
     assert!(out.contains("post.typeof.g: function"));
     assert!(out.contains("post.typeof.h: function"));
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
 
 #[test]
@@ -183,5 +189,8 @@ console.log("DONE");
         out.contains("pre.value: top-level"),
         "the real top-level function value must NOT be clobbered to undefined\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
