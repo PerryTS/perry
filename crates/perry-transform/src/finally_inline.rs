@@ -153,6 +153,20 @@ pub fn inline_finally_into_returns(module: &mut Module) {
                 &mut next_local_id,
             );
         }
+        // #5854: computed-key members (`async [k]() { try … finally … }`) have
+        // method-like bodies and must inline finally-into-returns exactly like
+        // `methods`/`static_methods` above. Omitting them left an async computed
+        // method's finally un-inlined, so its generator state machine could skip
+        // the finally on a return path.
+        for member in class.computed_members.iter_mut() {
+            process_stmts(
+                &mut member.function.body,
+                &[],
+                0,
+                &mut label_depths,
+                &mut next_local_id,
+            );
+        }
     }
     for stmt in module.init.iter_mut() {
         let mut single = vec![std::mem::replace(stmt, Stmt::Break)];

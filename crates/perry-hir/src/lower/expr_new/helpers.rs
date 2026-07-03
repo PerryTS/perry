@@ -128,6 +128,7 @@ pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
         "Math" => "js_throw_math_constructor_type_error",
+        "JSON" => "js_throw_json_constructor_type_error",
         _ => unreachable!(),
     };
     let throw_expr = Expr::Call {

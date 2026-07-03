@@ -1524,7 +1524,18 @@ pub(crate) fn push_style_suffix(
     _decimal_sep: char,
 ) {
     match r.style.as_str() {
-        "percent" => parts.push(("percentSign", "%".to_string())),
+        // German (and most European) locales separate the percent sign from
+        // the number with a non-breaking space; en-US glues it directly on
+        // (test262 intl402/BigInt/prototype/toLocaleString/de-DE.js expects
+        // "8.878.000.000 %", en-US.js expects "8,878,000,000%" with no
+        // space — same `push_style_suffix` call, locale-gated literal).
+        "percent" => {
+            let de_style = r.locale.eq_ignore_ascii_case("de") || r.locale.starts_with("de-");
+            if de_style {
+                parts.push(("literal", "\u{a0}".to_string()));
+            }
+            parts.push(("percentSign", "%".to_string()));
+        }
         "unit" => {
             if let Some(unit) = &r.unit {
                 parts.push(("literal", " ".to_string()));
@@ -1623,6 +1634,93 @@ pub(crate) fn format_number_instance(obj: *const ObjectHeader, value: f64) -> St
         .iter()
         .map(|(_, v)| v.as_str())
         .collect()
+}
+
+/// Read a `StringHeader` pointer as a Rust `&str` (the data bytes immediately
+/// follow the header, same layout `str_bytes_from_jsvalue` reads for a
+/// NaN-boxed string value). `js_bigint_to_string`'s output is always ASCII
+/// decimal digits (with an optional leading `-`), so `from_utf8_unchecked` is
+/// safe here.
+unsafe fn string_header_as_str<'a>(s: *const StringHeader) -> &'a str {
+    let len = (*s).byte_len as usize;
+    let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
+    std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+}
+
+/// Exact-precision rendering of a `BigInt` magnitude for the "standard"
+/// notation `"decimal"` style — mirrors the `_ =>` (default) arm of
+/// [`number_parts_core`], but starts from the BigInt's own exact base-10
+/// digit string instead of an `f64`-converted one, which can't exactly
+/// represent integers past 2^53 (test262 expects `90071992547409910n` to
+/// round-trip exactly). Every downstream step operates on digit strings, not
+/// `f64`, so only the magnitude extraction needed to change.
+fn bigint_number_parts_exact(
+    r: &NfResolved,
+    negative: bool,
+    abs_digits: &str,
+) -> Vec<(&'static str, String)> {
+    let de_style = r.locale.eq_ignore_ascii_case("de") || r.locale.starts_with("de-");
+    let group_sep = if de_style { '.' } else { ',' };
+    let decimal_sep = if de_style { ',' } else { '.' };
+    set_round_ctx(&r.rounding_mode, negative);
+
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
+    // `compact_round` also has the `compact_both` roundingPriority tie-break
+    // branch, unreachable here (only set for `notation == "compact"`) but
+    // reusing it keeps this in lockstep with that helper regardless.
+    let (mut i_out, f_out) = compact_round(abs_digits, "", r);
+    while (i_out.len() as u32) < r.min_int {
+        i_out.insert(0, '0');
+    }
+    let grouping = grouping_enabled(&r.use_grouping, i_out.len());
+    push_grouped_integer(&mut parts, &i_out, group_sep, grouping);
+    if !f_out.is_empty() {
+        parts.push(("decimal", decimal_sep.to_string()));
+        parts.push(("fraction", f_out));
+    }
+
+    let rounded_is_zero = parts
+        .iter()
+        .filter(|(t, _)| *t == "integer" || *t == "fraction")
+        .all(|(_, v)| v.bytes().all(|b| b == b'0'));
+    let mut out: Vec<(&'static str, String)> = Vec::with_capacity(parts.len() + 2);
+    push_sign(&mut out, &r.sign_display, negative, rounded_is_zero);
+    out.append(&mut parts);
+    push_style_suffix(&mut out, r, decimal_sep);
+    out
+}
+
+/// `BigInt.prototype.toLocaleString(locales?, options?)` — ECMA-402
+/// sec-bigint.prototype.tolocalestring (#5845). Builds a real
+/// `Intl.NumberFormat` from `locales`/`options` via the same `make_instance`
+/// path `new Intl.NumberFormat(...)` uses, so validation/resolution (and the
+/// exceptions they throw) match exactly. Only the "standard" notation
+/// `"decimal"` style renders from the BigInt's exact digit string; other
+/// styles/notations fall back to the same `f64` coercion
+/// `Intl.NumberFormat.prototype.format` uses (`nf_coerce_number`), so
+/// `toLocaleString` stays self-consistent with `format()` there too, even
+/// where both are lossy for BigInts past 2^53.
+pub(crate) fn bigint_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
+    let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
+    let negative = unsafe { crate::bigint::js_bigint_is_negative(ptr) } != 0;
+    let digits_ptr = crate::bigint::js_bigint_to_string(ptr);
+    // Copy into an owned `String` right away — `digits_ptr` is GC-managed and
+    // `make_instance` below allocates, which can move/free it.
+    let digits = unsafe { string_header_as_str(digits_ptr) };
+    let abs_digits = digits.strip_prefix('-').unwrap_or(digits).to_string();
+
+    let nf_obj_value = make_instance(std::ptr::null(), KIND_NUMBER, locales, options);
+    let nf_obj = object_ptr_from_value(nf_obj_value).expect("make_instance returns a valid object");
+    let r = nf_load(nf_obj);
+
+    let out = if r.style == "decimal" && r.notation == "standard" {
+        let mut parts = bigint_number_parts_exact(&r, negative, &abs_digits);
+        transliterate_parts_digits(&mut parts, &r.numbering_system);
+        parts.iter().map(|(_, v)| v.as_str()).collect()
+    } else {
+        format_number_instance(nf_obj, nf_coerce_number(value))
+    };
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
 }
 
 /// Convert a typed-parts list into a JS array of `{ type, value }` objects —

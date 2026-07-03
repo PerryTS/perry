@@ -91,62 +91,99 @@ fn invoke_host_wake_callback() {
 }
 
 // ============================================================================
-// #5779 — Idle-kick callback (tokio lost-unpark recovery).
+// Wait-driver (unified single-thread async model).
 //
-// Perry runs JS on the main thread, which is NOT a tokio worker; it parks on
-// the condvar below while the shared tokio runtime drives async I/O on its
-// worker pool. A task scheduled from the main thread (the canonical case: an
-// in-process HTTP server's per-request `oneshot::Sender::send` of the response,
-// fired from `res.end()` inside the main-thread request pump) relies on tokio
-// unparking a worker to run it. When *every* worker is parked and the I/O
-// reactor is blocked in `kevent`/`epoll_wait`, that remote unpark can be lost
-// under load — the woken task is enqueued but no worker is roused to drain it.
-// The task is stranded forever: the response is never written, so the fetch
-// client future never completes, and the main thread's 1-second idle re-check
-// finds nothing to do (it already shipped the response) and re-parks. Permanent
-// deadlock — exactly the in-process server-and-fetch hang in #5779.
+// When registered, `js_wait_for_event` drives this instead of parking on the
+// condvar. perry-stdlib installs a driver that runs ONE bounded tick of the
+// (current-thread) tokio runtime — driving the I/O reactor, the timer wheel,
+// and all spawned native tasks (reqwest / net / ws) ON THE MAIN THREAD. A
+// native completion is therefore observed in-thread and queues its result with
+// no cross-thread wake to lose; the loop then drains it in `perry_poll`. This
+// replaces the two-scheduler model (JS loop on the main thread + a multi-thread
+// tokio runtime) whose cross-thread driver-unpark could be lost.
 //
-// The fix: just before the main thread sleeps on its idle condvar, give it a
-// chance to poke the runtime so a worker is roused to drain any
-// enqueued-but-stranded task. perry-stdlib registers a callback here that
-// schedules a task on the shared runtime whenever async client work is in
-// flight. Because the kick fires right before the sleep, the drained task's own
-// completion notify wakes the main thread immediately — so recovery latency is
-// a worker hop, and even a fully missed wake self-heals within the 1s idle cap.
-// (perry-stdlib's kick task does real work, not an empty `spawn(async {})`,
-// which was measured not to reliably rouse a parked worker — see its
-// `stdlib_idle_kick`.)
+//   * `sleep(budget_ms)` — block until a native event is ready OR `budget_ms`
+//     elapses, whichever first; drives the runtime meanwhile.
+//   * `wake()` — end the current tick early; fired from `js_notify_main_thread`
+//     by any producer (the in-thread native task, or a blocking-pool thread).
 //
-// Registration is opt-in and the slot is a single atomic load when unset, so
-// embedders that never register pay nothing. The callback runs on the main
-// thread only (from `js_wait_for_event`'s pre-sleep path, never the hot
-// NOTIFIED fast path).
+// Both are installed together; a null `sleep` slot reverts to the condvar park
+// (non-async embedders pay a single atomic load).
 // ============================================================================
+static WAIT_DRIVER_SLEEP: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static WAIT_DRIVER_WAKE: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+/// `fast` — a brief, non-parking-when-idle native drive invoked when JS work is
+/// pending (so we're about to return to run microtasks, NOT park). On the
+/// single-thread runtime model, in-flight native tasks (a fetch's reqwest send,
+/// its h2 connection driver, sibling fetches) run ONLY inside the wait-driver
+/// tick; under constant JS microtask churn the `NOTIFIED` fast-path would
+/// otherwise return every iteration and never call `sleep`, starving those tasks
+/// forever. `fast` gives them a bounded turn each loop iteration and no-ops
+/// cheaply when nothing native is in flight (pure-JS-async is unaffected).
+static WAIT_DRIVER_FAST: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Idle-kick callback, stored as a raw fn pointer for a trivial C FFI surface.
-/// Null disables the kick.
-static IDLE_KICK_CALLBACK: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-
-/// Register the idle-kick callback (see module-level #5779 note). Passing
-/// `cb = NULL` clears it. Invoked on the main thread immediately before it
-/// blocks on the idle condvar; the implementation must be cheap and must not
-/// re-enter `js_wait_for_event`.
+/// Register the wait-driver (see module note above). Passing `sleep = NULL`
+/// clears it. `sleep`/`fast` are invoked on the main thread from
+/// `js_wait_for_event` (never re-entrant); `wake` is invoked from
+/// `js_notify_main_thread` on whatever thread notified, so it must be
+/// thread-safe.
 #[no_mangle]
-pub extern "C" fn js_register_idle_kick(cb: Option<extern "C" fn()>) {
-    let cb_ptr = cb.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
-    IDLE_KICK_CALLBACK.store(cb_ptr, Ordering::Release);
+pub extern "C" fn js_register_wait_driver(
+    sleep: Option<extern "C" fn(u64)>,
+    fast: Option<extern "C" fn()>,
+    wake: Option<extern "C" fn()>,
+) {
+    // Store wake + fast first so any notifier that observes a fresh sleep slot
+    // also sees usable companions.
+    let wake_ptr = wake.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
+    WAIT_DRIVER_WAKE.store(wake_ptr, Ordering::Release);
+    let fast_ptr = fast.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
+    WAIT_DRIVER_FAST.store(fast_ptr, Ordering::Release);
+    let sleep_ptr = sleep.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
+    WAIT_DRIVER_SLEEP.store(sleep_ptr, Ordering::Release);
+}
+
+/// Run one bounded tick of the registered wait-driver. Returns `true` if a
+/// driver was installed (and ran), `false` if the caller should fall back to
+/// the condvar park.
+#[inline]
+fn wait_driver_sleep(budget_ms: u64) -> bool {
+    let p = WAIT_DRIVER_SLEEP.load(Ordering::Acquire);
+    if p.is_null() {
+        return false;
+    }
+    // SAFETY: the slot only ever holds an `extern "C" fn(u64)` installed by
+    // `js_register_wait_driver`; re-checked non-null right above.
+    let f: extern "C" fn(u64) = unsafe { std::mem::transmute(p) };
+    f(budget_ms);
+    true
 }
 
 #[inline]
-fn invoke_idle_kick() {
-    let cb_ptr = IDLE_KICK_CALLBACK.load(Ordering::Acquire);
-    if cb_ptr.is_null() {
+fn invoke_wait_driver_wake() {
+    let p = WAIT_DRIVER_WAKE.load(Ordering::Acquire);
+    if p.is_null() {
         return;
     }
-    // SAFETY: the slot only ever holds a `extern "C" fn()` installed by
-    // `js_register_idle_kick`; re-checked non-null right above.
-    let cb: extern "C" fn() = unsafe { std::mem::transmute(cb_ptr) };
-    cb();
+    // SAFETY: the slot only ever holds an `extern "C" fn()` installed by
+    // `js_register_wait_driver`; re-checked non-null right above.
+    let f: extern "C" fn() = unsafe { std::mem::transmute(p) };
+    f();
+}
+
+/// Give in-flight native tasks a brief driven turn before returning to run
+/// pending JS work. No-ops cheaply (a single atomic load) when no wait-driver is
+/// registered; the driver itself no-ops when nothing native is in flight.
+#[inline]
+fn invoke_wait_driver_fast() {
+    let p = WAIT_DRIVER_FAST.load(Ordering::Acquire);
+    if p.is_null() {
+        return;
+    }
+    // SAFETY: the slot only ever holds an `extern "C" fn()` installed by
+    // `js_register_wait_driver`; re-checked non-null right above.
+    let f: extern "C" fn() = unsafe { std::mem::transmute(p) };
+    f();
 }
 
 struct Pump {
@@ -254,6 +291,21 @@ fn spin_streak_reset() {
     SPIN_STREAK.with(|s| s.set(0));
 }
 
+/// Read (without consuming) whether a producer has notified the main thread
+/// since the last `js_wait_for_event` reset.
+///
+/// Used by the perry-stdlib wait-driver tick: it parks on the I/O reactor and
+/// must end as soon as a native task queues a main-thread-visible result. The
+/// tick clears stale wakes by checking THIS flag (the single source of truth)
+/// rather than a stored notify permit, which can desync with `NOTIFIED` (the
+/// fast-path consumes `NOTIFIED` but not the permit). The main loop clears
+/// `NOTIFIED` before entering the tick, so a `true` here means a result was
+/// queued *during* the tick.
+#[no_mangle]
+pub extern "C" fn js_main_thread_notified() -> i32 {
+    i32::from(NOTIFIED.load(Ordering::Acquire))
+}
+
 /// Wake the main thread from `js_wait_for_event` (or a future call).
 ///
 /// Safe to call from any thread, including the main thread itself.
@@ -274,6 +326,13 @@ pub extern "C" fn js_notify_main_thread() {
     // is a single atomic-load when no host is listening, so callers that
     // never register pay essentially nothing.
     invoke_host_wake_callback();
+    // Unified-loop wake: if a wait-driver is installed, end its current bounded
+    // tick so the main loop drains this notify promptly. Fired before the
+    // WAITER_COUNT fast-path because the wait-driver does NOT register as a cvar
+    // waiter (it parks inside the runtime, not on `PUMP.cvar`). The driver's
+    // wake primitive coalesces (a notify with no tick in progress leaves a
+    // permit consumed on the next tick), so there is no lost wake.
+    invoke_wait_driver_wake();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
     // call to `js_wait_for_event` will see `NOTIFIED == true` on the
@@ -415,7 +474,21 @@ pub extern "C" fn js_wait_for_event() {
     // (timer deadline pinned in the past + hot notifies) silently
     // pegs a core. Only `cvar.wait_timeout` actually sleeping counts
     // as "progress" for streak-reset purposes.
-    if NOTIFIED.swap(false, Ordering::Acquire) {
+    // FAST PATH: there is pending JS work — a notify since the last wait, OR
+    // queued microtasks. Either way we must run that JS, not park for the budget.
+    // BUT in the single-thread runtime model, in-flight native tasks (a fetch's
+    // reqwest `send`, its h2 connection driver, sibling fetches) run ONLY inside
+    // the wait-driver tick. Constant JS promise churn flips `NOTIFIED` on every
+    // iteration (every `js_promise_resolve`/async-step notifies), so this path is
+    // taken every time and would otherwise STARVE those native tasks forever
+    // (the bundle hang: fetch `send().await` never progressed + sibling fetch
+    // never even started). Give them a brief driven turn here.
+    // `invoke_wait_driver_fast` no-ops cheaply when no driver is registered and
+    // when nothing native is in flight, so pure-JS-async pays only atomic loads.
+    // #1114: do NOT reset the spin streak on this path.
+    let was_notified = NOTIFIED.swap(false, Ordering::Acquire);
+    if was_notified || unsafe { js_microtasks_pending() } > 0 {
+        invoke_wait_driver_fast();
         return;
     }
 
@@ -452,16 +525,29 @@ pub extern "C" fn js_wait_for_event() {
                 std::thread::sleep(SPIN_THROTTLE_SLEEP);
             }
         }
+        // A due timer pins the budget at 0, but native work (a fetch's reqwest
+        // `send`, sibling fetches, net/ws round-trips) still only advances inside
+        // the wait-driver tick. A hot timer loop would otherwise take this branch
+        // every iteration and starve that work — the same starvation the
+        // notified/microtask path above guards against. Give it the same brief
+        // driven turn. No-op (atomic loads) when no driver is registered or
+        // nothing native is in flight. #1114: this path does NOT reset the streak.
+        invoke_wait_driver_fast();
         return;
     }
-    // #5779: we are about to sleep on the idle condvar. If async client work is
-    // in flight, kick the tokio runtime so a worker is roused to drain any task
-    // that was scheduled but whose worker-unpark was lost while every worker was
-    // parked. Done *before* registering as a waiter / sleeping so the kicked
-    // task's completion notify still wakes us via the NOTIFIED re-check below or
-    // the cvar — no lost wake. The callback no-ops cheaply when nothing is in
-    // flight (and is absent until perry-stdlib registers it).
-    invoke_idle_kick();
+    // Unified single-thread async model: when perry-stdlib has installed a
+    // wait-driver (i.e. async work exists), drive ONE bounded tick of the
+    // current-thread tokio runtime here instead of parking on the condvar. The
+    // tick drives the reactor + timer wheel + native tasks on THIS thread, so a
+    // completion is observed in-thread and queued with no cross-thread wake to
+    // lose; `perry_poll` drains it on the next loop turn. A real tick yielded
+    // the core, so it counts as progress for the #1114 spin throttle.
+    if wait_driver_sleep(budget_ms) {
+        spin_streak_reset();
+        return;
+    }
+    // Fallback (no async runtime registered — non-async programs / embedders):
+    // the original condvar park (#84).
     // Slow path: take the cvar mutex and sleep on it. Mark ourselves
     // as a waiter first so concurrent notifiers go through the
     // mutex+cvar path (they won't see our wait if we registered after
@@ -844,85 +930,5 @@ mod tests {
         );
 
         NOTIFIED.swap(false, Ordering::Acquire);
-    }
-
-    static KICK_COUNT: AtomicU64 = AtomicU64::new(0);
-
-    /// Idle-kick test stub: count invocations and immediately notify so the
-    /// pending `wait_timeout` shortcuts instead of sleeping the full idle cap
-    /// — mirrors the real callback's effect (a drained task's completion notify
-    /// wakes the main thread), keeping the test fast and deterministic.
-    extern "C" fn counting_kick() {
-        KICK_COUNT.fetch_add(1, Ordering::Release);
-        js_notify_main_thread();
-    }
-
-    /// #5779: the idle kick must run on the pre-sleep slow path so a parked
-    /// main thread can rouse a stranded tokio worker before blocking. Forcing
-    /// a real (budget > 0) wait with no prior notify must invoke the callback.
-    #[test]
-    fn idle_kick_fires_before_blocking_sleep() {
-        let _g = SERIAL.lock().unwrap();
-        // Drain any stale notify so the first attempt below can reach the
-        // slow path rather than returning via the fast path.
-        js_wait_for_event();
-        js_register_idle_kick(Some(counting_kick));
-
-        // Retry to stay robust against a parallel (non-event_pump) test that
-        // sets NOTIFIED or schedules a sooner timer — either of which would
-        // divert this call off the slow path. A working wiring fires on the
-        // first clean attempt; a broken one never does.
-        let mut fired = false;
-        for _ in 0..50 {
-            crate::timer::js_timer_tick();
-            NOTIFIED.store(false, Ordering::Release);
-            KICK_COUNT.store(0, Ordering::Release);
-            js_wait_for_event();
-            if KICK_COUNT.load(Ordering::Acquire) >= 1 {
-                fired = true;
-                break;
-            }
-        }
-
-        js_register_idle_kick(None);
-        NOTIFIED.swap(false, Ordering::Acquire);
-        assert!(
-            fired,
-            "idle kick was never invoked on the pre-sleep path — a stranded \
-             tokio worker would never be roused (the #5779 deadlock)"
-        );
-    }
-
-    /// #5779: the kick must NOT run on the NOTIFIED fast path — there is work
-    /// to drain, the main thread is not about to block, and kicking the
-    /// runtime on every hot async tick would be pure overhead.
-    #[test]
-    fn idle_kick_skipped_on_notified_fast_path() {
-        let _g = SERIAL.lock().unwrap();
-        js_wait_for_event(); // drain
-        js_register_idle_kick(Some(counting_kick));
-
-        // A pre-set NOTIFIED makes the next wait return via the fast path. A
-        // racing parallel notify could only *add* a fast-path return, never
-        // force the slow path here, so observing at least one clean fast-path
-        // return with no kick is deterministic across retries.
-        let mut clean_fast_path = false;
-        for _ in 0..50 {
-            KICK_COUNT.store(0, Ordering::Release);
-            js_notify_main_thread();
-            js_wait_for_event();
-            if KICK_COUNT.load(Ordering::Acquire) == 0 {
-                clean_fast_path = true;
-                break;
-            }
-        }
-
-        js_register_idle_kick(None);
-        NOTIFIED.swap(false, Ordering::Acquire);
-        assert!(
-            clean_fast_path,
-            "idle kick fired on the NOTIFIED fast path — it must only run \
-             when the main thread is about to block"
-        );
     }
 }

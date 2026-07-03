@@ -64,6 +64,20 @@ extern "C" {
     fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
     fn perry_ffi_spawn_blocking_with_reactor(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
     fn perry_ffi_spawn_async(ctx: *mut c_void);
+    fn perry_ffi_run_pending(budget_ms: u64);
+}
+
+/// Drive the shared async runtime for up to `budget_ms` (or until a producer
+/// signals work). In the unified single-thread runtime model the runtime only
+/// makes progress while the main thread drives it, so a *synchronous* native
+/// API that blocks the main thread waiting for data delivered by a spawned task
+/// (e.g. `js_ws_wait_for_message`) must call this in its poll loop instead of
+/// `std::thread::sleep` — otherwise the delivering task never runs and the wait
+/// always times out. Safe to call from the main thread outside any other
+/// `block_on`; must NOT be called from inside a spawned runtime task.
+pub fn run_pending(budget_ms: u64) {
+    // SAFETY: thin call into the perry-stdlib-provided runtime driver.
+    unsafe { perry_ffi_run_pending(budget_ms) };
 }
 
 // NaN-box tags. These values are part of perry-runtime's stable

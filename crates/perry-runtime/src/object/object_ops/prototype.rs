@@ -51,6 +51,27 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     // Set/Map/Regex source Perry can't model as a prototype) falls back
     // to the original behavior: a plain prototype-less object.
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+
+    // `Object.create(proxy)` — a Proxy is a small registered id, not a real
+    // heap pointer, so the synthetic-class-id modeling below (which stores a
+    // REAL prototype pointer) can't represent it, and the `is_valid_obj_ptr`
+    // check would reject it outright (falling back to a plain, prototype-less
+    // object — wrong: reads/writes/`in` on the result must still route through
+    // the proxy). Record it in the SAME observable `[[Prototype]]` side table
+    // `Object.setPrototypeOf` uses instead: a plain (class_id 0, non-null-proto)
+    // object whose prototype hop the generic chain walks (`ordinary_has_property`,
+    // `own_set_descriptor`'s `prototype_of_for_set`, field-get) already resolve
+    // through the proxy's traps. (test262 has/call-in-prototype.js,
+    // has/call-object-create.js, set/call-parameters-prototype.js.)
+    if crate::proxy::js_proxy_is_proxy(proto_value) != 0 {
+        let obj = js_object_alloc(0, 0);
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            proto_value.to_bits(),
+        );
+        return f64::from_bits((obj as u64) | POINTER_TAG);
+    }
+
     let mut class_id: u32 = 0;
     let proto_bits = proto_value.to_bits();
     if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {

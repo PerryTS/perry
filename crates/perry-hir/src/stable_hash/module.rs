@@ -21,6 +21,7 @@ impl SH for Module {
             functions,
             script_global_functions,
             references_global_this,
+            annexb_global_undefined_names,
             init,
             exported_native_instances,
             exported_func_return_native_instances,
@@ -54,6 +55,7 @@ impl SH for Module {
         // the reflection or emit it under the wrong gate).
         script_global_functions.hash(h);
         references_global_this.hash(h);
+        annexb_global_undefined_names.hash(h);
         init.hash(h);
         exported_native_instances.hash(h);
         exported_func_return_native_instances.hash(h);

@@ -78,58 +78,80 @@ use std::collections::HashSet;
 // the canonical exhaustive-walker implementations in `generator::id_scan`.
 use crate::generator::{compute_max_func_id, compute_max_local_id};
 
-/// Run the pre-pass on every async function in the module.
-pub fn transform_async_to_generator(module: &mut Module) {
-    // Conservative module-level scope: skip the rewrite ENTIRELY if the
-    // module has classes with __perry_cap_* fields (the v0.5.323 issue
-    // #212 capture rewrite). The async-step driver's fresh LocalId
-    // allocations can collide with the v0.5.323 method-local rebind
-    // ids — manifests as `[PERRY WARN] js_box_set: null box pointer`
-    // when the colliding LocalGet for the async-step's `__iter` returns
-    // the captured-by-class-method box pointer instead of the iter
-    // object. The collision is path-dependent on which ids `next_local_id`
-    // happened to land on; safer to bail on the whole module than to
-    // ship a coin-flip fix. Issue #212-style capturing classes are the
-    // ONLY known trigger, so this scope is tight enough that the issue
-    // #256 microtask-ordering reproducer (no classes) still gets the
-    // fix.
-    if module_has_capturing_classes(module) {
+/// Run the plain-async → generator CPS conversion on one function / class-method
+/// body: hoist non-top-level awaits, rewrite `await`→`yield`, and (if the body
+/// had any await) mark it a `was_plain_async` generator. `transform_generators`
+/// then builds the state machine — for class methods with the class
+/// `this`/`enclosing_class` context — and the shared lowering wraps
+/// `was_plain_async` generators in the async-step driver so the fn/method still
+/// returns a Promise. No-op for non-async or already-generator functions.
+fn cps_mark_async_fn(func: &mut Function, next_local_id: &mut LocalId) {
+    if !func.is_async || func.is_generator {
         return;
     }
+    let mut had_await = false;
+    // #691 Phase 3: peephole `await Promise.resolve(<provably-non-Promise>)` →
+    // `await <arg>` (spec-equivalent for a non-Promise arg; skips a Promise
+    // alloc + the unwrap-Fulfilled branch, hitting the primitive fast-path).
+    strip_redundant_promise_resolve_in_func(func);
+    // Hoist non-top-level awaits so every Await ends up in a top-level position
+    // `linearize_body` can split states at, then rewrite await→yield.
+    hoist_awaits_in_stmts(&mut func.body, next_local_id);
+    rewrite_stmts(&mut func.body, &mut had_await);
+    // Without awaits the direct-call path is correct + cheaper; leave is_async.
+    if had_await {
+        func.is_async = false;
+        func.is_generator = true;
+        func.was_plain_async = true;
+    }
+}
+
+/// Run the pre-pass on every async function in the module.
+pub fn transform_async_to_generator(module: &mut Module) {
+    // NOTE: previously bailed the ENTIRE module (incl. every top-level async
+    // fn) to block-wait when any class had `__perry_cap_*` fields (v0.5.323
+    // issue #212 capture rewrite), because the async-step driver's fresh
+    // LocalId allocations could collide with class-method capture rebind ids
+    // (`[PERRY WARN] js_box_set: null box pointer` — the async-step `__iter`
+    // LocalGet returning a captured box pointer). That collision is now
+    // prevented deterministically: #5293 routed `compute_max_local_id`
+    // through the exhaustive `generator::id_scan`, which explicitly scans
+    // class member bodies (methods/getters/setters/ctor/field inits), so
+    // `next_local_id` is always greater than every class-method capture id
+    // (see id_scan.rs "Also scan class member bodies … #212 fix allocates
+    // method-local rebind ids"). The blanket module bail was over-broad: any
+    // module with a single capturing class forced EVERY top-level async fn onto
+    // block-wait, so a common shape like
+    // `async function f(){ … await once(t, (done) => render(x, { onDone: done })) }`
+    // — where the awaited promise is resolved by that very callback — deadlocks,
+    // because block-wait starves the callback that would resolve it. Removed;
+    // rely on the exhaustive id scan (+ #1029 PreallocateBoxes for cross-state
+    // locals).
     let mut next_local_id = compute_max_local_id(module) + 1;
     for func in &mut module.functions {
-        if func.is_async && !func.is_generator {
-            // Per-function conservative scope: skip if the body has a
-            // nested closure with captures (forEach pattern, etc.).
-            if body_has_capturing_closure(&func.body) {
-                continue;
-            }
-            let mut had_await = false;
-            // #691 Phase 3: peephole `await Promise.resolve(<provably-non-Promise>)`
-            // → `await <arg>`. Skips the per-await Promise allocation + the
-            // unwrap-Fulfilled-inner branch in `js_async_step_chain`, hitting
-            // the `is_definitely_primitive` fast-path instead. ~58% reduction
-            // in callback bucket on promise_all_chains (63.5 → 26.3 ms). Safe
-            // because for non-Promise arg, `await arg` and `await Promise.resolve(arg)`
-            // are spec-equivalent (both take exactly one microtask hop, same
-            // value, no thenable resolution shenanigans).
-            strip_redundant_promise_resolve_in_func(func);
-            // First, hoist non-top-level awaits in every statement so
-            // every Await ends up in a top-level position the generator
-            // transform's `linearize_body` can split states at.
-            hoist_awaits_in_stmts(&mut func.body, &mut next_local_id);
-            // Then rewrite all awaits (now in top-level positions) to
-            // yields and flip the flag.
-            rewrite_stmts(&mut func.body, &mut had_await);
-            // Even if the body had no awaits, the function is still async
-            // semantically (its return value gets wrapped in a Promise).
-            // Without awaits, the existing direct-call path is correct
-            // and cheaper, so we leave is_async alone in that case.
-            if had_await {
-                func.is_async = false;
-                func.is_generator = true;
-                func.was_plain_async = true;
-            }
+        cps_mark_async_fn(func, &mut next_local_id);
+    }
+    // Async CLASS METHODS (e.g. an `async validate()` / `async parseAsync()` on
+    // a class). The loop above only covers `module.functions`; class member
+    // bodies were never marked, so async class methods stayed raw `is_async` and
+    // fell back to block-wait — every async method on a class deadlocked the
+    // same way top-level async fns did before this pass covered them.
+    // `transform_generators` ALREADY builds generator
+    // methods with the class `this`/`enclosing_class` context (generator/mod.rs)
+    // and the shared lowering wraps `was_plain_async` generators in the
+    // async-step driver, so marking them here is all that's required. Match the
+    // member set `transform_generators` handles: instance methods, static
+    // methods, and computed-key members. (Constructors / getters / setters can't
+    // be `async` in JS, so `cps_mark_async_fn`'s `is_async` guard no-ops them.)
+    for class in &mut module.classes {
+        for m in &mut class.methods {
+            cps_mark_async_fn(m, &mut next_local_id);
+        }
+        for m in &mut class.static_methods {
+            cps_mark_async_fn(m, &mut next_local_id);
+        }
+        for member in &mut class.computed_members {
+            cps_mark_async_fn(&mut member.function, &mut next_local_id);
         }
     }
 
@@ -210,6 +232,46 @@ pub fn transform_async_to_generator(module: &mut Module) {
                     &mut next_local_id,
                     &mut next_func_id,
                 );
+            }
+            for member in &mut class.computed_members {
+                rewrite_async_closures_in_expr(
+                    &mut member.key_expr,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+                rewrite_async_closures_in_stmts(
+                    &mut member.function.body,
+                    &work,
+                    &mut next_local_id,
+                    &mut next_func_id,
+                );
+            }
+            // #5854: instance + static FIELD initializers (and computed-key
+            // exprs) can hold async closures (`handler = async () => await x`);
+            // mirror the collect scan above so they are actually rewritten into
+            // the async-step state machine, not merely listed in the set.
+            for field in class
+                .fields
+                .iter_mut()
+                .chain(class.static_fields.iter_mut())
+            {
+                if let Some(init) = &mut field.init {
+                    rewrite_async_closures_in_expr(
+                        init,
+                        &work,
+                        &mut next_local_id,
+                        &mut next_func_id,
+                    );
+                }
+                if let Some(key_expr) = &mut field.key_expr {
+                    rewrite_async_closures_in_expr(
+                        key_expr,
+                        &work,
+                        &mut next_local_id,
+                        &mut next_func_id,
+                    );
+                }
             }
         }
     }
@@ -382,104 +444,22 @@ fn rewrite_async_closures_in_expr(
             return;
         }
     }
-    // Otherwise descend into children.
+    // Otherwise descend into children. NOTE: `walk_expr_children_mut` visits a
+    // Closure's PARAM DEFAULTS only, NOT its body — so for a NON-matching
+    // closure (non-async, a generator, or async-without-a-direct-await) we must
+    // descend into the body explicitly, mirroring the scan pass
+    // (`scan_expr_for_async_closures`, which unconditionally descends into every
+    // closure body). Without this, an async closure that WAS collected into
+    // `work` but is lexically nested inside a non-matching closure is never
+    // rewritten to a state machine — it silently falls back to block-wait,
+    // which deadlocks when its awaited promise is resolved by a callback the
+    // block-wait loop is itself starving.
+    if let Expr::Closure { body, .. } = expr {
+        rewrite_async_closures_in_stmts(body, work, next_local_id, next_func_id);
+    }
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         rewrite_async_closures_in_expr(child, work, next_local_id, next_func_id);
     });
-}
-
-/// Detect if the module has any classes with `__perry_cap_*` instance
-/// fields — the marker that the v0.5.323 issue #212 capture rewrite was
-/// applied. These classes have method bodies with method-local rebind
-/// LocalIds that share the global LocalId namespace; my pre-pass's
-/// fresh-id allocations can collide with them.
-fn module_has_capturing_classes(module: &Module) -> bool {
-    for class in &module.classes {
-        for field in &class.fields {
-            if field.name.starts_with("__perry_cap_") {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-// ─── Conservative scope: detect nested capturing closures ────────────────
-
-fn body_has_capturing_closure(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_has_capturing_closure)
-}
-
-fn stmt_has_capturing_closure(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init: Some(e), .. } => expr_has_capturing_closure(e),
-        Stmt::Expr(e) | Stmt::Throw(e) => expr_has_capturing_closure(e),
-        Stmt::Return(Some(e)) => expr_has_capturing_closure(e),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_has_capturing_closure(condition)
-                || body_has_capturing_closure(then_branch)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|eb| body_has_capturing_closure(eb))
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_has_capturing_closure(condition) || body_has_capturing_closure(body)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref().is_some_and(|i| stmt_has_capturing_closure(i))
-                || condition.as_ref().is_some_and(expr_has_capturing_closure)
-                || update.as_ref().is_some_and(expr_has_capturing_closure)
-                || body_has_capturing_closure(body)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body_has_capturing_closure(body)
-                || catch
-                    .as_ref()
-                    .is_some_and(|c| body_has_capturing_closure(&c.body))
-                || finally
-                    .as_ref()
-                    .is_some_and(|f| body_has_capturing_closure(f))
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_has_capturing_closure(discriminant)
-                || cases.iter().any(|c| body_has_capturing_closure(&c.body))
-        }
-        Stmt::Labeled { body, .. } => stmt_has_capturing_closure(body),
-        _ => false,
-    }
-}
-
-fn expr_has_capturing_closure(expr: &Expr) -> bool {
-    // Treat ANY nested Closure as risky, regardless of captures: even
-    // empty-captures closures may interact with the async-step driver in
-    // subtle ways (e.g. forEach/map/filter passing the closure through a
-    // native dispatch call where the closure gets stored). Better safe.
-    if matches!(expr, Expr::Closure { .. }) {
-        return true;
-    }
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |e| {
-        if !found && expr_has_capturing_closure(e) {
-            found = true;
-        }
-    });
-    found
 }
 
 fn alloc_local(next_id: &mut LocalId) -> LocalId {
@@ -1137,9 +1117,8 @@ fn strip_in_stmt(stmt: &mut Stmt, non_promise: &mut HashSet<LocalId>) {
 
 fn strip_in_expr(expr: &mut Expr, non_promise: &HashSet<LocalId>) {
     // Don't descend into nested closures — they have their own scope and
-    // their own param/local set. The outer transform pipeline handles them
-    // independently (they're skipped from async_to_generator entirely if
-    // capturing — see `body_has_capturing_closure`).
+    // their own param/local set. Nested async closures are rewritten
+    // independently by the async-closure pass (phase 2).
     if matches!(expr, Expr::Closure { .. }) {
         return;
     }
@@ -1286,6 +1265,29 @@ fn collect_async_step_closures(module: &mut Module) {
         }
         for setter in &class.setters {
             scan_stmts_for_async_closures(&setter.1.body, &mut found);
+        }
+        // #5854: async closures reachable ONLY through computed-key members
+        // (`async [k]() {…}` / `[k] = async () => …`), instance FIELD
+        // initializers (`f = async () => …`), and static-field initializers.
+        // The rewrite pass walks these same containers but only rewrites a
+        // closure whose FuncId is in this set — so without scanning them here
+        // the rewrite is a no-op and the closure stays a raw block-waiting
+        // async fn (the exact dead-code the computed-members rewrite was before
+        // this scan). Safe against the #212/#5143 id-collision class:
+        // `compute_max_local_id`/`compute_max_func_id` (id_scan.rs) already
+        // scan these exact containers, so the state machine's fresh
+        // state/done/sent ids always clear a field/computed-member closure's.
+        for member in &class.computed_members {
+            scan_expr_for_async_closures(&member.key_expr, &mut found);
+            scan_stmts_for_async_closures(&member.function.body, &mut found);
+        }
+        for field in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                scan_expr_for_async_closures(init, &mut found);
+            }
+            if let Some(key_expr) = &field.key_expr {
+                scan_expr_for_async_closures(key_expr, &mut found);
+            }
         }
     }
     module.async_step_closures = found;
@@ -1484,4 +1486,165 @@ fn expr_contains_await_shallow(expr: &Expr, found: &mut bool) -> bool {
         }
     });
     *found
+}
+
+#[cfg(test)]
+mod computed_and_field_async_tests {
+    use super::*;
+
+    // The minimal shape the collect scan matches: `async () => { await 1 }`
+    // — `Expr::Closure { is_async, !is_generator }` whose body has an Await.
+    fn async_closure_with_await(func_id: perry_types::FuncId) -> Expr {
+        Expr::Closure {
+            func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Expr(Expr::Await(Box::new(Expr::Integer(1))))],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: true,
+            is_generator: false,
+            is_strict: false,
+        }
+    }
+
+    fn empty_fn(id: perry_types::FuncId, body: Vec<Stmt>) -> Function {
+        Function {
+            id,
+            name: String::new(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn empty_class(name: &str) -> Class {
+        Class {
+            id: 1,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            computed_members: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+        }
+    }
+
+    fn field_with_init(name: &str, init: Expr) -> ClassField {
+        ClassField {
+            name: name.to_string(),
+            key_expr: None,
+            ty: Type::Any,
+            init: Some(init),
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }
+    }
+
+    // `h = async () => await 1` as an INSTANCE field: before #5854's collect
+    // extension the scan skipped `class.fields`, so this closure's FuncId never
+    // entered `async_step_closures`, the rewrite pass (which filters on that
+    // set) skipped it, and it stayed a raw block-waiting async fn. It must now
+    // be BOTH collected and CPS-rewritten to a generator.
+    #[test]
+    fn async_closure_in_instance_field_is_collected_and_rewritten() {
+        let mut module = Module::new("test");
+        let mut class = empty_class("C");
+        class
+            .fields
+            .push(field_with_init("h", async_closure_with_await(50)));
+        module.classes.push(class);
+
+        transform_async_to_generator(&mut module);
+
+        assert!(
+            module.async_step_closures.contains(&50),
+            "instance-field async closure FuncId must be collected"
+        );
+        // An async CLOSURE with awaits is rewritten in place: its body becomes a
+        // state machine (via transform_plain_async_closure_body) and `is_async`
+        // is cleared. (Unlike a top-level async fn, it is NOT re-flagged as a
+        // generator — the transformed body IS the driver.) A cleared `is_async`
+        // is the definitive signal the rewrite fired rather than falling back to
+        // raw block-wait.
+        match &module.classes[0].fields[0].init {
+            Some(Expr::Closure { is_async, .. }) => assert!(
+                !*is_async,
+                "field async closure must be CPS-rewritten (is_async cleared)"
+            ),
+            other => panic!("field init should still be a Closure, got {other:?}"),
+        }
+    }
+
+    // Companion: a STATIC field initializer is a separate container the collect
+    // scan also skipped pre-#5854.
+    #[test]
+    fn async_closure_in_static_field_is_collected() {
+        let mut module = Module::new("test");
+        let mut class = empty_class("C");
+        class
+            .static_fields
+            .push(field_with_init("h", async_closure_with_await(60)));
+        module.classes.push(class);
+
+        transform_async_to_generator(&mut module);
+
+        assert!(
+            module.async_step_closures.contains(&60),
+            "static-field async closure FuncId must be collected"
+        );
+    }
+
+    // A computed-key member body (`[0]() { async () => await 1 }`). The rewrite
+    // loop already walked `computed_members` (commit f80652ad0) but the collect
+    // scan did not, so the id set it filters on never listed the closure and the
+    // walk was dead. With both sides covering computed_members it works.
+    #[test]
+    fn async_closure_in_computed_member_body_is_collected() {
+        let mut module = Module::new("test");
+        let mut class = empty_class("C");
+        class.computed_members.push(ClassComputedMember {
+            key_expr: Expr::Integer(0),
+            function: empty_fn(2, vec![Stmt::Expr(async_closure_with_await(70))]),
+            is_static: false,
+            kind: ClassComputedMemberKind::Method,
+        });
+        module.classes.push(class);
+
+        transform_async_to_generator(&mut module);
+
+        assert!(
+            module.async_step_closures.contains(&70),
+            "computed-member-body async closure FuncId must be collected"
+        );
+    }
 }

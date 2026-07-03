@@ -62,9 +62,9 @@ pub(crate) use list_relative_plural::{
     rtf_singular_unit, rtf_to_parts_thunk,
 };
 pub(crate) use number_format::{
-    captured_intl_object, compact_round, compact_suffix, currency_instance_parts,
-    decimal_msd_exponent, format_number_instance, grouping_enabled, increment_decimal,
-    intl_object_from_value, nf_coerce_number, nf_load, nf_resolved_default,
+    bigint_to_locale_string, captured_intl_object, compact_round, compact_suffix,
+    currency_instance_parts, decimal_msd_exponent, format_number_instance, grouping_enabled,
+    increment_decimal, intl_object_from_value, nf_coerce_number, nf_load, nf_resolved_default,
     number_format_bound_format_thunk, number_format_bound_resolved_options_thunk,
     number_format_bound_to_parts_thunk, number_format_format_getter_thunk,
     number_format_format_object, number_format_range_thunk, number_format_range_to_parts_thunk,

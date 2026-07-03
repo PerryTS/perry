@@ -32,6 +32,7 @@ pub(crate) fn empty_module() -> Module {
         functions: vec![],
         script_global_functions: vec![],
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         init: vec![],
         exported_native_instances: vec![],
         exported_func_return_native_instances: vec![],

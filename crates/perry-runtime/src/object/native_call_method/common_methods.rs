@@ -452,7 +452,15 @@ pub(super) unsafe fn dispatch_common(
         // `toString`. If no custom method is present, fall back to the
         // default `[object Tag]` string. Primitive receivers delegate to
         // their existing `toString` behavior.
-        "toLocaleString" => {
+        //
+        // #5845: a `BigInt` receiver has its own more-specific
+        // `BigInt.prototype.toLocaleString` (ECMA-402), which must win over
+        // this generic `Object.prototype` fallback. Returning `None` here
+        // lets dispatch fall through to the primitive-builtin-prototype
+        // lookup further down `js_native_call_method`, which resolves the
+        // real installed method (and honors a user override, same as every
+        // other primitive-wrapper method).
+        "toLocaleString" if !jsval.is_bigint() => {
             return Some(js_object_default_to_locale_string(object));
         }
 

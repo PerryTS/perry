@@ -20,6 +20,7 @@ use crate::async_context::{
 
 pub mod assimilate;
 pub mod async_step;
+pub mod checked_dispatch;
 pub mod combinators;
 pub mod microtasks;
 pub mod native_async;
@@ -35,6 +36,10 @@ pub use async_step::{
     js_array_from_async, js_async_first_call, js_async_step_chain, js_async_step_done,
     js_get_current_step_closure, js_promise_resolved, js_promise_resolved_then,
     scan_async_step_thunk_cache, scan_async_step_thunk_cache_mut,
+};
+pub use checked_dispatch::{
+    js_promise_catch_checked, js_promise_closure_arg, js_promise_finally_checked,
+    js_promise_then_checked,
 };
 pub use combinators::{
     js_assimilate_thenable, js_await_any_promise, js_is_promise, js_promise_all,
@@ -63,9 +68,10 @@ pub use spec_combinators::{
     js_promise_with_resolvers_spec,
 };
 pub(crate) use then::{
-    js_promise_attach_handlers, js_promise_attach_settle_listener, mark_rejection_handled,
-    promise_has_own_constructor, promise_has_own_property, promise_proto_method,
-    promise_prototype_catch_thunk, promise_prototype_finally_thunk, promise_prototype_then_thunk,
+    box_promise_ptr, js_promise_attach_handlers, js_promise_attach_settle_listener,
+    mark_rejection_handled, promise_has_own_constructor, promise_has_own_property,
+    promise_proto_method, promise_prototype_catch_thunk, promise_prototype_finally_thunk,
+    promise_prototype_then_thunk,
 };
 pub use then::{
     js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free,

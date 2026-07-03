@@ -167,6 +167,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     let proto_is_null = proto_bits == TAG_NULL;
     let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto) != 0 };
     let proto_ok = proto_is_null
+        || crate::proxy::js_proxy_is_proxy(proto) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto) }
                 || super::super::class_ref_id(proto).is_some()));
@@ -213,6 +214,17 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
                 return TAG_NULL_U64;
             }
             let val = f64::from_bits(bits);
+            // OrdinarySetPrototypeOf step 7.b.ii.1: if `p`'s [[GetPrototypeOf]]
+            // is not the ordinary internal method (a Proxy's is exotic — it may
+            // run arbitrary trap code), the walk stops here without invoking it.
+            // Without this guard the cycle-detection walk called the target's
+            // `getPrototypeOf` trap as a side effect of unrelated cycle-safety
+            // bookkeeping (test262 has/call-in-prototype-index.js,
+            // set/call-parameters-prototype-index.js observe a `getPrototypeOf`
+            // trap the test handler never installs).
+            if crate::proxy::js_proxy_is_proxy(val) != 0 {
+                return TAG_NULL_U64;
+            }
             let next = js_object_get_prototype_of(val);
             let nb = next.to_bits();
             // Treat undefined as chain-end like null: `js_object_get_prototype_of`
@@ -240,11 +252,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             if tortoise == TAG_NULL_U64 {
                 break;
             }
-            // Advance tortoise one step, hare two steps.  Guard the second
-            // advance: if the first step lands on null, calling advance(null)
-            // would invoke js_object_get_prototype_of(null) which throws
-            // "Cannot convert undefined or null to object" (test262
-            // setPrototypeOf/success.js — plain object proto chain ends at null).
+            // Advance tortoise one step, hare two steps.
             tortoise = advance(tortoise);
             // The hare reaches the chain end (null) before the tortoise on any
             // acyclic chain longer than one link (e.g. a function proto:

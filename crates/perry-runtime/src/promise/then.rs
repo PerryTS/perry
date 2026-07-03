@@ -1110,7 +1110,7 @@ pub extern "C" fn js_promise_finally(
 // `typeof p.then === "function"` and a deferred `p.then(cb)` both behave.
 
 #[inline]
-fn arg_to_closure(v: f64) -> ClosurePtr {
+pub(crate) fn arg_to_closure(v: f64) -> ClosurePtr {
     let bits = v.to_bits();
     let top = bits >> 48;
     // Pointer- or string-tagged values carry a heap pointer in the low 48 bits;
@@ -1123,7 +1123,7 @@ fn arg_to_closure(v: f64) -> ClosurePtr {
 }
 
 #[inline]
-fn box_promise_ptr(p: *mut Promise) -> f64 {
+pub(crate) fn box_promise_ptr(p: *mut Promise) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(p as *const u8).bits())
 }
 

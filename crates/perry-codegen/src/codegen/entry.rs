@@ -229,6 +229,48 @@ fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
     }
 }
 
+/// #5848: emit the global-object reflection of a Script's Annex B
+/// block-nested top-level `function` declarations (`{ function f(){} }` /
+/// `if (c) function f(){}` / `switch (x) { case 1: function f(){} }`
+/// directly in sloppy global code) — `globalThis[name] = undefined`, as a
+/// non-configurable own property.
+///
+/// GlobalDeclarationInstantiation's `CreateGlobalVarBinding` (B.3.3.2 step
+/// 5.b.i) runs for these names before any top-level statement executes, so
+/// the property must already be observable — with value `undefined` — ahead
+/// of the block that later assigns the real function (test262 `annexB/
+/// language/global-code/*-global-init.js`). The block's own execution still
+/// writes the real function into the module-level local slot
+/// (`annexb_block_fn_var_ids`) as today; this only seeds the *object*
+/// property so pre-block `Object.getOwnPropertyDescriptor`/`hasOwnProperty`
+/// checks see it — a one-time snapshot, not a live-synced mirror, matching
+/// `emit_script_global_function_decls`'s existing precedent. Unlike that
+/// function, not gated on `hir.references_global_this`: this Annex B pattern
+/// is rare enough that the extra reflection call is not a meaningful
+/// per-program cost, and the spec creates the property unconditionally.
+fn emit_annexb_global_undefined_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
+    if hir.annexb_global_undefined_names.is_empty() {
+        return;
+    }
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    for name in &hir.annexb_global_undefined_names {
+        if ctx.block().is_terminated() {
+            break;
+        }
+        let key_idx = ctx.strings.intern(name);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let global_box = blk.call(DOUBLE, "js_get_global_this", &[]);
+        let obj_raw = crate::expr::unbox_to_i64(blk, &global_box);
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let key_raw = crate::expr::unbox_to_i64(blk, &key_box);
+        blk.call_void(
+            "js_object_set_field_by_name_nonconfigurable",
+            &[(I64, &obj_raw), (I64, &key_raw), (DOUBLE, &undef)],
+        );
+    }
+}
+
 /// For **non-entry modules**: emits `void <prefix>__init()` that runs the
 /// non-entry module's string pool init followed by its top-level
 /// statements. The entry module's main calls these via the
@@ -722,6 +764,9 @@ pub(super) fn compile_module_entry(
             !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await;
         if !is_esm_entry && hir.references_global_this {
             emit_script_global_function_decls(&mut ctx, hir);
+        }
+        if !is_esm_entry {
+            emit_annexb_global_undefined_decls(&mut ctx, hir);
         }
         stmt::lower_top_level_stmts(&mut ctx, &hir.init)
             .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;

@@ -752,6 +752,15 @@ pub fn lower_module_full(
                 }
                 _ => Expr::Undefined,
             };
+            // #5848: no same-named bare top-level function decl covers this
+            // name (that case is already reflected onto `globalThis` with its
+            // real value via `script_global_functions`) — record it so codegen
+            // seeds an early `undefined`-valued, non-configurable global
+            // property (GlobalDeclarationInstantiation's `CreateGlobalVarBinding`
+            // runs before any top-level statement executes).
+            if matches!(init, Expr::Undefined) {
+                module.annexb_global_undefined_names.push(name.clone());
+            }
             module.init.push(Stmt::Let {
                 id,
                 name: name.clone(),

@@ -22,7 +22,8 @@ use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_cl
 
 mod invariants;
 mod put_value;
-pub use put_value::js_put_value_set;
+pub(crate) use put_value::proxy_set_with_receiver;
+pub use put_value::{js_proxy_set, js_put_value_set};
 mod json;
 mod metadata;
 mod own_keys;
@@ -705,84 +706,6 @@ fn target_get(target: f64, key: f64) -> f64 {
     )
 }
 
-/// `proxy[key] = value` — if handler.set exists, call it with
-/// (target, key, value) and return TAG_TRUE (the trap's return value is
-/// ignored by the default test semantics since we echo `value`). Otherwise
-/// forward to the target directly.
-#[no_mangle]
-pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
-    let id = match lookup(proxy_boxed) {
-        Some(id) => id,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
-    if revoked {
-        return revoked_return();
-    }
-    let trap = handler_trap(handler, "set");
-    if is_callable(trap) {
-        // #2756: the `set` trap's boolean result is observable through
-        // `Reflect.set(proxy, …)` (and strict-mode assignment). Coerce and
-        // return it rather than discarding it. The trap receives the spec
-        // argument list `(target, key, value, receiver)` with `this` bound to
-        // the handler.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let value_h = scope.root_nanbox_f64(value);
-        let trap_result = call_trap(
-            handler,
-            trap,
-            &[
-                target_h.get_nanbox_f64(),
-                key_h.get_nanbox_f64(),
-                value_h.get_nanbox_f64(),
-                proxy_boxed,
-            ],
-        );
-        // A falsy trap result means the assignment failed; no invariant check.
-        if crate::value::js_is_truthy(trap_result) == 0 {
-            return nanbox_bool(false);
-        }
-        invariants::enforce_set_invariant(
-            target_h.get_nanbox_f64(),
-            key_h.get_nanbox_f64(),
-            value_h.get_nanbox_f64(),
-        );
-        return nanbox_bool(true);
-    }
-    // No set trap — forward to the target's `[[Set]]`. When the target is
-    // itself a Proxy, recurse through the proxy dispatch (its own trap or
-    // target) rather than `ordinary_set`, which would deref the fake pointer.
-    if lookup(target).is_some() {
-        return js_proxy_set(target, key, value);
-    }
-    reflect_ordinary_set(target, key, value)
-}
-
-/// Perform an ordinary (non-proxy) `[[Set]]` and report success as a NaN-boxed
-/// boolean, without throwing on a non-writable / non-extensible target the way
-/// strict-mode assignment does (#2756 / #615). Returns `false` when the write
-/// cannot be applied.
-fn reflect_ordinary_set_property_key(target: f64, property_key: f64, value: f64) -> f64 {
-    nanbox_bool(ordinary_set_with_receiver(
-        target,
-        property_key,
-        value,
-        target,
-    ))
-}
-
 /// `Reflect.set` with an explicit receiver: OrdinarySet(target, P, V,
 /// receiver), boolean result NaN-boxed.
 pub(crate) fn reflect_ordinary_set_with_receiver(
@@ -797,20 +720,6 @@ pub(crate) fn reflect_ordinary_set_with_receiver(
         value,
         receiver,
     ))
-}
-
-fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let value_handle = scope.root_nanbox_f64(value);
-    let property_key_handle = scope
-        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
-    reflect_ordinary_set_property_key(
-        target_handle.get_nanbox_f64(),
-        property_key_handle.get_nanbox_f64(),
-        value_handle.get_nanbox_f64(),
-    )
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
@@ -1336,6 +1245,15 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
 
     let mut current = target;
     for _ in 0..64 {
+        // A Proxy hop in the prototype chain: `OrdinarySetWithOwnDescriptor`
+        // step 2.a-b dispatches the full `[[Set]]` on the parent with the
+        // ORIGINAL `receiver`, not the raw own-descriptor walk below (which
+        // would misread the small proxy id as a heap pointer).
+        if lookup(current).is_some() {
+            return crate::value::js_is_truthy(proxy_set_with_receiver(
+                current, key, value, receiver,
+            )) != 0;
+        }
         // Integer-Indexed exotic [[Set]] (§10.4.5.5): a typed array in the
         // chain intercepts a canonical numeric index key — the prototype
         // chain is NEVER consulted for it. `SameValue(O, Receiver)` writes

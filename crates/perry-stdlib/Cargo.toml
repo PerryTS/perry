@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 default = ["full"]
 
 # Full stdlib - everything included
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-slugify", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "external-http-client-pump", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-slugify", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
