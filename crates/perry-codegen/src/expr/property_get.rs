@@ -57,7 +57,7 @@ use super::{
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
     emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
     emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix, import_origin_suffix_ns,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
@@ -912,10 +912,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // body. The body only runs later when the consumer
                         // actually calls `HashMap.keySet(self)`, by which time
                         // both modules have finished `__init`.
-                        // Issue #678: re-export renames mean the suffix in the
-                        // origin module differs from the consumer-visible name.
-                        let origin_suffix =
-                            import_origin_suffix(ctx.import_function_origin_names, property);
+                        // Issue #678/#5924: re-export renames mean the suffix
+                        // in the origin module differs from the
+                        // consumer-visible name. Namespace-scoped lookup
+                        // first so a rename in a different namespace
+                        // imported into this file can't clobber this
+                        // namespace's unrenamed member of the same name.
+                        let origin_suffix = import_origin_suffix_ns(
+                            ctx.import_function_origin_names,
+                            ctx.namespace_member_origin_names,
+                            _ns_lookup_name.as_deref().unwrap_or(""),
+                            property,
+                        );
                         if ctx.imported_vars.contains(property) {
                             let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));

@@ -175,6 +175,16 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// Issue #5924 (companion to #680/#678): per-namespace origin-name
+    /// resolution. Keyed by `(namespace_local_name, member_name)` →
+    /// `origin_name`. `import_function_origin_names` is a flat map, so when
+    /// two namespaces imported into the same file both have a member with
+    /// the same name and only one of them is a re-export rename, the
+    /// rename's origin-name override clobbers the other namespace's
+    /// (correct, unrenamed) suffix — `import { Effect, Context } from
+    /// "effect"` broke `Context.Service` because `Effect`'s own re-exported
+    /// `Service` clobbered the flat map first.
+    pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     /// When true, `compile_module` returns the textual LLVM IR (`.ll`)
     /// as bytes instead of invoking `clang -c` to produce an object file.
     /// Used by the bitcode-link path (`PERRY_LLVM_BITCODE_LINK=1`).
@@ -564,6 +574,9 @@ pub(crate) struct CrossModuleCtx {
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
+    /// Issue #5924: per-namespace origin-name resolution. See doc on
+    /// `CompileOptions::namespace_member_origin_names`.
+    pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine

@@ -110,7 +110,8 @@ pub(crate) use typed_feedback::{
 };
 pub(crate) use url_helpers::lower_url_string_getter;
 pub(crate) use v8_interop::{
-    emit_v8_export_call, emit_v8_member_method_call, import_origin_suffix, try_static_class_name,
+    emit_v8_export_call, emit_v8_member_method_call, import_origin_suffix, import_origin_suffix_ns,
+    try_static_class_name,
 };
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
@@ -453,6 +454,13 @@ pub(crate) struct FnCtx<'a> {
     /// by namespace member access lowering to disambiguate when the same
     /// export name appears in multiple `import * as X / Y` sources.
     pub namespace_member_prefixes: &'a std::collections::HashMap<(String, String), String>,
+    /// Issue #5924: per-namespace origin-name resolution. Keyed by
+    /// `(namespace_local_name, member_name)` → `origin_name`. Consulted
+    /// before `import_function_origin_names` when computing the symbol
+    /// suffix for a namespace-member access, so a re-export rename in one
+    /// namespace can't clobber another namespace's unrenamed member of the
+    /// same name.
+    pub namespace_member_origin_names: &'a std::collections::HashMap<(String, String), String>,
     /// Names of imported functions that are async. Used to wrap
     /// cross-module calls in promise machinery.
     // #854: cross-module async-import wrapping context; currently routed via

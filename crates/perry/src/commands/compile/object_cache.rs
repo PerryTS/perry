@@ -537,6 +537,21 @@ fn compute_object_cache_key_with_env(
             .join(",");
         h.field("namespace_member_prefixes", &s);
     }
+    // Issue #5924: per-namespace origin-name resolution. Same rationale as
+    // `namespace_member_prefixes` above — not reflected in the consumer
+    // module's HIR, but changes the symbol suffix a namespace member
+    // call/property access targets.
+    {
+        let mut v: Vec<(&(String, String), &String)> =
+            opts.namespace_member_origin_names.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|((ns, member), origin)| format!("{}:{}={}", ns, member, origin))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_member_origin_names", &s);
+    }
 
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
@@ -1031,6 +1046,7 @@ mod object_cache_tests {
             namespace_node_submodules: std::collections::HashMap::new(),
             namespace_v8_specifiers: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
+            namespace_member_origin_names: std::collections::HashMap::new(),
             emit_ir_only: false,
             verify_native_regions: false,
             disable_buffer_fast_path: false,

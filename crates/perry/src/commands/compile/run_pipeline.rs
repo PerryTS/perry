@@ -2068,6 +2068,17 @@ pub fn run_with_parse_cache(
             // member_name)` → `source_prefix`.
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
+            // Issue #5924 (companion to #680/#678): per-namespace origin-name
+            // resolution. `import_function_origin_names` is flat (keyed by
+            // bare member name), so when two namespaces imported into the
+            // same file both have a member with the same name and only ONE
+            // of them is a re-export rename, the rename's origin-name
+            // override clobbers the other namespace's (correct, unrenamed)
+            // suffix. Keyed by `(namespace_local, member_name)` →
+            // `origin_name`, mirroring `namespace_member_prefixes`.
+            let mut namespace_member_origin_names:
+                std::collections::HashMap<(String, String), String> =
+                std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
             // Issue #321: subset of `namespace_imports` populated only by the
             // named-import-of-namespace-reexport branch below (`import { Effect
@@ -2254,6 +2265,26 @@ pub fn run_with_parse_cache(
                                             .insert(export_name.clone(), origin_name.clone());
                                     }
                                 }
+                                // Issue #5924: unconditionally register every
+                                // member under the per-namespace key —
+                                // mirrors `namespace_member_prefixes` below,
+                                // which is also populated for every export,
+                                // not just renamed ones. A *sparse* map here
+                                // (only renamed members) would still force a
+                                // fallback to the flat
+                                // `import_function_origin_names` for
+                                // unrenamed members, and that flat entry may
+                                // belong to a DIFFERENT namespace imported
+                                // into the same file. Storing every member's
+                                // resolved suffix (renamed or not) lets the
+                                // consumer treat a namespace hit as
+                                // authoritative and never fall through.
+                                namespace_member_origin_names.insert(
+                                    (local.clone(), export_name.clone()),
+                                    resolved_origin_name
+                                        .clone()
+                                        .unwrap_or_else(|| export_name.clone()),
+                                );
                                 // Issue #680: also register under the
                                 // per-namespace key so `random.make` and
                                 // `tracer.make` can be disambiguated.
@@ -2526,15 +2557,50 @@ pub fn run_with_parse_cache(
                                     );
                                     // Issue #678: surface origin-name overrides
                                     // for the NamespaceReExport branch too.
-                                    if let Some(origin_name) = all_module_export_origin_names
+                                    let resolved_origin_name = all_module_export_origin_names
                                         .get(&ns_target_str)
                                         .and_then(|m| m.get(export_name))
-                                    {
+                                        .cloned();
+                                    if let Some(ref origin_name) = resolved_origin_name {
                                         if origin_name != export_name {
                                             import_function_origin_names
                                                 .insert(export_name.clone(), origin_name.clone());
                                         }
                                     }
+                                    // Issue #5924: unconditionally register
+                                    // every member under the per-namespace
+                                    // key, mirroring `namespace_member_prefixes`
+                                    // above (populated for every export, not
+                                    // just renamed ones). Found via a
+                                    // real-world `sst/opencode` compile:
+                                    // `import { Effect, Layer, Context,
+                                    // Schema, Types } from "effect"`
+                                    // processes all five namespace-reexport
+                                    // targets into this file's shared maps.
+                                    // When an EARLIER-processed namespace
+                                    // (e.g. `Effect`) re-exports a member
+                                    // under a rename (e.g. `Service`), the
+                                    // flat `import_function_origin_names`
+                                    // entry it leaves behind clobbers a
+                                    // LATER-processed namespace's (e.g.
+                                    // `Context`'s) *unrenamed* member of the
+                                    // same name — `Context.Service` resolved
+                                    // to the wrong symbol suffix and linking
+                                    // failed with an undefined
+                                    // `perry_fn_..._Context_ts__<
+                                    // wrong-suffix>` symbol. A *sparse*
+                                    // per-namespace map (only renamed
+                                    // members) doesn't fully fix this: an
+                                    // unrenamed member with no entry here
+                                    // would still fall back to the
+                                    // (possibly contaminated) flat map, so
+                                    // every member gets an entry — the
+                                    // resolved origin name when renamed,
+                                    // else the export name itself.
+                                    namespace_member_origin_names.insert(
+                                        (local_name.clone(), export_name.clone()),
+                                        resolved_origin_name.unwrap_or_else(|| export_name.clone()),
+                                    );
 
                                     let key = (origin_path.clone(), export_name.clone());
                                     if let Some(&param_count) = exported_func_param_counts.get(&key)
@@ -3843,6 +3909,7 @@ pub fn run_with_parse_cache(
                 namespace_node_submodules,
                 namespace_v8_specifiers,
                 namespace_member_prefixes,
+                namespace_member_origin_names,
                 emit_ir_only: bitcode_link,
                 verify_native_regions,
                 disable_buffer_fast_path,
