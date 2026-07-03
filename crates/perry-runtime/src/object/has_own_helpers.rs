@@ -41,6 +41,14 @@ pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
         // user function never gets these dynamic props at all, so the `_`
         // arm below is unaffected). Test262 built-ins/Function/prototype/
         // S15.3.4_A4.
+        //
+        // This doesn't distinguish an explicit `Object.defineProperty
+        // (Function.prototype, "valueOf", {value: f})` override (which
+        // spec-wise WOULD make the key a genuine own property) from the
+        // install-time shim — attempting that distinction via a func-ptr
+        // comparison against the shim's expected thunk turned out to be
+        // unreliable (it broke the untouched-key baseline case too) and was
+        // reverted; no test262 case in scope exercises that edge case.
         "hasOwnProperty"
         | "isPrototypeOf"
         | "propertyIsEnumerable"

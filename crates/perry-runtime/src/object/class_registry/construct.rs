@@ -1044,6 +1044,18 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     if is_arrow_function_value(value) {
         return false;
     }
+    // %Function.prototype% itself is callable but has no [[Construct]] slot
+    // (ECMA-262 20.2.3) — `is_non_constructable_builtin_function_value` only
+    // covers the separate "reified builtin closure" registry (`eval`, a
+    // reified `.apply`/`.call`/`.bind` value, …), not this singleton, so it
+    // needs its own check here too (mirrors `js_new_function_construct`'s
+    // dedicated `is_function_prototype_object_value` guard). Without this, a
+    // bound wrapper around it — `Function.prototype.bind()` — would resolve
+    // through `resolve_bound_target` to Function.prototype and read back as
+    // constructible.
+    if super::super::global_this::is_function_prototype_object_value(value) {
+        return false;
+    }
     if is_non_constructable_builtin_function_value(value) {
         return false;
     }
@@ -1114,16 +1126,30 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
 
 /// Whether `value` is itself a `Function.prototype.bind` result (not
 /// recursive — a single-layer tag check).
-fn is_bound_function_closure_value(value: f64) -> bool {
+///
+/// `get_valid_func_ptr` re-validates the address range and `CLOSURE_MAGIC`
+/// tag itself before touching `func_ptr`, so it's safe to call on ANY
+/// pointer-shaped `JSValue` — including a small-handle-band id (Fetch/ws/
+/// proxy registry ids) or an otherwise-invalid heap address — without a
+/// separate `is_closure_ptr` pre-check. A prior version of this helper
+/// dereferenced `(*ptr).type_tag` directly first, which is exactly the
+/// unguarded-pointer-shaped-value read this codebase has been bitten by
+/// before (#4740-class SIGSEGV on a mis-boxed/handle-band value).
+fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureHeader> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
-        return false;
+        return None;
     }
     let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
-    if ptr.is_null() || unsafe { (*ptr).type_tag } != crate::closure::CLOSURE_MAGIC {
-        return false;
+    if crate::closure::get_valid_func_ptr(ptr) == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+        Some(ptr as *mut crate::closure::ClosureHeader)
+    } else {
+        None
     }
-    crate::closure::get_valid_func_ptr(ptr) == crate::closure::BOUND_FUNCTION_FUNC_PTR
+}
+
+fn is_bound_function_closure_value(value: f64) -> bool {
+    bound_function_target_ptr(value).is_some()
 }
 
 /// Walk through any number of `Function.prototype.bind` wrapper layers to the
@@ -1133,17 +1159,9 @@ fn is_bound_function_closure_value(value: f64) -> bool {
 fn resolve_bound_target(value: f64) -> f64 {
     let mut cur = value;
     loop {
-        let jv = crate::value::JSValue::from_bits(cur.to_bits());
-        if !jv.is_pointer() {
+        let Some(ptr) = bound_function_target_ptr(cur) else {
             return cur;
-        }
-        let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
-        if ptr.is_null() || unsafe { (*ptr).type_tag } != crate::closure::CLOSURE_MAGIC {
-            return cur;
-        }
-        if crate::closure::get_valid_func_ptr(ptr) != crate::closure::BOUND_FUNCTION_FUNC_PTR {
-            return cur;
-        }
+        };
         cur = crate::closure::js_closure_get_capture_f64(ptr, 0);
     }
 }
@@ -1175,17 +1193,9 @@ unsafe fn unwrap_bound_construct_chain(
         std::slice::from_raw_parts(args_ptr, args_len).to_vec()
     };
     loop {
-        let jv = crate::value::JSValue::from_bits(cur.to_bits());
-        if !jv.is_pointer() {
+        let Some(ptr) = bound_function_target_ptr(cur) else {
             break;
-        }
-        let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
-        if ptr.is_null() || (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
-            break;
-        }
-        if crate::closure::get_valid_func_ptr(ptr) != crate::closure::BOUND_FUNCTION_FUNC_PTR {
-            break;
-        }
+        };
         unwrapped = true;
         let target = crate::closure::js_closure_get_capture_f64(ptr, 0);
         if nt.to_bits() == cur.to_bits() {
@@ -1408,6 +1418,17 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     }
     if !is_callable_function_value(func_value) {
         return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    // %Function.prototype% has no [[Construct]] slot (ECMA-262 20.2.3) but
+    // isn't covered by `is_non_constructable_builtin_function_value` (a
+    // separate "reified builtin closure" registry) — reachable here directly
+    // via `Reflect.construct(Function.prototype, …, distinctNewTarget)`, or
+    // after `unwrap_bound_construct_chain` resolves a bound wrapper down to
+    // it with a non-cascading newTarget.
+    if super::super::global_this::is_function_prototype_object_value(func_value)
+        || super::super::global_this::is_function_prototype_object_value(nt)
+    {
+        throw_non_constructable_builtin_function();
     }
     if is_non_constructable_builtin_function_value(func_value)
         || is_non_constructable_builtin_function_value(nt)
