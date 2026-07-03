@@ -416,8 +416,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
 
+            // Issue #5912 (CodeRabbit follow-up): an alias like
+            // `const MyURL = URL; new MyURL()` must not bind to the native
+            // constructor either when the ALIASED name is itself shadowed
+            // (`function URL(url) {...}` in scope) — `resolve_class_alias`
+            // is name-keyed and not scope-aware, so it happily maps
+            // `MyURL` -> `"URL"` without knowing `URL` was ever shadowed.
             if let Some(resolved) = ctx.resolve_class_alias(&class_name) {
-                if is_url_encoding_constructor_name(&resolved) {
+                if is_url_encoding_constructor_name(&resolved)
+                    && !ctx.shadows_unqualified_global(&resolved)
+                {
                     if let Some(expr) =
                         lower_url_encoding_constructor(ctx, &resolved, new_expr.args.as_deref())?
                     {
@@ -942,17 +950,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             // Handle URL class. #5912: gated on `callee_local_at_entry` /
-            // `lookup_func` so a local function/const shadowing the global
-            // name (e.g. a vendored `function URL(url?) {...}` polyfill)
-            // routes through the generic local-dispatch fallback below
-            // instead of always binding to perry's native WHATWG URL
-            // constructor — matches the `lookup_local`/`lookup_func`/
-            // `lookup_class` shadowing guard used for `Function`/`Object`
-            // above (a named function declaration is tracked via
-            // `lookup_func`, not `lookup_local`/`callee_local_at_entry`).
+            // `lookup_func` / `lookup_imported_func` so a local function/
+            // const/imported-binding shadowing the global name (e.g. a
+            // vendored `function URL(url?) {...}` polyfill, or `import {
+            // URL } from "./my-url-polyfill"`) routes through the generic
+            // local-dispatch fallback below instead of always binding to
+            // perry's native WHATWG URL constructor — matches the
+            // `lookup_local`/`lookup_func`/`lookup_class` shadowing guard
+            // used for `Function`/`Object` above (a named function
+            // declaration is tracked via `lookup_func`, not
+            // `lookup_local`/`callee_local_at_entry`). Deliberately doesn't
+            // use the `shadows_unqualified_global` one-liner here: that
+            // helper's `lookup_local` call is a FRESH scope lookup, but
+            // `callee_local_at_entry` must stay a pre-captured snapshot (see
+            // the comment above its definition) — the Error-type branch
+            // just above already lowers `new_expr.args`, which can disturb
+            // the locals scope stack before we get here.
             if class_name == "URL"
                 && callee_local_at_entry.is_none()
                 && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_class(&class_name).is_none()
             {
                 return Ok(
@@ -964,6 +981,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if matches!(class_name.as_str(), "URLSearchParams" | "URLPattern")
                 && callee_local_at_entry.is_none()
                 && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_class(&class_name).is_none()
             {
                 return Ok(lower_url_encoding_constructor(
@@ -1012,6 +1030,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if class_name == "TextEncoder"
                 && callee_local_at_entry.is_none()
                 && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_class(&class_name).is_none()
             {
                 return Ok(lower_url_encoding_constructor(
@@ -1025,6 +1044,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if class_name == "TextDecoder"
                 && callee_local_at_entry.is_none()
                 && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_class(&class_name).is_none()
             {
                 return Ok(lower_url_encoding_constructor(
