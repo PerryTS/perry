@@ -16,6 +16,16 @@ updates:
     # aes-gcm 0.11 lands and the whole AEAD surface can move in one PR.
     # Patch bumps still flow through.
     ignore:
+      # bson must stay on the major that `mongodb` re-exports (mongodb 3.x
+      # -> bson 2.x): perry-stdlib/perry-ext-mongodb build `bson::Document`s
+      # and pass them into mongodb APIs, so a solo bson major bump splits
+      # the graph into TWO bson versions and every mongodb call fails E0308
+      # ("expected mongodb::bson::Document, found bson::Document") — but
+      # only in the feature-gated bundled-mongodb builds (parity/smokes),
+      # never default cargo-test. Bump bson together with a mongodb major
+      # that re-exports it (#5872).
+      - dependency-name: "bson"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "aes"
         update-types: ["version-update:semver-minor"]
       - dependency-name: "aes-gcm"

@@ -841,27 +841,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bson"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3f109694c4f45353972af96bf97d8a057f82e2d6e496457f4d135b9867a518c"
-dependencies = [
- "ahash 0.8.12",
- "base64",
- "bitvec",
- "getrandom 0.3.4",
- "hex",
- "indexmap",
- "js-sys",
- "rand 0.9.4",
- "serde_bytes",
- "simdutf8",
- "thiserror 2.0.18",
- "time",
- "uuid",
-]
-
-[[package]]
 name = "built"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4603,7 +4582,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8da0cd419a51a5fb44819e290fbdb0665a54f21dead8923446a799c7f4d26ad9"
 dependencies = [
- "bson 2.15.0",
+ "bson",
  "mongocrypt-sys",
  "once_cell",
  "serde",
@@ -4623,7 +4602,7 @@ checksum = "276ba0cd571553d1f6936c6f180964776ece6ab7507dc8765f8a9c9c49d8cd00"
 dependencies = [
  "base64",
  "bitflags 2.12.1",
- "bson 2.15.0",
+ "bson",
  "derive-where",
  "derive_more",
  "futures-core",
@@ -5797,7 +5776,7 @@ dependencies = [
 name = "perry-ext-mongodb"
 version = "0.5.1217"
 dependencies = [
- "bson 3.1.0",
+ "bson",
  "futures-util",
  "mongodb",
  "perry-ffi",
@@ -6028,7 +6007,7 @@ dependencies = [
  "base64",
  "bcrypt",
  "brotli",
- "bson 3.1.0",
+ "bson",
  "bytes",
  "cbc",
  "chacha20poly1305",
