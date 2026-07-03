@@ -901,31 +901,14 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
-    // SSO property access (v0.5.213 Step 1 gate). The codegen inline
-    // `.length` path routes SHORT_STRING_TAG receivers here because
-    // it doesn't yet know about the SSO tag. Handle `.length` by
-    // reading the length byte directly from the NaN-box payload.
-    // Other property accesses on an SSO string (e.g. `.charAt` via
-    // `[0]`, `.slice`) aren't yet routed here — handled by the
-    // string method dispatch in a future migration step; today they
-    // fall through to "undefined" which matches the behavior for
-    // string-valued property access on untyped locals in general.
+    // SSO property access for keys not handled by the unified string fast path
+    // above. `.length` and canonical indices are centralized there; remaining
+    // unknown properties on untyped string locals resolve to undefined here
+    // rather than falling through to the object-deref path with an inline-string
+    // payload.
     {
         let obj_bits = obj as u64;
         if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {
-            if !key.is_null() {
-                unsafe {
-                    let key_ptr =
-                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let key_len = (*key).byte_len as usize;
-                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    if key_bytes == b"length" {
-                        let len = (obj_bits & crate::value::SHORT_STRING_LEN_MASK)
-                            >> crate::value::SHORT_STRING_LEN_SHIFT;
-                        return JSValue::number(len as f64);
-                    }
-                }
-            }
             return JSValue::undefined();
         }
     }

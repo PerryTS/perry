@@ -12,27 +12,35 @@ if [[ ! -x "$PERRY" ]]; then
     echo "SKIP: perry binary not found (build with cargo build -p perry)"
     exit 0
 fi
-if ! command -v node >/dev/null 2>&1; then
-    echo "SKIP: node binary not found"
-    exit 0
-fi
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 cat > "$TMPDIR/main.ts" <<'TS'
-const url = new URL("HTTP://ExAmPle.com:80/./a/../b?X=1#f oo");
+let count = 0;
+
+function parent() {
+  count++;
+  return class Base {};
+}
+
+function make() {
+  return class Child extends parent() {
+    static observed = count;
+  };
+}
+
+const Child = make();
 console.log(JSON.stringify({
-  href: url.href,
-  protocol: url.protocol,
-  hostname: url.hostname,
-  port: url.port,
-  pathname: url.pathname,
-  hash: url.hash,
+  count,
+  observed: (Child as any).observed,
+  construct: new Child() instanceof Child,
 }));
 TS
 
-node "$TMPDIR/main.ts" > "$TMPDIR/expected.log"
+cat > "$TMPDIR/expected.log" <<'LOG'
+{"count":1,"observed":1,"construct":true}
+LOG
 
 BIN="$TMPDIR/out"
 COMPILE_ARGS=(compile --no-cache)
@@ -59,4 +67,4 @@ if ! diff -u "$TMPDIR/expected.log" "$TMPDIR/run.log"; then
     exit 1
 fi
 
-echo "PASS: URL href normalization"
+echo "PASS: dynamic class extends expression evaluated once"

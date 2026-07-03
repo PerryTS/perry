@@ -159,10 +159,18 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
         ast::Lit::Bool(b) => Ok(Expr::Bool(b.value)),
         ast::Lit::Null(_) => Ok(Expr::Null),
         ast::Lit::BigInt(bi) => Ok(Expr::BigInt(bi.value.to_string())),
-        ast::Lit::Regex(re) => Ok(Expr::RegExp {
-            pattern: repair_latin1_decoded_utf8(&re.exp.to_string()),
-            flags: re.flags.to_string(),
-        }),
+        ast::Lit::Regex(re) => {
+            let pattern = re.exp.to_string();
+            let pattern = if pattern.is_ascii() {
+                pattern
+            } else {
+                repair_latin1_decoded_utf8(&pattern)
+            };
+            Ok(Expr::RegExp {
+                pattern,
+                flags: re.flags.to_string(),
+            })
+        }
         _ => Err(anyhow!("Unsupported literal type")),
     }
 }

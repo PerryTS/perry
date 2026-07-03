@@ -156,7 +156,10 @@ fn flatten_into<'a, F>(
                 imported,
                 exported,
             } => {
-                let resolved = flatten_exports(source, lookup)
+                let mut source_exports = Vec::new();
+                let mut nested_visited = visited.clone();
+                flatten_into(source, lookup, &mut source_exports, &mut nested_visited);
+                let resolved = source_exports
                     .into_iter()
                     .rev()
                     .find(|entry| entry.name == *imported);

@@ -507,19 +507,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
     }
 
-    let parent_proto_bits = dynamic_parent_prototype_bits(class_id).or_else(|| {
-        get_parent_class_id(class_id)
-            .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
-            .and_then(|parent_id| {
-                builtin_prototype_value_for_class_id(parent_id)
-                    .or_else(|| {
-                        let parent_proto = class_decl_prototype_value(parent_id);
-                        ((parent_proto.to_bits() >> 48) == 0x7FFD).then_some(parent_proto)
-                    })
-                    .map(f64::to_bits)
-            })
-            .or_else(global_object_prototype_bits)
-    });
+    let parent_proto_bits = resolve_class_parent_prototype_bits(class_id);
     if let Some(bits) = parent_proto_bits {
         super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
     }
@@ -532,7 +520,14 @@ pub(crate) fn refresh_class_decl_prototype_parent(class_id: u32) {
     if proto.is_null() {
         return;
     }
-    let parent_proto_bits = dynamic_parent_prototype_bits(class_id).or_else(|| {
+    let parent_proto_bits = resolve_class_parent_prototype_bits(class_id);
+    if let Some(bits) = parent_proto_bits {
+        super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
+    }
+}
+
+fn resolve_class_parent_prototype_bits(class_id: u32) -> Option<u64> {
+    dynamic_parent_prototype_bits(class_id).or_else(|| {
         get_parent_class_id(class_id)
             .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
             .and_then(|parent_id| {
@@ -544,10 +539,7 @@ pub(crate) fn refresh_class_decl_prototype_parent(class_id: u32) {
                     .map(f64::to_bits)
             })
             .or_else(global_object_prototype_bits)
-    });
-    if let Some(bits) = parent_proto_bits {
-        super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
-    }
+    })
 }
 
 pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Option<f64> {

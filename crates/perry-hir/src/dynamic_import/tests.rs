@@ -942,6 +942,36 @@ fn flatten_export_all_cycle_safe() {
 }
 
 #[test]
+fn flatten_named_reexport_cycle_safe() {
+    let mut a = Module::new("a");
+    a.exports.push(Export::ReExport {
+        source: "b".into(),
+        imported: "value".into(),
+        exported: "value".into(),
+    });
+    let mut b = Module::new("b");
+    b.exports.push(Export::ReExport {
+        source: "a".into(),
+        imported: "value".into(),
+        exported: "value".into(),
+    });
+    b.exports.push(Export::Named {
+        local: "fallback".into(),
+        exported: "other".into(),
+    });
+    let map = std::collections::HashMap::from([
+        ("a".to_string(), a.clone()),
+        ("b".to_string(), b.clone()),
+    ]);
+    let lookup = |s: &str| map.get(s);
+    let flat = flatten_exports("a", &lookup);
+    assert_eq!(flat.len(), 1);
+    assert_eq!(flat[0].name, "value");
+    assert_eq!(flat[0].source_module, "a");
+    assert_eq!(flat[0].source_local, "value");
+}
+
+#[test]
 fn flatten_namespace_re_export() {
     let mut m = Module::new("m");
     m.exports.push(Export::NamespaceReExport {

@@ -282,10 +282,26 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
                 let class = lower_class_decl(ctx, class_decl, false)?;
+                let parent_value_local = if class.extends_expr.is_some() {
+                    let id = ctx.fresh_local();
+                    let name = format!("__perry_parent_value_{}", class.name);
+                    ctx.locals.push((name.clone(), id, Type::Any));
+                    Some((id, name))
+                } else {
+                    None
+                };
                 if let Some(extends_expr) = &class.extends_expr {
+                    let (parent_id, parent_name) = parent_value_local.as_ref().unwrap();
+                    result.push(Stmt::Let {
+                        id: *parent_id,
+                        name: parent_name.clone(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(extends_expr.as_ref().clone()),
+                    });
                     result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
                         class_name: class.name.clone(),
-                        parent_expr: extends_expr.clone(),
+                        parent_expr: Box::new(Expr::LocalGet(*parent_id)),
                     }));
                 }
                 for member in &class.computed_members {
@@ -328,10 +344,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             }
                         }
                     }
-                    if let Some(parent_expr) = &class.extends_expr {
+                    if let Some((parent_id, _)) = parent_value_local {
                         named_statics.push((
                             "__perry_parent_value".to_string(),
-                            parent_expr.as_ref().clone(),
+                            Expr::LocalGet(parent_id),
                         ));
                     }
                     let class_local = ctx

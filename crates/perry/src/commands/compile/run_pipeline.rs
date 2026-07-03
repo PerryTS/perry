@@ -110,6 +110,7 @@ fn ctor_uses_new_target(class: &perry_hir::Class) -> bool {
 
 fn exported_class_by_name<'a>(
     exported_classes: &'a BTreeMap<(String, String), &'a perry_hir::Class>,
+    class_canonical_path: &std::collections::HashMap<perry_hir::ClassId, String>,
     preferred_path: &str,
     name: &str,
 ) -> Option<(String, &'a perry_hir::Class)> {
@@ -117,21 +118,37 @@ fn exported_class_by_name<'a>(
     if let Some(class) = exported_classes.get(&same_path_key) {
         return Some((preferred_path.to_string(), *class));
     }
+    let mut candidates = exported_classes
+        .iter()
+        .filter(|((_, class_name), _)| class_name == name);
+    let first = candidates.next()?;
+    if candidates.next().is_none() {
+        return Some((first.0 .0.clone(), *first.1));
+    }
     exported_classes
         .iter()
-        .find(|((_, class_name), _)| class_name == name)
+        .find(|((_, class_name), class)| {
+            class_name == name
+                && class_canonical_path
+                    .get(&class.id)
+                    .is_some_and(|path| path == preferred_path)
+        })
         .map(|((path, _), class)| (path.clone(), *class))
 }
 
 fn class_chain_uses_new_target(
     exported_classes: &BTreeMap<(String, String), &perry_hir::Class>,
+    class_canonical_path: &std::collections::HashMap<perry_hir::ClassId, String>,
     class_path: &str,
     class: &perry_hir::Class,
 ) -> bool {
     if ctor_uses_new_target(class) {
         return true;
     }
-    let mut current_path = class_path.to_string();
+    let mut current_path = class_canonical_path
+        .get(&class.id)
+        .cloned()
+        .unwrap_or_else(|| class_path.to_string());
     let mut parent = class.extends_name.as_deref();
     let mut depth = 0usize;
     while let Some(parent_name) = parent {
@@ -139,9 +156,12 @@ fn class_chain_uses_new_target(
         if depth > 64 {
             break;
         }
-        let Some((path, parent_class)) =
-            exported_class_by_name(exported_classes, &current_path, parent_name)
-        else {
+        let Some((path, parent_class)) = exported_class_by_name(
+            exported_classes,
+            class_canonical_path,
+            &current_path,
+            parent_name,
+        ) else {
             break;
         };
         if ctor_uses_new_target(parent_class) {
@@ -1768,7 +1788,19 @@ pub fn run_with_parse_cache(
             module_name_to_path.insert(hir_module.name.clone(), path.clone());
         }
     }
-    let normalize_namespace_path = |path: PathBuf| std::fs::canonicalize(&path).unwrap_or(path);
+    let namespace_path_cache: std::sync::Mutex<HashMap<PathBuf, PathBuf>> =
+        std::sync::Mutex::new(HashMap::new());
+    let normalize_namespace_path = |path: PathBuf| {
+        if let Some(cached) = namespace_path_cache.lock().unwrap().get(&path).cloned() {
+            return cached;
+        }
+        let normalized = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        namespace_path_cache
+            .lock()
+            .unwrap()
+            .insert(path, normalized.clone());
+        normalized
+    };
     // Build a normalized HIR-by-name map for `flatten_exports`. Each
     // module's `Export::ReExport::source`, `Export::ExportAll::source`,
     // and `Export::NamespaceReExport::source` strings hold the raw
@@ -2584,6 +2616,7 @@ pub fn run_with_parse_cache(
                                         has_own_constructor: class.constructor.is_some(),
                                         constructor_uses_new_target: class_chain_uses_new_target(
                                             &exported_classes,
+                                            &class_canonical_path,
                                             &key.0,
                                             class,
                                         ),
@@ -2798,6 +2831,90 @@ pub fn run_with_parse_cache(
                                         namespace_member_vars
                                             .insert(($namespace_local.clone(), export_name.clone()));
                                     }
+                                    if let Some(class) = exported_classes.get(&key) {
+                                        let class_prefix = canonical_class_source_prefix(
+                                            class,
+                                            &class_canonical_path,
+                                            &ctx.project_root,
+                                            &origin_prefix,
+                                        );
+                                        imported_classes.push(perry_codegen::ImportedClass {
+                                            name: class.name.clone(),
+                                            local_alias: None,
+                                            source_prefix: class_prefix,
+                                            constructor_param_count: class
+                                                .constructor
+                                                .as_ref()
+                                                .map(|c| c.params.len())
+                                                .unwrap_or(0),
+                                            has_own_constructor: class.constructor.is_some(),
+                                            constructor_uses_new_target:
+                                                class_chain_uses_new_target(
+                                                    &exported_classes,
+                                                    &class_canonical_path,
+                                                    &key.0,
+                                                    class,
+                                                ),
+                                            constructor_has_rest: class
+                                                .constructor
+                                                .as_ref()
+                                                .map(|c| c.params.iter().any(|p| p.is_rest))
+                                                .unwrap_or(false),
+                                            has_instance_fields: !class.fields.is_empty(),
+                                            method_names: class
+                                                .methods
+                                                .iter()
+                                                .map(|m| m.name.clone())
+                                                .collect(),
+                                            method_param_counts: class
+                                                .methods
+                                                .iter()
+                                                .map(|m| m.params.len())
+                                                .collect(),
+                                            method_has_rest: class
+                                                .methods
+                                                .iter()
+                                                .map(|m| m.params.iter().any(|p| p.is_rest))
+                                                .collect(),
+                                            static_method_names: class
+                                                .static_methods
+                                                .iter()
+                                                .map(|m| m.name.clone())
+                                                .collect(),
+                                            static_field_names: class
+                                                .static_fields
+                                                .iter()
+                                                .map(|f| f.name.clone())
+                                                .collect(),
+                                            getter_names: class
+                                                .getters
+                                                .iter()
+                                                .map(|(n, _)| n.clone())
+                                                .collect(),
+                                            setter_names: class
+                                                .setters
+                                                .iter()
+                                                .map(|(n, _)| n.clone())
+                                                .collect(),
+                                            parent_name: class.extends_name.clone(),
+                                            field_names: class
+                                                .fields
+                                                .iter()
+                                                .filter(|f| f.key_expr.is_none())
+                                                .map(|f| f.name.clone())
+                                                .collect(),
+                                            field_types: class
+                                                .fields
+                                                .iter()
+                                                .filter(|f| f.key_expr.is_none())
+                                                .map(|f| f.ty.clone())
+                                                .collect(),
+                                            source_class_id: Some(class.id),
+                                        });
+                                    }
+                                    if let Some(members) = exported_enums.get(&key) {
+                                        imported_enums.push((export_name.clone(), members.clone()));
+                                    }
                                 }
                             }
                         }};
@@ -2908,10 +3025,6 @@ pub fn run_with_parse_cache(
                                     break;
                                 };
                                 let ns_target_str = ns_target.to_string_lossy().to_string();
-                                let Some(target_exports) = all_module_exports.get(&ns_target_str)
-                                else {
-                                    break;
-                                };
                                 namespace_imports.push(local_name.clone());
                                 // Issue #321: tag this local as a "named-import-
                                 // of-namespace-reexport" so codegen's
@@ -2921,141 +3034,6 @@ pub fn run_with_parse_cache(
                                 // is scoped narrowly.
                                 namespace_reexport_named_imports.insert(local_name.clone());
                                 register_namespace_export_surface!(local_name, ns_target_str.as_str());
-                                for (export_name, origin_path) in target_exports {
-                                    let origin_prefix =
-                                        compute_module_prefix(origin_path, &ctx.project_root);
-                                    import_function_prefixes
-                                        .insert(export_name.clone(), origin_prefix.clone());
-                                    // Issue #678: surface origin-name overrides
-                                    // for the NamespaceReExport branch too.
-                                    if let Some(origin_name) = all_module_export_origin_names
-                                        .get(&ns_target_str)
-                                        .and_then(|m| m.get(export_name))
-                                    {
-                                        if origin_name != export_name {
-                                            import_function_origin_names
-                                                .insert(export_name.clone(), origin_name.clone());
-                                        }
-                                    }
-
-                                    let key = (origin_path.clone(), export_name.clone());
-                                    if let Some(&param_count) = exported_func_param_counts.get(&key)
-                                    {
-                                        imported_param_counts
-                                            .insert(export_name.clone(), param_count);
-                                    }
-                                    if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
-                                        imported_has_rest.insert(export_name.clone());
-                                    }
-                                    if exported_func_synthetic_arguments.contains(&key) {
-                                        imported_synthetic_arguments.insert(export_name.clone());
-                                    }
-                                    // Issue #321: NamespaceReExport members
-                                    // that are var-shaped exports (the
-                                    // canonical `export const succeed = (v) =>
-                                    // ...` shape in effect/Effect.ts and
-                                    // co-equivalent re-export hubs) must land
-                                    // in `imported_vars` so the codegen's
-                                    // StaticMethodCall and namespace-member
-                                    // call sites route through the zero-arg
-                                    // getter + `js_closure_callN`. Without
-                                    // this, `import { Effect } from "effect";
-                                    // Effect.succeed(42)` emitted a 1-arg
-                                    // direct call against the 0-arg getter
-                                    // — the source returned the closure
-                                    // pointer unchanged and `typeof
-                                    // Effect.succeed(42)` was `"function"`,
-                                    // and `runSync(program)` then threw
-                                    // `Cannot read properties of undefined`
-                                    // on `program._tag`. Mirrors the
-                                    // `Namespace { local }` branch above.
-                                    if exported_var_names.contains(&key) {
-                                        imported_vars.insert(export_name.clone());
-                                    }
-                                    if let Some(class) = exported_classes.get(&key) {
-                                        let class_prefix = canonical_class_source_prefix(
-                                            class,
-                                            &class_canonical_path,
-                                            &ctx.project_root,
-                                            &origin_prefix,
-                                        );
-                                        imported_classes.push(perry_codegen::ImportedClass {
-                                            name: class.name.clone(),
-                                            local_alias: None,
-                                            source_prefix: class_prefix,
-                                            constructor_param_count: class
-                                                .constructor
-                                                .as_ref()
-                                                .map(|c| c.params.len())
-                                                .unwrap_or(0),
-                                            has_own_constructor: class.constructor.is_some(),
-                                            constructor_uses_new_target:
-                                                class_chain_uses_new_target(
-                                                    &exported_classes,
-                                                    &key.0,
-                                                    class,
-                                                ),
-                                            constructor_has_rest: class
-                                                .constructor
-                                                .as_ref()
-                                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                                .unwrap_or(false),
-                                            has_instance_fields: !class.fields.is_empty(),
-                                            method_names: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.name.clone())
-                                                .collect(),
-                                            method_param_counts: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.params.len())
-                                                .collect(),
-                                            method_has_rest: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                                .collect(),
-                                            static_method_names: class
-                                                .static_methods
-                                                .iter()
-                                                .map(|m| m.name.clone())
-                                                .collect(),
-                                            static_field_names: class
-                                                .static_fields
-                                                .iter()
-                                                .map(|f| f.name.clone())
-                                                .collect(),
-                                            getter_names: class
-                                                .getters
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect(),
-                                            setter_names: class
-                                                .setters
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect(),
-                                            parent_name: class.extends_name.clone(),
-                                            field_names: class
-                                                .fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.name.clone())
-                                                .collect(),
-                                            field_types: class
-                                                .fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.ty.clone())
-                                                .collect(),
-                                            source_class_id: Some(class.id),
-                                        });
-                                    }
-                                    if let Some(members) = exported_enums.get(&key) {
-                                        imported_enums.push((export_name.clone(), members.clone()));
-                                    }
-                                }
                                 handled_as_namespace_reexport = true;
                                 break;
                             }
@@ -3250,6 +3228,7 @@ pub fn run_with_parse_cache(
                                 has_own_constructor: class.constructor.is_some(),
                                 constructor_uses_new_target: class_chain_uses_new_target(
                                     &exported_classes,
+                                    &class_canonical_path,
                                     &key.0,
                                     class,
                                 ),
@@ -3326,6 +3305,7 @@ pub fn run_with_parse_cache(
                             has_own_constructor: class.constructor.is_some(),
                             constructor_uses_new_target: class_chain_uses_new_target(
                                 &exported_classes,
+                                &class_canonical_path,
                                 &key.0,
                                 class,
                             ),
@@ -3489,6 +3469,7 @@ pub fn run_with_parse_cache(
                             has_own_constructor: class.constructor.is_some(),
                             constructor_uses_new_target: class_chain_uses_new_target(
                                 &exported_classes,
+                                &class_canonical_path,
                                 &src_path,
                                 class,
                             ),
@@ -3967,6 +3948,7 @@ pub fn run_with_parse_cache(
                             has_own_constructor: class.constructor.is_some(),
                             constructor_uses_new_target: class_chain_uses_new_target(
                                 &exported_classes,
+                                &class_canonical_path,
                                 &src_path,
                                 class,
                             ),
@@ -4171,6 +4153,7 @@ pub fn run_with_parse_cache(
                             has_own_constructor: class.constructor.is_some(),
                             constructor_uses_new_target: class_chain_uses_new_target(
                                 &exported_classes,
+                                &class_canonical_path,
                                 &src_path,
                                 class,
                             ),

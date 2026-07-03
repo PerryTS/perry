@@ -58,15 +58,15 @@ console.log(JSON.stringify({
 }));
 TS
 
-node "$TMPDIR/main.ts" > "$TMPDIR/expected.log"
+cat > "$TMPDIR/expected.log" <<'LOG'
+{"prototypes":{"Array":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"Date":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"RegExp":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"Promise":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"Map":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"Set":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"Blob":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"File":{"hasOwn":false,"hasOwnStatic":false,"descriptorIsUndefined":true,"namesHas":false},"Object":{"hasOwn":true,"hasOwnStatic":true,"descriptorIsUndefined":false,"namesHas":true}},"blob":{"toString":"[object Blob]","tag":"Blob","ctorName":"Blob","hasCtor":true},"file":{"toString":"[object File]","tag":"File","ctorName":"File","hasCtor":true}}
+LOG
 
 BIN="$TMPDIR/out"
 COMPILE_ARGS=(compile --no-cache)
-if [[ -f "$REPO_ROOT/target/debug/libperry_runtime.a" && -f "$REPO_ROOT/target/debug/libperry_stdlib.a" ]]; then
-    export PERRY_RUNTIME_DIR="$REPO_ROOT/target/debug"
-    COMPILE_ARGS+=(--no-auto-optimize)
-elif [[ -f "$REPO_ROOT/target/release/libperry_runtime.a" && -f "$REPO_ROOT/target/release/libperry_stdlib.a" ]]; then
-    export PERRY_RUNTIME_DIR="$REPO_ROOT/target/release"
+PERRY_DIR="$(cd "$(dirname "$PERRY")" && pwd)"
+if [[ -f "$PERRY_DIR/libperry_runtime.a" && -f "$PERRY_DIR/libperry_stdlib.a" ]]; then
+    export PERRY_RUNTIME_DIR="$PERRY_DIR"
     COMPILE_ARGS+=(--no-auto-optimize)
 fi
 

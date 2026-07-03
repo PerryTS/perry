@@ -569,6 +569,16 @@ fn compute_object_cache_key_with_env(
             .join(",");
         h.field("namespace_member_namespace_prefixes", &s);
     }
+    {
+        let mut v: Vec<(&String, &String)> = opts.namespace_import_prefixes.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        let s: String = v
+            .iter()
+            .map(|(local, prefix)| format!("{}={}", local, prefix))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("namespace_import_prefixes", &s);
+    }
 
     // Imported classes — sort by name. Serialize every field that codegen
     // reads so a changed constructor arity or new method on a re-exported
@@ -1559,6 +1569,15 @@ mod object_cache_tests {
         let mut b = empty_opts();
         b.namespace_member_vars
             .insert(("ns".into(), "string".into()));
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        b.namespace_import_prefixes
+            .insert("ns".into(), "source_prefix".into());
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")

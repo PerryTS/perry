@@ -12,6 +12,10 @@ if [[ ! -x "$PERRY" ]]; then
     echo "SKIP: perry binary not found (build with cargo build -p perry)"
     exit 0
 fi
+if ! command -v node >/dev/null 2>&1; then
+    echo "SKIP: node binary not found"
+    exit 0
+fi
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -36,11 +40,9 @@ node "$TMPDIR/main.ts" > "$TMPDIR/expected.log"
 
 BIN="$TMPDIR/out"
 COMPILE_ARGS=(compile --no-cache)
-if [[ -f "$REPO_ROOT/target/debug/libperry_runtime.a" && -f "$REPO_ROOT/target/debug/libperry_stdlib.a" ]]; then
-    export PERRY_RUNTIME_DIR="$REPO_ROOT/target/debug"
-    COMPILE_ARGS+=(--no-auto-optimize)
-elif [[ -f "$REPO_ROOT/target/release/libperry_runtime.a" && -f "$REPO_ROOT/target/release/libperry_stdlib.a" ]]; then
-    export PERRY_RUNTIME_DIR="$REPO_ROOT/target/release"
+PERRY_DIR="$(cd "$(dirname "$PERRY")" && pwd)"
+if [[ -f "$PERRY_DIR/libperry_runtime.a" && -f "$PERRY_DIR/libperry_stdlib.a" ]]; then
+    export PERRY_RUNTIME_DIR="$PERRY_DIR"
     COMPILE_ARGS+=(--no-auto-optimize)
 fi
 

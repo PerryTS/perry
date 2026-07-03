@@ -175,18 +175,29 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
-    /// Per-namespace member origin-name overrides. Keyed by
-    /// `(namespace_local_name, exported_member_name)` → `origin_export_name`.
+    /// Issue #680 follow-up: per-namespace member origin-name overrides.
+    /// `namespace_member_prefixes` picks the producer module, but re-exported
+    /// members can be stored under a different origin export name; without this
+    /// `ns.alias` calls the right module with the wrong symbol name.
+    /// Keyed by `(namespace_local_name, exported_member_name)` →
+    /// `origin_export_name`.
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
-    /// Per-namespace exported-variable members. Keyed by
-    /// `(namespace_local_name, exported_member_name)`.
+    /// Issue #680 follow-up: per-namespace exported-variable members. Namespace
+    /// member calls need to know when `ns.member` is a getter returning a
+    /// closure rather than a direct function symbol; otherwise codegen emits a
+    /// direct call to the zero-arg getter. Keyed by `(namespace_local_name,
+    /// exported_member_name)`.
     pub namespace_member_vars: std::collections::HashSet<(String, String)>,
-    /// Per-namespace nested namespace re-exports. Keyed by
-    /// `(namespace_local_name, exported_member_name)` → nested module prefix.
+    /// Issue #680 follow-up: per-namespace nested namespace re-exports.
+    /// `export * as child` members are namespace objects, not callable/value
+    /// exports from the parent prefix; this map preserves the nested target
+    /// prefix. Keyed by `(namespace_local_name, exported_member_name)` →
+    /// nested module prefix.
     pub namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String>,
-    /// Namespace import local → target module prefix. Used when the namespace
-    /// binding itself is read as a value so codegen can return the producer's
-    /// real module namespace object, including nested `export * as` members.
+    /// Issue #680 follow-up: namespace import local → target module prefix.
+    /// Member-specific maps are insufficient when the namespace binding itself
+    /// is read as a value; codegen must return the producer's real module
+    /// namespace object, including nested `export * as` members.
     pub namespace_import_prefixes: std::collections::HashMap<String, String>,
     /// When true, `compile_module` returns the textual LLVM IR (`.ll`)
     /// as bytes instead of invoking `clang -c` to produce an object file.

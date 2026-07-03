@@ -1366,8 +1366,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             namespace_extern_prefixes.insert(source_prefix.clone());
         }
     }
+    let mut emitted_namespace_extern_prefixes = std::collections::BTreeSet::new();
     for source_prefix in namespace_extern_prefixes {
-        llmod.add_external_global(&format!("__perry_ns_{}", source_prefix), DOUBLE);
+        if emitted_namespace_extern_prefixes.insert(source_prefix.clone()) {
+            llmod.add_external_global(&format!("__perry_ns_{}", source_prefix), DOUBLE);
+        }
     }
     for export in &hir.exports {
         let perry_hir::Export::Named { local, exported } = export else {
@@ -1412,8 +1415,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             if prefix.starts_with("__native_mod__") || prefix.starts_with("__node_submod__") {
                 continue;
             }
-            let ns_name = format!("__perry_ns_{}", prefix);
-            llmod.add_external_global(&ns_name, DOUBLE);
+            if emitted_namespace_extern_prefixes.insert(prefix.clone()) {
+                let ns_name = format!("__perry_ns_{}", prefix);
+                llmod.add_external_global(&ns_name, DOUBLE);
+            }
             // Issue #753: declare each dynamic-import target's `__init`
             // so the dispatch site in `Expr::DynamicImport` can call it
             // before loading the namespace. The wrapper-side init is

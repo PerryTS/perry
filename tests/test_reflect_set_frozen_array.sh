@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PERRY="${PERRY_BIN:-${PERRY:-$REPO_ROOT/target/debug/perry}}"
-if [[ ! -x "$PERRY" ]]; then PERRY="$REPO_ROOT/target/release/perry"; fi
+PERRY="${PERRY_BIN:-${PERRY:-$REPO_ROOT/target/release/perry}}"
+if [[ ! -x "$PERRY" ]]; then PERRY="$REPO_ROOT/target/debug/perry"; fi
 if [[ ! -x "$PERRY" ]]; then
     echo "SKIP: perry binary not found (build with cargo build -p perry)"
     exit 0
@@ -33,14 +33,28 @@ check(object.id === 1, "frozen object property unchanged");
 console.log("OK");
 TS
 
-OUT="$("$PERRY" run "$TMPDIR/main.ts" 2>&1)" || {
-    echo "FAIL: perry run errored"
-    echo "$OUT"
+BIN="$TMPDIR/out"
+COMPILE_ARGS=(compile --no-cache)
+PERRY_DIR="$(cd "$(dirname "$PERRY")" && pwd)"
+if [[ -f "$PERRY_DIR/libperry_runtime.a" && -f "$PERRY_DIR/libperry_stdlib.a" ]]; then
+    export PERRY_RUNTIME_DIR="$PERRY_DIR"
+    COMPILE_ARGS+=(--no-auto-optimize)
+fi
+
+"$PERRY" "${COMPILE_ARGS[@]}" "$TMPDIR/main.ts" -o "$BIN" > "$TMPDIR/compile.log" 2>&1 || {
+    echo "FAIL: compile failed"
+    sed 's/^/    /' "$TMPDIR/compile.log" | tail -80
     exit 1
 }
-if ! grep -q "^OK$" <<<"$OUT"; then
+
+"$BIN" > "$TMPDIR/run.log" 2>&1 || {
+    echo "FAIL: program failed"
+    sed 's/^/    /' "$TMPDIR/run.log" | tail -80
+    exit 1
+}
+if ! grep -q "^OK$" "$TMPDIR/run.log"; then
     echo "FAIL: expected OK, got:"
-    echo "$OUT"
+    cat "$TMPDIR/run.log"
     exit 1
 fi
 echo "PASS: Reflect.set reports false for frozen array indices"

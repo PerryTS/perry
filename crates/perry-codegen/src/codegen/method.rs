@@ -239,6 +239,7 @@ fn map_set_default_super_kind<'a>(
     classes: &HashMap<String, &'a perry_hir::Class>,
     mut parent: Option<&'a str>,
 ) -> Option<i32> {
+    let mut depth = 0usize;
     while let Some(name) = parent {
         match name {
             "Map" => return Some(0),
@@ -250,6 +251,10 @@ fn map_set_default_super_kind<'a>(
             return None;
         }
         parent = class.extends_name.as_deref();
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
     }
     None
 }
