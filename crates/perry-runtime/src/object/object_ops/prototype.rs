@@ -459,6 +459,11 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         return proto;
                     }
                 }
+                // #3986: `Object.create(proto)` / `new F()` (plain function
+                // ctor) instances carry a synthetic class id whose prototype
+                // object is stored keyed by that id. Return the exact stored
+                // object so prototype identity is preserved. Gated on
+                // GC_TYPE_OBJECT so non-object heap values don't misresolve.
                 if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
                     let synth_proto =
                         super::super::class_registry::class_prototype_object((*obj).class_id);
@@ -580,6 +585,8 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 }
                 return function_prototype_or_null();
             }
+            // #3986: synthetic-class instance (see the sibling site above) —
+            // return its stored prototype object to preserve identity.
             if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
                 let synth_proto =
                     super::super::class_registry::class_prototype_object((*obj).class_id);

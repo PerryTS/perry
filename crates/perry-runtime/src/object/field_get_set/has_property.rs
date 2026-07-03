@@ -11,6 +11,27 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let nanbox_false = f64::from_bits(0x7FFC_0000_0000_0003u64); // TAG_FALSE
     let nanbox_true = f64::from_bits(0x7FFC_0000_0000_0004u64); // TAG_TRUE
 
+    // The [[Prototype]] walk at the tail recurses through this entry point (a
+    // loop bounded at 1024 in earlier PRs became a recursion). `setPrototypeOf`
+    // rejects cycles, but a pathologically deep chain — or a cycle that slips
+    // past cycle-detection (see #b201538f3) — would otherwise overflow the
+    // stack. Bound total recursion depth to the same 1024 the manual walk below
+    // already caps at, so this introduces no new false-negative under that limit.
+    thread_local! {
+        static HP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    struct DepthGuard;
+    impl Drop for DepthGuard {
+        fn drop(&mut self) {
+            HP_DEPTH.with(|d| d.set(d.get() - 1));
+        }
+    }
+    if HP_DEPTH.with(|d| d.get()) > 1024 {
+        return nanbox_false;
+    }
+    HP_DEPTH.with(|d| d.set(d.get() + 1));
+    let _depth_guard = DepthGuard;
+
     let obj_val = JSValue::from_bits(obj.to_bits());
     let key_val = JSValue::from_bits(key.to_bits());
 
