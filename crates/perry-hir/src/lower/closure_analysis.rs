@@ -1058,6 +1058,44 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_captures_expr(e, out);
             }
         }
+        // A fresh class expression can hold closures in its static
+        // initializers and in the captured-args snapshot. This path is
+        // reachable via `class X extends Y {}` bindings, so a closure
+        // capturing a forward-declared `let` here must be seen or its box
+        // won't be preallocated.
+        Expr::ClassExprFresh {
+            named_statics,
+            symbol_statics,
+            captured_args,
+            ..
+        } => {
+            for (_, e) in named_statics {
+                collect_closure_captures_expr(e, out);
+            }
+            for (k, v) in symbol_statics {
+                collect_closure_captures_expr(k, out);
+                collect_closure_captures_expr(v, out);
+            }
+            for e in captured_args {
+                collect_closure_captures_expr(e, out);
+            }
+        }
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            collect_closure_captures_expr(expr, out);
+            if let Some(te) = ty_expr {
+                collect_closure_captures_expr(te, out);
+            }
+        }
+        Expr::In { property, object } => {
+            collect_closure_captures_expr(property, out);
+            collect_closure_captures_expr(object, out);
+        }
+        Expr::TaggedTemplateStrings { cooked, .. } => {
+            for e in cooked {
+                collect_closure_captures_expr(e, out);
+            }
+        }
+        Expr::TemplateRaw(inner) => collect_closure_captures_expr(inner, out),
         _ => {}
     }
 }

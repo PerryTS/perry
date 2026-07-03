@@ -299,7 +299,14 @@ pub(super) fn map_set_default_super_kind<'a>(
     classes: &std::collections::HashMap<String, &'a perry_hir::Class>,
     mut parent: Option<&'a str>,
 ) -> Option<i32> {
+    // Bound the walk like `ctor_chain_uses_new_target` above: a cyclic
+    // `extends` graph of constructorless classes would otherwise loop forever.
+    let mut depth = 0usize;
     while let Some(name) = parent {
+        depth += 1;
+        if depth > 64 {
+            return None;
+        }
         match name {
             "Map" => return Some(0),
             "Set" => return Some(1),
