@@ -377,8 +377,8 @@ rustls-pemfile = { version = "2", optional = true }
 # Database
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"], optional = true }
-mongodb = { version = "3.7", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"], optional = true }
-bson = { version = "3.1", optional = true }
+mongodb = { version = "3.7", default-features = false, features = ["bson-3", "compat-3-3-0", "rustls-tls", "dns-resolver"], optional = true }
+bson = { version = "3.1", optional = true, features = ["serde"] }
 rusqlite = { version = "0.37", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto

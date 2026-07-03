@@ -819,29 +819,6 @@ dependencies = [
 
 [[package]]
 name = "bson"
-version = "2.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7969a9ba84b0ff843813e7249eed1678d9b6607ce5a3b8f0a47af3fcf7978e6e"
-dependencies = [
- "ahash 0.8.12",
- "base64",
- "bitvec",
- "getrandom 0.2.17",
- "getrandom 0.3.4",
- "hex",
- "indexmap",
- "js-sys",
- "once_cell",
- "rand 0.9.4",
- "serde",
- "serde_bytes",
- "serde_json",
- "time",
- "uuid",
-]
-
-[[package]]
-name = "bson"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3f109694c4f45353972af96bf97d8a057f82e2d6e496457f4d135b9867a518c"
@@ -854,6 +831,7 @@ dependencies = [
  "indexmap",
  "js-sys",
  "rand 0.9.4",
+ "serde",
  "serde_bytes",
  "simdutf8",
  "thiserror 2.0.18",
@@ -4603,7 +4581,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8da0cd419a51a5fb44819e290fbdb0665a54f21dead8923446a799c7f4d26ad9"
 dependencies = [
- "bson 2.15.0",
+ "bson",
  "mongocrypt-sys",
  "once_cell",
  "serde",
@@ -4623,7 +4601,7 @@ checksum = "276ba0cd571553d1f6936c6f180964776ece6ab7507dc8765f8a9c9c49d8cd00"
 dependencies = [
  "base64",
  "bitflags 2.12.1",
- "bson 2.15.0",
+ "bson",
  "derive-where",
  "derive_more",
  "futures-core",
@@ -5797,7 +5775,7 @@ dependencies = [
 name = "perry-ext-mongodb"
 version = "0.5.1217"
 dependencies = [
- "bson 3.1.0",
+ "bson",
  "futures-util",
  "mongodb",
  "perry-ffi",
@@ -6028,7 +6006,7 @@ dependencies = [
  "base64",
  "bcrypt",
  "brotli",
- "bson 3.1.0",
+ "bson",
  "bytes",
  "cbc",
  "chacha20poly1305",
@@ -7677,7 +7655,6 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
- "indexmap",
  "itoa",
  "memchr",
  "serde",
