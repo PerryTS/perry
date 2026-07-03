@@ -247,7 +247,7 @@ fn logical_rhs_contains_yield(expr: &Expr) -> bool {
     false
 }
 
-fn expr_contains_yield(expr: &Expr) -> bool {
+pub(super) fn expr_contains_yield(expr: &Expr) -> bool {
     if matches!(expr, Expr::Yield { .. }) {
         return true;
     }

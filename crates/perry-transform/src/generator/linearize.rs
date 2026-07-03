@@ -643,7 +643,7 @@ pub fn linearize_body(
                 let body_current_before = current.len();
                 let body_catches_before = catches.len();
                 let mut body_rewritten = body.clone();
-                rewrite_break_continue_in_stmts(&mut body_rewritten, state_id);
+                rewrite_break_continue_in_stmts(&mut body_rewritten, state_id, next_local_id);
 
                 // Process loop body (may contain yields)
                 linearize_body(
@@ -779,7 +779,7 @@ pub fn linearize_body(
                 let while_current_before = current.len();
                 let while_catches_before = catches.len();
                 let mut while_body_rewritten = while_body.clone();
-                rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id);
+                rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id, next_local_id);
 
                 // Process body
                 linearize_body(
@@ -1319,10 +1319,57 @@ pub fn linearize_body(
                     | Stmt::DoWhile { body, .. } => {
                         rewrite_labeled_bc_in_stmts(body, label);
                     }
+                    // A labeled yielding SWITCH: `break label` at case-body
+                    // level is the switch's own break — rewrite it to plain
+                    // `break` so the yielding-switch desugar below folds it
+                    // into the done-flag (#5868).
+                    Stmt::Switch { cases, .. } => {
+                        for case in cases.iter_mut() {
+                            rewrite_labeled_bc_in_stmts(&mut case.body, label);
+                        }
+                    }
                     _ => {}
                 }
                 linearize_body(
                     std::slice::from_ref(&inner),
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                    finallys,
+                );
+            }
+
+            // `switch` containing yield(s) — in a case body, a case test, or
+            // the discriminant: desugar into a match-index + guarded-`if`
+            // chain (see `desugar_switch_to_ifs`) and recurse, so the
+            // existing `If` linearization splits the yield into resume
+            // states. Previously this fell through to the catch-all: the
+            // switch was emitted unsplit inside one state and codegen
+            // lowered the embedded residual `Expr::Yield` to `0.0` —
+            // `async f(x){ switch(x){ case 1: return await g() } }` resolved
+            // to `0` without ever suspending (#5868).
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } if super::hoist_yields::expr_contains_yield(discriminant)
+                || cases.iter().any(|c| {
+                    body_contains_yield(&c.body)
+                        || c.test
+                            .as_ref()
+                            .is_some_and(super::hoist_yields::expr_contains_yield)
+                }) =>
+            {
+                let desugared = super::break_continue::desugar_switch_to_ifs(
+                    discriminant,
+                    cases,
+                    next_local_id,
+                );
+                linearize_body(
+                    &desugared,
                     states,
                     current,
                     state_num,
