@@ -316,7 +316,27 @@ pub(crate) fn build_and_run_link(
         well_known_libs
             .iter()
             .map(|wk| {
-                strip_duplicate_objects_from_well_known_lib(wk).unwrap_or_else(|_| wk.clone())
+                // Wrappers precede stdlib here, so a wrapper's bundled
+                // perry-runtime copy would win first-definition over stdlib's
+                // and split the runtime's mutable globals in two (stdlib code
+                // keeps its own copy via LTO-internal refs) — spawned async
+                // tasks then starve because the event pump's wait-driver slot
+                // is registered in one copy and read from the other. Drop the
+                // bundled runtime members so stdlib's copy is the single
+                // provider; the standalone runtime archive linked after
+                // stdlib still fills any DCE gaps.
+                let wk = match stdlib_lib {
+                    Some(stdlib) => strip_bundled_runtime_from_well_known_lib(wk, stdlib)
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "[strip-dedup] bundled-runtime drop skipped for {} (non-fatal): {e}",
+                                wk.display()
+                            );
+                            wk.clone()
+                        }),
+                    None => wk.clone(),
+                };
+                strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or(wk)
             })
             .collect()
     } else {
