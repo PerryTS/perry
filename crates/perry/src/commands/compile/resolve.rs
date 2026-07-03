@@ -222,8 +222,36 @@ pub(super) fn enumerate_installed_packages(project_root: &Path) -> HashSet<Strin
     let mut out = HashSet::new();
     if let Some(nm) = find_node_modules(project_root) {
         collect_packages_in_node_modules(&nm, &mut out);
+        collect_packages_in_bun_store(&nm, &mut out);
     }
     out
+}
+
+/// #5914: bun's "flat"/isolated linker layout keeps non-hoisted transitive
+/// dependencies solely inside `node_modules/.bun/<pkg>@<version>/node_modules/<pkg>`
+/// (and the scoped `@scope+pkg@<version>` variant), with no corresponding
+/// top-level `node_modules/<pkg>` symlink — bun only symlinks packages that
+/// are direct dependencies of some workspace package into the top level.
+/// `collect_packages_in_node_modules` correctly skips `.bun` as a dotdir (it
+/// is bun's internal store, not itself a package), which means those
+/// transitive-only packages were invisible to the `"*"` / `"@scope/*"`
+/// wildcard expansion above even though they are genuinely installed and
+/// importable — a real `bun install` tree with `compilePackages: ["*"]` can
+/// silently miss dozens of packages this way. Each `.bun/<entry>/node_modules`
+/// subdirectory has the exact same shape as an ordinary `node_modules`
+/// directory, so walk it with the same collector.
+fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashSet<String>) {
+    let bun_dir = node_modules.join(".bun");
+    let entries = match fs::read_dir(&bun_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let nested = entry.path().join("node_modules");
+        if nested.is_dir() {
+            collect_packages_in_node_modules(&nested, out);
+        }
+    }
 }
 
 /// Walk a single `node_modules` directory, recording each package name and
