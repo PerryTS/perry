@@ -47,6 +47,7 @@ pub(crate) fn internal_promise() -> *mut Promise {
 }
 
 mod byob;
+mod expando;
 mod pipe;
 mod strategy;
 mod subclass;
@@ -66,6 +67,7 @@ pub use self::strategy::{
 };
 use self::strategy::{read_high_water_mark, read_queuing_strategy_size};
 
+pub(crate) use self::expando::stream_expando_get;
 use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
@@ -271,11 +273,6 @@ lazy_static::lazy_static! {
     // the runtime's finite-number stream probes still route dynamic calls like
     // `src.pipeThrough(ts).getReader()`.
     static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(STREAM_HANDLE_ID_START);
-    /// #5437: expando properties attached to live stream handles
-    /// (`stream.allReady = promise` in React's renderToReadableStream).
-    /// Keyed by stream id; values are NaN-boxed u64 bits, GC-traced in
-    /// `scan_stream_roots_mut`.
-    static ref STREAM_EXPANDO: Mutex<HashMap<usize, Vec<(String, u64)>>> = Mutex::new(HashMap::new());
 }
 
 static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -297,48 +294,9 @@ fn ensure_gc_registered() {
             js_reader_read,
         );
         unsafe {
-            perry_runtime::object::js_register_stream_expando_set(stream_expando_set_hook);
+            perry_runtime::object::js_register_stream_expando_set(expando::stream_expando_set_hook);
         }
     });
-}
-
-/// #5437: store an expando property on a live stream handle. Returns 1 when
-/// stored. Any live stream-band handle kind accepts expandos (streams,
-/// readers, writers) — matching JS objects accepting arbitrary properties.
-unsafe extern "C" fn stream_expando_set_hook(
-    id: usize,
-    key_ptr: *const u8,
-    key_len: usize,
-    value: f64,
-) -> i32 {
-    if key_ptr.is_null() || js_stream_handle_kind(id) == 0 {
-        return 0;
-    }
-    let bytes = std::slice::from_raw_parts(key_ptr, key_len);
-    let Ok(key) = std::str::from_utf8(bytes) else {
-        return 0;
-    };
-    if let Ok(mut map) = STREAM_EXPANDO.lock() {
-        let entry = map.entry(id).or_default();
-        if let Some(slot) = entry.iter_mut().find(|(k, _)| k == key) {
-            slot.1 = value.to_bits();
-        } else {
-            entry.push((key.to_string(), value.to_bits()));
-        }
-        return 1;
-    }
-    0
-}
-
-/// #5437: read an expando property off a stream handle (undefined bits when
-/// absent).
-pub(crate) fn stream_expando_get(id: usize, key: &str) -> Option<f64> {
-    let map = STREAM_EXPANDO.lock().ok()?;
-    let entry = map.get(&id)?;
-    entry
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, bits)| f64::from_bits(*bits))
 }
 
 #[allow(dead_code)]
@@ -358,13 +316,7 @@ fn visit_stream_value_slot(
 }
 
 fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-    if let Ok(mut map) = STREAM_EXPANDO.lock() {
-        for entries in map.values_mut() {
-            for (_, bits) in entries.iter_mut() {
-                visit_stream_value_slot(visitor, bits);
-            }
-        }
-    }
+    expando::scan_expando_roots(visitor);
     if let Ok(mut map) = READABLE_STREAMS.lock() {
         for s in map.values_mut() {
             visitor.visit_i64_slot(&mut s.start_cb);
