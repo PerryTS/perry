@@ -174,12 +174,16 @@ pub extern "C" fn js_put_value_set(
                 ) {
                     if unsafe { probe(id) } {
                         if let Some(name) = key_to_rust_string(property_key) {
-                            if unsafe { setter(id, name.as_ptr(), name.len(), value) } != 0 {
-                                return value;
-                            }
+                            unsafe { setter(id, name.as_ptr(), name.len(), value) };
                         }
                     }
                 }
+                // A stream-band id is a reserved handle, never a settable
+                // object — stop here rather than falling through to the
+                // ordinary `[[Set]]` walk, even when the expando write was a
+                // no-op (dead handle / hooks absent / non-UTF-8 key). Mirrors
+                // the `js_object_set_field_by_name` stream guard.
+                return value;
             }
         }
         if target.to_bits() == receiver.to_bits() && key_is_length(property_key) {

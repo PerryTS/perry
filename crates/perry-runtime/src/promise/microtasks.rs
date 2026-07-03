@@ -56,8 +56,10 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
 }
 
 /// Drain entry for the codegen `await` busy-wait loop: like
-/// `js_promise_run_microtasks`, but due timers fire even when reentrant —
-/// see `MicrotaskDrainMode::AwaitLoop`.
+/// `js_promise_run_microtasks`, but drains microtasks/nextTicks even when
+/// reentrant. Timers are driven separately by `js_await_loop_tick_timers`,
+/// which the codegen await loop calls right after this — see
+/// `MicrotaskDrainMode::AwaitLoop`.
 #[no_mangle]
 pub extern "C" fn js_promise_run_microtasks_await_loop() -> i32 {
     run_microtasks(MicrotaskDrainMode::AwaitLoop)
@@ -85,13 +87,14 @@ enum MicrotaskDrainMode {
     /// Promise/queueMicrotask jobs only — no nextTick drain, no timers.
     PromiseJobsOnly,
     /// The synchronous `await` busy-wait loop (codegen `Expr::Await`
-    /// lowering). An `await` is a yield point: the real event loop would
-    /// run due timers there, so this mode fires them even when the drain
-    /// is reentrant. Without it, a busy-wait await entered from inside a
-    /// microtask (every HTTP request handler runs inside the main pump)
-    /// could never see a `setImmediate`-scheduled resolution — Next.js's
-    /// React server renderer schedules its render/flush work exactly that
-    /// way, and the dynamic-SSR routes deadlocked in the wait loop (#5437).
+    /// lowering). Drains microtasks/nextTicks (even when reentrant) but does
+    /// NOT fire timers itself: the codegen await loop calls
+    /// `js_await_loop_tick_timers` — the guard-suspending timer path — on the
+    /// same iteration, so it is the single timer owner. That path is what lets
+    /// a busy-wait await entered from inside a timer/microtask (every HTTP
+    /// request handler) still see a `setImmediate`-scheduled resolution
+    /// (Next.js's React server renderer schedules its render/flush that way;
+    /// #5437).
     AwaitLoop,
 }
 
@@ -756,7 +759,14 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     // those drain on the next pump iteration before newly due timers.
     let fire_timers = match mode {
         MicrotaskDrainMode::AllowTimers => !reentrant,
-        MicrotaskDrainMode::AwaitLoop => true,
+        // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
+        // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
+        // very same iteration — the two are always emitted as a pair and this is
+        // the mode's only caller. Firing timers here too advanced them twice per
+        // await tick (a timer/immediate that schedules another could run in the
+        // same iteration before settlement is observed). Drain microtasks only;
+        // `js_await_loop_tick_timers` is the single timer owner for this path.
+        MicrotaskDrainMode::AwaitLoop => false,
         _ => false,
     };
     if fire_timers {

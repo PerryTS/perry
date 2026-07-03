@@ -774,6 +774,9 @@ unsafe fn close_pending(stream_id: usize) {
         js_promise_resolve(p, f64::from_bits(result));
     }
     byob::close_pending_byob(stream_id);
+    // #5437: stream is done — drop any expando entries so the table doesn't
+    // grow one row per stream over the server's lifetime.
+    expando::stream_expando_clear(stream_id);
 }
 
 unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
@@ -788,6 +791,8 @@ unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
         js_promise_reject(p, f64::from_bits(reason_bits));
     }
     byob::error_pending_byob(stream_id, reason_bits);
+    // #5437: stream errored — drop any expando entries (see close_pending).
+    expando::stream_expando_clear(stream_id);
 }
 
 // ─────────────────────────────────────────────────────────────────────

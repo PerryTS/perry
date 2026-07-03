@@ -269,21 +269,28 @@ pub extern "C" fn js_object_set_field_by_name(
     // stdlib per-stream expando table (GC-traced there).
     {
         let addr = obj as usize;
-        if crate::value::addr_class::is_stream_id_band(addr) && !key.is_null() {
-            if let (Some(probe), Some(setter)) = (
-                crate::object::stream_handle_probe(),
-                crate::object::stream_expando_set(),
-            ) {
-                if unsafe { probe(addr) } {
-                    if let Some(name) =
-                        unsafe { super::has_own_helpers::str_from_string_header(key) }
-                    {
-                        if unsafe { setter(addr, name.as_ptr(), name.len(), value) } != 0 {
-                            return;
+        if crate::value::addr_class::is_stream_id_band(addr) {
+            if !key.is_null() {
+                if let (Some(probe), Some(setter)) = (
+                    crate::object::stream_handle_probe(),
+                    crate::object::stream_expando_set(),
+                ) {
+                    if unsafe { probe(addr) } {
+                        if let Some(name) =
+                            unsafe { super::has_own_helpers::str_from_string_header(key) }
+                        {
+                            unsafe { setter(addr, name.as_ptr(), name.len(), value) };
                         }
                     }
                 }
             }
+            // A stream-band address is a reserved handle id, never a real
+            // `ObjectHeader`. Stop unconditionally — even when the expando
+            // write was a no-op (dead/unregistered handle, hooks absent, or a
+            // non-UTF-8 key). Falling through would reach the ObjectHeader
+            // path below and deref `addr - GC_HEADER_SIZE` (unmapped) → crash.
+            // Mirrors the reserved small-handle early-return further down.
+            return;
         }
     }
     // `Object.prototype["2"] = v` (stringified-index write) makes the index

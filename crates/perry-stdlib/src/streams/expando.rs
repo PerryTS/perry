@@ -55,6 +55,19 @@ pub(crate) fn stream_expando_get(id: usize, key: &str) -> Option<f64> {
         .map(|(_, bits)| f64::from_bits(*bits))
 }
 
+/// #5437: drop a handle's expando entry when the stream is torn down
+/// (closed/errored). Stream ids are monotonic (never reused), so without this
+/// the table would grow one entry per stream ever created — an unbounded leak
+/// over a long-running SSR server's lifetime, and `scan_expando_roots` would
+/// keep those values alive forever. Called from the readable-stream terminal
+/// paths, after any `stream.allReady`-style expando has already been consumed
+/// during the render.
+pub(crate) fn stream_expando_clear(id: usize) {
+    if let Ok(mut map) = STREAM_EXPANDO.lock() {
+        map.remove(&id);
+    }
+}
+
 /// #5437: GC-trace expando values. Called from `scan_stream_roots_mut`.
 pub(crate) fn scan_expando_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
     if let Ok(mut map) = STREAM_EXPANDO.lock() {
