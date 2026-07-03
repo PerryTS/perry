@@ -234,6 +234,34 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(TAG_FALSE);
         }
 
+        // `%Function.prototype%` is an ordinary object — `is_closure_ptr` is
+        // false for it, so the closure branch above never sees it — but it's
+        // installed with a full set of generic `Object.prototype` methods as
+        // real own data properties so they dispatch when called directly on
+        // it. Per spec (20.2.3) it only *inherits* these from
+        // `Object.prototype`; they are not its own. Reject the known shim
+        // keys here, before the generic `own_key_present` keys_array scan
+        // below would find them installed and report `true` (test262
+        // built-ins/Function/prototype/S15.3.4_A4).
+        if super::super::global_this::is_function_prototype_object_value(obj_value) {
+            if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
+                if matches!(
+                    key,
+                    "hasOwnProperty"
+                        | "isPrototypeOf"
+                        | "propertyIsEnumerable"
+                        | "toLocaleString"
+                        | "valueOf"
+                        | "__defineGetter__"
+                        | "__defineSetter__"
+                        | "__lookupGetter__"
+                        | "__lookupSetter__"
+                ) {
+                    return f64::from_bits(TAG_FALSE);
+                }
+            }
+        }
+
         if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
             let present = super::super::native_module::read_native_module_name(obj)
                 .as_deref()

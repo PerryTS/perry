@@ -33,37 +33,6 @@ pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
                 super::class_registry::function_would_have_own_prototype(val)
             }
         }
-        // `Function.prototype` is installed with a full set of generic
-        // Object.prototype methods as real dynamic props (so they dispatch
-        // when called on it), but per spec it only inherits these from
-        // `Object.prototype` — they are NOT its own properties. Only the
-        // %Function.prototype% singleton is special-cased here (an ordinary
-        // user function never gets these dynamic props at all, so the `_`
-        // arm below is unaffected). Test262 built-ins/Function/prototype/
-        // S15.3.4_A4.
-        //
-        // This doesn't distinguish an explicit `Object.defineProperty
-        // (Function.prototype, "valueOf", {value: f})` override (which
-        // spec-wise WOULD make the key a genuine own property) from the
-        // install-time shim — attempting that distinction via a func-ptr
-        // comparison against the shim's expected thunk turned out to be
-        // unreliable (it broke the untouched-key baseline case too) and was
-        // reverted; no test262 case in scope exercises that edge case.
-        "hasOwnProperty"
-        | "isPrototypeOf"
-        | "propertyIsEnumerable"
-        | "toLocaleString"
-        | "valueOf"
-        | "__defineGetter__"
-        | "__defineSetter__"
-        | "__lookupGetter__"
-        | "__lookupSetter__"
-            if super::is_function_prototype_object_value(crate::value::js_nanbox_pointer(
-                ptr as i64,
-            )) =>
-        {
-            false
-        }
         // User props are real own dynamic props in the side table.
         _ => crate::closure::closure_has_own_dynamic_prop(ptr, key),
     }
