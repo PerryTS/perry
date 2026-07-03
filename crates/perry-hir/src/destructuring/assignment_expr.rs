@@ -227,34 +227,31 @@ pub(crate) fn lower_destructuring_assignment(
                         // the style props through the rest), collapsing layout to
                         // defaults. Collect the statically-named keys to exclude and
                         // bind the rest to a fresh object of the remaining own keys.
-                        let exclude_keys: Vec<String> = obj_pat
-                            .props
-                            .iter()
-                            .filter_map(|p| match p {
-                                ast::ObjectPatProp::KeyValue(kv) => match &kv.key {
-                                    ast::PropName::Ident(i) => Some(i.sym.to_string()),
-                                    ast::PropName::Str(s) => {
-                                        Some(s.value.as_str().unwrap_or("").to_string())
-                                    }
-                                    ast::PropName::Num(n) => Some(n.value.to_string()),
-                                    _ => None,
-                                },
-                                ast::ObjectPatProp::Assign(a) => Some(a.key.sym.to_string()),
-                                ast::ObjectPatProp::Rest(_) => None,
-                            })
-                            .collect();
+                        let exclude_keys =
+                            super::helpers::collect_static_object_pattern_keys(&obj_pat.props);
                         let rest_expr = Expr::ObjectRest {
                             object: value.clone(),
                             exclude_keys,
                         };
-                        if let ast::Pat::Ident(ident) = &*rest.arg {
-                            let name = ident.id.sym.to_string();
-                            if let Some(id) = ctx.lookup_local(&name) {
-                                exprs.push(Expr::LocalSet(id, Box::new(rest_expr)));
-                            } else {
+                        match &*rest.arg {
+                            ast::Pat::Ident(ident) => {
+                                let name = ident.id.sym.to_string();
+                                if let Some(id) = ctx.lookup_local(&name) {
+                                    exprs.push(Expr::LocalSet(id, Box::new(rest_expr)));
+                                } else {
+                                    return Err(anyhow!(
+                                        "Assignment to undeclared variable in destructuring rest: {}",
+                                        name
+                                    ));
+                                }
+                            }
+                            // A non-identifier object-rest target (e.g. `({...a.b} = q)`)
+                            // is legal JS but not emitted by real codegen (the React
+                            // Compiler always binds a fresh identifier); fail loudly
+                            // instead of silently dropping the rest.
+                            _ => {
                                 return Err(anyhow!(
-                                    "Assignment to undeclared variable in destructuring rest: {}",
-                                    name
+                                    "Unsupported object-rest assignment target: only a plain identifier is supported"
                                 ));
                             }
                         }
