@@ -111,10 +111,61 @@ pub(crate) fn dyn_fn_ctor_kind_of(
     while let ast::Expr::Paren(p) = obj {
         obj = p.expr.as_ref();
     }
+    // `Object.getPrototypeOf(<fn-literal>).constructor` — the standard idiom
+    // for reaching the hidden `AsyncFunction`/`GeneratorFunction`/
+    // `AsyncGeneratorFunction` global constructors, which (unlike `Function`)
+    // aren't reachable as named globals. `Object.getPrototypeOf(fnExpr)`
+    // yields fnExpr's `[[Prototype]]` (e.g. `%GeneratorFunction.prototype%`
+    // for a generator literal), and `.constructor` on THAT is the matching
+    // hidden constructor — same kind as `fnExpr` itself (test262
+    // toString/GeneratorFunction.js).
+    if let Some(kind) = dyn_fn_ctor_kind_via_get_prototype_of(obj, known_literals) {
+        return Some(kind);
+    }
     if let Some(kind) = fn_literal_kind_of(obj) {
         return Some(kind);
     }
     if let ast::Expr::Ident(id) = obj {
+        return known_literals.get(id.sym.as_str()).copied();
+    }
+    None
+}
+
+/// Match `Object.getPrototypeOf(<arg>)` and resolve `<arg>`'s dynamic-ctor
+/// kind (function literal or known single-assignment variable).
+fn dyn_fn_ctor_kind_via_get_prototype_of(
+    obj: &ast::Expr,
+    known_literals: &HashMap<String, DynFnCtorKind>,
+) -> Option<DynFnCtorKind> {
+    let ast::Expr::Call(call) = obj else {
+        return None;
+    };
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return None;
+    }
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let mut c = callee.as_ref();
+    while let ast::Expr::Paren(p) = c {
+        c = p.expr.as_ref();
+    }
+    let ast::Expr::Member(gm) = c else {
+        return None;
+    };
+    let is_get_proto = matches!(&gm.prop, ast::MemberProp::Ident(id) if id.sym.as_ref() == "getPrototypeOf")
+        && matches!(gm.obj.as_ref(), ast::Expr::Ident(oid) if oid.sym.as_ref() == "Object");
+    if !is_get_proto {
+        return None;
+    }
+    let mut inner = call.args[0].expr.as_ref();
+    while let ast::Expr::Paren(p) = inner {
+        inner = p.expr.as_ref();
+    }
+    if let Some(kind) = fn_literal_kind_of(inner) {
+        return Some(kind);
+    }
+    if let ast::Expr::Ident(id) = inner {
         return known_literals.get(id.sym.as_str()).copied();
     }
     None

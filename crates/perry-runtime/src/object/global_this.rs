@@ -26,7 +26,7 @@ pub(crate) use array_error::{
     array_prototype_shift_thunk, array_prototype_slice_thunk, array_prototype_sort_thunk,
     array_prototype_splice_thunk, array_prototype_unshift_thunk, date_prototype_to_string_thunk,
     error_prototype_to_string_thunk, function_prototype_apply_thunk, function_prototype_bind_thunk,
-    function_prototype_call_thunk, function_prototype_to_string_thunk,
+    function_prototype_call_thunk, function_prototype_to_string_thunk, generic_array_like_to_vec,
     global_this_clear_immediate_thunk, global_this_clear_interval_thunk,
     global_this_clear_timeout_thunk, global_this_queue_microtask_thunk,
     global_this_rest_array_values, global_this_set_immediate_thunk, global_this_set_interval_thunk,

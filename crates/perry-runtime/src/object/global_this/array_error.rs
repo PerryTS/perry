@@ -364,24 +364,63 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
         }
     }
     let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
-    if !is_array.is_bool() || !is_array.as_bool() {
-        return Vec::new();
+    if is_array.is_bool() && is_array.as_bool() {
+        let arr = if value.is_pointer() {
+            value.as_pointer::<crate::array::ArrayHeader>()
+        } else if (args_array.to_bits() >> 48) == 0 {
+            args_array.to_bits() as *const crate::array::ArrayHeader
+        } else {
+            std::ptr::null()
+        };
+        if arr.is_null() {
+            return Vec::new();
+        }
+        let len = crate::array::js_array_length(arr) as usize;
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            out.push(f64::from_bits(
+                crate::array::js_array_get(arr, i as u32).bits(),
+            ));
+        }
+        return out;
     }
-    let arr = if value.is_pointer() {
-        value.as_pointer::<crate::array::ArrayHeader>()
-    } else if (args_array.to_bits() >> 48) == 0 {
-        args_array.to_bits() as *const crate::array::ArrayHeader
+    generic_array_like_to_vec(args_array)
+}
+
+/// Generic `CreateListFromArrayLike` (spec 7.3.24) for an `argArray` that is
+/// neither an arguments object nor a real Array — notably a Proxy or plain
+/// object with a numeric `length` and indexed properties. Reads `length` via
+/// `Get` (ToNumber-coerced, clamped to `ToLength`), then reads each index
+/// `0..length` via `Get` in order. `js_get_property` is the generic
+/// dynamic-property-get entry point (Proxy-trap aware, throws through on
+/// failure) also used by codegen for computed member access — so a throwing
+/// `length`/indexed `Get` trap propagates as the abrupt completion the spec
+/// requires (test262 built-ins/Function/prototype/apply/get-index-abrupt),
+/// instead of being silently swallowed into an empty list.
+pub(crate) unsafe fn generic_array_like_to_vec(args_array: f64) -> Vec<f64> {
+    let len_key = b"length";
+    let len_val =
+        crate::value::js_get_property(args_array, len_key.as_ptr() as i64, len_key.len() as i64);
+    let len_num = crate::builtins::js_number_coerce(len_val);
+    let len = if len_num.is_nan() {
+        0
     } else {
-        std::ptr::null()
+        let n = len_num.trunc();
+        if n <= 0.0 {
+            0
+        } else if n > 9_007_199_254_740_991.0 {
+            9_007_199_254_740_991_i64
+        } else {
+            n as i64
+        }
     };
-    if arr.is_null() {
-        return Vec::new();
-    }
-    let len = crate::array::js_array_length(arr) as usize;
-    let mut out = Vec::with_capacity(len);
+    let mut out = Vec::with_capacity(len.min(1024) as usize);
     for i in 0..len {
-        out.push(f64::from_bits(
-            crate::array::js_array_get(arr, i as u32).bits(),
+        let key = i.to_string();
+        out.push(crate::value::js_get_property(
+            args_array,
+            key.as_ptr() as i64,
+            key.len() as i64,
         ));
     }
     out
