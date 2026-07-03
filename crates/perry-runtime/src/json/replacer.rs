@@ -71,7 +71,40 @@ unsafe fn root_holder(value_f64: f64) -> f64 {
 #[inline]
 unsafe fn apply_to_json(value: f64) -> f64 {
     let bits = value.to_bits();
+    // A BigInt is a primitive, not a POINTER_TAG value — `extract_pointer`
+    // below never matches it, so without this check `BigInt.prototype.toJSON`
+    // is silently skipped for a top-level/replacer-walked BigInt (test262
+    // JSON/stringify/value-bigint-order). Mirror the no-replacer path's
+    // `serialize_bigint`, which already applies this.
+    if (bits & 0xFFFF_0000_0000_0000) == BIGINT_TAG {
+        if let Some(converted) = super::stringify::bigint_apply_to_json(value) {
+            return converted;
+        }
+        return value;
+    }
     if let Some(ptr) = extract_pointer(bits) {
+        // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream
+        // handle) is never a dereferenceable heap pointer.
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return value;
+        }
+        // An array can carry an own `toJSON` expando too (test262
+        // JSON/stringify/value-tojson-result) — checked via the array-named-
+        // property side table, not `object_get_to_json` (arrays have no
+        // `keys_array`). Buffer/TypedArray have no `GcHeader`, so exclude
+        // them first — `gc_obj_type` would otherwise misread their raw bytes
+        // as a GC_TYPE_ARRAY tag (see `stringify_value`'s matching guards).
+        if gc_obj_type(ptr) == crate::gc::GC_TYPE_ARRAY
+            && !crate::buffer::is_registered_buffer(ptr as usize)
+            && crate::typedarray::lookup_typed_array_kind(ptr as usize).is_none()
+        {
+            if let Some(to_json_val) =
+                super::stringify::array_get_to_json(ptr as *const crate::ArrayHeader)
+            {
+                return to_json_val;
+            }
+            return value;
+        }
         // Only plain JS objects carry a `toJSON` field worth probing; arrays /
         // buffers / errors don't, and probing them would walk an unrelated
         // layout. `object_get_to_json` itself guards on a null keys_array.
@@ -116,14 +149,11 @@ unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
     } else if replaced_bits == TAG_FALSE {
         buf.push_str("false");
     } else if replaced_tag == BIGINT_TAG {
-        let bigint_ptr = (replaced_bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            // BigInt toString gives a plain number string (no quotes).
-            buf.push_str(s);
-        } else {
-            buf.push_str("null");
-        }
+        // A BigInt surviving toJSON + the replacer is still unserializable
+        // (ECMA-262 SerializeJSONProperty: the BigInt Type check runs
+        // AFTER the replacer, unconditionally) — throw, don't silently
+        // print its digits (test262 JSON/stringify/value-bigint-order).
+        super::stringify::throw_bigint_serialize();
     } else if extract_pointer(replaced_bits).is_some() {
         // Pointer — caller recurses with the replacer.
         return false;
@@ -354,11 +384,12 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             }
         }
 
-        // Write the key
+        // Write the key. Must go through the escaper, not a raw `push_str` —
+        // a key can contain `"`/`\`/control characters (test262
+        // JSON/stringify/value-string-escape-ascii pattern).
         if let Some(key_str) = key_str_opt {
-            buf.push('"');
-            buf.push_str(key_str);
-            buf.push_str(if use_pretty { "\": " } else { "\":" });
+            write_escaped_string(buf, key_str);
+            buf.push_str(if use_pretty { ": " } else { ":" });
         } else {
             let _ = write!(buf, "\"field{}\"{}", f, if use_pretty { ": " } else { ":" });
         }
@@ -783,9 +814,10 @@ pub(crate) unsafe fn stringify_object_pretty(
         for _ in 0..inner_indent_count {
             buf.push_str(indent);
         }
-        buf.push('"');
-        buf.push_str(key_name);
-        buf.push_str("\": ");
+        // Escape the key, not a raw `push_str` — see the compact path's
+        // matching fix (test262 JSON/stringify/value-string-escape-ascii).
+        write_escaped_string(buf, key_name);
+        buf.push_str(": ");
         stringify_value_pretty(*field_val, TYPE_UNKNOWN, buf, indent, inner_indent_count);
         if i + 1 < entries.len() {
             buf.push(',');
@@ -922,9 +954,8 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
                 for _ in 0..inner_indent_count {
                     buf.push_str(indent);
                 }
-                buf.push('"');
-                buf.push_str(allowed_key);
-                buf.push_str("\": ");
+                write_escaped_string(buf, allowed_key);
+                buf.push_str(": ");
                 stringify_value_with_array_replacer(
                     *field_val,
                     allowed_keys,
@@ -934,9 +965,8 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
                     true,
                 );
             } else {
-                buf.push('"');
-                buf.push_str(allowed_key);
-                buf.push_str("\":");
+                write_escaped_string(buf, allowed_key);
+                buf.push(':');
                 stringify_value_with_array_replacer(
                     *field_val,
                     allowed_keys,
@@ -1217,6 +1247,12 @@ pub unsafe extern "C" fn js_json_stringify_full(
         return TAG_UNDEFINED as i64;
     }
 
+    // A top-level Symbol is likewise unserializable — return undefined
+    // (test262 JSON/stringify/value-symbol).
+    if is_symbol_value(value_bits) {
+        return TAG_UNDEFINED as i64;
+    }
+
     // Issue #179 Phase 4: lazy-stringify fast path for unmutated
     // lazy arrays — only when no replacer / no indent (matches the
     // output `JSON.stringify(value)` produces; replacer/indent
@@ -1397,12 +1433,51 @@ pub unsafe extern "C" fn js_json_stringify_full(
                 0,
             );
         }
-    } else if use_pretty {
-        // No replacer, but has spacer — pretty-print
-        stringify_value_pretty(value, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
     } else {
-        // Plain stringify
-        stringify_value(value, TYPE_UNKNOWN, &mut buf);
+        // No replacer. Pre-resolve the ROOT value's own `toJSON` here (same
+        // `apply_to_json_keyed` the function-replacer branch above uses) so a
+        // root whose `toJSON` returns `undefined` (or a function/Symbol) can
+        // short-circuit to `JSON.stringify`'s `undefined` return — the
+        // buffer-based walk below has no way to signal that once it starts
+        // writing bytes (test262 JSON/stringify/value-tojson-arguments,
+        // value-tojson-result's `arr.toJSON = () => {}` case). Arm the
+        // one-shot suppression guard so the walk below doesn't re-invoke
+        // `toJSON` on the same (already-resolved) root value.
+        let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
+        let empty_key_f64 = nanbox_string_f64(empty_str);
+        let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
+        let after_bits = value_after_to_json.to_bits();
+        if after_bits == TAG_UNDEFINED
+            || is_closure_value(after_bits)
+            || is_symbol_value(after_bits)
+        {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
+            restore_stringify_buf(buf);
+            match saved_cache {
+                Some(s) => restore_shape_cache(s),
+                None => clear_shape_cache(),
+            }
+            STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
+            return TAG_UNDEFINED as i64;
+        }
+        // Only arm suppression when `toJSON` actually substituted a
+        // different value — arming unconditionally would suppress a
+        // legitimate nested `toJSON` (e.g. `{a:1, b:{toJSON(){...}}}`) any
+        // time the root object itself has no closure field to consume the
+        // flag on its own dispatch (a plain data object never calls
+        // `object_get_to_json` at all, so the flag would otherwise leak
+        // straight through to the first real nested `toJSON`).
+        if after_bits != value.to_bits() {
+            arm_to_json_result_guard(value_after_to_json);
+        }
+        if use_pretty {
+            // No replacer, but has spacer — pretty-print
+            stringify_value_pretty(value_after_to_json, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
+        } else {
+            // Plain stringify
+            stringify_value(value_after_to_json, TYPE_UNKNOWN, &mut buf);
+        }
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
     }
 
     // Only touch STRINGIFY_STACK if we actually pushed to it (depth >

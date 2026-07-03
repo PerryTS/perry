@@ -676,7 +676,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math") {
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math" | "JSON") {
                 let args = new_expr
                     .args
                     .as_ref()
