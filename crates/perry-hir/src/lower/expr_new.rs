@@ -941,15 +941,31 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
 
-            // Handle URL class
-            if class_name == "URL" {
+            // Handle URL class. #5912: gated on `callee_local_at_entry` /
+            // `lookup_func` so a local function/const shadowing the global
+            // name (e.g. a vendored `function URL(url?) {...}` polyfill)
+            // routes through the generic local-dispatch fallback below
+            // instead of always binding to perry's native WHATWG URL
+            // constructor — matches the `lookup_local`/`lookup_func`/
+            // `lookup_class` shadowing guard used for `Function`/`Object`
+            // above (a named function declaration is tracked via
+            // `lookup_func`, not `lookup_local`/`callee_local_at_entry`).
+            if class_name == "URL"
+                && callee_local_at_entry.is_none()
+                && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_class(&class_name).is_none()
+            {
                 return Ok(
                     lower_url_encoding_constructor(ctx, "URL", new_expr.args.as_deref())?.unwrap(),
                 );
             }
 
             // Handle URLSearchParams / URLPattern classes
-            if matches!(class_name.as_str(), "URLSearchParams" | "URLPattern") {
+            if matches!(class_name.as_str(), "URLSearchParams" | "URLPattern")
+                && callee_local_at_entry.is_none()
+                && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_class(&class_name).is_none()
+            {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
                     &class_name,
@@ -993,7 +1009,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return Ok(Expr::FinalizationRegistryNew(Box::new(cb)));
             }
             // Handle TextEncoder constructor
-            if class_name == "TextEncoder" {
+            if class_name == "TextEncoder"
+                && callee_local_at_entry.is_none()
+                && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_class(&class_name).is_none()
+            {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
                     "TextEncoder",
@@ -1002,7 +1022,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap());
             }
             // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
-            if class_name == "TextDecoder" {
+            if class_name == "TextDecoder"
+                && callee_local_at_entry.is_none()
+                && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_class(&class_name).is_none()
+            {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
                     "TextDecoder",

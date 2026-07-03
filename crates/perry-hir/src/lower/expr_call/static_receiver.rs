@@ -64,6 +64,20 @@ pub(super) fn static_receiver_class(
             _ => None,
         };
         if let Some(class_name) = class_name {
+            // Issue #5912: a local function/const/class shadowing one of the
+            // well-known names below (e.g. a vendored `function URL(url) {
+            // ... }` polyfill) is the user's own value, never perry's native
+            // built-in — classify as a generic "Object" (skips the ambiguous
+            // Date/URL method arms, same treatment as an object-literal
+            // receiver below) instead of misrouting `.toString()`/`.toJSON()`
+            // through the native fast paths (`UrlInstanceToJSON` etc.) on a
+            // value that was never actually constructed via the native path.
+            if ctx.lookup_local(class_name).is_some()
+                || ctx.lookup_func(class_name).is_some()
+                || ctx.lookup_class(class_name).is_some()
+            {
+                return Some("Object");
+            }
             let resolved_class = ctx
                 .resolve_class_alias(class_name)
                 .unwrap_or_else(|| class_name.to_string());
@@ -139,6 +153,14 @@ pub(super) fn static_receiver_class(
                 _ => None,
             };
             if let Some(n) = named {
+                // Issue #5912: the local's inferred type name can legitimately
+                // be "URL" because it holds an instance of a REAL user class
+                // named `URL` (shadowing the global) — not perry's native
+                // WHATWG URL. Route those through generic dispatch too, same
+                // as the `New`-expression branch above.
+                if ctx.lookup_class(n).is_some() {
+                    return Some("Object");
+                }
                 return match n {
                     "Date" => Some("Date"),
                     "URL" => Some("URL"),
