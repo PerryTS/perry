@@ -44,6 +44,8 @@ pub use self::search_params::{
 // a URLSearchParams (a plain class_id-0 ObjectHeader) and pull its entries.
 pub(crate) use self::search_params::try_read_as_search_params;
 pub(crate) use self::url_class::is_url_object_shape;
+/// Canonical class-id for `URL` instances (see instanceof / branding paths).
+pub(crate) const CLASS_ID_URL: u32 = 0xFFFF002F;
 pub use self::url_class::{
     js_url_can_parse, js_url_can_parse_with_base, js_url_get_hash, js_url_get_host,
     js_url_get_hostname, js_url_get_href, js_url_get_origin, js_url_get_pathname, js_url_get_port,
