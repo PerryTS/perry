@@ -20,6 +20,9 @@ use std::collections::HashMap;
 
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
+mod has_delete;
+pub(crate) use has_delete::reflect_ordinary_delete_property_key;
+pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 mod put_value;
 pub(crate) use put_value::proxy_set_with_receiver;
@@ -793,15 +796,44 @@ fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     }
 }
 
-fn key_is_length(key: f64) -> bool {
+fn key_equals(key: f64, name: &[u8]) -> bool {
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key, &mut scratch) else {
         return false;
     };
-    if ptr.is_null() || len != 6 {
+    if ptr.is_null() || len as usize != name.len() {
         return false;
     }
-    unsafe { std::slice::from_raw_parts(ptr, len as usize) == b"length" }
+    unsafe { std::slice::from_raw_parts(ptr, len as usize) == name }
+}
+
+fn key_is_length(key: f64) -> bool {
+    key_equals(key, b"length")
+}
+
+/// Does deleting `key` off `target` hit a non-configurable exotic own property
+/// that lives outside the ordinary descriptor table? Covers an Array's `length`
+/// and a plain (non-arrow, non-bound) function's `prototype` — both are
+/// non-configurable, so `Reflect.deleteProperty` / `delete` must report failure.
+fn is_non_configurable_exotic_own(target: f64, key: f64) -> bool {
+    if array_ptr_from_value(target).is_some() && key_is_length(key) {
+        return true;
+    }
+    if key_equals(key, b"prototype") {
+        let raw = extract_pointer(target.to_bits()) as usize;
+        if raw != 0 && crate::closure::is_closure_ptr(raw) {
+            let closure = raw as *const crate::closure::ClosureHeader;
+            // Arrow and bound functions have no own `prototype` slot at all, so
+            // deleting it succeeds vacuously; only a plain function's `prototype`
+            // is a non-configurable own property.
+            if !crate::closure::closure_is_arrow(closure)
+                && !crate::closure::closure_is_bound_method(closure)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn parse_canonical_nonnegative_i32(bytes: &[u8]) -> Option<i32> {
@@ -1472,143 +1504,6 @@ pub extern "C" fn js_super_put_value_set(
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to
 /// `js_object_has_property` on the target.
-#[no_mangle]
-pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
-    let id = match lookup(proxy_boxed) {
-        Some(id) => id,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
-    if revoked {
-        return revoked_return();
-    }
-    let trap = handler_trap(handler, "has");
-    if is_callable(trap) {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let trap_result = call_trap(
-            handler,
-            trap,
-            &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
-        );
-        // [[HasProperty]] invariant: a `false` trap result is rejected when the
-        // target owns the key non-configurably, or the target is non-extensible
-        // and owns the key.
-        if crate::value::js_is_truthy(trap_result) == 0 {
-            invariants::enforce_has_false_invariant(
-                target_h.get_nanbox_f64(),
-                key_h.get_nanbox_f64(),
-            );
-            return nanbox_bool(false);
-        }
-        return nanbox_bool(true);
-    }
-    // No has trap — forward to the target's `[[HasProperty]]`, recursing through
-    // a proxy target.
-    if lookup(target).is_some() {
-        return js_proxy_has(target, key);
-    }
-    crate::object::js_object_has_property(target, key)
-}
-
-/// `delete proxy[key]` — if handler.deleteProperty exists, call it; else
-/// delegate to `js_object_delete_field` on the target.
-#[no_mangle]
-pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
-    let id = match lookup(proxy_boxed) {
-        Some(id) => id,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
-    if revoked {
-        return revoked_return();
-    }
-    let trap = handler_trap(handler, "deleteProperty");
-    if is_callable(trap) {
-        // #2760: the `deleteProperty` trap's boolean result is observable
-        // through `Reflect.deleteProperty(proxy, …)`.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let trap_result = call_trap(
-            handler,
-            trap,
-            &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
-        );
-        if crate::value::js_is_truthy(trap_result) == 0 {
-            return nanbox_bool(false);
-        }
-        // [[Delete]] invariant: a `true` result is rejected when the target owns
-        // the key non-configurably, or owns it and is non-extensible.
-        invariants::enforce_delete_invariant(target_h.get_nanbox_f64(), key_h.get_nanbox_f64());
-        return nanbox_bool(true);
-    }
-    // No trap — forward to the target's `[[Delete]]`, recursing through a proxy
-    // target.
-    if lookup(target).is_some() {
-        return js_proxy_delete(target, key);
-    }
-    reflect_ordinary_delete(target, key)
-}
-
-/// Perform an ordinary (non-proxy) `[[Delete]]` and report the result as a
-/// NaN-boxed boolean. Returns `false` for a non-configurable property (#2760),
-/// matching `Reflect.deleteProperty` rather than the silent-success behavior of
-/// the `delete` operator.
-fn reflect_ordinary_delete_property_key(target: f64, property_key: f64) -> f64 {
-    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
-        let deleted =
-            unsafe { crate::symbol::js_object_delete_symbol_property(target, property_key) };
-        return nanbox_bool(deleted != 0);
-    }
-    if let Some((_writable, configurable)) = crate::object::obj_value_attrs(target, property_key) {
-        if !configurable {
-            return nanbox_bool(false);
-        }
-    }
-    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-    let key_ptr =
-        crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
-    if !obj_ptr.is_null() && !key_ptr.is_null() {
-        let deleted = crate::object::js_object_delete_field(obj_ptr, key_ptr);
-        return nanbox_bool(deleted != 0);
-    }
-    nanbox_bool(true)
-}
-
-fn reflect_ordinary_delete(target: f64, key: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let property_key_handle = scope
-        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
-    reflect_ordinary_delete_property_key(
-        target_handle.get_nanbox_f64(),
-        property_key_handle.get_nanbox_f64(),
-    )
-}
-
 /// Is `value` a callable function value: a closure, a class-ref constructor, or
 /// a (possibly callable) proxy? Distinct from `is_callable`, which treats *any*
 /// pointer-tagged value as callable — that's too loose for trap validation,
