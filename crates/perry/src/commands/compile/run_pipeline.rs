@@ -2437,6 +2437,7 @@ pub fn run_with_parse_cache(
                                         static_field_names: class
                                             .static_fields
                                             .iter()
+                                            .filter(|f| f.key_expr.is_none())
                                             .map(|f| f.name.clone())
                                             .collect(),
                                         getter_names: class
@@ -2745,6 +2746,7 @@ pub fn run_with_parse_cache(
                                             static_field_names: class
                                                 .static_fields
                                                 .iter()
+                                                .filter(|f| f.key_expr.is_none())
                                                 .map(|f| f.name.clone())
                                                 .collect(),
                                             getter_names: class
@@ -3019,6 +3021,7 @@ pub fn run_with_parse_cache(
                                 static_field_names: class
                                     .static_fields
                                     .iter()
+                                    .filter(|f| f.key_expr.is_none())
                                     .map(|f| f.name.clone())
                                     .collect(),
                                 getter_names: class
@@ -3086,6 +3089,7 @@ pub fn run_with_parse_cache(
                             static_field_names: class
                                 .static_fields
                                 .iter()
+                                .filter(|f| f.key_expr.is_none())
                                 .map(|f| f.name.clone())
                                 .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
@@ -3244,6 +3248,7 @@ pub fn run_with_parse_cache(
                             static_field_names: class
                                 .static_fields
                                 .iter()
+                                .filter(|f| f.key_expr.is_none())
                                 .map(|f| f.name.clone())
                                 .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
@@ -3717,6 +3722,7 @@ pub fn run_with_parse_cache(
                             static_field_names: class
                                 .static_fields
                                 .iter()
+                                .filter(|f| f.key_expr.is_none())
                                 .map(|f| f.name.clone())
                                 .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
@@ -3916,6 +3922,7 @@ pub fn run_with_parse_cache(
                             static_field_names: class
                                 .static_fields
                                 .iter()
+                                .filter(|f| f.key_expr.is_none())
                                 .map(|f| f.name.clone())
                                 .collect(),
                             getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
