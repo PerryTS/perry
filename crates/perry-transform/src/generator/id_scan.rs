@@ -23,11 +23,7 @@ fn scan_params_for_max_local(params: &[Param], max_id: &mut LocalId) {
         if let Some(default) = &param.default {
             scan_expr_for_max_local(default, max_id);
         }
-        for dec in &param.decorators {
-            for arg in &dec.args {
-                scan_expr_for_max_local(arg, max_id);
-            }
-        }
+        scan_decorators_for_max_local(&param.decorators, max_id);
         if let Some(meta) = &param.arguments_object {
             for (_, local) in &meta.mapped_parameter_ids {
                 *max_id = (*max_id).max(*local);
@@ -44,19 +40,48 @@ fn scan_params_for_max_func(params: &[Param], max_id: &mut FuncId) {
         if let Some(default) = &param.default {
             scan_expr_for_max_func(default, max_id);
         }
-        for dec in &param.decorators {
-            for arg in &dec.args {
-                scan_expr_for_max_func(arg, max_id);
-            }
+        scan_decorators_for_max_func(&param.decorators, max_id);
+    }
+}
+
+/// Decorator factory args (`@dec(x => x)`) are full expressions that can
+/// hold closures — their LocalIds/FuncIds live in the same module-wide
+/// namespace as everything else. Used for param-, function/method-,
+/// class-, and field-level decorators.
+fn scan_decorators_for_max_local(decorators: &[Decorator], max_id: &mut LocalId) {
+    for dec in decorators {
+        for arg in &dec.args {
+            scan_expr_for_max_local(arg, max_id);
         }
     }
+}
+
+fn scan_decorators_for_max_func(decorators: &[Decorator], max_id: &mut FuncId) {
+    for dec in decorators {
+        for arg in &dec.args {
+            scan_expr_for_max_func(arg, max_id);
+        }
+    }
+}
+
+/// Fold a Function-shaped container's non-body id carriers (params +
+/// function-level decorator args) into the LocalId max.
+fn scan_function_shell_for_max_local(func: &Function, max_id: &mut LocalId) {
+    scan_params_for_max_local(&func.params, max_id);
+    scan_decorators_for_max_local(&func.decorators, max_id);
+}
+
+/// FuncId companion to [`scan_function_shell_for_max_local`].
+fn scan_function_shell_for_max_func(func: &Function, max_id: &mut FuncId) {
+    scan_params_for_max_func(&func.params, max_id);
+    scan_decorators_for_max_func(&func.decorators, max_id);
 }
 
 /// Find the maximum local ID used in the module.
 pub fn compute_max_local_id(module: &Module) -> LocalId {
     let mut max_id: LocalId = 0;
     for func in &module.functions {
-        scan_params_for_max_local(&func.params, &mut max_id);
+        scan_function_shell_for_max_local(func, &mut max_id);
         scan_stmts_for_max_local(&func.body, &mut max_id);
     }
     for stmt in &module.init {
@@ -80,28 +105,28 @@ pub fn compute_max_local_id(module: &Module) -> LocalId {
     // class-method codegen.
     for class in &module.classes {
         for method in &class.methods {
-            scan_params_for_max_local(&method.params, &mut max_id);
+            scan_function_shell_for_max_local(method, &mut max_id);
             scan_stmts_for_max_local(&method.body, &mut max_id);
         }
         for static_method in &class.static_methods {
-            scan_params_for_max_local(&static_method.params, &mut max_id);
+            scan_function_shell_for_max_local(static_method, &mut max_id);
             scan_stmts_for_max_local(&static_method.body, &mut max_id);
         }
         for member in &class.computed_members {
             scan_expr_for_max_local(&member.key_expr, &mut max_id);
-            scan_params_for_max_local(&member.function.params, &mut max_id);
+            scan_function_shell_for_max_local(&member.function, &mut max_id);
             scan_stmts_for_max_local(&member.function.body, &mut max_id);
         }
         if let Some(ctor) = &class.constructor {
-            scan_params_for_max_local(&ctor.params, &mut max_id);
+            scan_function_shell_for_max_local(ctor, &mut max_id);
             scan_stmts_for_max_local(&ctor.body, &mut max_id);
         }
         for getter in &class.getters {
-            scan_params_for_max_local(&getter.1.params, &mut max_id);
+            scan_function_shell_for_max_local(&getter.1, &mut max_id);
             scan_stmts_for_max_local(&getter.1.body, &mut max_id);
         }
         for setter in &class.setters {
-            scan_params_for_max_local(&setter.1.params, &mut max_id);
+            scan_function_shell_for_max_local(&setter.1, &mut max_id);
             scan_stmts_for_max_local(&setter.1.body, &mut max_id);
         }
         // Issue #5143 (LocalId parallel): class FIELD initializers and
@@ -121,7 +146,11 @@ pub fn compute_max_local_id(module: &Module) -> LocalId {
             if let Some(key_expr) = &field.key_expr {
                 scan_expr_for_max_local(key_expr, &mut max_id);
             }
+            scan_decorators_for_max_local(&field.decorators, &mut max_id);
         }
+        // Class-level decorator factory args (`@dec(x => x) class C {}`)
+        // carry ids the same way the member-level ones do.
+        scan_decorators_for_max_local(&class.decorators, &mut max_id);
         if let Some(extends_expr) = &class.extends_expr {
             scan_expr_for_max_local(extends_expr, &mut max_id);
         }
@@ -303,7 +332,7 @@ pub fn compute_max_func_id(module: &Module) -> FuncId {
     let mut max_id: FuncId = 0;
     for func in &module.functions {
         max_id = max_id.max(func.id);
-        scan_params_for_max_func(&func.params, &mut max_id);
+        scan_function_shell_for_max_func(func, &mut max_id);
         scan_stmts_for_max_func(&func.body, &mut max_id);
     }
     for stmt in &module.init {
@@ -337,7 +366,7 @@ pub fn compute_max_func_id(module: &Module) -> FuncId {
             .chain(class.getters.iter().map(|(_, f)| f))
             .chain(class.setters.iter().map(|(_, f)| f))
         {
-            scan_params_for_max_func(&m.params, &mut max_id);
+            scan_function_shell_for_max_func(m, &mut max_id);
             scan_stmts_for_max_func(&m.body, &mut max_id);
         }
         for member in &class.computed_members {
@@ -358,7 +387,10 @@ pub fn compute_max_func_id(module: &Module) -> FuncId {
             if let Some(key_expr) = &field.key_expr {
                 scan_expr_for_max_func(key_expr, &mut max_id);
             }
+            scan_decorators_for_max_func(&field.decorators, &mut max_id);
         }
+        // Class-level decorator factory args carry FuncIds the same way.
+        scan_decorators_for_max_func(&class.decorators, &mut max_id);
         if let Some(extends_expr) = &class.extends_expr {
             scan_expr_for_max_func(extends_expr, &mut max_id);
         }
@@ -802,6 +834,63 @@ mod tests {
             compute_max_func_id(&module),
             60,
             "method default-closure FuncId must be counted"
+        );
+    }
+
+    /// CodeRabbit follow-up on the #5941 scan fix: FUNCTION-level and
+    /// CLASS-level decorator factory args (`@dec(x => x)`) carry closures
+    /// whose ids must be visible too — not just Param.decorators.
+    #[test]
+    fn function_and_class_decorator_arg_closure_ids_visible_to_max_scans() {
+        let dec_with_closure = |func_id: FuncId, local_id: LocalId| Decorator {
+            name: "dec".to_string(),
+            args: vec![Expr::Closure {
+                func_id,
+                params: Vec::new(),
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(Expr::LocalGet(local_id)))],
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }],
+            is_factory: true,
+            is_reflect_metadata: false,
+        };
+        let mut module = Module::new("test");
+        module.functions.push(Function {
+            id: 1,
+            name: "f".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: Vec::new(),
+            is_strict: false,
+            is_async: false,
+            is_generator: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: vec![dec_with_closure(55, 95)],
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let mut class = class_with_fields("C", Vec::new());
+        class.decorators.push(dec_with_closure(56, 96));
+        module.classes.push(class);
+        assert_eq!(
+            compute_max_local_id(&module),
+            96,
+            "function/class decorator-arg closure LocalIds must be counted"
+        );
+        assert_eq!(
+            compute_max_func_id(&module),
+            56,
+            "function/class decorator-arg closure FuncIds must be counted"
         );
     }
 }
