@@ -325,6 +325,11 @@ pub(crate) fn rtf_instance_parts_and_unit(
     // ToNumber: a Symbol/BigInt value throws TypeError *before* the finite-ness
     // RangeError (format/value-symbol.js); an object's valueOf is invoked.
     let number = to_number_reject_bigint(value);
+    // ToString(unit): a Symbol throws TypeError (before the RangeError enum
+    // guard), matching ECMA-262 ToString — format/unit-invalid.js.
+    if unsafe { crate::symbol::js_is_symbol(unit_arg) != 0 } {
+        throw_type_error("Cannot convert a Symbol value to a string");
+    }
     let unit_str = value_to_string(unit_arg);
     if !number.is_finite() {
         throw_range_error("Value need to be finite number for Intl.RelativeTimeFormat.format()");
