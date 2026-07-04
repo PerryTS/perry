@@ -878,6 +878,22 @@ fn coerce_options_reject_null(options: f64) -> f64 {
     options
 }
 
+/// `ToObject(options)` for the SupportedLocales option read: `null` / `undefined`
+/// are handled by the caller; a non-object primitive (Boolean, Number, String,
+/// Symbol, BigInt) is boxed into a fresh empty object so that reading an option
+/// key walks the standard prototype chain and fires any `Object.prototype`
+/// getter for that key exactly once (SupportedLocales step 1.a, test262
+/// `supportedLocalesOf/options-toobject.js`). A real object passes through.
+fn to_object_for_options(options: f64) -> f64 {
+    if object_ptr_from_value(options).is_some() {
+        return options;
+    }
+    // Box the primitive: an empty object has no own option keys, so every read
+    // resolves through the prototype chain — matching the boxed-wrapper behaviour
+    // the spec observes (the wrapper carries no `localeMatcher` of its own).
+    js_nanbox_pointer(js_object_alloc(0, 0) as i64)
+}
+
 /// GetBooleanOption(options, key): `undefined` → `None`, otherwise ToBoolean.
 fn get_bool_option(options: f64, key: &str) -> Option<bool> {
     let value = get_option_value(options, key);
@@ -1692,7 +1708,10 @@ fn supported_locales_array(locales: f64, options: f64) -> f64 {
     //      lookup result.
     let requested = locales_from_value(locales);
     if !JSValue::from_bits(options.to_bits()).is_undefined() {
-        let options = coerce_options_reject_null(options);
+        // SupportedLocales step 1.a: ? ToObject(options). null throws; a
+        // primitive is boxed so the localeMatcher read fires an Object.prototype
+        // getter exactly once (options-toobject.js).
+        let options = to_object_for_options(coerce_options_reject_null(options));
         let _ = enum_option_strict(
             options,
             "localeMatcher",
