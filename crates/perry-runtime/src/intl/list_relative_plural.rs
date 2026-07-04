@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
+use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::closure::ClosureHeader;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
@@ -97,22 +97,30 @@ pub(crate) fn canonicalize_offset_time_zone(tz: &str) -> String {
     format!("{sign}{hh:02}:{mm:02}")
 }
 
-/// Drain any JS iterable into a `Vec<String>`, throwing `TypeError` if an
-/// element is not a String (the ECMA-402 StringListFromIterable contract).
+/// Drain a JS iterable into a `Vec<String>` per ECMA-402 StringListFromIterable:
+/// step the iterator one value at a time and, on the FIRST non-String value,
+/// IteratorClose (call the iterator's `return`) and throw a `TypeError`.
+///
+/// This must NOT pre-materialize the whole iterable: the abstract operation is
+/// specified to stop at the first bad element (and close the iterator), so a
+/// user iterator's `next` is called exactly as many times as the spec requires
+/// — test262 `format/iterable-invalid.js` / `iterable-iteratorclose.js` assert
+/// the observed `count` and that `return` fired.
 pub(crate) fn collect_string_list(value: f64) -> Vec<String> {
-    use crate::collection_iter::{classify_init, InitIter};
-    let arr_ptr = match classify_init(value) {
-        InitIter::Empty => return Vec::new(),
-        InitIter::Values(p) => p as *const crate::ArrayHeader,
-    };
-    if arr_ptr.is_null() {
+    use crate::collection_iter::{is_null_or_undefined, iterator_close, iterator_next_value};
+    // StringListFromIterable step 1: `undefined` is an empty list. Perry also
+    // treats `null` as empty here (a ListFormat `format()`/`formatToParts()`
+    // with no list), preserving the prior lenient behaviour.
+    if is_null_or_undefined(value) {
         return Vec::new();
     }
-    let len = js_array_length(arr_ptr);
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        let element = js_array_get_f64(arr_ptr, i);
+    // GetIterator(iterable): a non-iterable throws TypeError.
+    let iter = crate::symbol::js_get_iterator(value);
+    let mut out = Vec::new();
+    while let Some(element) = iterator_next_value(iter) {
         if !JSValue::from_bits(element.to_bits()).is_any_string() {
+            // IteratorClose(iteratorRecord, error): run `return`, then throw.
+            iterator_close(iter);
             throw_type_error("Iterable yielded a non-string value for Intl.ListFormat");
         }
         out.push(string_from_string_value(element).unwrap_or_default());
