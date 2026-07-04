@@ -43,9 +43,23 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if bits == TAG_UNDEFINED || bits == TAG_NULL {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
-    let raw_string_ptr = bits as *const crate::StringHeader;
-    if (bits >> 48) == 0 && crate::string::is_valid_string_ptr(raw_string_ptr) {
-        return crate::string::js_string_index_get(raw_string_ptr, index);
+    // A raw string pointer (a module-level string stored as raw I64, top16 == 0)
+    // routes through string indexing. Validate the GcHeader (obj_type == STRING)
+    // rather than a bare `>= 0x1000` range check: a plain `number` whose f64 bits
+    // look like a low pointer — e.g. the denormal ~1.7e-314 (bits 0x8_0000_0000)
+    // effect's fiber loop produces — also has top16 == 0, and dereferencing it as
+    // a StringHeader SIGBUSes. `try_read_gc_header` rejects non-heap addresses
+    // WITHOUT touching memory, so a denormal-bits number falls through to the
+    // number path below and correctly yields `undefined`. #63 / #321.
+    if (bits >> 48) == 0 {
+        if let Some(hdr) = unsafe { crate::value::addr_class::try_read_gc_header(bits as usize) } {
+            if hdr.obj_type == crate::gc::GC_TYPE_STRING {
+                return crate::string::js_string_index_get(
+                    bits as *const crate::StringHeader,
+                    index,
+                );
+            }
+        }
     }
     let jsval = JSValue::from_bits(bits);
     // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
