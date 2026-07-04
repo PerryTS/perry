@@ -1,0 +1,123 @@
+//! Regression tests for the 2026-07-02 audit's capture-re-registration P0:
+//! the end-of-body `RegisterClassCaptures` refresh in arrow/function-decl
+//! bodies (a) ran AFTER `ctx.class_renames` was restored and looked the
+//! class up by its RAW ident, and (b) inserted only before a TRAILING
+//! return.
+//!
+//! (a) meant factory B's `class e` (renamed `e$0` when factory A's `class e`
+//! was lowered first) re-registered factory A's `e` with B's out-of-scope
+//! ids — codegen's LocalGet soft-fallback then clobbered A's snapshot to
+//! all-undefined the moment B ran (minified bundles reuse one-letter class
+//! names across hundreds of factories, so both preconditions were
+//! near-certain at bundle scale); `e$0` itself never got refreshed. (b)
+//! meant early-return paths kept the stale decl-site snapshot.
+//!
+//! Static-method reads go through the snapshot-only prologue, so they
+//! discriminate the snapshot's value directly. Expected outputs are
+//! byte-for-byte `node --experimental-strip-types`.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+fn perry_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_perry"))
+}
+
+fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
+    let entry = dir.join("main.ts");
+    let output = dir.join("main_bin");
+    std::fs::write(&entry, source).expect("write entry");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir)
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .arg("--no-cache")
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output)
+        .current_dir(dir)
+        .output()
+        .expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed (exit {:?})\nstdout:\n{}\nstderr:\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    String::from_utf8_lossy(&run.stdout).into_owned()
+}
+
+/// Two arrow factories each declaring `class e` with their own captures:
+/// running factory B must not clobber factory A's capture snapshot (A's
+/// static read still sees "alpha" after B ran).
+#[test]
+fn same_class_name_across_factories_keeps_snapshots_separate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const makeA = () => {
+  const tagA = "alpha";
+  class e {
+    static who() {
+      return tagA;
+    }
+  }
+  return () => e.who();
+};
+const whoA = makeA();
+const makeB = (x: number) => {
+  const tagB = "beta" + x;
+  class e {
+    static who() {
+      return tagB;
+    }
+  }
+  return e.who();
+};
+console.log("A1:", whoA());
+console.log("B:", makeB(1));
+console.log("A2:", whoA());
+"#,
+    );
+    assert_eq!(stdout, "A1: alpha\nB: beta1\nA2: alpha\n");
+}
+
+/// The snapshot refresh must run before EVERY return, not only a trailing
+/// one: an early return after a captured-var mutation must see the mutated
+/// value in the snapshot (static reads are snapshot-only).
+#[test]
+fn snapshot_refresh_covers_early_returns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+function makeC(flag: boolean) {
+  let n = 1;
+  class e {
+    static val() {
+      return n;
+    }
+  }
+  n = 2;
+  if (flag) return e.val;
+  n = 3;
+  return e.val;
+}
+console.log("C-early:", makeC(true)());
+console.log("C-late:", makeC(false)());
+"#,
+    );
+    assert_eq!(stdout, "C-early: 2\nC-late: 3\n");
+}

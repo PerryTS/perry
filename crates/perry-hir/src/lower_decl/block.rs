@@ -1025,23 +1025,28 @@ pub fn lower_fn_body_block_stmt(
             return Err(err);
         }
     };
-    ctx.forward_class_names = saved_forward_class_names;
-    ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
-    ctx.class_renames = saved_class_renames;
-
     // Re-register capture snapshots for classes declared in this body at
     // its END. The decl-site `RegisterClassCaptures` runs before later
     // statements assign captured vars (tsc emits TS-enum namespaces AFTER
     // the classes that reference them — vendored zod's
     // ZodFirstPartyTypeKind), so static-method snapshot reads and post-
-    // return dynamic constructions need the FINAL values. Inserted before
-    // a trailing `return` when present; bodies with early returns keep the
-    // decl-site snapshot for those paths.
+    // return dynamic constructions need the FINAL values.
+    //
+    // MUST run while this body's `class_renames` are still ACTIVE, using the
+    // RESOLVED class name (2026-07-02 audit P0): with the restore-first +
+    // raw-ident order, factory B's renamed `class e` (→ `e$0`) re-registered
+    // the OUTER factory's `e` with B's out-of-scope ids — codegen's LocalGet
+    // soft-fallback then clobbered A's snapshot to all-undefined the moment
+    // B ran, resurrecting the W6 undefined-captures class for every dynamic
+    // construct of A's class; meanwhile `e$0` itself never got refreshed and
+    // its forward-ref `new` sites never got their cap args appended.
+    // Mirrors the function-expression twin (`lower_fn_expr`), including the
+    // refresh-before-EVERY-return placement.
     {
         let mut re_regs: Vec<Stmt> = Vec::new();
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
-                let cname = class_decl.ident.sym.to_string();
+                let cname = ctx.resolve_class_name(class_decl.ident.sym.as_str());
                 if let Some(captured) = ctx.lookup_class_captures(&cname) {
                     if !captured.is_empty() {
                         let captures: Vec<Expr> =
@@ -1074,16 +1079,14 @@ pub fn lower_fn_body_block_stmt(
             }
         }
         if !re_regs.is_empty() {
-            let insert_at = if matches!(body.last(), Some(Stmt::Return(_))) {
-                body.len() - 1
-            } else {
-                body.len()
-            };
-            for (i, s) in re_regs.into_iter().enumerate() {
-                body.insert(insert_at + i, s);
-            }
+            crate::lower::expr_function::insert_class_capture_refresh_before_returns(
+                &mut body, &re_regs,
+            );
         }
     }
+    ctx.forward_class_names = saved_forward_class_names;
+    ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
+    ctx.class_renames = saved_class_renames;
 
     // Undefined-initialised entry slots for hoisted `var`s declared in
     // nested blocks (see predefine_var_bindings_in_function_body docs).

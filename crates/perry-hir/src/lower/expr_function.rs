@@ -1262,7 +1262,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
 /// — a closure's `return` exits a different function and must keep its own
 /// snapshot. Each return path then records the live capture values at that
 /// point. See the call site in `lower_fn_expr_anon` (CodeRabbit #5739).
-fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>, re_regs: &[Stmt]) {
+pub(crate) fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>, re_regs: &[Stmt]) {
     let mut i = 0;
     while i < stmts.len() {
         insert_class_capture_refresh_into_stmt(&mut stmts[i], re_regs);

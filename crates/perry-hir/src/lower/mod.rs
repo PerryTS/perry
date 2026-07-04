@@ -37,7 +37,7 @@
 mod context;
 pub(crate) mod expr_assign;
 mod expr_call;
-mod expr_function;
+pub(crate) mod expr_function;
 pub(crate) use expr_function::capture_function_source;
 mod expr_member;
 pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_WRITE};
