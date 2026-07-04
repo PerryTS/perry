@@ -1493,10 +1493,25 @@ fn lower_new_impl(
                 if let Some(parent_ctor) = &parent_class.constructor {
                     // #5437: fill any unfilled parent cap param from the
                     // parent's decl-site capture snapshot.
+                    //
+                    // #806: the ANCESTOR's cap params are never in
+                    // `lowered_args` here, so this fill is always
+                    // caps-absent. A bare-ident site appends the LEAF's
+                    // captures — and a capturing leaf always has a
+                    // (synthesized) own ctor (`synthesize_class_captures`
+                    // takes the no-ctor path only for capture-free
+                    // classes), so a leaf that reached this walk appended
+                    // nothing. Forwarding the SITE's flag instead made the
+                    // binder derive the tail-split from the ancestor's cap
+                    // params and eat trailing USER args: `class Wrapped
+                    // extends WithSuffix(Logged) {}` + `new Wrapped("alpha")`
+                    // bound the mixin ctor's `seed` to undefined (the
+                    // snapshot silently rescued the cap, so only the user
+                    // arg was lost).
                     let parent_capture_fill =
                         ctx.class_ids.get(pname).copied().map(|cid| CaptureFill {
                             cid,
-                            caps_absent_from_args,
+                            caps_absent_from_args: true,
                         });
                     let saved_scope = bind_inline_constructor_params(
                         ctx,

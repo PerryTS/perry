@@ -647,6 +647,16 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
         if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
             let caps = class_capture_values(cur).unwrap_or_default();
             let user_params = (total_params as usize).saturating_sub(caps.len());
+            if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
+                eprintln!(
+                    "flat_super cid={} total={} caps={} args_len={} rest={:?}",
+                    cur,
+                    total_params,
+                    caps.len(),
+                    args_len,
+                    crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+                );
+            }
             let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
             for i in 0..user_params {
                 if !args_ptr.is_null() && i < args_len {
