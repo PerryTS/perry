@@ -468,6 +468,15 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::builtins::js_register_function_name(func_ptr, name.as_ptr(), name.len() as u32);
         }
         super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
+        // Every global helper installed here (parseInt/parseFloat/isNaN/
+        // isFinite/{en,de}codeURI{,Component}/escape/unescape/setTimeout/…) is a
+        // built-in *non-constructor* function: per spec it has no `.prototype`
+        // (reads back `undefined`) and `new fn()` throws a TypeError. Mark the
+        // closure so the `new`/`.prototype` paths honor that — otherwise these
+        // functions defaulted to an ordinary `.prototype` object and silently
+        // accepted `new` (test262 built-ins/{decodeURI,isNaN,parseFloat,…}
+        // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
+        super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);

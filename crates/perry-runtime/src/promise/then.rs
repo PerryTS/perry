@@ -163,7 +163,14 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
     let bits = reason.to_bits();
     if (bits >> 48) == 0x7FFD {
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if ptr >= 0x10000 && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR {
+        // Band+plausibility gate (2026-07-02 audit): a POINTER-tagged
+        // rejection reason can be a registry HANDLE (a fetch Response id in
+        // the 0x40000 band — `fetch().then(r => { throw r })` uncaught) —
+        // the old bare `>= 0x10000` deref'd the id as memory instead of
+        // printing the fallback line.
+        if crate::value::addr_class::is_plausible_heap_addr(ptr)
+            && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR
+        {
             let eh = ptr as *const crate::error::ErrorHeader;
             let stack_str = unsafe { crate::exception::string_header_to_string((*eh).stack) };
             if !stack_str.is_empty() {
