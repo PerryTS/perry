@@ -649,7 +649,7 @@ fn transform_instance(obj: *const ObjectHeader, transform: fn(&mut ParsedLocale)
     make_locale_instance(proto, &p)
 }
 
-extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
     super::require_new_target("Locale");
     let tag_value = super::rest_arg(rest, 0);
     let options_value = super::rest_arg(rest, 1);

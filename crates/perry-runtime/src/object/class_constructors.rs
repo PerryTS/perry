@@ -408,6 +408,26 @@ pub unsafe extern "C" fn js_super_construct_apply(
             );
         }
     }
+    // `class X extends Intl.<Ctor>` via `super(...spread)`: the decl-time parent
+    // value is the Intl constructor closure; run it (new.target set) and re-home
+    // the branded instance onto `this`, the spread counterpart of the
+    // `js_fetch_or_value_super` Intl branch.
+    {
+        let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
+        if crate::intl::is_intl_constructor_value(parent_val) {
+            let this_box = crate::value::js_nanbox_pointer(this_raw);
+            let n = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            } as usize;
+            let mut flat: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                flat.push(crate::array::js_array_get_f64(arr, i as u32));
+            }
+            crate::intl::intl_subclass_super(parent_val, this_box, flat.as_ptr(), flat.len());
+        }
+    }
     undef
 }
 

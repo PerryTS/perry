@@ -571,10 +571,29 @@ fn js_has_index(obj: f64, index: u32) -> bool {
 /// an Object (an `Intl.Locale` or anything ToString-able), else `TypeError`; the
 /// resulting tag is canonicalized (`RangeError` if structurally invalid) and
 /// pushed if not already present.
+/// If `value` is an `Intl.Locale` instance (its `[[InitializedLocale]]` slot,
+/// modeled by the `__intlKind == "Locale"` internal field) return its
+/// `[[Locale]]` tag string — the canonical `__localeFull` field. Per
+/// CanonicalizeLocaleList, a Locale element contributes `.toString()`'s value
+/// *without invoking the (user-overridable) `toString` method*: the abstract op
+/// reads the internal slot directly. Also matches `class X extends Intl.Locale`
+/// subclass instances, which carry the copied brand fields (see
+/// `intl_subclass_super`).
+pub(super) fn locale_instance_tag(value: f64) -> Option<String> {
+    let obj = object_ptr_from_value(value)?;
+    if get_string_field(obj, KEY_KIND).as_deref() != Some("Locale") {
+        return None;
+    }
+    // `__localeFull` — the constructor-canonicalized full tag.
+    get_string_field(obj, "__localeFull")
+}
+
 fn push_locale_element(out: &mut Vec<String>, value: f64) {
     let jv = JSValue::from_bits(value.to_bits());
     let tag = if jv.is_any_string() {
         string_from_string_value(value).unwrap_or_default()
+    } else if let Some(locale_tag) = locale_instance_tag(value) {
+        locale_tag
     } else if object_ptr_from_value(value).is_some() {
         value_to_string(value)
     } else {
@@ -602,6 +621,17 @@ fn locales_from_value(locales: f64) -> Vec<String> {
     // A String argument is treated as a single-element list (not iterated by char).
     if js.is_any_string() {
         let tag = string_from_string_value(locales).unwrap_or_default();
+        let Some(canonical) = canonicalize_language_tag(&tag) else {
+            throw_invalid_language_tag(&tag);
+        };
+        return vec![canonical];
+    }
+    // CanonicalizeLocaleList step 2: a value with an `[[InitializedLocale]]`
+    // slot (an `Intl.Locale`, or a `class X extends Intl.Locale` subclass
+    // instance) is wrapped as the single-element list « locale » — its
+    // `[[Locale]]` slot is read directly, NOT iterated as an array-like nor run
+    // through `toString`.
+    if let Some(tag) = locale_instance_tag(locales) {
         let Some(canonical) = canonicalize_language_tag(&tag) else {
             throw_invalid_language_tag(&tag);
         };
@@ -1697,6 +1727,77 @@ extern "C" fn plural_rules_constructor_thunk(closure: *const ClosureHeader, rest
         rest_arg(rest, 0),
         rest_arg(rest, 1),
     )
+}
+
+/// The compiled function pointers of every `Intl.*` service constructor thunk.
+/// Used by [`intl_subclass_super`] to recognize a `class X extends Intl.<Ctor>`
+/// parent value from its closure so `super(...)` can construct it correctly
+/// (with `new.target` set) rather than tripping the `require_new_target` guard.
+fn intl_constructor_func_ptrs() -> [*const u8; 10] {
+    [
+        number_format_constructor_thunk as *const u8,
+        date_time_format_constructor_thunk as *const u8,
+        collator_constructor_thunk as *const u8,
+        segmenter_constructor_thunk as *const u8,
+        list_format_constructor_thunk as *const u8,
+        relative_time_format_constructor_thunk as *const u8,
+        plural_rules_constructor_thunk as *const u8,
+        duration_format::constructor_thunk as *const u8,
+        display_names::constructor_thunk as *const u8,
+        locale::locale_constructor_thunk as *const u8,
+    ]
+}
+
+/// `true` when `parent_val` is (the closure for) an `Intl.*` service
+/// constructor. `class X extends Intl.ListFormat` routes its `super()` through
+/// the generic runtime-value dispatcher, which would invoke the constructor
+/// without a `new.target` and throw "Constructor Intl.X requires 'new'"; this
+/// lets the super-call path recognize the parent and construct it properly.
+pub(crate) fn is_intl_constructor_value(parent_val: f64) -> bool {
+    let jsval = JSValue::from_bits(parent_val.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let closure = jsval.as_pointer() as *const ClosureHeader;
+    if closure.is_null() {
+        return false;
+    }
+    let fp = unsafe { (*closure).func_ptr };
+    intl_constructor_func_ptrs().iter().any(|p| *p == fp)
+}
+
+/// `class X extends Intl.<Ctor>` super-call handling. An `Intl.*` service
+/// constructor allocates and returns a fresh branded object (internal
+/// `__intl*` fields plus own `format`/`resolvedOptions`/… methods) and does not
+/// mutate the implicit `this`; it also throws "requires 'new'" when
+/// `new.target` is undefined. So when `parent_val` is an Intl constructor: set
+/// `new.target` to the parent for the duration of the construct (so the guard
+/// passes), run it, then copy every own field of the returned instance onto the
+/// subclass `this` — giving `this` the Intl brand and its bound methods.
+/// Returns `true` when handled (mirrors [`temporal_subclass_super`]).
+pub(crate) unsafe fn intl_subclass_super(
+    parent_val: f64,
+    this_box: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> bool {
+    if !is_intl_constructor_value(parent_val) {
+        return false;
+    }
+    let prev_this = crate::object::js_implicit_this_set(this_box);
+    let prev_nt = crate::object::js_new_target_set(parent_val);
+    let instance = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+    crate::object::js_new_target_set(prev_nt);
+    crate::object::js_implicit_this_set(prev_this);
+    // Re-home the freshly-built instance's brand + bound methods onto `this`.
+    let this_bits = this_box.to_bits();
+    if (this_bits >> 48) == 0x7FFD {
+        let dst = (this_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if dst >= 0x10000 {
+            crate::object::js_object_copy_own_fields(dst, instance);
+        }
+    }
+    true
 }
 
 fn supported_locales_array(locales: f64, options: f64) -> f64 {

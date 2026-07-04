@@ -550,6 +550,25 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             return undef;
         }
     }
+    // `class X extends Intl.<Ctor>` (`super(locales, options)`): an Intl service
+    // constructor returns a fresh branded object and throws "requires 'new'"
+    // when `new.target` is undefined, so — like Temporal — recognize the parent
+    // and construct it with `new.target` set, re-homing the instance's brand +
+    // methods onto `this`. `parent_val` can arrive stale for an aliased heritage
+    // (`const L = Intl.Locale; class X extends L`); recover the decl-time parent.
+    {
+        let intl_parent = if crate::intl::is_intl_constructor_value(parent_val) {
+            parent_val
+        } else if let Some(obj) = subclass_this_object_ptr(this_box) {
+            let cid = crate::object::js_object_get_class_id(obj);
+            crate::object::class_registry::js_get_dynamic_parent_value(cid)
+        } else {
+            parent_val
+        };
+        if crate::intl::intl_subclass_super(intl_parent, this_box, args_ptr, args_len) {
+            return undef;
+        }
+    }
     // Resolve the parent constructor kind from the value first. When the
     // `extends` expression is an alias of `global.Request`/`global.Response`
     // (`@hono/node-server`'s `class Request extends GlobalRequest`), the alias

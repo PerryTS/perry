@@ -5,8 +5,8 @@
 
 use super::{
     array_ptr_from_value, canonicalize_language_tag, get_field, get_number_field,
-    object_ptr_from_value, string_from_string_value, string_value, throw_invalid_language_tag,
-    throw_range_error, throw_type_error, value_to_string,
+    locale_instance_tag, object_ptr_from_value, string_from_string_value, string_value,
+    throw_invalid_language_tag, throw_range_error, throw_type_error, value_to_string,
 };
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::ClosureHeader;
@@ -19,6 +19,13 @@ fn locale_list_element_tag(value: f64) -> String {
     let js = JSValue::from_bits(value.to_bits());
     if js.is_any_string() {
         return string_from_string_value(value).unwrap_or_default();
+    }
+    // An `Intl.Locale` (or `class X extends Intl.Locale` subclass) element:
+    // CanonicalizeLocaleList reads its `[[Locale]]` slot directly, WITHOUT
+    // calling the (user-overridable) `toString` — checked before the generic
+    // ToString path below (test262 canonicalize-locale-list-take-locale.js).
+    if let Some(tag) = locale_instance_tag(value) {
+        return tag;
     }
     // Object (but not a Symbol, which is pointer-shaped yet a primitive).
     if js.is_pointer() && unsafe { crate::symbol::js_is_symbol(value) } == 0 {
@@ -61,6 +68,14 @@ fn get_canonical_locales(locales: f64) -> f64 {
     }
     if js.is_any_string() {
         let tag = string_from_string_value(locales).unwrap_or_default();
+        push_canonical_locale(&mut seen, &tag);
+        return canonical_locales_array(&seen);
+    }
+    // CanonicalizeLocaleList step 2: a value with an `[[InitializedLocale]]`
+    // slot (an `Intl.Locale` or a subclass instance) is the single-element list
+    // « locale », read from its `[[Locale]]` slot — never iterated as an
+    // array-like nor stringified via `toString`.
+    if let Some(tag) = locale_instance_tag(locales) {
         push_canonical_locale(&mut seen, &tag);
         return canonical_locales_array(&seen);
     }
