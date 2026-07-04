@@ -81,7 +81,7 @@ fn test_object_valued_user_prop_is_a_gc_root_and_rewrites() {
     // The guard clears the thread's mutable-scanner registry for isolation;
     // this test is ABOUT the scanner, so re-register it.
     gc_register_mutable_root_scanner(
-        crate::node_submodules::diagnostics::scan_error_user_props_roots_mut,
+        crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,
     );
 
     let err = crate::error::js_error_new() as usize;

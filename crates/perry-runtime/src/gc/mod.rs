@@ -325,7 +325,7 @@ pub fn gc_init() {
     // while reachable; stale addresses after a move). The address KEYS are
     // maintained by the ErrorSideTables move/finalize hooks.
     gc_register_mutable_root_scanner(
-        crate::node_submodules::diagnostics::scan_error_user_props_roots_mut,
+        crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,
     );
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
     gc_register_mutable_root_scanner(async_context_mutable_root_scanner);

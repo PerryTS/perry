@@ -587,7 +587,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
             crate::object::exotic_expando::exotic_expando_owner_moved(old_user, new_user);
         }
         GcMoveHookKind::ErrorSideTables => {
-            crate::node_submodules::diagnostics::error_side_tables_owner_moved(old_user, new_user);
+            crate::node_submodules::diagnostics_gc::error_side_tables_owner_moved(
+                old_user, new_user,
+            );
         }
     }
 }
@@ -598,7 +600,7 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
             crate::object::clear_overflow_for_ptr(user_ptr);
         }
         GcMoveHookKind::ErrorSideTables => {
-            crate::node_submodules::diagnostics::error_side_tables_clear_dead(user_ptr);
+            crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
         }
         GcMoveHookKind::None
         | GcMoveHookKind::ClosureDynamicProps
@@ -648,7 +650,7 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             );
         }
         GcFinalizeHookKind::ErrorSideTables => {
-            crate::node_submodules::diagnostics::error_side_tables_clear_dead(user_ptr as usize);
+            crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr as usize);
         }
     }
 }

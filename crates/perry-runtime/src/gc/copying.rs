@@ -1120,5 +1120,5 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
 fn finalize_dead_copied_minor_from_space_side_allocations() {
     crate::map::finalize_dead_copied_minor_from_space_maps();
     crate::set::finalize_dead_copied_minor_from_space_sets();
-    crate::node_submodules::diagnostics::finalize_dead_copied_minor_from_space_errors();
+    crate::node_submodules::diagnostics_gc::finalize_dead_copied_minor_from_space_errors();
 }
