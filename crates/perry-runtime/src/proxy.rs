@@ -562,6 +562,28 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
+    // `[[Get]] ( P, Receiver )` receives an already-computed property key P, but
+    // codegen calls this helper with the raw index value for a computed read on
+    // a statically-known proxy (`proxy[10]` lowers to
+    // `js_proxy_get(proxy, 10.0)`). Apply `ToPropertyKey` so a numeric index is
+    // seen by the trap as the canonical string key (`10` -> `"10"`) and the
+    // forward-to-target path below stringifies consistently. Symbols and
+    // strings pass through unchanged. Without this the get trap received a raw
+    // number and key-equality checks (`key === "10"`) silently failed (test262
+    // Proxy/get/trap-is-{null,undefined}-target-is-proxy `proxy[10]`). A key
+    // that is already a string (the overwhelmingly common `proxy.foo` case) or
+    // a symbol is left untouched, so this only pays `ToPropertyKey` for the
+    // numeric / object-index forms.
+    let key = {
+        let tag = key.to_bits() & 0xFFFF_0000_0000_0000;
+        let is_string_key =
+            tag == crate::value::STRING_TAG || tag == crate::value::SHORT_STRING_TAG;
+        if is_string_key || unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            key
+        } else {
+            unsafe { crate::object::js_to_property_key(key) }
+        }
+    };
     let (target, handler, revoked) = PROXIES.with(|p| {
         p.borrow()
             .get(id as usize)

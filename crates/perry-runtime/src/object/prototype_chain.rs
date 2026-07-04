@@ -186,6 +186,32 @@ pub(crate) fn resolve_inherited_field(
     if proto_ptr == 0 || proto_ptr == obj_ptr {
         return None;
     }
+    // A Proxy prototype (`Object.create(proxy).x`) is a small fake pointer in
+    // the proxy id band, which passes the loose `is_valid_obj_ptr` heap-range
+    // check below and would then be dereferenced as an `ObjectHeader` — a
+    // SIGSEGV. Route the inherited read through the proxy's `[[Get]]` (which
+    // fires the get trap or forwards to the target), binding the original
+    // instance as the receiver. (test262
+    // Proxy/get/trap-is-{null,undefined}-target-is-proxy via
+    // `Object.create(proxy)[k]`.)
+    {
+        let proto_val = f64::from_bits(proto_bits);
+        if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+            if key.is_null() {
+                return None;
+            }
+            let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+            let receiver =
+                f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
+            let previous_this = super::js_implicit_this_set(receiver);
+            let v = crate::proxy::js_proxy_get(proto_val, key_val);
+            super::js_implicit_this_set(previous_this);
+            if v.to_bits() == crate::value::TAG_UNDEFINED {
+                return None;
+            }
+            return Some(crate::value::JSValue::from_bits(v.to_bits()));
+        }
+    }
     let proto = proto_ptr as *const crate::ObjectHeader;
     if !super::is_valid_obj_ptr(proto as *const u8) {
         return None;
