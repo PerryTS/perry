@@ -1,3 +1,9 @@
+## v0.5.1234 — #806: no-own-ctor walk binds the ancestor ctor with caps-absent semantics
+
+The parent walk for a ctor-free subclass forwarded the `new`-site's `caps_absent_from_args` into the ancestor's `CaptureFill`, deriving the user/cap tail-split from the ANCESTOR's cap params. But a bare-ident site appends the LEAF's captures, and a capturing leaf always synthesizes an own ctor — a leaf reaching the walk appended nothing, so trailing user args were eaten into cap slots (the decl-site snapshot silently rescued the cap itself; only the user args were lost). `new WrappedLogged("alpha")` bound the mixin ctor's `seed` to undefined. The ancestor fill is now unconditionally caps-absent.
+
+New e2e suite `issue_806_default_derived_ctor_forwarding` (5 node-validated cases; 3 green). Two sibling shapes remain `#[ignore]`d with traced mechanisms — the HIR fixed-arity default-ctor synthesis (rest/extends-expr parents truncate or drop forwarded args) and the sig-cap/rest gaps in the runtime construct dispatchers — tracked as #5957. `run_class_constructor_on_this_flat` gains the same `PERRY_SUPER_DEBUG` diagnostics `js_super_construct_apply` already had.
+
 ## v0.5.1233 — CI: cache-warm primes the release compiler + gap-suite auto-opt variants
 
 The conformance-smoke job restored the shared rust-cache with a full match and still hit its 60-minute timeout: the warmed DEBUG units share nothing with its RELEASE build, and every gap test whose auto-optimize feature combination had no `target/perry-auto-<hash>` archive kicked off an in-job cargo build of the runtime (orphan cargo/rustc still compiling at cancellation). cache-warm now builds the release compiler and runs the gap suite once per main merge so every variant lands under the shared key; code-only PRs carry main's `CARGO_PKG_VERSION`, so their smoke jobs restore exact variant matches until the next merge re-warms (job timeout 120 → 150 for the cold first run).
