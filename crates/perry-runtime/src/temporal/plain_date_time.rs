@@ -186,7 +186,10 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         }
         "toJSON" => string(&dt.to_string()),
         "toLocaleString" => {
-            super::options::assert_locale_string_calendar(dt.calendar().identifier());
+            super::options::assert_locale_string_calendar(
+                dt.calendar().identifier(),
+                raw_arg(args, 1),
+            );
             let epoch_ms = crate::date::components_to_timestamp(
                 dt.year(),
                 dt.month() as u32,

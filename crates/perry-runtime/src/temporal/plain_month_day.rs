@@ -133,6 +133,7 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
         "toLocaleString" => {
             super::options::assert_locale_string_calendar_no_iso_carveout(
                 md.calendar().identifier(),
+                raw_arg(args, 1),
             );
             let epoch_ms = crate::date::components_to_timestamp(
                 1970,

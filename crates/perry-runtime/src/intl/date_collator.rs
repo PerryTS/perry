@@ -1357,8 +1357,8 @@ pub(crate) fn temporal_locale_string(
         }
     };
 
-    let mut date_style = get_opt("dateStyle");
-    let mut time_style = get_opt("timeStyle");
+    let date_style = get_opt("dateStyle");
+    let time_style = get_opt("timeStyle");
     let year_opt = get_opt("year");
     let month_opt = get_opt("month");
     let day_opt = get_opt("day");
@@ -1414,25 +1414,25 @@ pub(crate) fn temporal_locale_string(
             // timeStyle is silently ignored (the date-only value is formatted
             // using dateStyle alone). Only throw when timeStyle is the sole
             // style selector (no dateStyle to fall back on).
-            if time_style.is_some() && date_style.is_none() {
+            // Date-only Temporal types run `ToDateTimeOptions(options, "date",
+            // "date")`, whose `required = "date"` step throws a TypeError if ANY
+            // time-only style is present — `timeStyle` is rejected even when
+            // `dateStyle` is also supplied (test262
+            // .../toLocaleString/datestyle-and-timestyle for
+            // PlainDate/PlainYearMonth/PlainMonthDay).
+            if time_style.is_some() {
                 throw_type_error(
                     "timeStyle option is not valid for this Temporal type (no time component)",
                 );
             }
-            // Silence timeStyle so downstream formatting uses date-only logic.
-            if time_style.is_some() && date_style.is_some() {
-                time_style = None;
-            }
         }
         TemporalLocaleCtx::PlainTime => {
-            // Symmetric: dateStyle alone throws; combined → drop dateStyle.
-            if date_style.is_some() && time_style.is_none() {
+            // Symmetric: `ToDateTimeOptions(options, "time", "time")` rejects any
+            // `dateStyle` on a time-only value, combined with `timeStyle` or not.
+            if date_style.is_some() {
                 throw_type_error(
                     "dateStyle option is not valid for Temporal.PlainTime (no date component)",
                 );
-            }
-            if date_style.is_some() && time_style.is_some() {
-                date_style = None;
             }
         }
         TemporalLocaleCtx::ZonedDateTime => {
