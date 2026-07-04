@@ -36,7 +36,9 @@ mod number_format_digits;
 mod number_format_options;
 mod numbering_system;
 use numbering_system::{is_well_formed_numbering_system, resolve_numbering_system};
+mod canon_aliases;
 mod segmenter;
+use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
     collator_bound_compare_thunk, collator_bound_resolved_options_thunk, collator_compare_object,
@@ -510,13 +512,15 @@ fn canonicalize_language_tag(tag: &str) -> Option<String> {
     #[cfg(feature = "intl-locale")]
     {
         match icu_locale_core::Locale::normalize(tag) {
-            Ok(canonical) => Some(canonical.into_owned()),
+            Ok(canonical) => Some(canonicalize_unicode_extension_types(
+                &canonical.into_owned(),
+            )),
             Err(_) => None,
         }
     }
     #[cfg(not(feature = "intl-locale"))]
     {
-        canonical_locale(tag)
+        canonical_locale(tag).map(|c| canonicalize_unicode_extension_types(&c))
     }
 }
 
