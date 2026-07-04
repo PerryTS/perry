@@ -242,3 +242,36 @@ run(true);
     );
     assert_eq!(stdout, "spins: 2 calls: 3\n");
 }
+
+/// `continue` inside a `try` WITHOUT `finally`, with an awaited update: the
+/// prefix applies inside the try (no abrupt-completion ordering concern) and
+/// the update still runs on the continue path. (With a `finally` present the
+/// transform deliberately bails to the previous lowering — a `continue`
+/// there must run the finally BEFORE the update, and the finally may
+/// override it; see stmts_have_continue_inside_try_finally.)
+#[test]
+fn for_await_update_continue_inside_try_no_finally() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+async function bump(i: number): Promise<number> {
+  return i + 1;
+}
+async function run() {
+  const out: string[] = [];
+  for (let i = 0; i < 4; i = await bump(i)) {
+    try {
+      if (i === 1) continue;
+      out.push("v" + i);
+    } catch (e) {
+      out.push("err");
+    }
+  }
+  console.log(out.join(","));
+}
+run();
+"#,
+    );
+    assert_eq!(stdout, "v0,v2,v3\n");
+}

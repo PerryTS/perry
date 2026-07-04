@@ -668,16 +668,21 @@ pub fn linearize_body(
             } if condition
                 .as_ref()
                 .is_some_and(super::hoist_yields::expr_contains_yield)
-                || update
+                || (update
                     .as_ref()
-                    .is_some_and(super::hoist_yields::expr_contains_yield) =>
+                    .is_some_and(super::hoist_yields::expr_contains_yield)
+                    && !stmts_have_continue_inside_try_finally(body)) =>
             {
                 let cond_yields = condition
                     .as_ref()
                     .is_some_and(super::hoist_yields::expr_contains_yield);
                 let upd_yields = update
                     .as_ref()
-                    .is_some_and(super::hoist_yields::expr_contains_yield);
+                    .is_some_and(super::hoist_yields::expr_contains_yield)
+                    // Abrupt-completion ordering: see the async twin — a
+                    // continue inside try/finally must not have the update
+                    // prefixed ahead of the finally (#5934 review).
+                    && !stmts_have_continue_inside_try_finally(body);
                 let mut new_body = Vec::with_capacity(body.len() + 3);
                 if cond_yields {
                     let t = alloc_local(next_local_id);

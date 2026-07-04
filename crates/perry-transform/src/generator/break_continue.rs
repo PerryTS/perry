@@ -740,3 +740,53 @@ pub fn prefix_loop_continues(stmts: &mut Vec<Stmt>, prefix: &[Stmt]) {
         }
     }
 }
+
+/// Does `stmts` contain a loop-level `continue` nested inside a
+/// `try`/`catch` that has a `finally` block? Such a `continue` is an abrupt
+/// completion: the `finally` must run BEFORE the loop's update — and if the
+/// `finally` itself completes abruptly (`return`/`throw`), the update must
+/// not run at all. `prefix_loop_continues` would insert the update BEFORE
+/// the `finally`, so callers moving an awaited/yielded `for`-update into the
+/// body bail back to the previous lowering when this shape is present
+/// (#5933 review). A `continue` inside the `finally` block itself is fine —
+/// the `finally` has already run at that point — as is any `continue` under
+/// a `try` without `finally`.
+pub fn stmts_have_continue_inside_try_finally(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match s {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            stmts_have_continue_inside_try_finally(then_branch)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| stmts_have_continue_inside_try_finally(e))
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            if finally.is_some()
+                && (stmts_have_loop_level_continue(body)
+                    || catch
+                        .as_ref()
+                        .is_some_and(|c| stmts_have_loop_level_continue(&c.body)))
+            {
+                return true;
+            }
+            stmts_have_continue_inside_try_finally(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|c| stmts_have_continue_inside_try_finally(&c.body))
+                || finally
+                    .as_ref()
+                    .is_some_and(|f| stmts_have_continue_inside_try_finally(f))
+        }
+        Stmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|c| stmts_have_continue_inside_try_finally(&c.body)),
+        _ => false,
+    })
+}

@@ -608,7 +608,14 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         } => {
             let cond_awaits = condition.as_ref().is_some_and(|c| expr_contains_await(c));
             let upd_awaits = update.as_ref().is_some_and(|u| expr_contains_await(u));
-            if cond_awaits || upd_awaits {
+            // A continue inside try{..}finally{..} is an abrupt completion:
+            // the finally must run BEFORE the update (and can override it).
+            // prefix_loop_continues would insert the update before the
+            // finally, so keep the previous lowering for that rare shape
+            // instead of reordering it (CodeRabbit review on #5934).
+            let upd_movable =
+                upd_awaits && !crate::generator::stmts_have_continue_inside_try_finally(body);
+            if cond_awaits || upd_movable {
                 // Awaited condition/update must run on every iteration
                 // (#5933). Keep the `For` (so `continue` still routes
                 // through update-then-condition per spec), but move the
@@ -623,7 +630,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 // The init keeps its run-once semantics via the recursive
                 // call's normal For handling.
                 let cond_taken = if cond_awaits { condition.take() } else { None };
-                let upd_taken = if upd_awaits { update.take() } else { None };
+                let upd_taken = if upd_movable { update.take() } else { None };
                 let mut new_body = Vec::with_capacity(body.len() + 3);
                 if let Some(c) = cond_taken {
                     let t = alloc_local(next_id);
