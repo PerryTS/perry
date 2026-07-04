@@ -1046,31 +1046,24 @@ pub fn lower_module_full(
     // also go through the box so they observe each other's writes. Without
     // this pass, a `get: () => value` sibling of `inc: () => value++` captures
     // the raw initial value instead of the shared boxed binding.
-    preallocate_forward_captured_lets_stmts(&mut module.init);
     widen_mutable_captures_stmts(&mut module.init);
     for func in &mut module.functions {
-        preallocate_forward_captured_lets_stmts(&mut func.body);
         widen_mutable_captures_stmts(&mut func.body);
     }
     for class in &mut module.classes {
         for method in &mut class.methods {
-            preallocate_forward_captured_lets_stmts(&mut method.body);
             widen_mutable_captures_stmts(&mut method.body);
         }
         for (_, getter) in &mut class.getters {
-            preallocate_forward_captured_lets_stmts(&mut getter.body);
             widen_mutable_captures_stmts(&mut getter.body);
         }
         for (_, setter) in &mut class.setters {
-            preallocate_forward_captured_lets_stmts(&mut setter.body);
             widen_mutable_captures_stmts(&mut setter.body);
         }
         for static_method in &mut class.static_methods {
-            preallocate_forward_captured_lets_stmts(&mut static_method.body);
             widen_mutable_captures_stmts(&mut static_method.body);
         }
         if let Some(ref mut ctor) = class.constructor {
-            preallocate_forward_captured_lets_stmts(&mut ctor.body);
             widen_mutable_captures_stmts(&mut ctor.body);
         }
     }

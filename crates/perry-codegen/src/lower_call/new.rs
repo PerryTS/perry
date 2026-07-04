@@ -13,10 +13,9 @@ use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
-    ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
-    effective_constructor_param_count, emit_promise_subclass_init, local_constructor_symbol_exists,
-    map_set_default_super_kind, node_stream_parent_kind, restore_imported_ctor_new_target,
-    set_imported_ctor_new_target,
+    ctor_body_has_value_return, ctor_body_uses_new_target, ctor_body_uses_this,
+    ctor_chain_uses_new_target, effective_constructor_param_count, emit_promise_subclass_init,
+    local_constructor_symbol_exists, node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -308,6 +307,12 @@ fn marshal_imported_ctor_args(
         out
     }
 }
+
+/// The effective constructor arity for `new <class>(...)`: the class's own
+/// ctor params, else — for a subclass with no own ctor — the closest
+/// ancestor-with-a-ctor's param count (the synthesized default ctor forwards
+/// `super(...args)`). Matches the standalone-ctor signature emitted in
+/// `codegen/artifacts.rs`, so callers pass the right number of args.
 
 /// Emit a call to the shared standalone `<class>_constructor` symbol and
 /// return the raw value it produced. The standalone ctor function returns
@@ -1315,14 +1320,9 @@ fn lower_new_impl(
         None
     };
     // `class X extends Promise {}` with no own ctor — `new X(executor)` runs the
-    // Promise constructor against a hidden backing cell (see new_helpers).
+    // Promise constructor against a hidden backing cell (see new_helpers). (#5991)
     let promise_parent_runtime =
         !has_own_ctor && !has_imported_ctor && class.extends_name.as_deref() == Some("Promise");
-    let map_set_parent_kind = if !has_own_ctor && !has_imported_ctor {
-        map_set_default_super_kind(ctx.classes, class.extends_name.as_deref())
-    } else {
-        None
-    };
     let inherited_ctor_class: Option<String> = if !has_own_ctor && has_extends {
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
@@ -1738,9 +1738,7 @@ fn lower_new_impl(
                 // to match the symbol's real signature (see codegen/mod.rs).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
-                let saved_new_target = set_imported_ctor_new_target(ctx, class_name, &ctor);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
-                restore_imported_ctor_new_target(ctx, saved_new_target);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers, and pack the rest
@@ -1766,9 +1764,7 @@ fn lower_new_impl(
                 // ("value is not a function" on `new Chalk(...).red(...)`).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
-                let saved_new_target = set_imported_ctor_new_target(ctx, class_name, &ctor);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
-                restore_imported_ctor_new_target(ctx, saved_new_target);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
                 found_inherited_ctor = true;
             }
@@ -1819,6 +1815,7 @@ fn lower_new_impl(
             .unwrap_or(false);
         if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
             if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
+                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let parent_val = ctx.block().call(
                     DOUBLE,
                     "js_get_dynamic_parent_value",
@@ -1856,30 +1853,6 @@ fn lower_new_impl(
                         (DOUBLE, &this_box),
                         (PTR, &args_ptr),
                         (I64, &args_len),
-                    ],
-                );
-            }
-        }
-        if !found_inherited_ctor {
-            if let Some(kind) = map_set_parent_kind {
-                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let iterable = lowered_args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| undef_lit.clone());
-                let this_box = ctx
-                    .this_stack
-                    .last()
-                    .cloned()
-                    .map(|slot| ctx.block().load(DOUBLE, &slot))
-                    .unwrap_or_else(|| undef_lit.clone());
-                ctx.block().call(
-                    DOUBLE,
-                    "js_map_set_subclass_init",
-                    &[
-                        (DOUBLE, &this_box),
-                        (I32, &kind.to_string()),
-                        (DOUBLE, &iterable),
                     ],
                 );
             }
@@ -1928,20 +1901,8 @@ fn lower_new_impl(
                 class_name,
                 FieldInitMode::BetweenExclusiveTo(stop_at),
             )?;
-        } else if class
-            .extends_name
-            .as_deref()
-            .map(|p| ctx.classes.contains_key(p))
-            .unwrap_or(false)
-        {
-            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         } else {
-            // Extends a builtin (Error/Array/Map/Set/…) with no user-class
-            // ancestor: the leaf IS the root of the user chain, so AfterRoot
-            // (chain[1..]) drops its own fields. Apply the leaf's initializers
-            // after the builtin super-init, mirroring the explicit-super()
-            // SelfOnly arm in this_super_call.rs.
-            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
+            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);

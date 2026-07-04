@@ -22,9 +22,6 @@ fn empty_opts() -> CompileOptions {
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
         namespace_member_origin_names: std::collections::HashMap::new(),
-        namespace_member_vars: std::collections::HashSet::new(),
-        namespace_member_namespace_prefixes: std::collections::HashMap::new(),
-        namespace_import_prefixes: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
@@ -1350,8 +1347,7 @@ fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
 
     let ir = compile_ir("pod_dynamic_materialized_read_coerce.ts", body);
     assert!(
-        ir.contains("call double @js_number_coerce")
-            || ir.contains("call double @js_object_get_field_by_name_f64"),
+        ir.contains("call double @js_number_coerce"),
         "POD field reads after dynamic materialization must not feed boxed JSValue fallbacks into raw numeric arithmetic:\n{ir}"
     );
 }
@@ -7429,7 +7425,6 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,
@@ -7601,7 +7596,6 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,
@@ -7693,7 +7687,6 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,
@@ -7807,7 +7800,6 @@ fn typed_i1_numeric_predicate_module() -> Module {
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,
@@ -7884,7 +7876,6 @@ fn typed_i1_i32_predicate_module() -> Module {
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,
@@ -8010,7 +8001,6 @@ fn typed_i32_return_module(case: &str) -> Module {
         exported_functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
-        annexb_global_undefined_names: Vec::new(),
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,

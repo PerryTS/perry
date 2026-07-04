@@ -983,12 +983,7 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     // allocation. Closures don't carry the flag, so keep consulting the side
     // tables for them (their `name`/`length` + user `defineProperty` descriptors
     // live there).
-    let array_has_descriptors =
-        unsafe { crate::object::array_has_descriptors(obj_ptr as *const crate::ObjectHeader) };
-    if crate::object::object_has_descriptors(obj_ptr)
-        || array_has_descriptors
-        || crate::closure::is_closure_ptr(obj_ptr)
-    {
+    if crate::object::object_has_descriptors(obj_ptr) || crate::closure::is_closure_ptr(obj_ptr) {
         if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
             return Some(OwnSetDescriptor::Accessor {
                 setter_bits: acc.set,

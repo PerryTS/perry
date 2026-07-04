@@ -25,35 +25,6 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     // dedicated thunks; do not include it here to avoid clobbering those.
 ];
 
-const INHERITED_OBJECT_PROTO_SHIMS: &[&str] = &[
-    "hasOwnProperty",
-    "isPrototypeOf",
-    "propertyIsEnumerable",
-    "__defineGetter__",
-    "__defineSetter__",
-    "__lookupGetter__",
-    "__lookupSetter__",
-];
-
-pub(crate) fn is_inherited_object_proto_shim_on_builtin_prototype(
-    proto_obj: *const ObjectHeader,
-    key: &str,
-) -> bool {
-    if proto_obj.is_null() || !INHERITED_OBJECT_PROTO_SHIMS.contains(&key) {
-        return false;
-    }
-    let proto_bits = crate::value::js_nanbox_pointer(proto_obj as i64).to_bits();
-    for builtin in GLOBAL_THIS_BUILTIN_CONSTRUCTORS.iter().copied() {
-        if builtin == "Object" {
-            continue;
-        }
-        if builtin_prototype_value(builtin).to_bits() == proto_bits {
-            return true;
-        }
-    }
-    false
-}
-
 /// Populate well-known method properties on a built-in constructor's
 /// prototype object. Each registered method is a closure carrying a
 /// proper `name` property so feature-detection idioms like
@@ -705,7 +676,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("text", 0),
                 ],
             );
-            set_intrinsic_to_string_tag(proto_obj, builtin_name);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "FormData" => {

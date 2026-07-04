@@ -580,15 +580,6 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
         return false;
     }
 
-    // BigInt keys compare by numeric value, not allocation identity: `1n`
-    // stored and `1n` looked up are distinct heap allocations. Mirrors the
-    // Set path (set.rs::jsvalue_eq); BigInt keys take the linear scan below.
-    let a_val = crate::JSValue::from_bits(a_bits);
-    let b_val = crate::JSValue::from_bits(b_bits);
-    if a_val.is_bigint() && b_val.is_bigint() {
-        return crate::bigint::js_bigint_eq(a_val.as_bigint_ptr(), b_val.as_bigint_ptr()) != 0;
-    }
-
     if is_string_like(a_bits) && is_string_like(b_bits) {
         let mut a_scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let mut b_scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];

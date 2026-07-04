@@ -175,35 +175,16 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
-    /// Issue #680 / #5924 follow-up: per-namespace member origin-name overrides.
-    /// `namespace_member_prefixes` picks the producer module, but re-exported
-    /// members can be stored under a different origin export name; without this
-    /// `ns.alias` calls the right module with the wrong symbol name. Keyed by
-    /// `(namespace_local_name, exported_member_name)` → `origin_export_name`.
-    /// Being per-namespace also fixes #5924: `import_function_origin_names` is a
-    /// flat map, so two namespaces imported into the same file that both expose
-    /// a member with the same name (only one of them a re-export rename) would
-    /// clobber each other — `import { Effect, Context } from "effect"` broke
-    /// `Context.Service` because `Effect`'s own re-exported `Service` clobbered
-    /// the flat map first.
+    /// Issue #5924 (companion to #680/#678): per-namespace origin-name
+    /// resolution. Keyed by `(namespace_local_name, member_name)` →
+    /// `origin_name`. `import_function_origin_names` is a flat map, so when
+    /// two namespaces imported into the same file both have a member with
+    /// the same name and only one of them is a re-export rename, the
+    /// rename's origin-name override clobbers the other namespace's
+    /// (correct, unrenamed) suffix — `import { Effect, Context } from
+    /// "effect"` broke `Context.Service` because `Effect`'s own re-exported
+    /// `Service` clobbered the flat map first.
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
-    /// Issue #680 follow-up: per-namespace exported-variable members. Namespace
-    /// member calls need to know when `ns.member` is a getter returning a
-    /// closure rather than a direct function symbol; otherwise codegen emits a
-    /// direct call to the zero-arg getter. Keyed by `(namespace_local_name,
-    /// exported_member_name)`.
-    pub namespace_member_vars: std::collections::HashSet<(String, String)>,
-    /// Issue #680 follow-up: per-namespace nested namespace re-exports.
-    /// `export * as child` members are namespace objects, not callable/value
-    /// exports from the parent prefix; this map preserves the nested target
-    /// prefix. Keyed by `(namespace_local_name, exported_member_name)` →
-    /// nested module prefix.
-    pub namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String>,
-    /// Issue #680 follow-up: namespace import local → target module prefix.
-    /// Member-specific maps are insufficient when the namespace binding itself
-    /// is read as a value; codegen must return the producer's real module
-    /// namespace object, including nested `export * as` members.
-    pub namespace_import_prefixes: std::collections::HashMap<String, String>,
     /// When true, `compile_module` returns the textual LLVM IR (`.ll`)
     /// as bytes instead of invoking `clang -c` to produce an object file.
     /// Used by the bitcode-link path (`PERRY_LLVM_BITCODE_LINK=1`).
@@ -494,8 +475,6 @@ pub struct ImportedClass {
     pub constructor_param_count: usize,
     /// Whether the source class declared its own constructor body.
     pub has_own_constructor: bool,
-    /// Whether the source constructor symbol may read `new.target`.
-    pub constructor_uses_new_target: bool,
     /// Whether the source class's constructor's last declared parameter is
     /// `...rest`. Symmetric to `method_has_rest` but for the constructor: the
     /// source module compiled `<class>_constructor(this, arg0, …)` expecting
@@ -570,7 +549,6 @@ pub(crate) struct ImportedCtor {
     pub symbol: String,
     pub param_count: usize,
     pub has_own_constructor: bool,
-    pub uses_new_target: bool,
     pub has_instance_fields: bool,
     /// True when the constructor's last declared param is `...rest`. Tells
     /// the cross-module `new` dispatch to pack the trailing args into an
@@ -596,14 +574,9 @@ pub(crate) struct CrossModuleCtx {
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
-    /// See `CompileOptions::namespace_member_origin_names` (#680 / #5924).
+    /// Issue #5924: per-namespace origin-name resolution. See doc on
+    /// `CompileOptions::namespace_member_origin_names`.
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
-    /// See `CompileOptions::namespace_member_vars`.
-    pub namespace_member_vars: std::collections::HashSet<(String, String)>,
-    /// See `CompileOptions::namespace_member_namespace_prefixes`.
-    pub namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String>,
-    /// See `CompileOptions::namespace_import_prefixes`.
-    pub namespace_import_prefixes: std::collections::HashMap<String, String>,
     pub imported_async_funcs: std::collections::HashSet<String>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine

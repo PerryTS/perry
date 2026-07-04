@@ -27,34 +27,6 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    if !key.is_null() {
-        let obj_bits = obj as u64;
-        let tagged = f64::from_bits(obj_bits);
-        let tagged_value = crate::value::JSValue::from_bits(obj_bits);
-        let string_ptr = if tagged_value.is_any_string() {
-            crate::value::js_get_string_pointer_unified(tagged) as *const crate::StringHeader
-        } else if obj_bits >= crate::gc::GC_HEADER_SIZE as u64
-            && crate::value::addr_class::is_valid_obj_ptr(obj as *const u8)
-        {
-            let gc_hdr = unsafe {
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
-            };
-            if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_STRING {
-                obj as *const crate::StringHeader
-            } else {
-                std::ptr::null()
-            }
-        } else {
-            std::ptr::null()
-        };
-        if crate::string::is_valid_string_ptr(string_ptr) {
-            let key_value = crate::value::js_nanbox_string(key as i64);
-            let indexed = crate::string::js_string_index_get(string_ptr, key_value);
-            if indexed.to_bits() != crate::value::TAG_UNDEFINED {
-                return JSValue::from_bits(indexed.to_bits());
-            }
-        }
-    }
     // #2846: the receiver may be a Proxy value that arrived through a generic
     // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
     // Proxies are encoded as small fake pointers; deref-ing one as an
@@ -941,14 +913,31 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
-    // SSO property access for keys not handled by the unified string fast path
-    // above. `.length` and canonical indices are centralized there; remaining
-    // unknown properties on untyped string locals resolve to undefined here
-    // rather than falling through to the object-deref path with an inline-string
-    // payload.
+    // SSO property access (v0.5.213 Step 1 gate). The codegen inline
+    // `.length` path routes SHORT_STRING_TAG receivers here because
+    // it doesn't yet know about the SSO tag. Handle `.length` by
+    // reading the length byte directly from the NaN-box payload.
+    // Other property accesses on an SSO string (e.g. `.charAt` via
+    // `[0]`, `.slice`) aren't yet routed here — handled by the
+    // string method dispatch in a future migration step; today they
+    // fall through to "undefined" which matches the behavior for
+    // string-valued property access on untyped locals in general.
     {
         let obj_bits = obj as u64;
         if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"length" {
+                        let len = (obj_bits & crate::value::SHORT_STRING_LEN_MASK)
+                            >> crate::value::SHORT_STRING_LEN_SHIFT;
+                        return JSValue::number(len as f64);
+                    }
+                }
+            }
             return JSValue::undefined();
         }
     }

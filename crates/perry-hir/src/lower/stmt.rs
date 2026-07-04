@@ -1147,7 +1147,6 @@ pub(crate) fn lower_stmt(
                 }
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, false)?;
-                    module.init.push(crate::lower_decl::enum_runtime_let(ctx, &en));
                     module.enums.push(en);
                 }
                 ast::Decl::TsInterface(iface_decl) => {

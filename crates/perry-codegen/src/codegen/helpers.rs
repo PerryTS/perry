@@ -1145,7 +1145,7 @@ pub(super) fn emit_namespace_populator(
                 let wrapper_name = format!(
                     "__perry_wrap_perry_fn_{}__{}",
                     source_prefix,
-                    sanitize_member(source_local)
+                    sanitize(source_local)
                 );
                 let arity = (*param_count).min(16);
                 let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];

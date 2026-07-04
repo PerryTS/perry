@@ -33,10 +33,6 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     }
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
-        let bits = value.to_bits();
-        if bits > 0x10000 && bits <= crate::value::POINTER_MASK {
-            return crate::closure::is_closure_ptr(bits as usize);
-        }
         return false;
     }
     crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
@@ -73,87 +69,6 @@ fn value_addr(value: f64) -> usize {
     } else {
         0
     }
-}
-
-fn prototype_identity_key(value: f64) -> Option<u64> {
-    let bits = value.to_bits();
-    if let Some(class_id) = super::class_prototype_ref_id(value) {
-        return Some(0xFFFF_0000_0000_0000 | class_id as u64);
-    }
-    match bits >> 48 {
-        0x7FFD => {
-            let ptr = (bits & crate::value::POINTER_MASK) as usize;
-            super::class_registry::class_id_for_decl_prototype_object(ptr)
-                .map(|class_id| 0xFFFF_0000_0000_0000 | class_id as u64)
-                .or(Some(ptr as u64))
-        }
-        0x7FFE if super::class_ref_id(value).is_some() => Some(bits),
-        0 if bits > 0x10000 => {
-            super::class_registry::class_id_for_decl_prototype_object(bits as usize)
-                .map(|class_id| 0xFFFF_0000_0000_0000 | class_id as u64)
-                .or(Some(bits))
-        }
-        _ => None,
-    }
-}
-
-fn prototype_identity_chain_contains(value: f64, target_proto: f64) -> bool {
-    if !unsafe { crate::object::value_is_object_like(value) } {
-        return false;
-    }
-    if !unsafe { crate::object::value_is_object_like(target_proto) }
-        && super::class_ref_id(target_proto).is_none()
-        && super::class_prototype_ref_id(target_proto).is_none()
-    {
-        return false;
-    }
-
-    let Some(target_key) = prototype_identity_key(target_proto) else {
-        return false;
-    };
-    let mut current = value;
-    for _ in 0..128 {
-        current = super::object_ops::js_object_get_prototype_of(current);
-        let bits = current.to_bits();
-        if bits == crate::value::TAG_NULL || bits == crate::value::TAG_UNDEFINED {
-            return false;
-        }
-        if prototype_identity_key(current) == Some(target_key) {
-            return true;
-        }
-    }
-    false
-}
-
-fn ordinary_function_has_instance(value: f64, type_ref: f64) -> Option<f64> {
-    if !value_is_callable(type_ref) {
-        return None;
-    }
-    let bits = type_ref.to_bits();
-    let function_value = if (bits >> 48) == 0x7FFD {
-        type_ref
-    } else if bits > 0x10000 && bits <= crate::value::POINTER_MASK {
-        if !crate::closure::is_closure_ptr(bits as usize) {
-            return None;
-        }
-        crate::value::js_nanbox_pointer(bits as i64)
-    } else {
-        return None;
-    };
-    let proto = super::class_registry::js_function_prototype_value_for_read(function_value);
-    if unsafe { crate::object::value_is_object_like(proto) }
-        || super::class_ref_id(proto).is_some()
-        || super::class_prototype_ref_id(proto).is_some()
-    {
-        return Some(f64::from_bits(
-            if prototype_identity_chain_contains(value, proto) {
-                crate::value::TAG_TRUE
-            } else {
-                crate::value::TAG_FALSE
-            },
-        ));
-    }
-    None
 }
 
 fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
@@ -438,9 +353,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
-    if let Some(result) = ordinary_function_has_instance(value, type_ref) {
-        return result;
-    }
     // `inst instanceof Intl.<Ctor>`: Intl instances are plain heap objects whose
     // `[[Prototype]]` is `Intl.<Ctor>.prototype` but carry no class-id, so the
     // arms above can't match them. Walk their static-prototype chain.
@@ -498,9 +410,6 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "URIError" => crate::error::CLASS_ID_URI_ERROR,
         "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
         "Promise" => CLASS_ID_PROMISE,
-        "Blob" => crate::node_submodules::blob::CLASS_ID_BLOB,
-        "File" => crate::node_submodules::blob::CLASS_ID_FILE,
-        "URL" => crate::url::CLASS_ID_URL,
         "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
         "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
         "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
@@ -1061,7 +970,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
-    // WHATWG fetch: `instanceof Response` / `Request` / `Headers` / `Blob` / `File`.
+    // WHATWG fetch: `instanceof Response` / `Request` / `Headers` / `Blob`.
     // These are pointer-tagged small-integer handles (stdlib fetch registries),
     // not heap objects, so consult the stdlib fetch kind-probe rather than the
     // class chain. Without this, Hono's `res instanceof Response` route-fallback
@@ -1069,25 +978,21 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const CLASS_ID_RESPONSE: u32 = 0xFFFF0028;
     const CLASS_ID_REQUEST: u32 = 0xFFFF0029;
     const CLASS_ID_HEADERS: u32 = 0xFFFF002A;
-    const CLASS_ID_BLOB: u32 = crate::node_submodules::blob::CLASS_ID_BLOB;
-    const CLASS_ID_FILE: u32 = crate::node_submodules::blob::CLASS_ID_FILE;
+    const CLASS_ID_BLOB: u32 = 0xFFFF0026;
     if class_id == CLASS_ID_RESPONSE
         || class_id == CLASS_ID_REQUEST
         || class_id == CLASS_ID_HEADERS
         || class_id == CLASS_ID_BLOB
-        || class_id == CLASS_ID_FILE
     {
         let want = match class_id {
             CLASS_ID_RESPONSE => 1u8,
             CLASS_ID_REQUEST => 2,
             CLASS_ID_HEADERS => 3,
-            CLASS_ID_BLOB => 4,
-            _ => 5, // CLASS_ID_FILE
+            _ => 4, // CLASS_ID_BLOB
         };
         if let Some(handle) = small_native_handle_id(value) {
             if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-                let kind = unsafe { probe(handle as usize) };
-                if kind == want || (class_id == CLASS_ID_BLOB && kind == 5) {
+                if unsafe { probe(handle as usize) } == want {
                     return true_val;
                 }
             }
@@ -1100,8 +1005,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             let raw = jsval.as_pointer::<u8>() as usize;
             if let Some(id) = unsafe { crate::object::fetch_subclass_handle_id(raw) } {
                 if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-                    let kind = unsafe { probe(id as usize) };
-                    if kind == want || (class_id == CLASS_ID_BLOB && kind == 5) {
+                    if unsafe { probe(id as usize) } == want {
                         return true_val;
                     }
                 }
@@ -1196,16 +1100,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     }
     if class_id == CLASS_ID_PROMISE {
         return if crate::promise::js_value_is_promise(value) != 0 {
-            true_val
-        } else {
-            false_val
-        };
-    }
-    const CLASS_ID_URL: u32 = crate::url::CLASS_ID_URL;
-    if class_id == CLASS_ID_URL {
-        return if crate::url::object_from_f64(value)
-            .is_some_and(crate::url::url_class::is_url_object_shape)
-        {
             true_val
         } else {
             false_val
@@ -1398,10 +1292,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
         }
 
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
-            return false_val;
-        }
-
         // For user-defined classes that extend Error: `myErr instanceof Error` should be true.
         if class_id == crate::error::CLASS_ID_ERROR {
             let obj_class_id = (*obj_ptr).class_id;
@@ -1434,29 +1324,5 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
 
         false_val
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    extern "C" fn test_ctor(_closure: *const crate::closure::ClosureHeader) -> f64 {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    }
-
-    #[test]
-    fn ordinary_function_has_instance_reads_raw_closure_prototype_safely() {
-        let closure = crate::closure::js_closure_alloc(test_ctor as *const u8, 0);
-        let function_value = crate::value::js_nanbox_pointer(closure as i64);
-        let prototype = super::class_registry::js_function_prototype_value_for_read(function_value);
-
-        let instance = js_object_alloc(0, 0);
-        let instance_value = crate::value::js_nanbox_pointer(instance as i64);
-        js_object_set_prototype_of(instance_value, prototype);
-
-        let raw_function_value = f64::from_bits(closure as u64);
-        let result = ordinary_function_has_instance(instance_value, raw_function_value);
-        assert_eq!(result.map(f64::to_bits), Some(crate::value::TAG_TRUE));
     }
 }

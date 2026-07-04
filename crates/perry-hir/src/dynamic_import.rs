@@ -156,28 +156,18 @@ fn flatten_into<'a, F>(
                 imported,
                 exported,
             } => {
-                let mut source_exports = Vec::new();
-                let mut nested_visited = visited.clone();
-                flatten_into(source, lookup, &mut source_exports, &mut nested_visited);
-                let resolved = source_exports
-                    .into_iter()
-                    .rev()
-                    .find(|entry| entry.name == *imported);
-                if let Some(entry) = resolved {
-                    out.push(FlatExport {
-                        name: exported.clone(),
-                        source_module: entry.source_module,
-                        source_local: entry.source_local,
-                        nested_namespace_of: entry.nested_namespace_of,
-                    });
-                } else {
-                    out.push(FlatExport {
-                        name: exported.clone(),
-                        source_module: source.clone(),
-                        source_local: imported.clone(),
-                        nested_namespace_of: None,
-                    });
-                }
+                // The value lives in `source`; if `source` re-exports it
+                // again, we want to follow that chain so codegen reaches
+                // the ULTIMATE owner. But for the MVP we surface one hop
+                // — the cross-module access pattern works regardless of
+                // how many hops away the value's defining module is, as
+                // long as we name the directly-importing source.
+                out.push(FlatExport {
+                    name: exported.clone(),
+                    source_module: source.clone(),
+                    source_local: imported.clone(),
+                    nested_namespace_of: None,
+                });
             }
             Export::ExportAll { source } => {
                 // Recursively flatten the source's exports into ours.
@@ -1363,9 +1353,12 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
         // chunk set is what we want to ingest, and the runtime dispatch still
         // picks the right one by path string).
         //
-        // Guard rail: the driver validates these strings with the real module
-        // resolver before registering dynamic edges. Unresolvable values keep
-        // the site deferred instead of compiling arbitrary data-object strings.
+        // Guard rail: this only fires when *every* value resolves to a relative
+        // module specifier (`./…` / `../…`). That keeps it a strict
+        // deferrals-into-compiles change — a plain data object indexed for a
+        // non-module reason (`const cfg = { name: "app", port: "3000" };
+        // import(cfg[k])`) has non-relative values, so it stays deferred exactly
+        // as before instead of trying to compile `"app"`/`"3000"` as modules.
         Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
             // Record every const-local id on the registry's indirection chain in
             // the *outer* `visiting` set so a value that member-accesses back
@@ -1392,6 +1385,13 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
         }
         _ => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
     }
+}
+
+/// True for a relative module specifier (`./x`, `../x`). Registry-object
+/// dynamic-import resolution (#5207) only over-approximates to values that look
+/// like relative chunk paths, so a non-module data object stays deferred.
+fn is_relative_specifier(s: &str) -> bool {
+    s.starts_with("./") || s.starts_with("../") || s == "." || s == ".."
 }
 
 /// #5207: collect the candidate value expressions of a const object-literal
@@ -1431,9 +1431,9 @@ fn object_registry_values<'a, V: Borrow<Expr>>(
 }
 
 /// #5207: resolve a registry's value expressions to the union of their module
-/// specifier strings. Filesystem/package resolution is intentionally left to
-/// the compile driver; if any string cannot be resolved there, the site stays
-/// deferred so data-object strings are not compiled as modules.
+/// specifiers, but only when *every* value resolves to a relative specifier.
+/// Any non-relative or unresolvable value collapses the whole site to
+/// `Unresolved` so it keeps deferring (no false compile of a non-module string).
 fn resolve_registry_value_union<V: Borrow<Expr>>(
     values: &[&Expr],
     consts: &std::collections::HashMap<u32, V>,
@@ -1452,7 +1452,7 @@ fn resolve_registry_value_union<V: Borrow<Expr>>(
         ) {
             Resolution::Set(set) => {
                 for s in set {
-                    if !is_relative_module_specifier(&s) {
+                    if !is_relative_specifier(&s) {
                         return Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string());
                     }
                     if !out.contains(&s) {
@@ -1468,10 +1468,6 @@ fn resolve_registry_value_union<V: Borrow<Expr>>(
     } else {
         Resolution::Set(out)
     }
-}
-
-fn is_relative_module_specifier(value: &str) -> bool {
-    value.starts_with("./") || value.starts_with("../")
 }
 
 /// Shared "couldn't statically resolve this dynamic import() specifier"

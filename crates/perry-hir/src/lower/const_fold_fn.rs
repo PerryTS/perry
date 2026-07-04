@@ -310,23 +310,17 @@ pub(crate) fn try_const_fold_function_construct_kind(
         None => (String::new(), String::new()),
     };
 
-    // Capability-probe handling. A trivial no-op `new Function("")` /
-    // `Function("")` — an EXPLICIT empty-string body — is commonly used to decide
-    // whether runtime code generation is available. Perry is ahead-of-time
-    // compiled, so report "unavailable" by throwing at construction; callers can
-    // then take their non-codegen fallback. Only the trivial empty-body no-op is
-    // refused; real literal bodies (`return 42`, the `return this` globalThis
-    // polyfill) still fold.
-    //
-    // `new Function()` with NO arguments is NOT this probe — it is the plain
-    // "make an empty function" spelling (e.g. `Reflect.construct(Intl.X, args,
-    // new Function())` to pick a custom prototype). Node returns
-    // `function anonymous(){}` for it, so fold it rather than throw; the throw is
-    // gated on `!consts.is_empty()` so only an explicit empty-string body probes.
-    if !consts.is_empty()
-        && body_src.trim().is_empty()
-        && crate::eval_classifier::eval_csp_probe_unavailable()
-    {
+    // CSP capability-probe handling (`PERRY_EVAL_CSP`). A trivial no-op
+    // `new Function("")` / `Function("")` is the canonical runtime-codegen
+    // feature-test (`try { new Function(""), true } catch { false }`). perry is
+    // ahead-of-time compiled and cannot generate code from a runtime string, so
+    // under CSP mode this probe must report "unavailable" — throw at
+    // *construction* (not when called), exactly as a CSP `unsafe-eval`-blocked
+    // environment does — so probing callers (e.g. zod 4's validator JIT) take
+    // their non-codegen interpreter fallback. Only the trivial empty-body no-op
+    // is refused; real literal bodies (`return 42`, the `return this` globalThis
+    // polyfill) still fold, preserving spec behavior by default.
+    if body_src.trim().is_empty() && crate::eval_classifier::eval_csp_probe_unavailable() {
         return synth_throwing_iife(
             ctx,
             "throw new TypeError(\"Function: runtime dynamic code generation is \
