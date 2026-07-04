@@ -311,12 +311,22 @@ pub(crate) fn try_const_fold_function_construct_kind(
     };
 
     // Capability-probe handling. A trivial no-op `new Function("")` /
-    // `Function("")` is commonly used to decide whether runtime code generation
-    // is available. Perry is ahead-of-time compiled, so report "unavailable" by
-    // throwing at construction; callers can then take their non-codegen fallback.
-    // Only the trivial empty-body no-op is refused; real literal bodies
-    // (`return 42`, the `return this` globalThis polyfill) still fold.
-    if body_src.trim().is_empty() && crate::eval_classifier::eval_csp_probe_unavailable() {
+    // `Function("")` — an EXPLICIT empty-string body — is commonly used to decide
+    // whether runtime code generation is available. Perry is ahead-of-time
+    // compiled, so report "unavailable" by throwing at construction; callers can
+    // then take their non-codegen fallback. Only the trivial empty-body no-op is
+    // refused; real literal bodies (`return 42`, the `return this` globalThis
+    // polyfill) still fold.
+    //
+    // `new Function()` with NO arguments is NOT this probe — it is the plain
+    // "make an empty function" spelling (e.g. `Reflect.construct(Intl.X, args,
+    // new Function())` to pick a custom prototype). Node returns
+    // `function anonymous(){}` for it, so fold it rather than throw; the throw is
+    // gated on `!consts.is_empty()` so only an explicit empty-string body probes.
+    if !consts.is_empty()
+        && body_src.trim().is_empty()
+        && crate::eval_classifier::eval_csp_probe_unavailable()
+    {
         return synth_throwing_iife(
             ctx,
             "throw new TypeError(\"Function: runtime dynamic code generation is \
