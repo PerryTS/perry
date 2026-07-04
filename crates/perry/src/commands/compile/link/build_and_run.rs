@@ -336,6 +336,24 @@ pub(crate) fn build_and_run_link(
                         }),
                     None => wk.clone(),
                 };
+                // Issue #5928: the runtime-specific drop above only targets
+                // `perry_runtime-*` codegen units. Programs linking multiple
+                // well-known libraries that each bundle a full "shared
+                // tokio" HTTP stack (e.g. both `http` and `fastify`) still
+                // collide on every OTHER shared transitive dependency
+                // (tokio, hyper_util, h2, rustls, reqwest, ring, std, core,
+                // …) — apply the general, fixed-point-safe dedup for those.
+                let wk = match stdlib_lib {
+                    Some(stdlib) => strip_bundled_shared_deps_from_well_known_lib(&wk, stdlib)
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "[strip-dedup] shared-deps drop skipped for {} (non-fatal): {e}",
+                                wk.display()
+                            );
+                            wk.clone()
+                        }),
+                    None => wk.clone(),
+                };
                 strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or(wk)
             })
             .collect()
