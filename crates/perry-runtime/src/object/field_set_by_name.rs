@@ -27,12 +27,19 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 == 0x7FFD || top16 >= 0x7FF8 {
-            if top16 == 0x7FFC {
+        if top16 >= 0x7FF8 {
+            if top16 != 0x7FFD {
+                // Not a POINTER-tagged heap receiver (SSO string payload,
+                // UNDEFINED/NULL remnant, INT32, BIGINT…). The old catch-all
+                // masked these to 48 bits — a 2–5-char SSO payload lands in
+                // the 2–5.5TB range, passes the macOS heap floor, and the
+                // GcHeader read below deref'd unmapped memory (write-side
+                // #5429 twin, 2026-07-02 audit). Return 0 = defer to the
+                // full dynamic path, which triages by tag.
                 return 0;
             }
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-            if raw.is_null() || (raw as usize) < 0x10000 {
+            if raw.is_null() || crate::value::addr_class::is_small_handle(raw as usize) {
                 return 0;
             }
             raw
@@ -57,11 +64,13 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
 
-        if !is_valid_obj_ptr(obj as *const u8) {
-            return 0;
-        }
-        let gc_header =
-            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        // Validated header probe (rejects the handle band, implausible
+        // addresses, and slab allocations without touching memory) instead
+        // of the bare floor + raw deref.
+        let gc_header = match crate::value::addr_class::try_read_gc_header(obj as usize) {
+            Some(h) => h as *const crate::gc::GcHeader,
+            None => return 0,
+        };
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
