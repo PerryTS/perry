@@ -87,15 +87,14 @@ pub(crate) fn finalize_dead_copied_minor_from_space_errors() {
         {
             return false;
         }
-        if addr < crate::gc::GC_HEADER_SIZE {
-            return false;
-        }
         unsafe {
-            let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*header).obj_type != crate::gc::GC_TYPE_ERROR {
+            let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+                return false;
+            };
+            if header.obj_type != crate::gc::GC_TYPE_ERROR {
                 return false;
             }
-            let flags = (*header).gc_flags;
+            let flags = header.gc_flags;
             flags & crate::gc::GC_FLAG_ARENA != 0
                 && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
         }
