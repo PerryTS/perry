@@ -373,6 +373,15 @@ const DURATION_UNITS: &[&str] = &[
 /// non-string is a `TypeError`; out-of-range / non-integral / mixed-sign records are
 /// a `RangeError`.
 fn to_duration_record(value: f64) -> Vec<f64> {
+    // `ToDurationRecord` first branch: a `Temporal.Duration` (or subclass) copies
+    // its internal slots directly — no prototype getters observed, no field-order
+    // side effects. Only reachable when the Temporal engine is compiled in.
+    #[cfg(feature = "temporal")]
+    if let Some(vals) = crate::temporal::duration_unit_values(value) {
+        let vals = vals.to_vec();
+        validate_duration(&vals);
+        return vals;
+    }
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_any_string() {
         let s = string_from_string_value(value).unwrap_or_default();
@@ -449,15 +458,49 @@ fn validate_duration(vals: &[f64]) {
             throw_range_error(&format!("Intl.DurationFormat.format: {unit} out of range"));
         }
     }
-    // days*86400 + hours*3600 + minutes*60 + seconds + ms/1e3 + us/1e6 + ns/1e9
-    let normalized = vals[3] * 86_400.0
-        + vals[4] * 3_600.0
-        + vals[5] * 60.0
-        + vals[6]
-        + vals[7] / 1.0e3
-        + vals[8] / 1.0e6
-        + vals[9] / 1.0e9;
-    if !normalized.is_finite() || normalized.abs() >= 9_007_199_254_740_992.0 {
+    // `IsValidDurationRecord` step 16–17:
+    //   normalizedSeconds = days×86400 + hours×3600 + minutes×60 + seconds
+    //                       + ms×10⁻³ + µs×10⁻⁶ + ns×10⁻⁹
+    //   reject when abs(normalizedSeconds) ≥ 2⁵³.
+    // The naive f64 sum above loses ULPs at these magnitudes (days near
+    // MAX_SAFE_INTEGER/86400), spuriously rounding a maximal-but-valid duration
+    // past 2⁵³ — test262 `duration-out-of-range-3/-4` pin this exact edge. Do it
+    // in exact integer nanoseconds instead: each field is a validated integral
+    // f64, so `abs(normalizedSeconds) ≥ 2⁵³` ⇔ `abs(totalNs) ≥ 2⁵³ × 10⁹`, an
+    // exact i128 comparison.
+    const NS_PER: [i128; 7] = [
+        86_400_000_000_000, // days
+        3_600_000_000_000,  // hours
+        60_000_000_000,     // minutes
+        1_000_000_000,      // seconds
+        1_000_000,          // milliseconds
+        1_000,              // microseconds
+        1,                  // nanoseconds
+    ];
+    const LIMIT_NS: i128 = (1i128 << 53) * 1_000_000_000;
+    let mut total_ns: i128 = 0;
+    let mut overflow = false;
+    for (k, &scale) in NS_PER.iter().enumerate() {
+        let v = vals[3 + k];
+        // A non-integral / non-finite field is impossible here (fields are
+        // validated in `to_duration_record`), but stay defensive: treat it as
+        // out-of-range rather than panicking on the cast.
+        if !v.is_finite() || v.fract() != 0.0 {
+            overflow = true;
+            break;
+        }
+        match (v as i128)
+            .checked_mul(scale)
+            .and_then(|prod| total_ns.checked_add(prod))
+        {
+            Some(sum) => total_ns = sum,
+            None => {
+                overflow = true;
+                break;
+            }
+        }
+    }
+    if overflow || total_ns.unsigned_abs() >= LIMIT_NS as u128 {
         throw_range_error("Intl.DurationFormat.format: duration out of range");
     }
 }

@@ -279,6 +279,35 @@ pub fn temporal_kind(value: f64) -> Option<TemporalKind> {
     temporal_value_ref(value).map(TemporalValue::kind)
 }
 
+/// If `value` is a `Temporal.Duration` (or subclass instance), read its ten unit
+/// values directly from the internal slots — in `[years, months, weeks, days,
+/// hours, minutes, seconds, milliseconds, microseconds, nanoseconds]` order,
+/// matching `DURATION_UNITS`. Returns `None` for any non-Duration value.
+///
+/// `Intl.DurationFormat.prototype.format`/`formatToParts` call `ToDurationRecord`,
+/// whose spec first branch (`IsTemporalDuration`) copies the internal slots and
+/// deliberately does *not* invoke the `Temporal.Duration.prototype` getters — so
+/// this must bypass property lookup entirely (test262
+/// `taint-temporal-duration-prototype`).
+#[cfg(feature = "temporal")]
+pub fn duration_unit_values(value: f64) -> Option<[f64; 10]> {
+    match temporal_value_ref_or_subclass(value)? {
+        TemporalValue::Duration(d) => Some([
+            d.years() as f64,
+            d.months() as f64,
+            d.weeks() as f64,
+            d.days() as f64,
+            d.hours() as f64,
+            d.minutes() as f64,
+            d.seconds() as f64,
+            d.milliseconds() as f64,
+            d.microseconds() as f64,
+            d.nanoseconds() as f64,
+        ]),
+        _ => None,
+    }
+}
+
 /// The calendar identifier string of a Temporal value that carries a calendar
 /// (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay, ZonedDateTime),
 /// or `None` for types without a calendar (Instant, PlainTime, Duration) or
