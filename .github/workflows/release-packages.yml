@@ -1685,8 +1685,15 @@ jobs:
         # died on the first package with "You cannot publish over the
         # previously published versions" — the remaining six packages could
         # never go out (run 27239815088).
+        # One platform's failure must not starve the packages after it in
+        # glob order (with `set -e` a single E413/transient registry error
+        # aborted the loop mid-way — exactly how linux/windows sat at a stale
+        # version for weeks while darwin kept updating). Record failures,
+        # keep publishing, fail the step at the end with the full list; the
+        # already-published skip above keeps re-runs idempotent.
         run: |
           set -e
+          failed=""
           for pkg in ./npm/perry-*; do
             name=$(node -p "require('$pkg/package.json').name")
             ver=$(node -p "require('$pkg/package.json').version")
@@ -1695,8 +1702,15 @@ jobs:
               continue
             fi
             echo "=== publishing $pkg ==="
-            npm publish "$pkg" --access public --provenance
+            if ! npm publish "$pkg" --access public --provenance; then
+              echo "::error::npm publish failed for $name@$ver — continuing with remaining packages"
+              failed="$failed $name@$ver"
+            fi
           done
+          if [ -n "$failed" ]; then
+            echo "::error::failed platform packages:$failed"
+            exit 1
+          fi
 
       - name: Publish wrapper (@perryts/perry) last
         run: |
