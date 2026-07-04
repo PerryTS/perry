@@ -34,6 +34,8 @@ mod list_relative_plural;
 mod number_format;
 mod number_format_digits;
 mod number_format_options;
+mod numbering_system;
+use numbering_system::{is_well_formed_numbering_system, resolve_numbering_system};
 mod segmenter;
 
 pub(crate) use date_collator::{
@@ -439,50 +441,6 @@ fn currency_fraction_digits(code: &str) -> u32 {
         "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
         _ => 2,
     }
-}
-
-/// A `numberingSystem` value is structurally valid when it is one or more
-/// hyphen-separated subtags of 3–8 alphanumerics (the `type` Unicode nonterminal).
-fn is_well_formed_numbering_system(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('-').all(|sub| {
-            (3..=8).contains(&sub.len()) && sub.bytes().all(|b| b.is_ascii_alphanumeric())
-        })
-}
-
-/// Extract the `-u-nu-<value>` numbering system from a (canonicalized) locale
-/// string, lower-cased. Returns `None` when no `nu` keyword is present.
-fn numbering_system_from_locale(locale: &str) -> Option<String> {
-    let lower = locale.to_ascii_lowercase();
-    let subtags: Vec<&str> = lower.split('-').collect();
-    let u = subtags.iter().position(|s| *s == "u")?;
-    let mut i = u + 1;
-    while i < subtags.len() {
-        let key = subtags[i];
-        // A keyword key is exactly two chars; everything up to the next key is its value.
-        if key.len() == 2 {
-            if key == "nu" {
-                let mut value = String::new();
-                let mut j = i + 1;
-                while j < subtags.len() && subtags[j].len() != 2 {
-                    if !value.is_empty() {
-                        value.push('-');
-                    }
-                    value.push_str(subtags[j]);
-                    j += 1;
-                }
-                return (!value.is_empty()).then_some(value);
-            }
-            i += 1;
-            while i < subtags.len() && subtags[i].len() != 2 {
-                i += 1;
-            }
-        } else {
-            // Hit another singleton extension (e.g. `-t-`); `nu` lives only under `u`.
-            break;
-        }
-    }
-    None
 }
 
 #[cold]
@@ -1125,15 +1083,23 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                     )),
                 }
             }
-            // `numberingSystem` must be a well-formed `type` nonterminal.
-            if let Some(ns) = get_locale_extension_option(options, "numberingSystem") {
+            // `numberingSystem` must be a well-formed `type` nonterminal. Read
+            // it here (preserving the GetOption order options-order.js asserts),
+            // then run ResolveLocale for `nu` — reconciling the option with the
+            // locale's `-u-nu-` keyword so `resolvedOptions().locale` /
+            // `.numberingSystem` reflect only the supported value actually used.
+            let dtf_opt_ns = get_locale_extension_option(options, "numberingSystem").map(|ns| {
                 if !is_well_formed_numbering_system(&ns) {
                     throw_range_error(&format!(
                         "Value {ns} out of range for Intl options property numberingSystem"
                     ));
                 }
-                set_internal_field(obj, KEY_NUMBERING_SYSTEM, string_value(&ns));
-            }
+                ns.to_ascii_lowercase()
+            });
+            let (dtf_locale, dtf_numbering) =
+                resolve_numbering_system(&locale, dtf_opt_ns.as_deref());
+            set_internal_field(obj, KEY_LOCALE, string_value(&dtf_locale));
+            set_internal_field(obj, KEY_NUMBERING_SYSTEM, string_value(&dtf_numbering));
             // hour12 (boolean) then hourCycle (enum) — both only surface in
             // `resolvedOptions` when the resolved pattern has an hour field.
             if let Some(h12) = get_bool_option(options, "hour12") {

@@ -236,17 +236,23 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
         "best fit",
     );
 
-    let numbering = match df_get_option_string(options, "numberingSystem") {
+    let opt_ns = match df_get_option_string(options, "numberingSystem") {
         Some(ns) => {
             if !valid_numbering_system(&ns) {
                 throw_range_error(&format!(
                     "Value {ns} out of range for Intl.DurationFormat options property numberingSystem"
                 ));
             }
-            ns
+            Some(ns.to_ascii_lowercase())
         }
-        None => "latn".to_string(),
+        None => None,
     };
+    // ResolveLocale for `nu`: reconcile the option with the requested locale's
+    // `-u-nu-` keyword (stored in KEY_LOCALE at construction) and update both the
+    // resolved locale and numbering system.
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    let (resolved_locale, numbering) = super::resolve_numbering_system(&locale, opt_ns.as_deref());
+    set_internal_field(obj, KEY_LOCALE, string_value(&resolved_locale));
     set_internal_field(obj, KEY_DF_NUMBERING, string_value(&numbering));
 
     let base_style = df_enum_option(
