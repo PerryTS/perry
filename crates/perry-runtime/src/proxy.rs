@@ -1385,6 +1385,25 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 ) {
                     return true;
                 }
+                // `Object.preventExtensions(fn)` / `Object.seal(fn)` set
+                // NO_EXTEND / SEALED in the closure's GcHeader (functions are
+                // GcHeader-backed closures). A [[Set]] that would ADD a new own
+                // property must fail (OrdinaryDefineOwnProperty returns false,
+                // silent in non-strict, TypeError in strict); an existing own
+                // key can still be updated. (test262
+                // Object/preventExtensions/15.2.3.10-3-{3,13}.)
+                if !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name) {
+                    let non_extensible = unsafe {
+                        let gc = (cur_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                            as *const crate::gc::GcHeader;
+                        (*gc)._reserved
+                            & (crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED)
+                            != 0
+                    };
+                    if non_extensible {
+                        return false;
+                    }
+                }
             }
             return create_or_update_receiver_property(receiver, key, value);
         }
