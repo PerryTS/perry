@@ -541,7 +541,20 @@ pub fn run_with_parse_cache(
     // closure (`MySqlPreparedQuery extends QueryPromise`), but the
     // canonical path is `query-promise.js`, not `index.js` which
     // re-exports it via `export *`.
-    let mut class_canonical_path: std::collections::HashMap<perry_hir::ClassId, String> =
+    // Issue #5987: `ClassId` is meant to be unique across the whole program
+    // (module lowering threads a `next_class_id` counter forward precisely
+    // to guarantee this), but a real multi-thousand-module compile can still
+    // produce two unrelated classes with the same id (e.g. via parallel
+    // lowering or object-cache reuse of a previously-lowered module) — this
+    // showed up for `effect`'s two distinct `ClientAbort` classes (in
+    // `RpcSchema.ts` and `HttpServerError.ts`) resolving to a third,
+    // unrelated module (`SchemaAST.ts`) that doesn't define either. Store
+    // the class's own name alongside its path so a lookup can detect an id
+    // collision (name mismatch) and refuse the entry rather than silently
+    // trusting it — every caller already has a reliable fallback for this
+    // case (the compound `(path, name)` key that found `class` in the first
+    // place already proves the origin is correct).
+    let mut class_canonical_path: std::collections::HashMap<perry_hir::ClassId, (String, String)> =
         std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
@@ -550,7 +563,7 @@ pub fn run_with_parse_cache(
                 exported_classes.insert((path_str.clone(), class.name.clone()), class);
                 class_canonical_path
                     .entry(class.id)
-                    .or_insert_with(|| path_str.clone());
+                    .or_insert_with(|| (path_str.clone(), class.name.clone()));
             }
         }
         // Issue #485: handle `export { Local as Exported }` for classes.
@@ -3783,10 +3796,16 @@ pub fn run_with_parse_cache(
                 let field_types_clone = imported_classes[idx].field_types.clone();
                 let parent_name_clone = imported_classes[idx].parent_name.clone();
                 // The child's own canonical source path, used to resolve its
-                // `extends` parent in the child's module scope.
+                // `extends` parent in the child's module scope. Issue #5987:
+                // guard against a `ClassId` collision the same way
+                // `canonical_class_source_prefix` does — only trust the
+                // recorded path if its name matches this child's own name.
+                let child_name_clone = imported_classes[idx].name.clone();
                 let child_src_path: Option<String> = imported_classes[idx]
                     .source_class_id
-                    .and_then(|cid| class_canonical_path.get(&cid).cloned());
+                    .and_then(|cid| class_canonical_path.get(&cid).cloned())
+                    .filter(|(_, name)| name == &child_name_clone)
+                    .map(|(path, _)| path);
                 // Issue #485: include the class's parent in the transitive
                 // closure too. Without this, `import { Sub } from 'pkg'` where
                 // `Sub extends Base` (and Base lives in another file inside
@@ -3839,7 +3858,7 @@ pub fn run_with_parse_cache(
                                 cname == &ref_name
                                     && class_canonical_path
                                         .get(&class.id)
-                                        .map(|cp| cp == path)
+                                        .map(|(cp, cid_name)| cp == path && cid_name == cname)
                                         .unwrap_or(true)
                             })
                         })
