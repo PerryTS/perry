@@ -699,15 +699,25 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                     ptr::null_mut(),
                     capture_context(),
                 );
-                // Keep the original next-nulling: the forwarder handles adoption,
-                // and leaving a stale `inner.next` chained to `outer` can form a
-                // resolution cycle ("Chaining cycle detected"). The awaiter's
-                // reaction lives in on_fulfilled (untouched above), not in `next`.
-                store_promise_next_slot(
-                    inner,
-                    std::ptr::addr_of_mut!((*inner).next),
-                    ptr::null_mut(),
-                );
+                // #5941: null `inner.next` ONLY when it already points at
+                // `outer` — the re-adoption case where leaving it would have
+                // the runner's settle propagation resolve `outer` on top of
+                // the forwarder ("Chaining cycle detected"). Any OTHER
+                // promise in `inner.next` is an EARLIER dependent's chain —
+                // a prior adoption's fast-path edge (the `store_promise_next_slot`
+                // above) or a `.then` child — and the old unconditional null
+                // severed it: with two dependents adopting one shared inner
+                // promise (Next.js RSC render, shared React work promises),
+                // the second adoption orphaned the first dependent, its
+                // async-step machine's result never settled, and the render
+                // parked forever (the #5437/#5941 dynamic-route deadlock).
+                if outer == (*inner).next {
+                    store_promise_next_slot(
+                        inner,
+                        std::ptr::addr_of_mut!((*inner).next),
+                        ptr::null_mut(),
+                    );
+                }
             }
         }
     }
