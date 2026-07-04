@@ -1069,7 +1069,7 @@ pub(crate) fn build_optimized_libs(
         runtime_bc,
         stdlib_bc,
         extra_bc,
+        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
         well_known_libs,
-        prefer_well_known_before_stdlib: false,
     }
 }
