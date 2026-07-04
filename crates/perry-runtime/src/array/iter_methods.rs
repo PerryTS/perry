@@ -353,18 +353,18 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = array_elements_ptr(arr);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
             let element = if exotic {
-                crate::array::array_spec_get(arr, i as u32)
+                crate::array::array_spec_get(rooted.arr(), i as u32)
             } else {
-                array_element_get_value(elements_ptr, i)
+                rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, arr_value);
+            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -395,18 +395,18 @@ pub extern "C" fn js_array_findIndex(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = array_elements_ptr(arr);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
             let element = if exotic {
-                crate::array::array_spec_get(arr, i as u32)
+                crate::array::array_spec_get(rooted.arr(), i as u32)
             } else {
-                array_element_get_value(elements_ptr, i)
+                rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, arr_value);
+            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -436,17 +436,17 @@ pub extern "C" fn js_array_find_last(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = array_elements_ptr(arr);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
-                crate::array::array_spec_get(arr, i as u32)
+                crate::array::array_spec_get(rooted.arr(), i as u32)
             } else {
-                array_element_get_value(elements_ptr, i)
+                rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, arr_value);
+            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
             }
@@ -474,17 +474,17 @@ pub extern "C" fn js_array_find_last_index(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = array_elements_ptr(arr);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
-                crate::array::array_spec_get(arr, i as u32)
+                crate::array::array_spec_get(rooted.arr(), i as u32)
             } else {
-                array_element_get_value(elements_ptr, i)
+                rooted.get_or_undefined(i)
             };
-            let result = js_closure_call3(callback, element, i as f64, arr_value);
+            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
             }
@@ -557,24 +557,25 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = array_elements_ptr(arr);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
             let element = if exotic {
+                let arr = rooted.arr();
                 if !crate::array::array_spec_has_index(arr, i as u32) {
                     continue;
                 }
                 crate::array::array_spec_get(arr, i as u32)
             } else {
-                match present_array_element(elements_ptr, i) {
+                match rooted.present(i) {
                     Some(e) => e,
                     None => continue,
                 }
             };
-            let result = js_closure_call3(callback, element, i as f64, arr_value);
+            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }
@@ -602,24 +603,25 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = array_elements_ptr(arr);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
             let element = if exotic {
+                let arr = rooted.arr();
                 if !crate::array::array_spec_has_index(arr, i as u32) {
                     continue;
                 }
                 crate::array::array_spec_get(arr, i as u32)
             } else {
-                match present_array_element(elements_ptr, i) {
+                match rooted.present(i) {
                     Some(e) => e,
                     None => continue,
                 }
             };
-            let result = js_closure_call3(callback, element, i as f64, arr_value);
+            let result = js_closure_call3(callback, element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
             }
@@ -642,17 +644,31 @@ pub extern "C" fn js_array_flatMap(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = array_elements_ptr(arr);
-
-        let mut result = js_array_alloc(length);
-        let arr_value = array_receiver_value(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
+        // Root the result across callbacks and pushes (a push both allocates
+        // — possibly triggering a moving GC — and may reallocate the array).
+        let result_rooted = scope.root_nanbox_f64(f64::from_bits(
+            crate::value::JSValue::pointer(js_array_alloc(length) as *const u8).bits(),
+        ));
+        // Scratch handle for the callback-returned sub-array while the inner
+        // push loop allocates.
+        let sub_rooted = scope.root_nanbox_f64(undefined_value());
+        let push_rooted = |value: f64| {
+            let result =
+                (result_rooted.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+            let result = js_array_push_f64(result, value);
+            result_rooted.set_nanbox_f64(f64::from_bits(
+                crate::value::JSValue::pointer(result as *const u8).bits(),
+            ));
+        };
         let _tg = DenseThisGuard::bind_undefined();
 
         for i in 0..length as usize {
-            let Some(element) = present_array_element(elements_ptr, i) else {
+            let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let mapped = js_closure_call3(callback, element, i as f64, arr_value);
+            let mapped = js_closure_call3(callback, element, i as f64, rooted.receiver());
             // Check if the mapped value is an array (pointer-tagged)
             let bits = mapped.to_bits();
             let top16 = bits >> 48;
@@ -660,24 +676,27 @@ pub extern "C" fn js_array_flatMap(
                 // NaN-boxed pointer — likely an array
                 let sub_arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
                 if !sub_arr.is_null() {
+                    sub_rooted.set_nanbox_f64(mapped);
                     let sub_len = (*sub_arr).length;
-                    let sub_elements = (sub_arr as *const u8)
-                        .add(std::mem::size_of::<ArrayHeader>())
-                        as *const f64;
                     for j in 0..sub_len as usize {
+                        let sub_arr = (sub_rooted.get_nanbox_u64() & crate::value::POINTER_MASK)
+                            as *const ArrayHeader;
+                        let sub_elements = (sub_arr as *const u8)
+                            .add(std::mem::size_of::<ArrayHeader>())
+                            as *const f64;
                         let Some(sub_element) = present_array_element(sub_elements, j) else {
                             continue;
                         };
-                        result = js_array_push_f64(result, sub_element);
+                        push_rooted(sub_element);
                     }
                 }
             } else {
                 // Not an array — push as single element
-                result = js_array_push_f64(result, mapped);
+                push_rooted(mapped);
             }
         }
 
-        result
+        (result_rooted.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut ArrayHeader
     }
 }
 
@@ -711,7 +730,8 @@ pub extern "C" fn js_array_reduce(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = array_elements_ptr(arr);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
 
         if length == 0 {
             if has_initial != 0 {
@@ -725,14 +745,16 @@ pub extern "C" fn js_array_reduce(
         let exotic = crate::array::array_iteration_is_exotic(arr);
         let present = |i: usize| -> Option<f64> {
             if exotic {
+                // An exotic index read can run a user getter → GC → move.
+                let arr = rooted.arr();
                 crate::array::array_spec_has_index(arr, i as u32)
-                    .then(|| crate::array::array_spec_get(arr, i as u32))
+                    .then(|| crate::array::array_spec_get(rooted.arr(), i as u32))
             } else {
-                present_array_element(elements_ptr, i)
+                rooted.present(i)
             }
         };
 
-        let (mut accumulator, start_idx) = if has_initial != 0 {
+        let (accumulator, start_idx) = if has_initial != 0 {
             (initial, 0)
         } else {
             let mut seed = None;
@@ -748,16 +770,26 @@ pub extern "C" fn js_array_reduce(
             }
         };
 
-        let arr_value = array_receiver_value(arr);
+        // Root the accumulator: it can hold a heap value, and both the
+        // callback and an exotic getter can trigger a moving GC between
+        // iterations while it sits in this Rust local.
+        let acc_rooted = scope.root_nanbox_f64(accumulator);
         for i in start_idx..length {
             let Some(element) = present(i) else {
                 continue;
             };
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
-            accumulator = js_closure_call4(callback, accumulator, element, i as f64, arr_value);
+            let next = js_closure_call4(
+                callback,
+                acc_rooted.get_nanbox_f64(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
+            acc_rooted.set_nanbox_f64(next);
         }
 
-        accumulator
+        acc_rooted.get_nanbox_f64()
     }
 }
 
