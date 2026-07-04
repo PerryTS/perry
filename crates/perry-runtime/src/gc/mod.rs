@@ -71,7 +71,7 @@ pub fn gc_collect_minor() -> u64 {
         .emit_after_current()
 }
 
-fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     // Phase C4b-γ-3: re-entrancy guard. Without this, the evacuation
     // pass's `arena_alloc_gc_old` can trigger `gc_check_trigger` (via
     // `arena.alloc`'s slow-path block-fill) DURING the outer collection
