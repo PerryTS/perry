@@ -561,6 +561,173 @@ pub fn linearize_body(
                 });
             }
 
+            // While condition containing a yield (direct-generator
+            // `while (yield …)` / `while ((x = yield …) !== s)`; async fns'
+            // awaited conditions are restructured at the hoist layer before
+            // they become yields, so this arm covers the generator case).
+            // The old path cloned the condition — with its embedded yield —
+            // into the cond_state, where codegen's fallback lowers the
+            // residual `Expr::Yield` to `0.0` (#5933). Restructure to the
+            // per-iteration form and recurse; `hoist_yields_in_stmts`
+            // normalizes the condition's yields to the statement positions
+            // the Let-with-yield arms handle.
+            //
+            //   while (true) {
+            //     let __loop_cond_yield_N = <cond>;
+            //     if (!__loop_cond_yield_N) break;
+            //     <body>
+            //   }
+            Stmt::While { condition, body }
+                if super::hoist_yields::expr_contains_yield(condition) =>
+            {
+                let t = alloc_local(next_local_id);
+                let mut prefix = vec![Stmt::Let {
+                    id: t,
+                    name: format!("__loop_cond_yield_{}", t),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(condition.clone()),
+                }];
+                hoist_yields_in_stmts(&mut prefix, next_local_id);
+                prefix.push(Stmt::If {
+                    condition: Expr::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(Expr::LocalGet(t)),
+                    },
+                    then_branch: vec![Stmt::Break],
+                    else_branch: None,
+                });
+                prefix.extend(body.iter().cloned());
+                let restructured = Stmt::While {
+                    condition: Expr::Bool(true),
+                    body: prefix,
+                };
+                linearize_body(
+                    std::slice::from_ref(&restructured),
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                    finallys,
+                );
+            }
+
+            // do-while with a yield in the condition: first-iteration-flag
+            // desugar (same as the body-yield DoWhile arm below), which puts
+            // the yield into a While condition — the arm above then applies
+            // on recursion, and `continue` correctly falls through to the
+            // condition evaluation.
+            Stmt::DoWhile { body, condition }
+                if super::hoist_yields::expr_contains_yield(condition) =>
+            {
+                let first_id = alloc_local(next_local_id);
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    first_id,
+                    Box::new(Expr::Bool(true)),
+                )));
+                let mut while_body = Vec::with_capacity(body.len() + 1);
+                while_body.push(Stmt::Expr(Expr::LocalSet(
+                    first_id,
+                    Box::new(Expr::Bool(false)),
+                )));
+                while_body.extend(body.iter().cloned());
+                let while_stmt = Stmt::While {
+                    condition: Expr::Logical {
+                        op: LogicalOp::Or,
+                        left: Box::new(Expr::LocalGet(first_id)),
+                        right: Box::new(condition.clone()),
+                    },
+                    body: while_body,
+                };
+                linearize_body(
+                    std::slice::from_ref(&while_stmt),
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                    finallys,
+                );
+            }
+
+            // For-loop with a yield in the CONDITION or UPDATE slot: move
+            // the yielding slot(s) into the body (condition → body-top
+            // check; update → body-end with loop-level `continue`s prefixed
+            // by it so the continue → update → condition order holds), then
+            // recurse — the For/While arms below handle the rest.
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } if condition
+                .as_ref()
+                .is_some_and(super::hoist_yields::expr_contains_yield)
+                || update
+                    .as_ref()
+                    .is_some_and(super::hoist_yields::expr_contains_yield) =>
+            {
+                let cond_yields = condition
+                    .as_ref()
+                    .is_some_and(super::hoist_yields::expr_contains_yield);
+                let upd_yields = update
+                    .as_ref()
+                    .is_some_and(super::hoist_yields::expr_contains_yield);
+                let mut new_body = Vec::with_capacity(body.len() + 3);
+                if cond_yields {
+                    let t = alloc_local(next_local_id);
+                    let mut prefix = vec![Stmt::Let {
+                        id: t,
+                        name: format!("__loop_cond_yield_{}", t),
+                        ty: Type::Any,
+                        mutable: true,
+                        init: condition.clone(),
+                    }];
+                    hoist_yields_in_stmts(&mut prefix, next_local_id);
+                    new_body.append(&mut prefix);
+                    new_body.push(Stmt::If {
+                        condition: Expr::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(Expr::LocalGet(t)),
+                        },
+                        then_branch: vec![Stmt::Break],
+                        else_branch: None,
+                    });
+                }
+                let mut taken_body = body.clone();
+                if upd_yields {
+                    let mut upd_stmts = vec![Stmt::Expr(update.clone().unwrap())];
+                    hoist_yields_in_stmts(&mut upd_stmts, next_local_id);
+                    prefix_loop_continues(&mut taken_body, &upd_stmts);
+                    new_body.append(&mut taken_body);
+                    new_body.extend(upd_stmts);
+                } else {
+                    new_body.append(&mut taken_body);
+                }
+                let new_for = Stmt::For {
+                    init: init.clone(),
+                    condition: if cond_yields { None } else { condition.clone() },
+                    update: if upd_yields { None } else { update.clone() },
+                    body: new_body,
+                };
+                linearize_body(
+                    std::slice::from_ref(&new_for),
+                    states,
+                    current,
+                    state_num,
+                    state_id,
+                    next_local_id,
+                    sent_id,
+                    catches,
+                    finallys,
+                );
+            }
+
             // For-loop containing yield(s)
             Stmt::For {
                 init,

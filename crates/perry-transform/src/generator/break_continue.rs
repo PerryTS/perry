@@ -685,3 +685,58 @@ fn rewrite_switch_breaks_in_stmt(s: &Stmt, done_id: LocalId) -> Stmt {
         other => other.clone(),
     }
 }
+
+/// Prefix every loop-level `continue` in `stmts` with copies of `prefix`
+/// (#5933: a `for` loop's awaited update moves to the body end, and each
+/// `continue` must still run it before re-entering the loop, preserving the
+/// spec's continue → update → condition order). Descends `if`/`try` and
+/// `switch` CASES (none of which capture `continue`); stops at nested loops
+/// and labeled statements, whose `continue` binds to them, and never enters
+/// closures (statement walk only).
+pub fn prefix_loop_continues(stmts: &mut Vec<Stmt>, prefix: &[Stmt]) {
+    let mut i = 0;
+    while i < stmts.len() {
+        match &mut stmts[i] {
+            Stmt::Continue => {
+                for (k, p) in prefix.iter().enumerate() {
+                    stmts.insert(i + k, p.clone());
+                }
+                i += prefix.len() + 1;
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                prefix_loop_continues(then_branch, prefix);
+                if let Some(eb) = else_branch {
+                    prefix_loop_continues(eb, prefix);
+                }
+                i += 1;
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                prefix_loop_continues(body, prefix);
+                if let Some(c) = catch {
+                    prefix_loop_continues(&mut c.body, prefix);
+                }
+                if let Some(f) = finally {
+                    prefix_loop_continues(f, prefix);
+                }
+                i += 1;
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    prefix_loop_continues(&mut case.body, prefix);
+                }
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+}
