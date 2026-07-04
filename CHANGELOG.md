@@ -1,3 +1,9 @@
+## v0.5.1233 — CI: cache-warm primes the release compiler + gap-suite auto-opt variants
+
+The conformance-smoke job restored the shared rust-cache with a full match and still hit its 60-minute timeout: the warmed DEBUG units share nothing with its RELEASE build, and every gap test whose auto-optimize feature combination had no `target/perry-auto-<hash>` archive kicked off an in-job cargo build of the runtime (orphan cargo/rustc still compiling at cancellation). cache-warm now builds the release compiler and runs the gap suite once per main merge so every variant lands under the shared key; code-only PRs carry main's `CARGO_PKG_VERSION`, so their smoke jobs restore exact variant matches until the next merge re-warms (job timeout 120 → 150 for the cold first run).
+
+Also brings the version stream back in sync with two code-only fleet merges that landed without metadata: #5953 (#5898 — mutating array methods throw on frozen/non-writable length) and #5954 (#5909 — `JSON.stringify` of a toJSON-returned cycle throws instead of SIGSEGV).
+
 ## v0.5.1232 — anchor inliner + deforest max-LocalId scans on the hardened id_scan
 
 The inliner (`inline/analysis.rs`) and deforestation (`deforest/walk.rs`) each carried their own ad-hoc max-LocalId scan to mint fresh locals; both were shallower than `generator::compute_max_local_id` (the scan hardened for #5143 to cover class field/static/computed-member/extends closures). A fresh local minted from an under-counting scan can collide with a LocalId owned by a closure the scan missed — the same defect class as #5143's FuncId collision. Both passes now seed from `crate::generator::compute_max_local_id(module)` and only extend it with their local maxima, so every future descent fix to the shared scan protects all three passes at once.
