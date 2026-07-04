@@ -347,6 +347,39 @@ fn lower_method_prop(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
+    // #5846: retain the method's own source for `Function.prototype.toString`.
+    // Per spec a concise/object-literal method's toString is
+    // `PropertyName ( params ) { body }` — no "function" keyword — so slice
+    // from the key's start (the `[` for a computed key) through the function
+    // body's closing brace, mirroring `capture_function_source`'s use for
+    // declarations/expressions/arrows. Without this, `{ a(){} }.a` fell back
+    // to the synthesized `function a() { [native code] }` form, which is
+    // wrong when that source is itself used (e.g. as a ToPropertyKey
+    // coercion target for a computed key elsewhere) — test262
+    // toString/method-computed-property-name.
+    //
+    // Scoped to plain (non-async, non-generator) methods only: an
+    // `async`/`*` modifier sits BEFORE the key in source (`async *[k](){}`),
+    // so `method_key_span.lo` would truncate it off the front — and
+    // toString/{async,generator}-method* were already passing via the
+    // synthesized-native-form fallback (which conforms to the loose
+    // NativeFunction-syntax check `assertToStringOrNativeFunction` falls
+    // back to on an exact-match miss); capturing a truncated real slice here
+    // would regress them to neither an exact match nor valid NativeFunction
+    // syntax. TODO: extend to async/generator methods once the modifier
+    // (and any comments before the key) can be included in the span.
+    if !method.function.is_async && !method.function.is_generator {
+        let method_key_span = match &method.key {
+            ast::PropName::Ident(i) => i.span,
+            ast::PropName::Str(s) => s.span,
+            ast::PropName::Num(n) => n.span,
+            ast::PropName::Computed(c) => c.span,
+            ast::PropName::BigInt(b) => b.span,
+        };
+        let method_src_span = swc_common::Span::new(method_key_span.lo, method.function.span.hi);
+        super::capture_function_source(ctx, func_id, &method_src_span, false);
+    }
+
     // Capture analysis (same pattern as arrow/function expressions)
     let mut all_refs = Vec::new();
     let mut visited_closures = std::collections::HashSet::new();

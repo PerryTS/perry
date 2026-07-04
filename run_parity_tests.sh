@@ -7,6 +7,12 @@ TEST_DIR="$SCRIPT_DIR/test-files"
 NODE_SUITE_DIR="$SCRIPT_DIR/test-parity/node-suite"
 OUTPUT_DIR="$SCRIPT_DIR/test-parity/output"
 REPORT_DIR="$SCRIPT_DIR/test-parity/reports"
+# Per-run scratch dir for compiled test binaries (2026-07-02 audit): the old
+# fixed /tmp/perry_parity_<test-id> paths meant two concurrent suite runs
+# (two agents / two worktrees on one machine) executed EACH OTHER'S compiler
+# output — cross-contaminated pass/fail attributed to the wrong build.
+PARITY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/perry-parity.XXXXXX")"
+trap 'rm -rf "$PARITY_TMP"' EXIT
 
 # LLVM is the only backend post-Phase K hard cutover. The --llvm /
 # --cranelift flags and PERRY_BACKEND env var are kept as no-ops for
@@ -560,7 +566,7 @@ for test_file in "${TEST_FILES[@]}"; do
     safe_test_id="${test_id//\//__}"
     node_output_file="$OUTPUT_DIR/node/${safe_test_id}.txt"
     perry_output_file="$OUTPUT_DIR/perry/${safe_test_id}.txt"
-    perry_binary="/tmp/perry_parity_$safe_test_id"
+    perry_binary="$PARITY_TMP/perry_parity_$safe_test_id"
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)

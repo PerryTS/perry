@@ -29,6 +29,7 @@ mod install;
 use install::install_constructor;
 mod list_relative_plural;
 mod number_format;
+mod number_format_digits;
 mod number_format_options;
 mod segmenter;
 

@@ -273,6 +273,18 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # #5892 — the auto-opt archive cache (target/perry-auto-<hash>) keys on
+      # perry-runtime's source hash and does NOT account for ext-crate sources,
+      # so a rust-cache-restored stale dir keeps linking OUTDATED ext archives
+      # into test-compiled binaries even after the ext sources were fixed (this
+      # is how the #5911 shim fix failed to clear the issue_4903 hang: the
+      # restored cache still carried pre-fix optimized archives). Evict it so
+      # every run links archives built from the checked-out tree; costs one
+      # ~6-9 min rebuild on the first perry compile of the run.
+      - name: Evict stale auto-opt archives (#5892)
+        run: |
+          rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
+
       - name: Run cargo test
         # Exclude UI backends that don't build on the ubuntu-latest CI image:
         # - perry-ui-macos / perry-ui-ios / perry-ui-tvos / perry-ui-watchos
@@ -665,6 +677,55 @@ jobs:
         with:
           name: native-abi-evidence-packet
           path: target/native-abi-evidence-packet/
+
+  # ---------------------------------------------------------------------------
+  # Gap-suite conformance smoke (every PR + main push)
+  # ---------------------------------------------------------------------------
+  conformance-smoke:
+    # 2026-07-02 audit §11: nothing on the default PR path exercised
+    # TypeScript SEMANTICS — lint/cargo-test/api-docs-drift build and unit-
+    # test the compiler but never diff a compiled program against node, so
+    # behavioral regressions landed silently between tags (the 2026-06-23
+    # 851-case test262 regression and the #5763 setPrototypeOf boot breakage
+    # both shipped through green required checks). This job runs the gap
+    # suite — every test-files/test_gap_*.ts (258) AOT-compiled and diffed
+    # byte-for-byte against `node --experimental-strip-types` — and fails on
+    # any failure NOT already triaged in test-parity/known_failures.json
+    # (run_gap_tests.sh's no-new-untriaged gate).
+    #
+    # MEASUREMENT PHASE: deliberately not yet in the branch-protection
+    # required set. Once wall-time on real PRs is confirmed acceptable, add
+    # `conformance-smoke` to the required contexts; until then a red here is
+    # a loud non-blocking signal.
+    continue-on-error: true
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Run gap suite
+        run: ./scripts/run_gap_tests.sh
+
+      - name: Upload gap report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gap-suite-report
+          path: test-parity/reports/
 
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)

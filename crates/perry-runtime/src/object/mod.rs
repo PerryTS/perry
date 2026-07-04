@@ -87,7 +87,7 @@ mod with_env;
 // Issue #1103 follow-up: behavior-preserving split of the residual top-level
 // helpers that lived directly in `object/mod.rs`.
 mod class_meta_registry;
-mod descriptor_state;
+pub(crate) mod descriptor_state;
 mod this_binding;
 mod to_string_tag;
 pub use alloc::*;

@@ -165,20 +165,30 @@ but user-written modules should use static `import` declarations.
 > dynamic `require()`, etc.), but plain JavaScript projects compile and run in
 > most cases.
 
-## Limited Prototype Manipulation
+## Prototype Manipulation
 
-Perry compiles classes to fixed structures. Dynamic prototype modification is not supported:
+Dynamic prototype manipulation is supported for the common patterns:
 
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-MyClass.prototype.newMethod = function() {};
-Object.setPrototypeOf(obj, proto);
+```ts
+// Supported
+MyClass.prototype.newMethod = function () {};   // prototype method assignment
+Object.setPrototypeOf(obj, proto);              // incl. chains of any length
+Object.setPrototypeOf(Derived, Base);           // transpiled __extends statics link
+Object.getPrototypeOf(obj);                     // inspection
 ```
 
-`Object.getPrototypeOf(...)` and `Reflect.getPrototypeOf(...)` are supported
-for class/prototype inspection patterns, but `Object.setPrototypeOf(...)` /
-`Reflect.setPrototypeOf(...)` do not mutate Perry's fixed class layout.
+Prototype-method assignment routes through a dedicated registry
+(`CLASS_PROTOTYPE_METHODS`) and `Object.setPrototypeOf` performs a real,
+cycle-checked prototype mutation (a genuine cycle still throws `TypeError`).
+
+Remaining known gaps:
+
+- the assignment form `obj.__proto__ = x` on the dynamic write path stores a
+  literal `"__proto__"` property instead of setting the prototype (use
+  `Object.setPrototypeOf`);
+- an object-literal `{ __proto__: [] }` sets the prototype without throwing,
+  but the result is not yet visible to `instanceof` (`… instanceof Array`
+  reports `false`).
 
 ## Weak References Retain Their Targets
 

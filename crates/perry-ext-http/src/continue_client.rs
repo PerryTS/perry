@@ -21,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use bytes::Bytes;
 
 use crate::plain_client::parse_http_response;
-use crate::{push_event, ClientRequestHandle, PendingHttpEvent};
+use crate::{push_event, ClientInflightGuard, ClientRequestHandle, PendingHttpEvent};
 
 /// Whether the request headers ask for the `100-continue` handshake.
 pub(crate) fn wants_continue(headers: &HashMap<String, String>) -> bool {
@@ -160,7 +160,12 @@ pub(crate) fn dispatch_expect_continue(
             return;
         }
         let handle = tokio::runtime::Handle::current();
+        // #5892 remainder: same in-flight guard as `dispatch_request` — the
+        // continue exchange must stay visible to the exit gate for its whole
+        // lifetime, not just until the outer spawn closure returns.
+        let inflight_guard = ClientInflightGuard::new();
         let jh = handle.spawn(async move {
+            let _inflight = inflight_guard;
             if let Err(error_message) = run_exchange(
                 request_handle,
                 host,

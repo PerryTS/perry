@@ -50,20 +50,43 @@ pub(super) fn static_receiver_class(
         }
     }
     if let ast::Expr::New(new_expr) = obj {
-        let class_name = match new_expr.callee.as_ref() {
-            ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+        // Issue #5912 (CodeRabbit follow-up): `new globalThis.URL(...)`
+        // always reaches the REAL global regardless of any local `URL`
+        // shadowing — that's the entire point of the explicit `globalThis.`
+        // qualifier. Track which callee shape matched instead of collapsing
+        // both into one `class_name` capture; the original version fed both
+        // forms into the same shadow check below, incorrectly downgrading
+        // `new globalThis.URL()` to "Object" whenever a local `URL` shadowed
+        // the bare name.
+        let (class_name, is_global_qualified) = match new_expr.callee.as_ref() {
+            ast::Expr::Ident(ident) => (Some(ident.sym.as_ref()), false),
             ast::Expr::Member(member)
                 if matches!(member.obj.as_ref(), ast::Expr::Ident(obj) if obj.sym.as_ref() == "globalThis")
                     && ctx.lookup_local("globalThis").is_none() =>
             {
                 match &member.prop {
-                    ast::MemberProp::Ident(prop) => Some(prop.sym.as_ref()),
-                    _ => None,
+                    ast::MemberProp::Ident(prop) => (Some(prop.sym.as_ref()), true),
+                    _ => (None, false),
                 }
             }
-            _ => None,
+            _ => (None, false),
         };
         if let Some(class_name) = class_name {
+            // Issue #5912: a local function/const/class/imported-binding
+            // (`shadows_unqualified_global` covers all four — see #5912
+            // review follow-up) shadowing one of the well-known names below
+            // (e.g. a vendored `function URL(url) { ... }` polyfill) is the
+            // user's own value, never perry's native built-in — classify as
+            // a generic "Object" (skips the ambiguous Date/URL method arms,
+            // same treatment as an object-literal receiver below) instead of
+            // misrouting `.toString()`/`.toJSON()` through the native fast
+            // paths (`UrlInstanceToJSON` etc.) on a value that was never
+            // actually constructed via the native path. Doesn't apply to the
+            // `globalThis.X` form above — see the comment on
+            // `is_global_qualified`.
+            if !is_global_qualified && ctx.shadows_unqualified_global(class_name) {
+                return Some("Object");
+            }
             let resolved_class = ctx
                 .resolve_class_alias(class_name)
                 .unwrap_or_else(|| class_name.to_string());
@@ -139,6 +162,14 @@ pub(super) fn static_receiver_class(
                 _ => None,
             };
             if let Some(n) = named {
+                // Issue #5912: the local's inferred type name can legitimately
+                // be "URL" because it holds an instance of a REAL user class
+                // named `URL` (shadowing the global) — not perry's native
+                // WHATWG URL. Route those through generic dispatch too, same
+                // as the `New`-expression branch above.
+                if ctx.lookup_class(n).is_some() {
+                    return Some("Object");
+                }
                 return match n {
                     "Date" => Some("Date"),
                     "URL" => Some("URL"),

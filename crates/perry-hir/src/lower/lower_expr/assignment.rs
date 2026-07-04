@@ -93,8 +93,30 @@ pub(crate) fn lower_expr_assignment(
                 }
             }
             let object_expr = lower_expr(ctx, &member.obj)?;
-            let object = Box::new(object_expr.clone());
-            match &member.prop {
+            // #5437: `PutValueSet` (and the private-name `PropertySet`) carry
+            // the object expression in BOTH `target` and `receiver`, and codegen
+            // evaluates both. When the object is itself an assignment to a local
+            // — Next.js' React renderer does
+            // `(r = n2(t = new nX(...), ...)).parentFlushed = !0` — duplicating
+            // it re-runs the assignment (and the nested `new nX`), constructing
+            // the Request twice with the now-reassigned `t` so its
+            // resumableState became another Request → dynamic-SSR 500. Evaluate
+            // the assignment ONCE as a prelude and read the just-assigned local
+            // back from both slots (reusing the assignment's own already-slotted
+            // local — a fresh temp gets no codegen stack slot in expression
+            // position). Pure / non-assignment objects keep the long-standing
+            // duplicate-in-place shape so codegen fast paths and IR are
+            // unchanged.
+            let reuse_id = if let Expr::LocalSet(set_id, _) = &object_expr {
+                Some(*set_id)
+            } else {
+                None
+            };
+            let (prelude, object): (Option<Expr>, Box<Expr>) = match reuse_id {
+                Some(id) => (Some(object_expr), Box::new(Expr::LocalGet(id))),
+                None => (None, Box::new(object_expr.clone())),
+            };
+            let result = match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
                     // Issue #711 part 2: `<expr>.prototype = <value>`
@@ -111,28 +133,29 @@ pub(crate) fn lower_expr_assignment(
                     // `someClass.prototype = X` writes on non-function
                     // values).
                     if property == "prototype" {
-                        return Ok(Expr::SetFunctionPrototype {
+                        Expr::SetFunctionPrototype {
                             func: object,
                             proto: value,
-                        });
+                        }
+                    } else {
+                        Expr::PutValueSet {
+                            target: object.clone(),
+                            key: Box::new(Expr::String(property)),
+                            value,
+                            receiver: object,
+                            strict: ctx.current_strict,
+                        }
                     }
-                    Ok(Expr::PutValueSet {
-                        target: object.clone(),
-                        key: Box::new(Expr::String(property)),
-                        value,
-                        receiver: object,
-                        strict: ctx.current_strict,
-                    })
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::PutValueSet {
+                    Expr::PutValueSet {
                         target: object.clone(),
                         key: index,
                         value,
                         receiver: object,
                         strict: ctx.current_strict,
-                    })
+                    }
                 }
                 ast::MemberProp::PrivateName(private) => {
                     let property = format!("#{}", private.name);
@@ -142,13 +165,17 @@ pub(crate) fn lower_expr_assignment(
                         &property,
                         expr_member::PRIV_OP_WRITE,
                     );
-                    Ok(Expr::PropertySet {
+                    Expr::PropertySet {
                         object,
                         property,
                         value,
-                    })
+                    }
                 }
-            }
+            };
+            Ok(match prelude {
+                Some(p) => Expr::Sequence(vec![p, result]),
+                None => result,
+            })
         }
         // Recursively unwrap parens and type annotations
         ast::Expr::Paren(paren) => lower_expr_assignment(ctx, &paren.expr, value),

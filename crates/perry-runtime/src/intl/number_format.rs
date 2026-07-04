@@ -1,5 +1,6 @@
 use super::*;
 
+use super::number_format_digits::numbering_system_digits;
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::ClosureHeader;
 use crate::object::{
@@ -624,646 +625,6 @@ pub(crate) fn number_instance_parts(
     number_parts_from_resolved(&r, value)
 }
 
-/// The ten digit glyphs for a Unicode numbering system, or `None` for `latn`
-/// (and any unrecognized system, which falls back to Latin digits). Generated
-/// from the test262 `numberingSystemDigits` table; covers every system with a
-/// simple sequential-or-tabulated digit mapping.
-pub(crate) fn numbering_system_digits(name: &str) -> Option<[char; 10]> {
-    match name {
-        // BEGIN generated numbering-system digit table
-        "adlm" => Some([
-            '\u{1e950}',
-            '\u{1e951}',
-            '\u{1e952}',
-            '\u{1e953}',
-            '\u{1e954}',
-            '\u{1e955}',
-            '\u{1e956}',
-            '\u{1e957}',
-            '\u{1e958}',
-            '\u{1e959}',
-        ]),
-        "ahom" => Some([
-            '\u{11730}',
-            '\u{11731}',
-            '\u{11732}',
-            '\u{11733}',
-            '\u{11734}',
-            '\u{11735}',
-            '\u{11736}',
-            '\u{11737}',
-            '\u{11738}',
-            '\u{11739}',
-        ]),
-        "arab" => Some([
-            '\u{660}', '\u{661}', '\u{662}', '\u{663}', '\u{664}', '\u{665}', '\u{666}', '\u{667}',
-            '\u{668}', '\u{669}',
-        ]),
-        "arabext" => Some([
-            '\u{6f0}', '\u{6f1}', '\u{6f2}', '\u{6f3}', '\u{6f4}', '\u{6f5}', '\u{6f6}', '\u{6f7}',
-            '\u{6f8}', '\u{6f9}',
-        ]),
-        "bali" => Some([
-            '\u{1b50}', '\u{1b51}', '\u{1b52}', '\u{1b53}', '\u{1b54}', '\u{1b55}', '\u{1b56}',
-            '\u{1b57}', '\u{1b58}', '\u{1b59}',
-        ]),
-        "beng" => Some([
-            '\u{9e6}', '\u{9e7}', '\u{9e8}', '\u{9e9}', '\u{9ea}', '\u{9eb}', '\u{9ec}', '\u{9ed}',
-            '\u{9ee}', '\u{9ef}',
-        ]),
-        "bhks" => Some([
-            '\u{11c50}',
-            '\u{11c51}',
-            '\u{11c52}',
-            '\u{11c53}',
-            '\u{11c54}',
-            '\u{11c55}',
-            '\u{11c56}',
-            '\u{11c57}',
-            '\u{11c58}',
-            '\u{11c59}',
-        ]),
-        "brah" => Some([
-            '\u{11066}',
-            '\u{11067}',
-            '\u{11068}',
-            '\u{11069}',
-            '\u{1106a}',
-            '\u{1106b}',
-            '\u{1106c}',
-            '\u{1106d}',
-            '\u{1106e}',
-            '\u{1106f}',
-        ]),
-        "cakm" => Some([
-            '\u{11136}',
-            '\u{11137}',
-            '\u{11138}',
-            '\u{11139}',
-            '\u{1113a}',
-            '\u{1113b}',
-            '\u{1113c}',
-            '\u{1113d}',
-            '\u{1113e}',
-            '\u{1113f}',
-        ]),
-        "cham" => Some([
-            '\u{aa50}', '\u{aa51}', '\u{aa52}', '\u{aa53}', '\u{aa54}', '\u{aa55}', '\u{aa56}',
-            '\u{aa57}', '\u{aa58}', '\u{aa59}',
-        ]),
-        "deva" => Some([
-            '\u{966}', '\u{967}', '\u{968}', '\u{969}', '\u{96a}', '\u{96b}', '\u{96c}', '\u{96d}',
-            '\u{96e}', '\u{96f}',
-        ]),
-        "diak" => Some([
-            '\u{11950}',
-            '\u{11951}',
-            '\u{11952}',
-            '\u{11953}',
-            '\u{11954}',
-            '\u{11955}',
-            '\u{11956}',
-            '\u{11957}',
-            '\u{11958}',
-            '\u{11959}',
-        ]),
-        "fullwide" => Some([
-            '\u{ff10}', '\u{ff11}', '\u{ff12}', '\u{ff13}', '\u{ff14}', '\u{ff15}', '\u{ff16}',
-            '\u{ff17}', '\u{ff18}', '\u{ff19}',
-        ]),
-        "gara" => Some([
-            '\u{10d40}',
-            '\u{10d41}',
-            '\u{10d42}',
-            '\u{10d43}',
-            '\u{10d44}',
-            '\u{10d45}',
-            '\u{10d46}',
-            '\u{10d47}',
-            '\u{10d48}',
-            '\u{10d49}',
-        ]),
-        "gong" => Some([
-            '\u{11da0}',
-            '\u{11da1}',
-            '\u{11da2}',
-            '\u{11da3}',
-            '\u{11da4}',
-            '\u{11da5}',
-            '\u{11da6}',
-            '\u{11da7}',
-            '\u{11da8}',
-            '\u{11da9}',
-        ]),
-        "gonm" => Some([
-            '\u{11d50}',
-            '\u{11d51}',
-            '\u{11d52}',
-            '\u{11d53}',
-            '\u{11d54}',
-            '\u{11d55}',
-            '\u{11d56}',
-            '\u{11d57}',
-            '\u{11d58}',
-            '\u{11d59}',
-        ]),
-        "gujr" => Some([
-            '\u{ae6}', '\u{ae7}', '\u{ae8}', '\u{ae9}', '\u{aea}', '\u{aeb}', '\u{aec}', '\u{aed}',
-            '\u{aee}', '\u{aef}',
-        ]),
-        "gukh" => Some([
-            '\u{16130}',
-            '\u{16131}',
-            '\u{16132}',
-            '\u{16133}',
-            '\u{16134}',
-            '\u{16135}',
-            '\u{16136}',
-            '\u{16137}',
-            '\u{16138}',
-            '\u{16139}',
-        ]),
-        "guru" => Some([
-            '\u{a66}', '\u{a67}', '\u{a68}', '\u{a69}', '\u{a6a}', '\u{a6b}', '\u{a6c}', '\u{a6d}',
-            '\u{a6e}', '\u{a6f}',
-        ]),
-        "hanidec" => Some([
-            '\u{3007}', '\u{4e00}', '\u{4e8c}', '\u{4e09}', '\u{56db}', '\u{4e94}', '\u{516d}',
-            '\u{4e03}', '\u{516b}', '\u{4e5d}',
-        ]),
-        "hmng" => Some([
-            '\u{16b50}',
-            '\u{16b51}',
-            '\u{16b52}',
-            '\u{16b53}',
-            '\u{16b54}',
-            '\u{16b55}',
-            '\u{16b56}',
-            '\u{16b57}',
-            '\u{16b58}',
-            '\u{16b59}',
-        ]),
-        "hmnp" => Some([
-            '\u{1e140}',
-            '\u{1e141}',
-            '\u{1e142}',
-            '\u{1e143}',
-            '\u{1e144}',
-            '\u{1e145}',
-            '\u{1e146}',
-            '\u{1e147}',
-            '\u{1e148}',
-            '\u{1e149}',
-        ]),
-        "java" => Some([
-            '\u{a9d0}', '\u{a9d1}', '\u{a9d2}', '\u{a9d3}', '\u{a9d4}', '\u{a9d5}', '\u{a9d6}',
-            '\u{a9d7}', '\u{a9d8}', '\u{a9d9}',
-        ]),
-        "kali" => Some([
-            '\u{a900}', '\u{a901}', '\u{a902}', '\u{a903}', '\u{a904}', '\u{a905}', '\u{a906}',
-            '\u{a907}', '\u{a908}', '\u{a909}',
-        ]),
-        "kawi" => Some([
-            '\u{11f50}',
-            '\u{11f51}',
-            '\u{11f52}',
-            '\u{11f53}',
-            '\u{11f54}',
-            '\u{11f55}',
-            '\u{11f56}',
-            '\u{11f57}',
-            '\u{11f58}',
-            '\u{11f59}',
-        ]),
-        "khmr" => Some([
-            '\u{17e0}', '\u{17e1}', '\u{17e2}', '\u{17e3}', '\u{17e4}', '\u{17e5}', '\u{17e6}',
-            '\u{17e7}', '\u{17e8}', '\u{17e9}',
-        ]),
-        "knda" => Some([
-            '\u{ce6}', '\u{ce7}', '\u{ce8}', '\u{ce9}', '\u{cea}', '\u{ceb}', '\u{cec}', '\u{ced}',
-            '\u{cee}', '\u{cef}',
-        ]),
-        "krai" => Some([
-            '\u{16d70}',
-            '\u{16d71}',
-            '\u{16d72}',
-            '\u{16d73}',
-            '\u{16d74}',
-            '\u{16d75}',
-            '\u{16d76}',
-            '\u{16d77}',
-            '\u{16d78}',
-            '\u{16d79}',
-        ]),
-        "lana" => Some([
-            '\u{1a80}', '\u{1a81}', '\u{1a82}', '\u{1a83}', '\u{1a84}', '\u{1a85}', '\u{1a86}',
-            '\u{1a87}', '\u{1a88}', '\u{1a89}',
-        ]),
-        "lanatham" => Some([
-            '\u{1a90}', '\u{1a91}', '\u{1a92}', '\u{1a93}', '\u{1a94}', '\u{1a95}', '\u{1a96}',
-            '\u{1a97}', '\u{1a98}', '\u{1a99}',
-        ]),
-        "laoo" => Some([
-            '\u{ed0}', '\u{ed1}', '\u{ed2}', '\u{ed3}', '\u{ed4}', '\u{ed5}', '\u{ed6}', '\u{ed7}',
-            '\u{ed8}', '\u{ed9}',
-        ]),
-        "lepc" => Some([
-            '\u{1c40}', '\u{1c41}', '\u{1c42}', '\u{1c43}', '\u{1c44}', '\u{1c45}', '\u{1c46}',
-            '\u{1c47}', '\u{1c48}', '\u{1c49}',
-        ]),
-        "limb" => Some([
-            '\u{1946}', '\u{1947}', '\u{1948}', '\u{1949}', '\u{194a}', '\u{194b}', '\u{194c}',
-            '\u{194d}', '\u{194e}', '\u{194f}',
-        ]),
-        "mathbold" => Some([
-            '\u{1d7ce}',
-            '\u{1d7cf}',
-            '\u{1d7d0}',
-            '\u{1d7d1}',
-            '\u{1d7d2}',
-            '\u{1d7d3}',
-            '\u{1d7d4}',
-            '\u{1d7d5}',
-            '\u{1d7d6}',
-            '\u{1d7d7}',
-        ]),
-        "mathdbl" => Some([
-            '\u{1d7d8}',
-            '\u{1d7d9}',
-            '\u{1d7da}',
-            '\u{1d7db}',
-            '\u{1d7dc}',
-            '\u{1d7dd}',
-            '\u{1d7de}',
-            '\u{1d7df}',
-            '\u{1d7e0}',
-            '\u{1d7e1}',
-        ]),
-        "mathmono" => Some([
-            '\u{1d7f6}',
-            '\u{1d7f7}',
-            '\u{1d7f8}',
-            '\u{1d7f9}',
-            '\u{1d7fa}',
-            '\u{1d7fb}',
-            '\u{1d7fc}',
-            '\u{1d7fd}',
-            '\u{1d7fe}',
-            '\u{1d7ff}',
-        ]),
-        "mathsanb" => Some([
-            '\u{1d7ec}',
-            '\u{1d7ed}',
-            '\u{1d7ee}',
-            '\u{1d7ef}',
-            '\u{1d7f0}',
-            '\u{1d7f1}',
-            '\u{1d7f2}',
-            '\u{1d7f3}',
-            '\u{1d7f4}',
-            '\u{1d7f5}',
-        ]),
-        "mathsans" => Some([
-            '\u{1d7e2}',
-            '\u{1d7e3}',
-            '\u{1d7e4}',
-            '\u{1d7e5}',
-            '\u{1d7e6}',
-            '\u{1d7e7}',
-            '\u{1d7e8}',
-            '\u{1d7e9}',
-            '\u{1d7ea}',
-            '\u{1d7eb}',
-        ]),
-        "mlym" => Some([
-            '\u{d66}', '\u{d67}', '\u{d68}', '\u{d69}', '\u{d6a}', '\u{d6b}', '\u{d6c}', '\u{d6d}',
-            '\u{d6e}', '\u{d6f}',
-        ]),
-        "modi" => Some([
-            '\u{11650}',
-            '\u{11651}',
-            '\u{11652}',
-            '\u{11653}',
-            '\u{11654}',
-            '\u{11655}',
-            '\u{11656}',
-            '\u{11657}',
-            '\u{11658}',
-            '\u{11659}',
-        ]),
-        "mong" => Some([
-            '\u{1810}', '\u{1811}', '\u{1812}', '\u{1813}', '\u{1814}', '\u{1815}', '\u{1816}',
-            '\u{1817}', '\u{1818}', '\u{1819}',
-        ]),
-        "mroo" => Some([
-            '\u{16a60}',
-            '\u{16a61}',
-            '\u{16a62}',
-            '\u{16a63}',
-            '\u{16a64}',
-            '\u{16a65}',
-            '\u{16a66}',
-            '\u{16a67}',
-            '\u{16a68}',
-            '\u{16a69}',
-        ]),
-        "mtei" => Some([
-            '\u{abf0}', '\u{abf1}', '\u{abf2}', '\u{abf3}', '\u{abf4}', '\u{abf5}', '\u{abf6}',
-            '\u{abf7}', '\u{abf8}', '\u{abf9}',
-        ]),
-        "mymr" => Some([
-            '\u{1040}', '\u{1041}', '\u{1042}', '\u{1043}', '\u{1044}', '\u{1045}', '\u{1046}',
-            '\u{1047}', '\u{1048}', '\u{1049}',
-        ]),
-        "mymrepka" => Some([
-            '\u{116da}',
-            '\u{116db}',
-            '\u{116dc}',
-            '\u{116dd}',
-            '\u{116de}',
-            '\u{116df}',
-            '\u{116e0}',
-            '\u{116e1}',
-            '\u{116e2}',
-            '\u{116e3}',
-        ]),
-        "mymrpao" => Some([
-            '\u{116d0}',
-            '\u{116d1}',
-            '\u{116d2}',
-            '\u{116d3}',
-            '\u{116d4}',
-            '\u{116d5}',
-            '\u{116d6}',
-            '\u{116d7}',
-            '\u{116d8}',
-            '\u{116d9}',
-        ]),
-        "mymrshan" => Some([
-            '\u{1090}', '\u{1091}', '\u{1092}', '\u{1093}', '\u{1094}', '\u{1095}', '\u{1096}',
-            '\u{1097}', '\u{1098}', '\u{1099}',
-        ]),
-        "mymrtlng" => Some([
-            '\u{a9f0}', '\u{a9f1}', '\u{a9f2}', '\u{a9f3}', '\u{a9f4}', '\u{a9f5}', '\u{a9f6}',
-            '\u{a9f7}', '\u{a9f8}', '\u{a9f9}',
-        ]),
-        "nagm" => Some([
-            '\u{1e4f0}',
-            '\u{1e4f1}',
-            '\u{1e4f2}',
-            '\u{1e4f3}',
-            '\u{1e4f4}',
-            '\u{1e4f5}',
-            '\u{1e4f6}',
-            '\u{1e4f7}',
-            '\u{1e4f8}',
-            '\u{1e4f9}',
-        ]),
-        "newa" => Some([
-            '\u{11450}',
-            '\u{11451}',
-            '\u{11452}',
-            '\u{11453}',
-            '\u{11454}',
-            '\u{11455}',
-            '\u{11456}',
-            '\u{11457}',
-            '\u{11458}',
-            '\u{11459}',
-        ]),
-        "nkoo" => Some([
-            '\u{7c0}', '\u{7c1}', '\u{7c2}', '\u{7c3}', '\u{7c4}', '\u{7c5}', '\u{7c6}', '\u{7c7}',
-            '\u{7c8}', '\u{7c9}',
-        ]),
-        "olck" => Some([
-            '\u{1c50}', '\u{1c51}', '\u{1c52}', '\u{1c53}', '\u{1c54}', '\u{1c55}', '\u{1c56}',
-            '\u{1c57}', '\u{1c58}', '\u{1c59}',
-        ]),
-        "onao" => Some([
-            '\u{1e5f1}',
-            '\u{1e5f2}',
-            '\u{1e5f3}',
-            '\u{1e5f4}',
-            '\u{1e5f5}',
-            '\u{1e5f6}',
-            '\u{1e5f7}',
-            '\u{1e5f8}',
-            '\u{1e5f9}',
-            '\u{1e5fa}',
-        ]),
-        "orya" => Some([
-            '\u{b66}', '\u{b67}', '\u{b68}', '\u{b69}', '\u{b6a}', '\u{b6b}', '\u{b6c}', '\u{b6d}',
-            '\u{b6e}', '\u{b6f}',
-        ]),
-        "osma" => Some([
-            '\u{104a0}',
-            '\u{104a1}',
-            '\u{104a2}',
-            '\u{104a3}',
-            '\u{104a4}',
-            '\u{104a5}',
-            '\u{104a6}',
-            '\u{104a7}',
-            '\u{104a8}',
-            '\u{104a9}',
-        ]),
-        "outlined" => Some([
-            '\u{1ccf0}',
-            '\u{1ccf1}',
-            '\u{1ccf2}',
-            '\u{1ccf3}',
-            '\u{1ccf4}',
-            '\u{1ccf5}',
-            '\u{1ccf6}',
-            '\u{1ccf7}',
-            '\u{1ccf8}',
-            '\u{1ccf9}',
-        ]),
-        "rohg" => Some([
-            '\u{10d30}',
-            '\u{10d31}',
-            '\u{10d32}',
-            '\u{10d33}',
-            '\u{10d34}',
-            '\u{10d35}',
-            '\u{10d36}',
-            '\u{10d37}',
-            '\u{10d38}',
-            '\u{10d39}',
-        ]),
-        "saur" => Some([
-            '\u{a8d0}', '\u{a8d1}', '\u{a8d2}', '\u{a8d3}', '\u{a8d4}', '\u{a8d5}', '\u{a8d6}',
-            '\u{a8d7}', '\u{a8d8}', '\u{a8d9}',
-        ]),
-        "segment" => Some([
-            '\u{1fbf0}',
-            '\u{1fbf1}',
-            '\u{1fbf2}',
-            '\u{1fbf3}',
-            '\u{1fbf4}',
-            '\u{1fbf5}',
-            '\u{1fbf6}',
-            '\u{1fbf7}',
-            '\u{1fbf8}',
-            '\u{1fbf9}',
-        ]),
-        "shrd" => Some([
-            '\u{111d0}',
-            '\u{111d1}',
-            '\u{111d2}',
-            '\u{111d3}',
-            '\u{111d4}',
-            '\u{111d5}',
-            '\u{111d6}',
-            '\u{111d7}',
-            '\u{111d8}',
-            '\u{111d9}',
-        ]),
-        "sind" => Some([
-            '\u{112f0}',
-            '\u{112f1}',
-            '\u{112f2}',
-            '\u{112f3}',
-            '\u{112f4}',
-            '\u{112f5}',
-            '\u{112f6}',
-            '\u{112f7}',
-            '\u{112f8}',
-            '\u{112f9}',
-        ]),
-        "sinh" => Some([
-            '\u{de6}', '\u{de7}', '\u{de8}', '\u{de9}', '\u{dea}', '\u{deb}', '\u{dec}', '\u{ded}',
-            '\u{dee}', '\u{def}',
-        ]),
-        "sora" => Some([
-            '\u{110f0}',
-            '\u{110f1}',
-            '\u{110f2}',
-            '\u{110f3}',
-            '\u{110f4}',
-            '\u{110f5}',
-            '\u{110f6}',
-            '\u{110f7}',
-            '\u{110f8}',
-            '\u{110f9}',
-        ]),
-        "sund" => Some([
-            '\u{1bb0}', '\u{1bb1}', '\u{1bb2}', '\u{1bb3}', '\u{1bb4}', '\u{1bb5}', '\u{1bb6}',
-            '\u{1bb7}', '\u{1bb8}', '\u{1bb9}',
-        ]),
-        "sunu" => Some([
-            '\u{11bf0}',
-            '\u{11bf1}',
-            '\u{11bf2}',
-            '\u{11bf3}',
-            '\u{11bf4}',
-            '\u{11bf5}',
-            '\u{11bf6}',
-            '\u{11bf7}',
-            '\u{11bf8}',
-            '\u{11bf9}',
-        ]),
-        "takr" => Some([
-            '\u{116c0}',
-            '\u{116c1}',
-            '\u{116c2}',
-            '\u{116c3}',
-            '\u{116c4}',
-            '\u{116c5}',
-            '\u{116c6}',
-            '\u{116c7}',
-            '\u{116c8}',
-            '\u{116c9}',
-        ]),
-        "talu" => Some([
-            '\u{19d0}', '\u{19d1}', '\u{19d2}', '\u{19d3}', '\u{19d4}', '\u{19d5}', '\u{19d6}',
-            '\u{19d7}', '\u{19d8}', '\u{19d9}',
-        ]),
-        "tamldec" => Some([
-            '\u{be6}', '\u{be7}', '\u{be8}', '\u{be9}', '\u{bea}', '\u{beb}', '\u{bec}', '\u{bed}',
-            '\u{bee}', '\u{bef}',
-        ]),
-        "telu" => Some([
-            '\u{c66}', '\u{c67}', '\u{c68}', '\u{c69}', '\u{c6a}', '\u{c6b}', '\u{c6c}', '\u{c6d}',
-            '\u{c6e}', '\u{c6f}',
-        ]),
-        "thai" => Some([
-            '\u{e50}', '\u{e51}', '\u{e52}', '\u{e53}', '\u{e54}', '\u{e55}', '\u{e56}', '\u{e57}',
-            '\u{e58}', '\u{e59}',
-        ]),
-        "tibt" => Some([
-            '\u{f20}', '\u{f21}', '\u{f22}', '\u{f23}', '\u{f24}', '\u{f25}', '\u{f26}', '\u{f27}',
-            '\u{f28}', '\u{f29}',
-        ]),
-        "tirh" => Some([
-            '\u{114d0}',
-            '\u{114d1}',
-            '\u{114d2}',
-            '\u{114d3}',
-            '\u{114d4}',
-            '\u{114d5}',
-            '\u{114d6}',
-            '\u{114d7}',
-            '\u{114d8}',
-            '\u{114d9}',
-        ]),
-        "tnsa" => Some([
-            '\u{16ac0}',
-            '\u{16ac1}',
-            '\u{16ac2}',
-            '\u{16ac3}',
-            '\u{16ac4}',
-            '\u{16ac5}',
-            '\u{16ac6}',
-            '\u{16ac7}',
-            '\u{16ac8}',
-            '\u{16ac9}',
-        ]),
-        "tols" => Some([
-            '\u{11de0}',
-            '\u{11de1}',
-            '\u{11de2}',
-            '\u{11de3}',
-            '\u{11de4}',
-            '\u{11de5}',
-            '\u{11de6}',
-            '\u{11de7}',
-            '\u{11de8}',
-            '\u{11de9}',
-        ]),
-        "vaii" => Some([
-            '\u{a620}', '\u{a621}', '\u{a622}', '\u{a623}', '\u{a624}', '\u{a625}', '\u{a626}',
-            '\u{a627}', '\u{a628}', '\u{a629}',
-        ]),
-        "wara" => Some([
-            '\u{118e0}',
-            '\u{118e1}',
-            '\u{118e2}',
-            '\u{118e3}',
-            '\u{118e4}',
-            '\u{118e5}',
-            '\u{118e6}',
-            '\u{118e7}',
-            '\u{118e8}',
-            '\u{118e9}',
-        ]),
-        "wcho" => Some([
-            '\u{1e2f0}',
-            '\u{1e2f1}',
-            '\u{1e2f2}',
-            '\u{1e2f3}',
-            '\u{1e2f4}',
-            '\u{1e2f5}',
-            '\u{1e2f6}',
-            '\u{1e2f7}',
-            '\u{1e2f8}',
-            '\u{1e2f9}',
-        ]),
-        // END generated numbering-system digit table
-        _ => None,
-    }
-}
-
 /// Rewrite the ASCII (`latn`) digit glyphs in the numeric segments of a typed
 /// parts list into the resolved numbering system. Only digit-bearing segment
 /// types are touched — separators, signs, currency/unit/compact literals keep
@@ -1320,6 +681,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
     if value.is_nan() {
         // NaN is non-negative and non-zero for sign purposes: only `always`
         // prepends a (plus) sign — `+NaN` — every other mode shows bare `NaN`.
+        push_unit_prefix(&mut parts, r);
         push_sign(&mut parts, &r.sign_display, false, true);
         parts.push(("nan", nan_string(&r.locale).to_string()));
         push_style_suffix(&mut parts, r, decimal_sep);
@@ -1333,6 +695,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
 
     if abs.is_infinite() {
         let mut out: Vec<(&'static str, String)> = Vec::new();
+        push_unit_prefix(&mut out, r);
         push_sign(&mut out, &r.sign_display, negative, false);
         out.push(("infinity", "∞".to_string()));
         push_style_suffix(&mut out, r, decimal_sep);
@@ -1487,6 +850,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
         .filter(|(t, _)| *t == "integer" || *t == "fraction")
         .all(|(_, v)| v.bytes().all(|b| b == b'0'));
     let mut out: Vec<(&'static str, String)> = Vec::with_capacity(parts.len() + 2);
+    push_unit_prefix(&mut out, r);
     push_sign(&mut out, &r.sign_display, negative, rounded_is_zero);
     out.append(&mut parts);
     push_style_suffix(&mut out, r, decimal_sep);
@@ -1517,6 +881,71 @@ pub(crate) fn compact_round(int_part: &str, frac_part: &str, r: &NfResolved) -> 
     }
 }
 
+/// The BCP-47 primary language subtag (`"de-DE"` → `"de"`).
+fn locale_lang(locale: &str) -> &str {
+    locale.split(['-', '_']).next().unwrap_or(locale)
+}
+
+/// Prefix text some locales place *before* the number for a unit (e.g. the
+/// Japanese/Korean/Chinese "speed" reading of `kilometer-per-hour`'s long
+/// form: "時速 -987 キロメートル"). Only a handful of compound units have a
+/// CLDR-attested prefix; everything else renders suffix-only.
+fn unit_prefix_text(unit: &str, display: &str, locale: &str) -> Option<&'static str> {
+    if display != "long" {
+        return None;
+    }
+    match (unit, locale_lang(locale)) {
+        ("kilometer-per-hour", "ja") => Some("時速"),
+        ("kilometer-per-hour", "ko") => Some("시속"),
+        ("kilometer-per-hour", "zh") => Some("每小時"),
+        _ => None,
+    }
+}
+
+/// Suffix text CLDR renders *after* the number for a unit, plus whether a
+/// literal space separates it from the number. Falls back to the raw unit
+/// identifier (space-separated) for units without a hardcoded CLDR entry —
+/// a placeholder, but distinct from the bare number, and byte-consistent
+/// between `format`/`formatToParts`.
+fn unit_suffix_text(unit: &str, display: &str, locale: &str) -> (String, bool) {
+    if unit == "percent" && display != "long" {
+        // The "%" glyph is the short/narrow CLDR form; long falls through to
+        // the raw-identifier placeholder below like any other untabulated unit.
+        return ("%".to_string(), false);
+    }
+    if unit == "kilometer-per-hour" {
+        let lang = locale_lang(locale);
+        return match (display, lang) {
+            ("short", "zh") => ("公里/小時".to_string(), true),
+            ("short", "ko") => ("km/h".to_string(), false),
+            ("short", _) => ("km/h".to_string(), true),
+            ("narrow", "de") => ("km/h".to_string(), true),
+            ("narrow", "zh") => ("公里/小時".to_string(), false),
+            ("narrow", _) => ("km/h".to_string(), false),
+            ("long", "en") => ("kilometers per hour".to_string(), true),
+            ("long", "de") => ("Kilometer pro Stunde".to_string(), true),
+            ("long", "ja") => ("キロメートル".to_string(), true),
+            ("long", "ko") => ("킬로미터".to_string(), false),
+            ("long", "zh") => ("公里".to_string(), true),
+            _ => ("km/h".to_string(), true),
+        };
+    }
+    (unit.to_string(), true)
+}
+
+/// Prepend a unit's CLDR prefix (see [`unit_prefix_text`]), if any, before the
+/// sign/number segments.
+pub(crate) fn push_unit_prefix(parts: &mut Vec<(&'static str, String)>, r: &NfResolved) {
+    if r.style != "unit" {
+        return;
+    }
+    let Some(unit) = &r.unit else { return };
+    if let Some(prefix) = unit_prefix_text(unit, &r.unit_display, &r.locale) {
+        parts.push(("unit", prefix.to_string()));
+        parts.push(("literal", " ".to_string()));
+    }
+}
+
 /// Append the trailing style suffix (`percent`/`unit`) after the numeric parts.
 pub(crate) fn push_style_suffix(
     parts: &mut Vec<(&'static str, String)>,
@@ -1538,8 +967,11 @@ pub(crate) fn push_style_suffix(
         }
         "unit" => {
             if let Some(unit) = &r.unit {
-                parts.push(("literal", " ".to_string()));
-                parts.push(("unit", unit.clone()));
+                let (suffix, sep) = unit_suffix_text(unit, &r.unit_display, &r.locale);
+                if sep {
+                    parts.push(("literal", " ".to_string()));
+                }
+                parts.push(("unit", suffix));
             }
         }
         _ => {}
@@ -1557,7 +989,10 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
     let frac_digits = r.max_frac as usize;
     // Capture original sign before any rounding.
     let is_negative = value < 0.0 || (value == 0.0 && value.is_sign_negative());
-    let accounting = r.currency_sign == "accounting";
+    // CLDR doesn't define a distinct parenthesized accounting pattern for every
+    // locale — German falls back to the plain minus-sign pattern even when
+    // `currencySign: "accounting"` is requested.
+    let accounting = r.currency_sign == "accounting" && locale_lang(locale) != "de";
     // The native float renderer below doesn't honor roundingIncrement; when set,
     // snap the magnitude onto the increment grid first (digit-string rounding,
     // respecting roundingMode) so the renderer formats an already-gridded value.
@@ -1581,14 +1016,12 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
     } else {
         value
     };
-    // For accounting sign, pass the absolute value so format_number_parts does
-    // not emit a minus-sign segment — we wrap the assembled parts in "()" below.
-    let format_value = if accounting && is_negative {
-        value.abs()
-    } else {
-        value
-    };
-    let digits = format_number_parts(format_value, locale, Some(frac_digits), None);
+    // Sign is rendered separately below (via `push_sign`, same as the
+    // non-currency path) so always format the bare magnitude here.
+    let digits = format_number_parts(value.abs(), locale, Some(frac_digits), None);
+    let rounded_is_zero = value.is_nan()
+        || (value.is_finite() && digits.bytes().all(|b| !b.is_ascii_digit() || b == b'0'));
+    let is_negative = !value.is_nan() && is_negative;
     let mut numeric: Vec<(&'static str, String)> = Vec::new();
     split_numeric_parts(&digits, locale, &mut numeric);
     let de_style = locale.eq_ignore_ascii_case("de") || locale.starts_with("de-");
@@ -1620,11 +1053,25 @@ pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'stat
         }
         None => parts = numeric,
     }
-    // Accounting sign: negative amounts are wrapped in parentheses (no minus sign).
-    // Only applied when signDisplay is not "never".
-    if accounting && is_negative && r.sign_display != "never" {
+    // Sign is decided after rounding, same rule as the non-currency path:
+    // `exceptZero`/`negative` suppress the sign when the *rounded* magnitude
+    // is zero (e.g. -0.0001 → no sign), while `auto`/`always` follow the
+    // original mathematical sign (-0 still counts as negative).
+    let mut sign_parts: Vec<(&'static str, String)> = Vec::new();
+    push_sign(
+        &mut sign_parts,
+        &r.sign_display,
+        is_negative,
+        rounded_is_zero,
+    );
+    if accounting && sign_parts.iter().any(|(t, _)| *t == "minusSign") {
+        // Accounting negatives are wrapped in parentheses instead of a minus sign.
         parts.insert(0, ("literal", "(".to_string()));
         parts.push(("literal", ")".to_string()));
+    } else {
+        for (i, seg) in sign_parts.into_iter().enumerate() {
+            parts.insert(i, seg);
+        }
     }
     parts
 }

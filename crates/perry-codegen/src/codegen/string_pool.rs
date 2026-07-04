@@ -8,6 +8,7 @@ use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+use super::spec_function_length;
 
 /// Emits a long sequence of INDEPENDENT init operations (string allocation,
 /// closure/class/function registration) into a series of small chunk functions
@@ -963,7 +964,15 @@ pub(super) fn emit_string_pool(
     // getter-pairs loop above; emission mangling matches the
     // setter-method-emission path at codegen.rs:2041 (renamed.name =
     // "__set_<prop>" → LLVM symbol perry_method_<mp>__<class>____set_<f.name>).
-    let mut setter_pairs: Vec<(u32, String, String, bool)> = Vec::new();
+    // (cid, prop, llvm_name, is_static, spec_length). `spec_length` is the
+    // ECMAScript-visible `.length` of the setter function value read via
+    // `Object.getOwnPropertyDescriptor(proto, prop).set` — leading formal
+    // params before the first default/rest. A setter always has one formal
+    // param, but `set m(x = 42)` has `.length === 0` (test262
+    // class/setter-length-dflt): without a per-func-ptr length registration
+    // the runtime fell back to the setter's ABI arity (1), over-counting the
+    // defaulted param.
+    let mut setter_pairs: Vec<(u32, String, String, bool, u32)> = Vec::new();
     for (class_name, class) in classes.iter() {
         if *class_name != class.name {
             continue;
@@ -999,11 +1008,12 @@ pub(super) fn emit_string_pool(
                     sanitize_member(&inner),
                 )
             };
-            setter_pairs.push((cid, prop.clone(), llvm_name, is_static));
+            let spec_length = spec_function_length(&setter_fn.params) as u32;
+            setter_pairs.push((cid, prop.clone(), llvm_name, is_static, spec_length));
         }
     }
     setter_pairs.sort_unstable();
-    for (cid, prop_name, llvm_name, is_static) in setter_pairs {
+    for (cid, prop_name, llvm_name, is_static, spec_length) in setter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == prop_name) {
@@ -1015,6 +1025,15 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        // Register the setter's spec `.length` keyed by its func_ptr so
+        // `Object.getOwnPropertyDescriptor(proto, prop).set.length` reports
+        // the default-aware count instead of the raw ABI arity. Static
+        // accessors are emitted under a no-`this` `perry_static_…` symbol, so
+        // the same func_ptr is what a value-read of `.set` binds.
+        blk.call_void(
+            "js_register_closure_length",
+            &[(PTR, &func_ref), (I32, &spec_length.to_string())],
+        );
         let register_fn = if is_static {
             "js_register_class_static_setter"
         } else {

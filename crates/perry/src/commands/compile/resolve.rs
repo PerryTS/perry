@@ -122,6 +122,8 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+mod bun_store_tests;
+#[cfg(test)]
 mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
@@ -223,7 +225,51 @@ pub(super) fn enumerate_installed_packages(project_root: &Path) -> HashSet<Strin
     if let Some(nm) = find_node_modules(project_root) {
         collect_packages_in_node_modules(&nm, &mut out);
     }
+    // #5914: bun's "flat"/isolated linker layout keeps non-hoisted transitive
+    // dependencies solely inside `node_modules/.bun/<pkg>@<version>/node_modules/<pkg>`
+    // (and the scoped `@scope+pkg@<version>` variant), with no corresponding
+    // top-level `node_modules/<pkg>` symlink — bun only symlinks packages
+    // that are direct dependencies of some workspace package into the top
+    // level. `collect_packages_in_node_modules` correctly skips `.bun` as a
+    // dotdir (it is bun's internal store, not itself a package), which means
+    // those transitive-only packages are invisible to the `"*"` /
+    // `"@scope/*"` wildcard expansion above.
+    //
+    // Worse, in a bun workspace/monorepo the `.bun` store typically lives
+    // ONLY at the true root, while `find_node_modules` stops at the
+    // *nearest* ancestor `node_modules` — a workspace member commonly has
+    // its own (bun-created, `.bun`-less) `node_modules` for its first-party
+    // sibling-package symlinks, so `nm` above is very often NOT the root and
+    // never sees `.bun` at all. Walk every ancestor's `node_modules/.bun`,
+    // not just the nearest `node_modules` dir, so a workspace-member
+    // `project_root` still finds root-level bun-only transitive deps.
+    let mut dir = project_root.to_path_buf();
+    loop {
+        collect_packages_in_bun_store(&dir.join("node_modules"), &mut out);
+        if !dir.pop() {
+            break;
+        }
+    }
     out
+}
+
+/// See the `.bun` note on `enumerate_installed_packages`. Each
+/// `.bun/<entry>/node_modules` subdirectory has the exact same shape as an
+/// ordinary `node_modules` directory, so walk it with the same collector.
+/// `node_modules` need not exist (`fs::read_dir` on the derived `.bun` path
+/// simply fails and returns).
+fn collect_packages_in_bun_store(node_modules: &Path, out: &mut HashSet<String>) {
+    let bun_dir = node_modules.join(".bun");
+    let entries = match fs::read_dir(&bun_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let nested = entry.path().join("node_modules");
+        if nested.is_dir() {
+            collect_packages_in_node_modules(&nested, out);
+        }
+    }
 }
 
 /// Walk a single `node_modules` directory, recording each package name and

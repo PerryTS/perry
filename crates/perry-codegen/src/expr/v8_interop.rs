@@ -24,6 +24,30 @@ pub(crate) fn import_origin_suffix<'a>(
     origin_names.get(name).map(String::as_str).unwrap_or(name)
 }
 
+/// Issue #5924 (companion to #678/#680): namespace-scoped variant of
+/// `import_origin_suffix`.
+///
+/// `import_function_origin_names` is flat (keyed by bare member name), so
+/// when two namespaces imported into the same file both have a member with
+/// the same name and only one of them is a re-export rename, the rename's
+/// origin-name override clobbers the other namespace's (correct, unrenamed)
+/// suffix — `import { Effect, Context } from "effect"` broke
+/// `Context.Service` because `Effect`'s own re-exported `Service` clobbered
+/// the flat map first. Prefers the per-namespace override
+/// (`(namespace_local, member_name)`) before falling through to the flat
+/// map.
+pub(crate) fn import_origin_suffix_ns<'a>(
+    origin_names: &'a std::collections::HashMap<String, String>,
+    namespace_origin_names: &'a std::collections::HashMap<(String, String), String>,
+    namespace_local: &str,
+    name: &'a str,
+) -> &'a str {
+    namespace_origin_names
+        .get(&(namespace_local.to_string(), name.to_string()))
+        .map(String::as_str)
+        .unwrap_or_else(|| import_origin_suffix(origin_names, name))
+}
+
 /// Issue #678 followup: emit a `js_call_v8_export` bridge call for a name
 /// that resolves to a V8-fallback (interpreted) module.
 ///

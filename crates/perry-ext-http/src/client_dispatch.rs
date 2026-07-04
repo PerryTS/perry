@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use perry_ffi::{spawn_blocking_with_reactor as spawn_blocking, Handle};
 
 use crate::{
-    agent, dispatch_plain_http_request, push_event, tls_client, PendingHttpEvent, HTTP_CLIENT,
+    agent, dispatch_plain_http_request, push_event, tls_client, ClientInflightGuard,
+    PendingHttpEvent, HTTP_CLIENT,
 };
 
 /// Spawn the actual reqwest send. The `spawn_blocking_with_reactor`
@@ -68,7 +69,16 @@ pub(crate) fn dispatch_request(
             return;
         }
         let handle = tokio::runtime::Handle::current();
+        // #5892 remainder (issue_4909 early-exit): the outer closure's
+        // EXT_BLOCKING gate drops the moment we return, and the first
+        // `push_event` is a full response round-trip away — without this
+        // guard the exchange is invisible to the exit gate in between, so a
+        // program whose only other live handle just closed (in-process
+        // server+client) can clean-exit before 'response' fires. Moved into
+        // the task so it covers the full stream lifetime (#5779 idle-kick).
+        let inflight_guard = ClientInflightGuard::new();
         let jh = handle.spawn(async move {
+            let _inflight = inflight_guard;
             if let Some(result) = dispatch_plain_http_request(
                 request_handle,
                 method.as_str(),

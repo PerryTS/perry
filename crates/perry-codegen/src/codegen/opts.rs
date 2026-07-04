@@ -175,12 +175,17 @@ pub struct CompileOptions {
     /// it dispatched `tracer.make(Math.random())` instead of
     /// `random.make(Math.random())`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
-    /// Issue #680 follow-up: per-namespace member origin-name overrides.
+    /// Issue #680 / #5924 follow-up: per-namespace member origin-name overrides.
     /// `namespace_member_prefixes` picks the producer module, but re-exported
     /// members can be stored under a different origin export name; without this
-    /// `ns.alias` calls the right module with the wrong symbol name.
-    /// Keyed by `(namespace_local_name, exported_member_name)` →
-    /// `origin_export_name`.
+    /// `ns.alias` calls the right module with the wrong symbol name. Keyed by
+    /// `(namespace_local_name, exported_member_name)` → `origin_export_name`.
+    /// Being per-namespace also fixes #5924: `import_function_origin_names` is a
+    /// flat map, so two namespaces imported into the same file that both expose
+    /// a member with the same name (only one of them a re-export rename) would
+    /// clobber each other — `import { Effect, Context } from "effect"` broke
+    /// `Context.Service` because `Effect`'s own re-exported `Service` clobbered
+    /// the flat map first.
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     /// Issue #680 follow-up: per-namespace exported-variable members. Namespace
     /// member calls need to know when `ns.member` is a getter returning a
@@ -591,7 +596,7 @@ pub(crate) struct CrossModuleCtx {
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,
-    /// See `CompileOptions::namespace_member_origin_names`.
+    /// See `CompileOptions::namespace_member_origin_names` (#680 / #5924).
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     /// See `CompileOptions::namespace_member_vars`.
     pub namespace_member_vars: std::collections::HashSet<(String, String)>,

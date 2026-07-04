@@ -314,6 +314,12 @@ pub fn gc_init() {
         crate::timer::new_timer_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
+    // 2026-07-02 audit P0 (ported from be73b4f8d): string-keyed descriptor
+    // tables (defineProperty accessors/attrs) and the proxy registry +
+    // reflect-metadata store were invisible to GC — values swept/moved under
+    // live references, owner keys stale after evacuation.
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
     gc_register_mutable_root_scanner(async_context_mutable_root_scanner);
     gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);

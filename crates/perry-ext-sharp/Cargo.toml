@@ -13,7 +13,7 @@ perry-ffi.workspace = true
 # `avif` enables the pure-Rust ravif encoder (AVIF output). We deliberately do
 # NOT enable `avif-native` (C dav1d decoder), so AVIF is encode-only.
 image = { version = "0.25", features = ["avif"] }
-fast_image_resize = "5"
+fast_image_resize = "6"
 kamadak-exif = "0.6"
 
 [dev-dependencies]

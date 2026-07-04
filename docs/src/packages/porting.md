@@ -11,7 +11,7 @@ Perry compiles a practical subset of TypeScript. Most pure TS/JS packages can be
 | Package uses Node native addons (`.node` files, `binding.gyp`, `prebuilds/`, `node-gyp`) | **Don't put it in `compilePackages`.** Find a pure JS/TS alternative, or replace the native boundary with a Perry native binding (`perry.nativeLibrary`). |
 | Package is pure TS/JS with only light use of dynamic features | **Good candidate.** Add to `compilePackages`, patch whatever trips the compiler. |
 | Package's core API is built on `Proxy` (ORMs, validation DSLs, reactive stores) | **Probably not portable.** The surface Perry-users touch is the Proxy. |
-| Package is pure TS/JS but uses lookbehind regex, `Symbol`, `WeakMap`, etc. | **Patchable.** See [Common gaps](#common-gaps) below. |
+| Package is pure TS/JS but uses `Symbol`, `WeakMap`, `console.dir`, etc. | **Patchable.** See [Common gaps](#common-gaps) below. |
 
 ## Native addon packages
 
@@ -96,16 +96,11 @@ Perry's [full limitations list](../language/limitations.md) is the canonical ref
 
 ### Lookbehind regex
 
-Perry uses Rust's `regex` crate, which doesn't support lookbehind (`(?<=…)` / `(?<!…)`).
-
-```text
-// Not supported
-str.match(/(?<=prefix)\w+/);
-
-// Rewrite — capture the prefix and slice
-const m = str.match(/prefix(\w+)/);
-const rest = m ? m[1] : null;
-```
+Supported. Perry compiles with Rust's `regex` crate first and transparently
+falls back to `fancy-regex` for patterns the fast engine can't express —
+lookbehind (`(?<=…)` / `(?<!…)`), lookahead, and backreferences — including
+capture-group translation and replacement-string expansion. No rewrite is
+needed when porting a package that uses them.
 
 ### `Symbol`
 
@@ -180,8 +175,8 @@ Please:
 1. Read the package at node_modules/<NAME>/. Check package.json for
    native addons (binding.gyp, gypfile, prebuilds/ — stop if present).
 2. Scan for unsupported constructs: eval, new Function, dynamic require,
-   Symbol, Proxy, WeakMap, WeakRef, Reflect, decorators, lookbehind
-   regex (?<= / ?<!), Object.setPrototypeOf, computed property keys.
+   Symbol, Proxy, WeakMap, WeakRef, Reflect, decorators, computed
+   property keys.
 3. Report a triage: what rules the package out vs. what's patchable.
 4. If patchable: add the package to perry.compilePackages in
    package.json, apply minimal localized patches, and record each

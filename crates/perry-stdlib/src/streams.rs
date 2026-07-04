@@ -47,6 +47,7 @@ pub(crate) fn internal_promise() -> *mut Promise {
 }
 
 mod byob;
+mod expando;
 mod pipe;
 mod strategy;
 mod subclass;
@@ -66,6 +67,7 @@ pub use self::strategy::{
 };
 use self::strategy::{read_high_water_mark, read_queuing_strategy_size};
 
+pub(crate) use self::expando::stream_expando_get;
 use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
@@ -291,6 +293,9 @@ fn ensure_gc_registered() {
             js_readable_stream_get_reader,
             js_reader_read,
         );
+        unsafe {
+            perry_runtime::object::js_register_stream_expando_set(expando::stream_expando_set_hook);
+        }
     });
 }
 
@@ -311,6 +316,7 @@ fn visit_stream_value_slot(
 }
 
 fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    expando::scan_expando_roots(visitor);
     if let Ok(mut map) = READABLE_STREAMS.lock() {
         for s in map.values_mut() {
             visitor.visit_i64_slot(&mut s.start_cb);
@@ -768,6 +774,9 @@ unsafe fn close_pending(stream_id: usize) {
         js_promise_resolve(p, f64::from_bits(result));
     }
     byob::close_pending_byob(stream_id);
+    // #5437: stream is done — drop any expando entries so the table doesn't
+    // grow one row per stream over the server's lifetime.
+    expando::stream_expando_clear(stream_id);
 }
 
 unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
@@ -782,6 +791,8 @@ unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
         js_promise_reject(p, f64::from_bits(reason_bits));
     }
     byob::error_pending_byob(stream_id, reason_bits);
+    // #5437: stream errored — drop any expando entries (see close_pending).
+    expando::stream_expando_clear(stream_id);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1831,6 +1842,9 @@ pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
     if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.reader_handle = None;
     }
+    // #5437: the reader instance is done — drop any expando entries keyed by
+    // its handle id so the table doesn't retain them for the process lifetime.
+    expando::stream_expando_clear(reader_id);
     f64::from_bits(TAG_UNDEFINED)
 }
 

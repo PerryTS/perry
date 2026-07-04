@@ -202,9 +202,153 @@ fn streamed_response_reassembles_chunks_byte_identically() {
 
 #[test]
 fn has_pending_zero_when_idle() {
+    // Serialize with tests that queue real events (the in-flight-guard test
+    // below) — clearing the shared queue under their feet would break them.
+    let _lock = GC_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Drain anything other tests left; then assert zero.
     let _ = HTTP_PENDING_EVENTS.lock().map(|mut q| q.clear());
     assert_eq!(js_http_has_pending(), 0);
+}
+
+/// #5892 remainder / issue_4909 early-exit regression: from the moment
+/// `dispatch_request` returns until the response events are queued, the
+/// exchange must be visible to the exit gate — `js_ext_http_client_inflight()`
+/// (the guard) or a non-empty `HTTP_PENDING_EVENTS` (the pump gate). Pre-fix,
+/// only the agent-socket path held a `ClientInflightGuard`; the reqwest path
+/// was invisible after the outer spawn closure returned, so an in-process
+/// server+client program whose server just `close()`d could clean-exit with
+/// the response still unread on the socket ('status 200' never printed —
+/// the write_end CI failure).
+///
+/// The test shims run `spawn_blocking` inline, so entering a runtime context
+/// makes `dispatch_request` synchronously spawn the detached task onto this
+/// NOT-YET-DRIVEN current-thread runtime — reproducing the production window
+/// between dispatch and the task's first poll deterministically.
+#[test]
+fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
+    let _lock = GC_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // Minimal HTTP/1.1 server on an OS thread.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let server = std::thread::spawn(move || {
+        if let Ok((mut sock, _)) = listener.accept() {
+            use std::io::{Read, Write};
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf);
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        }
+    });
+
+    let request_handle = register_handle(ClientRequestHandle {
+        method: "GET".to_string(),
+        url: format!("http://127.0.0.1:{port}/"),
+        headers: HashMap::new(),
+        body: Vec::new(),
+        response_callback: 0,
+        listeners: HashMap::new(),
+        timeout_ms: None,
+        ended: false,
+        flushed_early: false,
+        pending_write_callbacks: Vec::new(),
+        end_callback: 0,
+        completed: false,
+        timeout_fired: false,
+        close_emitted: false,
+        agent_handle: 0,
+        tls: crate::tls_client::TlsOptions::default(),
+        incoming_handle: 0,
+        expects_continue: false,
+        continue_body_tx: None,
+    });
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let baseline = js_ext_http_client_inflight();
+    {
+        let _enter = rt.enter();
+        client_dispatch::dispatch_request(
+            request_handle,
+            "GET".to_string(),
+            format!("http://127.0.0.1:{port}/"),
+            HashMap::new(),
+            Vec::new(),
+            Some(10_000),
+            0,
+            crate::tls_client::TlsOptions::default(),
+        );
+    }
+
+    // THE regression assertion: the detached task exists but has never been
+    // polled and has pushed no events — the in-flight guard is the ONLY thing
+    // keeping the exit gate up in this window.
+    assert!(
+        js_ext_http_client_inflight() > baseline,
+        "in-flight guard must be held from dispatch, before the task's first poll"
+    );
+
+    // Drive the runtime to completion. At every observable point until the
+    // response is queued, the exit-gate union must stay nonzero.
+    let my_response_end_queued = || {
+        HTTP_PENDING_EVENTS.lock().is_ok_and(|q| {
+            q.iter().any(|ev| {
+                matches!(ev, PendingHttpEvent::ResponseEnd { request_handle: h } if *h == request_handle)
+            })
+        })
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !my_response_end_queued() {
+        let queue_has_mine = HTTP_PENDING_EVENTS.lock().is_ok_and(|q| !q.is_empty());
+        assert!(
+            js_ext_http_client_inflight() > baseline || queue_has_mine,
+            "exit-gate union (inflight || pending events) went to zero before the response was delivered"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "response never arrived (events: {:?})",
+            HTTP_PENDING_EVENTS.lock().map(|q| q.len())
+        );
+        rt.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        });
+    }
+
+    // The guard must also RELEASE once the response has fully streamed —
+    // a leaked guard would keep every program with one fetch alive forever.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while js_ext_http_client_inflight() > baseline {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "in-flight guard leaked after the response fully streamed"
+        );
+        rt.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        });
+    }
+
+    // Cleanup: drop this test's events + handle so the idle test stays valid.
+    if let Ok(mut q) = HTTP_PENDING_EVENTS.lock() {
+        q.retain(|ev| {
+            !matches!(
+                ev,
+                PendingHttpEvent::ResponseHead { request_handle: h, .. }
+                | PendingHttpEvent::ResponseChunk { request_handle: h, .. }
+                | PendingHttpEvent::ResponseEnd { request_handle: h }
+                | PendingHttpEvent::Error { request_handle: h, .. }
+                | PendingHttpEvent::TransportError { request_handle: h, .. }
+                | PendingHttpEvent::Timeout { request_handle: h } if *h == request_handle
+            )
+        });
+    }
+    drop_handle(request_handle);
+    let _ = server.join();
 }
 
 #[test]

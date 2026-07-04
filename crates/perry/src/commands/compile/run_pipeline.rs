@@ -2080,7 +2080,25 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    let object_output_dir = std::env::current_dir()?;
+    // Per-invocation object staging dir (2026-07-02 audit fleet P0).
+    // Objects used to land at CWD-relative name-only paths, so two
+    // concurrent perry compiles sharing a working directory overwrote each
+    // other's `<module>.o` mid-link and each deleted the other's objects
+    // afterwards — deterministically wrong binaries whenever the object
+    // cache was bypassed (--no-cache / trace modes / store errors), and the
+    // fixed-name stub objects collided even with the cache ON. pid + a
+    // strictly-monotonic wall component (the linker.rs #509 discipline)
+    // keeps simultaneous invocations disjoint; the dir is removed with the
+    // intermediates below.
+    let object_output_dir = {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("perry-objs-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir)?;
+        dir
+    };
     let compile_results: Vec<Result<NativeObjectArtifact, String>> = ctx
         .native_modules
         .par_iter()
@@ -2319,6 +2337,12 @@ pub fn run_with_parse_cache(
             // member_name)` → `source_prefix`.
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
+            // Issue #680 / #5924: per-namespace origin-name resolution
+            // (mirroring `namespace_member_prefixes`). Being per-namespace
+            // instead of the flat `import_function_origin_names` avoids the
+            // #5924 clobber where two namespaces sharing a member name (only one
+            // a re-export rename) overwrite each other (`Effect`'s re-exported
+            // `Service` broke `Context.Service`).
             let mut namespace_member_origin_names: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_member_vars: std::collections::HashSet<(String, String)> =
@@ -2514,8 +2538,34 @@ pub fn run_with_parse_cache(
                             for (export_name, origin_path) in exports {
                                 let origin_prefix =
                                     compute_module_prefix(origin_path, &ctx.project_root);
+                                // Issue #5927: namespace members are a
+                                // best-effort fallback in the flat
+                                // `import_function_prefixes` map — the
+                                // authoritative lookup for genuine
+                                // namespace-member accesses is the
+                                // per-namespace `namespace_member_prefixes`
+                                // map populated unconditionally below. Use
+                                // `or_insert` (never overwrite) so a PLAIN
+                                // named import of the same bare name (which
+                                // has NO other resolution path — a bare
+                                // call has no namespace to scope against)
+                                // always wins the flat map, regardless of
+                                // which import statement is processed
+                                // first. Pre-fix, `import { omit } from
+                                // "remeda"` in the same file as `import {
+                                // Context } from "effect"` (where
+                                // effect's Context.ts also exports `omit`)
+                                // meant whichever import was LATER in
+                                // source order silently overwrote the
+                                // other's flat-map entry — opencode's
+                                // `provider.ts` has `Context` imported
+                                // after `omit`, so `omit(...)` (a bare
+                                // remeda call) resolved against
+                                // `Context.ts`'s prefix instead of
+                                // remeda's chunk.
                                 import_function_prefixes
-                                    .insert(export_name.clone(), origin_prefix.clone());
+                                    .entry(export_name.clone())
+                                    .or_insert_with(|| origin_prefix.clone());
                                 // Issue #678: surface origin-name overrides
                                 // for namespace-imported members too. A
                                 // member reached via a re-export rename
@@ -2528,10 +2578,36 @@ pub fn run_with_parse_cache(
                                     .cloned();
                                 if let Some(ref origin_name) = resolved_origin_name {
                                     if origin_name != export_name {
+                                        // Issue #5927: same `or_insert`
+                                        // rationale as `import_function_prefixes`
+                                        // above — never let a namespace
+                                        // member's origin-name rename
+                                        // overwrite a plain import's entry.
                                         import_function_origin_names
-                                            .insert(export_name.clone(), origin_name.clone());
+                                            .entry(export_name.clone())
+                                            .or_insert_with(|| origin_name.clone());
                                     }
                                 }
+                                // Issue #5924: unconditionally register every
+                                // member under the per-namespace key —
+                                // mirrors `namespace_member_prefixes` below,
+                                // which is also populated for every export,
+                                // not just renamed ones. A *sparse* map here
+                                // (only renamed members) would still force a
+                                // fallback to the flat
+                                // `import_function_origin_names` for
+                                // unrenamed members, and that flat entry may
+                                // belong to a DIFFERENT namespace imported
+                                // into the same file. Storing every member's
+                                // resolved suffix (renamed or not) lets the
+                                // consumer treat a namespace hit as
+                                // authoritative and never fall through.
+                                namespace_member_origin_names.insert(
+                                    (local.clone(), export_name.clone()),
+                                    resolved_origin_name
+                                        .clone()
+                                        .unwrap_or_else(|| export_name.clone()),
+                                );
                                 // Issue #680: also register under the
                                 // per-namespace key so `random.make` and
                                 // `tracer.make` can be disambiguated.
@@ -2785,26 +2861,86 @@ pub fn run_with_parse_cache(
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
+                                    // Issue #5927: `or_insert` — see the
+                                    // matching rationale on the
+                                    // `namespace_like_local` branch above.
+                                    // A namespace member is a best-effort
+                                    // fallback in this flat map; a PLAIN
+                                    // named import of the same bare name
+                                    // has no other resolution path and
+                                    // must always win, regardless of
+                                    // import-statement order.
                                     import_function_prefixes
-                                        .insert(export_name.clone(), origin_prefix.clone());
+                                        .entry(export_name.clone())
+                                        .or_insert_with(|| origin_prefix.clone());
+                                    // Issue #5922 (companion to #680): also
+                                    // register under the per-namespace key so
+                                    // `Context.foo` and `Option.foo` resolve to
+                                    // their own sources even when two
+                                    // namespace-reexport targets imported into
+                                    // the same file happen to export a member
+                                    // with the same bare name. Without this,
+                                    // codegen's `expr/static_method.rs` (plus
+                                    // `namespace_call.rs` / `property_get.rs`
+                                    // for lowercase-receiver call/read forms)
+                                    // fall through to the flat
+                                    // `import_function_prefixes`, which the
+                                    // last-registered namespace silently wins.
                                     namespace_member_prefixes.insert(
                                         ($namespace_local.clone(), export_name.clone()),
                                         origin_prefix.clone(),
                                     );
+                                    // Issue #678: surface origin-name overrides
+                                    // for the NamespaceReExport branch too.
                                     let resolved_origin_name = all_module_export_origin_names
                                         .get(target_path_str)
                                         .and_then(|m| m.get(export_name))
                                         .cloned();
                                     if let Some(ref origin_name) = resolved_origin_name {
                                         if origin_name != export_name {
+                                            // Issue #5927: `or_insert` — see
+                                            // the matching rationale above.
                                             import_function_origin_names
-                                                .insert(export_name.clone(), origin_name.clone());
-                                            namespace_member_origin_names.insert(
-                                                ($namespace_local.clone(), export_name.clone()),
-                                                origin_name.clone(),
-                                            );
+                                                .entry(export_name.clone())
+                                                .or_insert_with(|| origin_name.clone());
                                         }
                                     }
+                                    // Issue #5924: unconditionally register
+                                    // every member under the per-namespace
+                                    // key, mirroring `namespace_member_prefixes`
+                                    // above (populated for every export, not
+                                    // just renamed ones). Found via a
+                                    // real-world `sst/opencode` compile:
+                                    // `import { Effect, Layer, Context,
+                                    // Schema, Types } from "effect"`
+                                    // processes all five namespace-reexport
+                                    // targets into this file's shared maps.
+                                    // When an EARLIER-processed namespace
+                                    // (e.g. `Effect`) re-exports a member
+                                    // under a rename (e.g. `Service`), the
+                                    // flat `import_function_origin_names`
+                                    // entry it leaves behind clobbers a
+                                    // LATER-processed namespace's (e.g.
+                                    // `Context`'s) *unrenamed* member of the
+                                    // same name — `Context.Service` resolved
+                                    // to the wrong symbol suffix and linking
+                                    // failed with an undefined
+                                    // `perry_fn_..._Context_ts__<
+                                    // wrong-suffix>` symbol. A *sparse*
+                                    // per-namespace map (only renamed
+                                    // members) doesn't fully fix this: an
+                                    // unrenamed member with no entry here
+                                    // would still fall back to the
+                                    // (possibly contaminated) flat map, so
+                                    // every member gets an entry — the
+                                    // resolved origin name when renamed,
+                                    // else the export name itself.
+                                    namespace_member_origin_names.insert(
+                                        ($namespace_local.clone(), export_name.clone()),
+                                        resolved_origin_name
+                                            .clone()
+                                            .unwrap_or_else(|| export_name.clone()),
+                                    );
 
                                     let key = (origin_path.clone(), export_name.clone());
                                     if let Some(&param_count) = exported_func_param_counts.get(&key)
@@ -3071,9 +3207,30 @@ pub fn run_with_parse_cache(
                         source_prefix.clone()
                     };
 
-                    import_function_prefixes
-                        .insert(exported_name.clone(), effective_prefix.clone());
-                    if local_name != exported_name {
+                    // Issue #<TBD>: only key by `exported_name` in the
+                    // no-rename case (`local_name == exported_name`), where
+                    // the HIR's `ExternFuncRef` genuinely carries that
+                    // string. In the aliased case (#35/#321 above:
+                    // `ExternFuncRef` carries the LOCAL name, unique per
+                    // import site), inserting under `exported_name` too is
+                    // not just redundant — `exported_name` is whatever the
+                    // ORIGIN module happens to call it, so it can collide
+                    // with an unrelated LOCAL alias elsewhere in the same
+                    // file. Concrete repro: `import { a as n, c as a } from
+                    // "./x"; import { a as t } from "./y"` — the second
+                    // specifier's exported name "a" overwrote the first
+                    // import's *local* alias "a" (from `c as a`), silently
+                    // repointing `ExternFuncRef { name: "a" }` at module y
+                    // instead of x. Only inserting the ALIASED case under
+                    // `local_name` (never also under `exported_name`) keeps
+                    // every key in this map unique per file — local names
+                    // can't collide with each other (each `let`/import
+                    // binding needs a distinct identifier), but exported
+                    // names from different source modules can and do.
+                    if local_name == exported_name {
+                        import_function_prefixes
+                            .insert(exported_name.clone(), effective_prefix.clone());
+                    } else {
                         import_function_prefixes
                             .insert(local_name.clone(), effective_prefix.clone());
                     }
@@ -4960,7 +5117,7 @@ pub fn run_with_parse_cache(
             }
             let stub_bytes =
                 perry_codegen::stubs::generate_stub_object(&md, &mf, &mi, target.as_deref())?;
-            let stub_path = PathBuf::from("_perry_stubs.o");
+            let stub_path = object_output_dir.join("_perry_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
@@ -5342,7 +5499,7 @@ pub fn run_with_parse_cache(
                 &stub_wrapper_names,
                 target.as_deref(),
             )?;
-            let stub_path = PathBuf::from("_perry_failed_stubs.o");
+            let stub_path = object_output_dir.join("_perry_failed_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
@@ -5541,6 +5698,9 @@ pub fn run_with_parse_cache(
             for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
+            // Best-effort: drop the per-invocation staging dir (only when
+            // empty — keep_intermediates or stray files leave it in place).
+            let _ = fs::remove_dir(&object_output_dir);
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
@@ -5677,6 +5837,9 @@ pub fn run_with_parse_cache(
             for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
+            // Best-effort: drop the per-invocation staging dir (only when
+            // empty — keep_intermediates or stray files leave it in place).
+            let _ = fs::remove_dir(&object_output_dir);
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
