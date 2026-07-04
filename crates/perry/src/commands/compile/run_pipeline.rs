@@ -1830,7 +1830,25 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    let object_output_dir = std::env::current_dir()?;
+    // Per-invocation object staging dir (2026-07-02 audit fleet P0).
+    // Objects used to land at CWD-relative name-only paths, so two
+    // concurrent perry compiles sharing a working directory overwrote each
+    // other's `<module>.o` mid-link and each deleted the other's objects
+    // afterwards — deterministically wrong binaries whenever the object
+    // cache was bypassed (--no-cache / trace modes / store errors), and the
+    // fixed-name stub objects collided even with the cache ON. pid + a
+    // strictly-monotonic wall component (the linker.rs #509 discipline)
+    // keeps simultaneous invocations disjoint; the dir is removed with the
+    // intermediates below.
+    let object_output_dir = {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("perry-objs-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir)?;
+        dir
+    };
     let compile_results: Vec<Result<NativeObjectArtifact, String>> = ctx
         .native_modules
         .par_iter()
@@ -4676,7 +4694,7 @@ pub fn run_with_parse_cache(
             }
             let stub_bytes =
                 perry_codegen::stubs::generate_stub_object(&md, &mf, &mi, target.as_deref())?;
-            let stub_path = PathBuf::from("_perry_stubs.o");
+            let stub_path = object_output_dir.join("_perry_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
@@ -5058,7 +5076,7 @@ pub fn run_with_parse_cache(
                 &stub_wrapper_names,
                 target.as_deref(),
             )?;
-            let stub_path = PathBuf::from("_perry_failed_stubs.o");
+            let stub_path = object_output_dir.join("_perry_failed_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
             obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
@@ -5257,6 +5275,9 @@ pub fn run_with_parse_cache(
             for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
+            // Best-effort: drop the per-invocation staging dir (only when
+            // empty — keep_intermediates or stray files leave it in place).
+            let _ = fs::remove_dir(&object_output_dir);
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
@@ -5393,6 +5414,9 @@ pub fn run_with_parse_cache(
             for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
+            // Best-effort: drop the per-invocation staging dir (only when
+            // empty — keep_intermediates or stray files leave it in place).
+            let _ = fs::remove_dir(&object_output_dir);
         }
 
         let codegen_cache_stats = if object_cache.is_enabled() {
