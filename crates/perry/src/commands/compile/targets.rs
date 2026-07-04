@@ -726,7 +726,17 @@ pub(super) fn find_watchos_swift_runtime() -> Option<PathBuf> {
         }
     }
 
-    // 2. Check in the source tree (development builds)
+    // 2. Check the workspace checkout (PERRY_WORKSPACE_ROOT / exe / cwd
+    // walk) so npm/homebrew installs pointed at a source tree resolve the
+    // Swift shell the same way they resolve runtime/stdlib.
+    if let Some(root) = super::find_perry_workspace_root() {
+        let candidate = root.join("crates/perry-ui-watchos/swift/PerryWatchApp.swift");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    // 3. Check in the source tree (development builds)
     let source_candidate = PathBuf::from("crates/perry-ui-watchos/swift/PerryWatchApp.swift");
     if source_candidate.exists() {
         return Some(source_candidate);
@@ -752,6 +762,13 @@ pub(super) fn find_visionos_swift_runtime() -> Option<PathBuf> {
                     return Some(candidate);
                 }
             }
+        }
+    }
+
+    if let Some(root) = super::find_perry_workspace_root() {
+        let candidate = root.join("crates/perry-ui-visionos/swift/PerryVisionApp.swift");
+        if candidate.exists() {
+            return Some(candidate);
         }
     }
 

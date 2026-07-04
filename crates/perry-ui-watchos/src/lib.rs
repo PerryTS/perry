@@ -1304,7 +1304,7 @@ pub extern "C" fn perry_system_app_group_delete(_key_ptr: i64) {
 pub extern "C" fn perry_system_request_location(_cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_system_audio_start() -> f64 {
-    1.0
+    audio::start() as f64
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_stop() {
@@ -1324,7 +1324,7 @@ pub extern "C" fn perry_system_audio_get_waveform(_count: f64) -> f64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_system_get_device_model() -> i64 {
-    0
+    audio::get_device_model()
 }
 /// Bug-report-flow utility: stable OS-version string. watchOS stub.
 #[no_mangle]

@@ -454,6 +454,25 @@ pub extern "C" fn perry_next_wake_ms() -> f64 {
     best
 }
 
+/// Host-driven event loop (watchOS SwiftUI tree shell). When set, the
+/// generated entry's event-drain loop exits after its initial microtask
+/// flush instead of parking: the host shell (PerryWatchApp.swift) owns the
+/// run loop and calls js_callback_timer_tick / js_interval_timer_tick each
+/// frame, and `perry_main_init` must return so SwiftUI can render the tree.
+/// Set by perry-ui-watchos `app_run()` — i.e. only when the user program
+/// actually built a perry/ui App on a Swift-shell platform.
+static EVENT_LOOP_HOST_DRIVEN: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+pub extern "C" fn js_set_event_loop_host_driven(v: i32) {
+    EVENT_LOOP_HOST_DRIVEN.store(v != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_loop_host_driven() -> i32 {
+    EVENT_LOOP_HOST_DRIVEN.load(Ordering::Relaxed) as i32
+}
+
 /// Block until the next scheduled timer fires, a notify arrives, or the
 /// 1-second idle cap elapses — whichever is earliest. Returns immediately
 /// if a notify arrived since the last call (the flag is cleared on

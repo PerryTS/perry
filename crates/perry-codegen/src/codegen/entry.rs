@@ -829,8 +829,14 @@ pub(super) fn compile_module_entry(
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
 
-                // loop_header: check if there's any reason to keep running
+                // loop_header: check if there's any reason to keep running.
+                // Host-driven shells (watchOS SwiftUI tree renderer) flag the
+                // loop via js_set_event_loop_host_driven from perry_ui_app_run:
+                // the shell owns the run loop and ticks timers itself, so the
+                // entry must return (Swift calls it as perry_main_init and
+                // renders only after it comes back) even while timers are live.
                 ctx.current_block = header_idx;
+                let host_driven = ctx.block().call(I32, "js_event_loop_host_driven", &[]);
                 let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
                 let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
                 let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
@@ -848,7 +854,9 @@ pub(super) fn compile_module_entry(
                 let any = ctx.block().or(I32, &any3, &has_microtasks);
                 let zero = "0".to_string();
                 let cmp = ctx.block().icmp_ne(I32, &any, &zero);
-                ctx.block().cond_br(&cmp, &body_label, &exit_label);
+                let not_host = ctx.block().icmp_eq(I32, &host_driven, &zero);
+                let keep = ctx.block().and(crate::types::I1, &cmp, &not_host);
+                ctx.block().cond_br(&keep, &body_label, &exit_label);
 
                 // loop_body: tick everything, sleep, loop
                 ctx.current_block = body_idx;

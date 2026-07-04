@@ -696,6 +696,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // after enqueueing onto a queue the pump drains; otherwise sleeps until
     // the next timer deadline (or 1s safety cap).
     module.declare_function("js_wait_for_event", VOID, &[]);
+    // Host-driven event loop flag (watchOS SwiftUI tree shell): the entry's
+    // drain loop exits when perry_ui_app_run marked the loop host-driven.
+    module.declare_function("js_event_loop_host_driven", I32, &[]);
     module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
 
