@@ -176,3 +176,58 @@ g(false);
     );
     assert_eq!(stdout, "D: live\nD: null\n");
 }
+
+/// Statics on a RENAMED colliding class must dispatch to the renamed
+/// registrant, not the first same-named one: static method calls, static
+/// FIELD reads/writes, and instance construction in factory B must all
+/// bind B's `class e` (#5938 follow-up — the raw-name lookups in the
+/// static-call/static-field lowering arms bound factory A's class, so
+/// `B:` printed alpha values).
+#[test]
+fn renamed_class_statics_dispatch_to_renamed_registrant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const mkA = () => {
+  const tag = "alpha";
+  class e {
+    static label = "L:" + tag;
+    v: string;
+    constructor() {
+      this.v = tag;
+    }
+    static who(): string {
+      return tag;
+    }
+  }
+  e.label = e.label + "!";
+  return { who: () => e.who(), inst: () => new e().v, lab: () => e.label };
+};
+const a = mkA();
+const mkB = (x: number) => {
+  const tag = "beta" + x;
+  class e {
+    static label = "L:" + tag;
+    v: string;
+    constructor() {
+      this.v = tag;
+    }
+    static who(): string {
+      return tag;
+    }
+  }
+  e.label = e.label + "?";
+  return { who: e.who(), inst: new e().v, lab: e.label };
+};
+console.log(a.who(), a.inst(), a.lab());
+const b = mkB(1);
+console.log(b.who, b.inst, b.lab);
+console.log(a.who(), a.inst(), a.lab());
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "alpha alpha L:alpha!\nbeta1 beta1 L:beta1?\nalpha alpha L:alpha!\n"
+    );
+}

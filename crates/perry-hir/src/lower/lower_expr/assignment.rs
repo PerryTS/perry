@@ -78,7 +78,10 @@ pub(crate) fn lower_expr_assignment(
         }
         ast::Expr::Member(member) => {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                let obj_name = obj_ident.sym.to_string();
+                // #5938 follow-up: resolve scope-local class renames so a
+                // colliding body-local `class X`'s static write targets the
+                // renamed registrant, not the first same-named one.
+                let obj_name = ctx.resolve_class_name(obj_ident.sym.as_ref());
                 if ctx.lookup_class(&obj_name).is_some() {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
