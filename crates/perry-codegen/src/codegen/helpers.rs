@@ -598,6 +598,24 @@ pub(super) fn register_module_globals_as_gc_roots(
         ctx.block()
             .call_void("js_gc_register_global_root", &[(I64, &addr)]);
     }
+
+    // Static class-field globals (`@perry_static_<mod>__<Class>__<field>`)
+    // hold NaN-boxed any-values just like module globals but were never
+    // registered (2026-07-02 audit P0 — byte-for-byte the #5042 class-keys
+    // shape): the global's copy was never rewritten on evacuation, and when
+    // the write-site class-id lookup misses it is the ONLY reference, so the
+    // value was collectable while `C.field` still read it. The map can hold
+    // one global under several keys (class name + import alias) — dedupe.
+    // Cross-module duplicates (defining module + importers both register the
+    // same linked address) are harmless: GLOBAL_ROOTS tolerates duplicate
+    // entries (double mark/rewrite is idempotent).
+    let static_names: std::collections::BTreeSet<&String> =
+        ctx.static_field_globals.values().collect();
+    for global_name in static_names {
+        let addr = ctx.block().ptrtoint(&format!("@{}", global_name), I64);
+        ctx.block()
+            .call_void("js_gc_register_global_root", &[(I64, &addr)]);
+    }
 }
 
 /// Early static-field setup: registrations that don't read any

@@ -1907,3 +1907,58 @@ static KEEP_REFLECT_HAS: extern "C" fn(f64, f64) -> f64 = js_reflect_has;
 static KEEP_REFLECT_OWN_KEYS: extern "C" fn(f64) -> f64 = js_reflect_own_keys;
 #[used]
 static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_apply;
+
+/// Rewrite a `REFLECT_METADATA` key's POINTER-tagged target bits during the
+/// GC metadata-rewrite phase; non-pointer targets (class refs, primitives)
+/// pass through untouched.
+fn rewrite_metadata_target_bits(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    target_bits: u64,
+) -> u64 {
+    if !visitor.is_metadata_rewrite_phase() {
+        return target_bits;
+    }
+    if (target_bits & !POINTER_MASK) != POINTER_TAG {
+        return target_bits;
+    }
+    let mut addr = (target_bits & POINTER_MASK) as usize;
+    if visitor.visit_metadata_usize_slot(&mut addr) {
+        POINTER_TAG | (addr as u64 & POINTER_MASK)
+    } else {
+        target_bits
+    }
+}
+
+/// GC scanner for the proxy registry + reflect-metadata store (2026-07-02
+/// audit P0; ported from the stranded be73b4f8d). A proxy's target/handler
+/// are commonly reachable ONLY through `PROXIES` — without visiting them a
+/// minor GC collects (or moves) them and every subsequent trap derefs freed
+/// or stale memory. `REFLECT_METADATA`'s own doc admits its keys go stale on
+/// a target move; rekey them during the metadata-rewrite phase.
+pub(crate) fn scan_proxy_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROXIES.with(|proxies| {
+        for entry in proxies.borrow_mut().iter_mut().flatten() {
+            visitor.visit_nanbox_f64_slot(&mut entry.target);
+            visitor.visit_nanbox_f64_slot(&mut entry.handler);
+        }
+    });
+
+    REFLECT_METADATA.with(|store| {
+        let mut store = store.borrow_mut();
+        let needs_rebuild = store
+            .keys()
+            .any(|key| rewrite_metadata_target_bits(visitor, key.target_bits) != key.target_bits);
+        if needs_rebuild {
+            let old = std::mem::take(&mut *store);
+            for (mut key, mut value) in old {
+                visitor.visit_nanbox_f64_slot(&mut value);
+                key.target_bits = rewrite_metadata_target_bits(visitor, key.target_bits);
+                store.insert(key, value);
+            }
+        } else {
+            for value in store.values_mut() {
+                visitor.visit_nanbox_f64_slot(value);
+            }
+        }
+    });
+}

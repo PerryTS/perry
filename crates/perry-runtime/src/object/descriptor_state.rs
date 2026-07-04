@@ -544,3 +544,73 @@ pub(crate) unsafe fn mark_all_keys(
         set_property_attrs(obj_addr, key_str, attrs);
     }
 }
+
+/// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
+/// phase (evacuation moved the owning object), mirroring the symbol-keyed
+/// twin tables' owner rekey (`symbol/gc_roots.rs`). Outside that phase the
+/// owner is returned unchanged.
+fn rewrite_descriptor_owner(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    owner: usize,
+) -> usize {
+    if !visitor.is_metadata_rewrite_phase() {
+        return owner;
+    }
+    let mut addr = owner;
+    visitor.visit_metadata_usize_slot(&mut addr);
+    addr
+}
+
+/// GC scanner for the string-keyed descriptor side tables (2026-07-02 audit
+/// P0; ported from the stranded be73b4f8d): `ACCESSOR_DESCRIPTORS` holds the
+/// ONLY reference to `Object.defineProperty` getter/setter closures (the
+/// accessor install path stores no field-slot copy), so without visiting
+/// them a minor GC sweeps or moves the closure out from under the next
+/// property read. Owner keys are `(obj_addr, key)` — rekeyed when the owning
+/// object moves, exactly like the symbol-keyed twins, so frozen/non-writable
+/// attrs and accessors don't silently detach (or fire on a new tenant at a
+/// reused address).
+pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROPERTY_DESCRIPTORS.with(|descriptors| {
+        let mut descriptors = descriptors.borrow_mut();
+        let needs_rebuild = descriptors
+            .keys()
+            .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
+        if needs_rebuild {
+            let old = std::mem::take(&mut *descriptors);
+            for ((owner, key), attrs) in old {
+                let owner = rewrite_descriptor_owner(visitor, owner);
+                descriptors.insert((owner, key), attrs);
+            }
+        }
+    });
+
+    ACCESSOR_DESCRIPTORS.with(|descriptors| {
+        let mut descriptors = descriptors.borrow_mut();
+        let needs_rebuild = descriptors
+            .keys()
+            .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
+        if needs_rebuild {
+            let old = std::mem::take(&mut *descriptors);
+            for ((owner, key), mut acc) in old {
+                if acc.get != 0 {
+                    visitor.visit_nanbox_u64_slot(&mut acc.get);
+                }
+                if acc.set != 0 {
+                    visitor.visit_nanbox_u64_slot(&mut acc.set);
+                }
+                let owner = rewrite_descriptor_owner(visitor, owner);
+                descriptors.insert((owner, key), acc);
+            }
+        } else {
+            for acc in descriptors.values_mut() {
+                if acc.get != 0 {
+                    visitor.visit_nanbox_u64_slot(&mut acc.get);
+                }
+                if acc.set != 0 {
+                    visitor.visit_nanbox_u64_slot(&mut acc.set);
+                }
+            }
+        }
+    });
+}

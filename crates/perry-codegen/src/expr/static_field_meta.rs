@@ -69,7 +69,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key = (class_name.clone(), field_name.clone());
             if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
                 let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): static field global slot is registered as a mutable GC root.
+                // GC_STORE_AUDIT(ROOT): static field global slot is registered as a mutable GC root
+                // (register_module_globals_as_gc_roots walks ctx.static_field_globals since the
+                // 2026-07-02 audit fix; before that this comment was aspirational and the slot
+                // was unrooted).
                 emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
             }
             // v0.5.747: also register the static field in the runtime
