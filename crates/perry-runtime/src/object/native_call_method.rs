@@ -1546,6 +1546,31 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // Exotic receivers (RegExp / Date / Error) with a user-assigned own
+    // property that is a callable: `var r = /x/; r.f = function(){...}; r.f()`
+    // and `String.prototype.toLowerCase.call`-style borrows like
+    // `reg.toLowerCase = String.prototype.toLowerCase; reg.toLowerCase()`
+    // (test262 String/prototype/{toLowerCase,toUpperCase,...}/*_A1_T14). These
+    // objects store dynamic props in the exotic-expando side table, not the
+    // ObjectHeader field map, so the field/vtable/prototype dispatch above
+    // never sees them. Look the name up there; if it is a callable, invoke it
+    // with the receiver bound as `this` (via IMPLICIT_THIS, matching the
+    // closure-field dispatch path above).
+    if jsval.is_pointer() {
+        if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(object) {
+            if let Some(bits) = super::exotic_expando::value_lookup(kind, addr, method_name) {
+                let candidate = f64::from_bits(bits);
+                if crate::collection_iter::is_callable(candidate) {
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                    let result =
+                        crate::closure::js_native_call_value(candidate, args_ptr, args_len);
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
+            }
+        }
+    }
+
     crate::object::class_registry::report_dispatch_miss(
         "call-method (no method/field/proto match)",
         object,
