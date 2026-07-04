@@ -1219,9 +1219,46 @@ fn al_set_length(recv: f64, len: i64) {
             }
         }
     }
+    // `Set(O, "length", …, true)` (Throw=true) must throw a TypeError when the
+    // set fails: a frozen array, an array/object whose `length` is a
+    // non-writable data property (`defineProperty(o,"length",{writable:false})`
+    // or a function's intrinsic `length`), or a frozen plain object. The
+    // by-name setter below silently no-ops in those cases (PutValue's
+    // non-strict fall-through), so detect the failure up front and throw.
+    if al_length_write_would_fail(recv, raw_addr) {
+        crate::collection_iter::throw_type_error(
+            "Cannot assign to read only property 'length' of object",
+        );
+    }
     let raw = raw_addr as *mut crate::object::ObjectHeader;
     let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     crate::object::js_object_set_field_by_name(raw, key, len as f64);
+}
+
+/// True when `Set(recv, "length", …)` would fail (and so must throw under
+/// `Throw=true`): a frozen array, a non-writable `length` data property, or a
+/// callable receiver (a function's `length` is non-writable by spec).
+fn al_length_write_would_fail(recv: f64, raw_addr: usize) -> bool {
+    // Frozen array: `length` is non-writable after `Object.freeze`.
+    let arr = as_real_array(recv);
+    if !arr.is_null() {
+        if crate::array::array_is_frozen(arr) {
+            return true;
+        }
+        return crate::object::get_property_attrs(raw_addr, "length")
+            .map(|a| !a.writable())
+            .unwrap_or(false);
+    }
+    // Non-array receivers: a recorded non-writable `length` descriptor
+    // (`defineProperty(o,"length",{writable:false})`) or a callable receiver
+    // whose intrinsic `length` is non-writable.
+    if crate::object::get_property_attrs(raw_addr, "length")
+        .map(|a| !a.writable())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    crate::closure::is_closure_ptr(raw_addr)
 }
 
 /// `ToIntegerOrInfinity(v)` as an `f64` (NaN → 0; ±Infinity preserved).
