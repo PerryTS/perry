@@ -1342,6 +1342,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // write for `i++`/`i--` on a sloppy implicit global (#3575).
     module.declare_function("js_global_get_optional", DOUBLE, &[DOUBLE]);
     module.declare_function("js_global_update", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #5989: strict-mode `Date = wrapped` — write an EXISTING global
+    // property, throw the spec ReferenceError only when absent.
+    module.declare_function(
+        "js_global_assign_existing_or_throw",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
     module.declare_function("js_throw_reference_error_super_delete", DOUBLE, &[]);
     module.declare_function(

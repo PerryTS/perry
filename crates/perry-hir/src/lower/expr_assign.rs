@@ -448,10 +448,29 @@ fn lower_assignment_target(
                 Ok(*value)
             } else {
                 if ctx.current_strict {
-                    return Ok(Expr::Sequence(vec![
-                        *value,
-                        throw_reference_error_unresolvable_assignment(&name),
-                    ]));
+                    // #5989: strict-mode assignment to an identifier with no
+                    // lexical binding must first resolve against the global
+                    // object (spec PutValue): an EXISTING global property is
+                    // a normal property write — Next.js 16's cacheComponents
+                    // node-environment extensions reassign `Date` exactly
+                    // this way in strict CJS (`Date = createDate(Date)`),
+                    // and the old unconditional throw made the install fail
+                    // at boot, disarming dynamic-IO clock detection. Only a
+                    // genuinely absent binding throws; the helper does the
+                    // presence probe + write-back at runtime (mirrors the
+                    // `js_global_update` shape for `++x` on globals).
+                    // Argument order preserves spec evaluation order: the
+                    // RHS evaluates before the reference check can throw.
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_global_assign_existing_or_throw".to_string(),
+                            param_types: vec![Type::Any, Type::Any],
+                            return_type: Type::Any,
+                        }),
+                        args: vec![Expr::String(name), *value],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    });
                 }
                 eprintln!(
                     "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
