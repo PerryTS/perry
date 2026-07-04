@@ -583,8 +583,18 @@ pub(crate) fn build_optimized_libs(
     };
     let runtime_path = release_dir.join(runtime_name);
     let stdlib_path = release_dir.join(stdlib_name);
-    let build_stamp =
-        auto_optimized_build_stamp(&key_input, target, &cross_features, &tokio_using_bindings);
+    // Content fingerprint of the sources that land in the archives — makes the
+    // stamp (and therefore the freshness gate) immune to mtime scrambling from
+    // cache restores / fresh checkouts (#5892 layer 2, #5778 warm-cache trap).
+    let source_fingerprint =
+        auto_optimized_source_fingerprint(&workspace_root, &tokio_using_bindings);
+    let build_stamp = auto_optimized_build_stamp(
+        &key_input,
+        target,
+        &cross_features,
+        &tokio_using_bindings,
+        &source_fingerprint,
+    );
     let build_stamp_path = target_dir.join(".perry-auto-build.stamp");
 
     // Closes #25 (the v0.5.384 NJOBS 6->3 retreat): serialize parallel
