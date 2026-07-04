@@ -1,3 +1,7 @@
+## v0.5.1231 — #5869 residual: boxed locals must not feed the typed-ABI closure specializations
+
+A BOXED local's slot holds a box POINTER, never the typed value — but its declared type stayed in `module_local_types`, so the typed-ABI closure specialization (`__typed_f64`/i1/i32/string capture reps) read the capture RAW while only the generic variant went through `js_box_get`; the dispatcher picked the typed body and calls returned box-pointer bits as a denormal number (`2.58e-311` instead of `42`). Exposed by #5871's Labeled-descent fix, which made the type visible for closures inside labeled blocks. Fix: filter boxed ids out of `module_local_types` (`crates/perry-codegen/src/codegen/mod.rs`), so every type-directed unboxed access on a boxed slot is disqualified in one place and falls back to the generic box-aware paths. Un-ignores the `closure_inside_labeled_block_counts_as_capture` e2e.
+
 ## v0.5.1230 — class-capture snapshot P0 pair: resolved-name re-registration + same-body assignment tracking
 
 Two defects in the decl-site class-capture snapshot (`js_class_register_capture_values`), both extracted from the #5437 Next.js branch:
