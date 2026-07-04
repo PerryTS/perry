@@ -359,6 +359,14 @@ pub unsafe fn dispatch_array_iterator_method(
             // Field 0: backing array pointer (NaN-boxed).
             let backing_field = js_object_get_field(iter_obj, 0);
             let backing_f64 = f64::from_bits(backing_field.bits());
+            // Once the iterator is exhausted the backing array is cleared to
+            // `undefined` (spec: `[[IteratedArrayLike]]` set to undefined), so a
+            // later `.next()` stays done even if the array grew after exhaustion
+            // (test262 Array/prototype/{values,keys,entries}/iteration-mutable:
+            // pushing AFTER the iterator reported done must not resurface).
+            if JSValue::from_bits(backing_f64.to_bits()).is_undefined() {
+                return make_iter_result(JSValue::undefined(), true);
+            }
             let arr_ptr = js_nanbox_get_pointer(backing_f64) as *const ArrayHeader;
             // Field 1: current index.
             let idx_field = js_object_get_field(iter_obj, 1);
@@ -374,6 +382,7 @@ pub unsafe fn dispatch_array_iterator_method(
             };
 
             if idx >= len {
+                js_object_set_field(iter_obj, 0, JSValue::undefined());
                 return make_iter_result(JSValue::undefined(), true);
             }
 
