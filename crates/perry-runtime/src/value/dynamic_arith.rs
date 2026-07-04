@@ -30,6 +30,52 @@ unsafe fn throw_mix_bigint() -> ! {
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
+/// `ToNumeric(value)` (ES §7.1.3): `ToPrimitive(value, number)` then, if the
+/// primitive is a BigInt, keep it — otherwise `ToNumber`. This is the coercion
+/// the numeric binary operators run on each operand *before* the both-BigInt
+/// check, so a boxed BigInt (`Object(1n)`) unwraps to a BigInt (not a Number),
+/// and a `Symbol.toPrimitive`/`valueOf` that yields a BigInt participates in
+/// BigInt arithmetic (test262 `bigint-non-primitive`, `bigint-and-number`).
+///
+/// A plain primitive short-circuits (no allocation, no method lookup). Only an
+/// object operand takes the ToPrimitive path; a non-object result of that
+/// (string, bool, …) still goes through `js_number_coerce`, matching a bare
+/// primitive of the same shape.
+#[inline]
+unsafe fn to_numeric(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_bigint() {
+        return value;
+    }
+    // Non-object primitives (number/int32/string/bool/null/undefined) never
+    // become a BigInt; defer to the existing ToNumber coercion.
+    if !jsval.is_pointer() {
+        return crate::builtins::js_number_coerce(value);
+    }
+    // Symbols are pointers but ToNumber(Symbol) throws — let js_number_coerce
+    // raise that (it brand-checks). Other objects: ToPrimitive(number) first.
+    if crate::symbol::js_is_symbol(value) != 0 {
+        return crate::builtins::js_number_coerce(value);
+    }
+    match crate::value::to_string::to_primitive_number(value) {
+        crate::value::to_string::OrdinaryToPrimitiveOutcome::Primitive(p) => {
+            // A BigInt primitive stays a BigInt (that's the whole point of
+            // ToNumeric); anything else re-coerces via ToNumber.
+            if JSValue::from_bits(p.to_bits()).is_bigint() {
+                p
+            } else {
+                crate::builtins::js_number_coerce(p)
+            }
+        }
+        crate::value::to_string::OrdinaryToPrimitiveOutcome::DefaultString => {
+            crate::builtins::js_number_coerce(value)
+        }
+        crate::value::to_string::OrdinaryToPrimitiveOutcome::TypeError => {
+            throw_add_type_error(b"Cannot convert object to primitive value")
+        }
+    }
+}
+
 /// Enforce Node's rule that BigInt operators require *both* operands to be
 /// BigInt. Returns true when both are BigInt (proceed with the BigInt op),
 /// false when neither is (use the numeric path), and throws a TypeError when
@@ -226,6 +272,8 @@ fn numify_arith_operand(v: f64) -> f64 {
 /// Dynamic multiply: BigInt * BigInt if either operand is BigInt, else f64 * f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mul);
     }
@@ -404,6 +452,8 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
 /// Dynamic subtract: BigInt - BigInt if either operand is BigInt, else f64 - f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_sub);
     }
@@ -413,6 +463,8 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_div);
     }
@@ -422,6 +474,8 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
 /// Dynamic modulo: BigInt % BigInt if either operand is BigInt, else f64 % f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_mod);
     }
@@ -476,6 +530,8 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shr);
     }
@@ -489,6 +545,8 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
 /// Dynamic left shift: BigInt << if either operand is BigInt, else i32 << for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shl);
     }
@@ -501,6 +559,10 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise AND: BigInt & if either operand is BigInt, else i32 & for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
+    // ToNumeric both operands first so a boxed BigInt/Number (`Object(1n)`)
+    // resolves to its primitive type before the both-BigInt check.
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_and);
     }
@@ -511,6 +573,8 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise OR: BigInt | if either operand is BigInt, else i32 | for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_or);
     }
@@ -521,6 +585,8 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
 /// Dynamic bitwise XOR: BigInt ^ if either operand is BigInt, else i32 ^ for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_xor);
     }
@@ -534,6 +600,8 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
 /// `js_bigint_pow`).
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_pow);
     }
@@ -545,6 +613,8 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
 /// numeric ToUint32 `>>>`.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
+    let a = to_numeric(a);
+    let b = to_numeric(b);
     let a_big = JSValue::from_bits(a.to_bits()).is_bigint();
     let b_big = JSValue::from_bits(b.to_bits()).is_bigint();
     if a_big || b_big {

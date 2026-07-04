@@ -354,6 +354,44 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .block()
                     .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
             }
+            // A non-primitive operand may `ToNumeric` to a BigInt at runtime
+            // (`Object(1n)`, or an object with a BigInt-returning
+            // `Symbol.toPrimitive`/`valueOf`). The numeric fast path below
+            // `js_number_coerce`s both sides — collapsing a boxed BigInt to a
+            // Number and silently producing a Number result instead of the
+            // spec-mandated TypeError (mixed) or BigInt (both-bigint). Route
+            // such operands through the dynamic helper, which runs full
+            // `ToNumeric` (test262 `bigint-and-number` / `bigint-non-primitive`
+            // for the object cases). Only the arithmetic/bitwise ops with a
+            // dynamic helper are affected; the common all-numeric shapes (both
+            // operands statically numeric/bool) keep the fast path untouched.
+            if matches!(
+                op,
+                BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Mod
+                    | BinaryOp::Sub
+                    | BinaryOp::Pow
+            ) {
+                let l_prim =
+                    crate::type_analysis::is_numeric_expr(ctx, left) || is_bool_expr(ctx, left);
+                let r_prim =
+                    crate::type_analysis::is_numeric_expr(ctx, right) || is_bool_expr(ctx, right);
+                if !(l_prim && r_prim) {
+                    let fname = bigint_dynamic_helper(*op);
+                    let l = lower_expr(ctx, left)?;
+                    let r = lower_expr(ctx, right)?;
+                    return Ok(ctx
+                        .block()
+                        .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                }
+            }
             // Fast path: `<integer-valued> % <integer literal>` (the
             // factorial / `i % 1000` loop shape). `frem double` lowers
             // to a libm `fmod()` call on ARM — no hardware instruction
