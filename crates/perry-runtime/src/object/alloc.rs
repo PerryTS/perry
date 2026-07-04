@@ -757,16 +757,33 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
     let dst = dst_raw as *mut ObjectHeader;
 
-    // Extract src pointer (NaN-boxed f64)
+    // Extract + VALIDATE the src pointer (2026-07-02 audit P0). The old
+    // `top16 >= 0x7FF8` catch-all admitted SSO strings (0x7FF9), registry
+    // handles, INT32s, and negative doubles, and the only guard was
+    // `< 0x10000` — so `{...response}` (a POINTER-tagged fetch-band id) or
+    // `{..."ab"}` deref'd a non-heap address as an ObjectHeader (Linux
+    // SIGSEGV), and `{...map}` walked a MapHeader's bytes as object fields.
+    // Spec (CopyDataProperties): non-objects with no own enumerable string
+    // props contribute nothing — so anything that is not a genuine heap
+    // OBJECT is skipped. (Known remaining gap, safe now instead of UB:
+    // spreading a STRING should yield its index properties; it currently
+    // yields none.)
     let src_bits = src_f64.to_bits();
     let src_top16 = src_bits >> 48;
-    let src_raw = if src_top16 >= 0x7FF8 {
-        (src_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        src_bits as usize
-    };
-    if src_raw < 0x10000 {
+    // Only a POINTER-tagged value can be a spreadable heap object.
+    if src_top16 != 0x7FFD {
         return;
+    }
+    let src_raw = (src_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if crate::value::addr_class::is_handle_band(src_raw) || src_raw < 0x10000 {
+        return;
+    }
+    // Probe the GcHeader without deref-faulting and require a real object
+    // (Maps/Sets/Promises/etc. have their own layouts — reading their bytes
+    // as ObjectHeader fields is type confusion).
+    match crate::value::addr_class::try_read_gc_header(src_raw) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        _ => return,
     }
     let src = src_raw as *const ObjectHeader;
 
