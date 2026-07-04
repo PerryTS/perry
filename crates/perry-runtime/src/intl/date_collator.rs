@@ -419,6 +419,8 @@ fn format_parts_with_dtf_obj(
             let weekday_opt = get_string_field(obj, KEY_WEEKDAY);
             let era_opt = get_string_field(obj, KEY_ERA);
             let day_period_opt = get_string_field(obj, KEY_DAY_PERIOD);
+            let fractional_digits =
+                get_number_field(obj, KEY_FRACTIONAL).map(|n| (n as u8).clamp(1, 3));
             build_parts_from_components(
                 year,
                 month,
@@ -427,6 +429,7 @@ fn format_parts_with_dtf_obj(
                 minute,
                 second,
                 secs,
+                ms,
                 mi,
                 year_opt.as_deref(),
                 month_opt.as_deref(),
@@ -437,6 +440,7 @@ fn format_parts_with_dtf_obj(
                 weekday_opt.as_deref(),
                 era_opt.as_deref(),
                 day_period_opt.as_deref(),
+                fractional_digits,
                 use_24h,
             )
         }
@@ -444,6 +448,7 @@ fn format_parts_with_dtf_obj(
 }
 
 /// Build `formatToParts` parts from individual component options (no dateStyle/timeStyle).
+#[allow(clippy::too_many_arguments)]
 fn build_parts_from_components(
     year: i32,
     month: u32,
@@ -452,6 +457,7 @@ fn build_parts_from_components(
     minute: u32,
     second: u32,
     secs: i64,
+    ms: f64,
     mi: usize,
     year_opt: Option<&str>,
     month_opt: Option<&str>,
@@ -462,6 +468,7 @@ fn build_parts_from_components(
     weekday_opt: Option<&str>,
     era_opt: Option<&str>,
     day_period_opt: Option<&str>,
+    fractional_digits: Option<u8>,
     use_24h: bool,
 ) -> Vec<(&'static str, String)> {
     let mut parts: Vec<(&'static str, String)> = Vec::new();
@@ -547,70 +554,66 @@ fn build_parts_from_components(
     }
 
     if has_time {
+        let inc_hour = hour_opt.is_some();
         let inc_secs = second_opt.is_some();
         let inc_mins = minute_opt.is_some() || inc_secs;
-        if use_24h {
-            if let Some(h_s) = hour_opt {
-                let h_str = if h_s == "2-digit" {
+        let (h12, ampm) = if hour == 0 {
+            (12u32, "AM")
+        } else if hour < 12 {
+            (hour, "AM")
+        } else if hour == 12 {
+            (12, "PM")
+        } else {
+            (hour - 12, "PM")
+        };
+        // Emit hour / minute / second parts (only those requested), colon-joined.
+        let mut emitted_time = false;
+        if let Some(h_s) = hour_opt {
+            let h_str = if use_24h {
+                if h_s == "2-digit" {
                     format!("{:02}", hour)
                 } else {
                     hour.to_string()
-                };
-                parts.push(("hour", h_str));
-            }
-            if inc_mins {
-                if hour_opt.is_some() {
-                    parts.push(("literal", ":".to_string()));
                 }
-                parts.push(("minute", format!("{:02}", minute)));
-            }
-            if inc_secs {
-                parts.push(("literal", ":".to_string()));
-                parts.push(("second", format!("{:02}", second)));
-            }
-            if let Some(dp_s) = day_period_opt {
-                if hour_opt.is_some() || inc_mins {
-                    parts.push(("literal", " ".to_string()));
-                }
-                parts.push(("dayPeriod", day_period_string(hour, dp_s).to_string()));
-            }
-        } else {
-            let (h, ampm) = if hour == 0 {
-                (12u32, "AM")
-            } else if hour < 12 {
-                (hour, "AM")
-            } else if hour == 12 {
-                (12, "PM")
+            } else if h_s == "2-digit" {
+                format!("{:02}", h12)
             } else {
-                (hour - 12, "PM")
+                h12.to_string()
             };
-            if let Some(h_s) = hour_opt {
-                let h_str = if h_s == "2-digit" {
-                    format!("{:02}", h)
-                } else {
-                    h.to_string()
-                };
-                parts.push(("hour", h_str));
-            }
-            if inc_mins {
-                if hour_opt.is_some() {
-                    parts.push(("literal", ":".to_string()));
-                }
-                parts.push(("minute", format!("{:02}", minute)));
-            }
-            if inc_secs {
+            parts.push(("hour", h_str));
+            emitted_time = true;
+        }
+        if inc_mins {
+            if emitted_time {
                 parts.push(("literal", ":".to_string()));
-                parts.push(("second", format!("{:02}", second)));
             }
-            if let Some(dp_s) = day_period_opt {
-                if hour_opt.is_some() || inc_mins {
-                    parts.push(("literal", " ".to_string()));
-                }
-                parts.push(("dayPeriod", day_period_string(hour, dp_s).to_string()));
-            } else if hour_opt.is_some() || inc_mins {
+            parts.push(("minute", format!("{:02}", minute)));
+            emitted_time = true;
+        }
+        if inc_secs {
+            if emitted_time {
+                parts.push(("literal", ":".to_string()));
+            }
+            parts.push(("second", format!("{:02}", second)));
+            emitted_time = true;
+            // fractionalSecondDigits: a `.` literal then a `fractionalSecond` part.
+            if let Some(digits) = fractional_digits {
+                parts.push(("literal", ".".to_string()));
+                parts.push(("fractionalSecond", fractional_seconds_str(ms, digits)));
+            }
+        }
+        // Day period: an explicit `dayPeriod` option always surfaces; the 12-hour
+        // clock adds AM/PM only when an hour was actually requested.
+        if let Some(dp_s) = day_period_opt {
+            if emitted_time {
                 parts.push(("literal", " ".to_string()));
-                parts.push(("dayPeriod", ampm.to_string()));
             }
+            parts.push(("dayPeriod", day_period_string(hour, dp_s).to_string()));
+        } else if inc_hour && !use_24h {
+            if emitted_time {
+                parts.push(("literal", " ".to_string()));
+            }
+            parts.push(("dayPeriod", ampm.to_string()));
         }
     }
 
@@ -968,6 +971,19 @@ fn resolve_24h(hour12: Option<bool>, hour_cycle: Option<&str>) -> bool {
 }
 
 /// Format date+time components from the individual component options (no style).
+/// Render the first `digits` (1..=3) of the sub-second millisecond fraction of
+/// `ms`, zero-padded and truncated (round-down), for `fractionalSecondDigits`.
+/// e.g. ms whose millisecond component is 234 → `"2"` / `"23"` / `"234"`.
+fn fractional_seconds_str(ms: f64, digits: u8) -> String {
+    // Millisecond-of-second in [0, 999]. `ms` may be negative (pre-epoch);
+    // rem_euclid keeps the fraction non-negative and clock-aligned.
+    let millis = (ms as i64).rem_euclid(1000) as u32;
+    let three = format!("{:03}", millis);
+    let n = (digits as usize).min(3).max(1);
+    three[..n].to_string()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn format_components(
     year: i32,
     month: u32,
@@ -976,6 +992,7 @@ fn format_components(
     minute: u32,
     second: u32,
     secs: i64,
+    ms: f64,
     year_opt: Option<&str>,
     month_opt: Option<&str>,
     day_opt: Option<&str>,
@@ -985,6 +1002,7 @@ fn format_components(
     weekday_opt: Option<&str>,
     era_opt: Option<&str>,
     day_period_opt: Option<&str>,
+    fractional_digits: Option<u8>,
     use_24h: bool,
 ) -> String {
     let has_date = year_opt.is_some() || month_opt.is_some() || day_opt.is_some();
@@ -1044,54 +1062,60 @@ fn format_components(
     };
 
     let time_part = if has_time {
+        // Compose only the requested components, colon-joined. The hour appears
+        // *only* when `hour` was requested — a `{minute, second}`-only DTF must
+        // render `mm:ss`, never inject an hour or an AM/PM. `fractionalSecondDigits`
+        // appends `.<n digits>` after the seconds (round-down / truncate).
+        let inc_hour = hour_opt.is_some();
         let inc_secs = second_opt.is_some();
         let inc_mins = minute_opt.is_some() || inc_secs;
-        Some(if use_24h {
-            if inc_secs {
-                let base = format!("{:02}:{:02}:{:02}", hour, minute, second);
-                match day_period_opt {
-                    Some(s) => format!("{} {}", base, day_period_string(hour, s)),
-                    None => base,
-                }
-            } else if inc_mins {
-                let base = format!("{:02}:{:02}", hour, minute);
-                match day_period_opt {
-                    Some(s) => format!("{} {}", base, day_period_string(hour, s)),
-                    None => base,
-                }
-            } else if hour_opt.is_some() {
-                let base = format!("{:02}", hour);
-                match day_period_opt {
-                    Some(s) => format!("{} {}", base, day_period_string(hour, s)),
-                    None => base,
-                }
-            } else {
-                // dayPeriod-only (no hour/minute/second requested).
-                day_period_string(hour, day_period_opt.unwrap_or("long")).to_string()
-            }
+        // 12-hour clock only shows AM/PM alongside an hour; an explicit
+        // `dayPeriod` option surfaces it independently.
+        let (h12, ampm) = if hour == 0 {
+            (12u32, "AM")
+        } else if hour < 12 {
+            (hour, "AM")
+        } else if hour == 12 {
+            (12, "PM")
         } else {
-            let (h, ampm) = if hour == 0 {
-                (12u32, "AM")
-            } else if hour < 12 {
-                (hour, "AM")
-            } else if hour == 12 {
-                (12, "PM")
+            (hour - 12, "PM")
+        };
+        let mut segs: Vec<String> = Vec::new();
+        if inc_hour {
+            if use_24h {
+                segs.push(format!("{:02}", hour));
+            } else if hour_opt == Some("2-digit") {
+                segs.push(format!("{:02}", h12));
             } else {
-                (hour - 12, "PM")
-            };
-            let suffix = day_period_opt
-                .map(|s| day_period_string(hour, s))
-                .unwrap_or(ampm);
-            if inc_secs {
-                format!("{}:{:02}:{:02} {}", h, minute, second, suffix)
-            } else if inc_mins {
-                format!("{}:{:02} {}", h, minute, suffix)
-            } else if hour_opt.is_some() {
-                format!("{} {}", h, suffix)
-            } else {
-                // dayPeriod-only (no hour/minute/second requested).
-                suffix.to_string()
+                segs.push(h12.to_string());
             }
+        }
+        if inc_mins {
+            segs.push(format!("{:02}", minute));
+        }
+        if inc_secs {
+            let mut s = format!("{:02}", second);
+            if let Some(digits) = fractional_digits {
+                s.push('.');
+                s.push_str(&fractional_seconds_str(ms, digits));
+            }
+            segs.push(s);
+        }
+        let base = segs.join(":");
+        // Determine the trailing day-period label, if any.
+        let suffix = if let Some(dp_s) = day_period_opt {
+            Some(day_period_string(hour, dp_s).to_string())
+        } else if inc_hour && !use_24h {
+            Some(ampm.to_string())
+        } else {
+            None
+        };
+        Some(match (base.is_empty(), suffix) {
+            (false, Some(sfx)) => format!("{} {}", base, sfx),
+            (false, None) => base,
+            (true, Some(sfx)) => sfx,
+            // No component and no dayPeriod: fall back to a bare dayPeriod label.
+            (true, None) => day_period_string(hour, "long").to_string(),
         })
     } else {
         None
@@ -1260,6 +1284,8 @@ fn format_ms_with_dtf_obj(
             let weekday_opt = get_string_field(obj, KEY_WEEKDAY);
             let era_opt = get_string_field(obj, KEY_ERA);
             let day_period_opt = get_string_field(obj, KEY_DAY_PERIOD);
+            let fractional_digits =
+                get_number_field(obj, KEY_FRACTIONAL).map(|n| (n as u8).clamp(1, 3));
             format_components(
                 year,
                 month,
@@ -1268,6 +1294,7 @@ fn format_ms_with_dtf_obj(
                 minute,
                 second,
                 secs,
+                ms,
                 year_opt.as_deref(),
                 month_opt.as_deref(),
                 day_opt.as_deref(),
@@ -1277,6 +1304,7 @@ fn format_ms_with_dtf_obj(
                 weekday_opt.as_deref(),
                 era_opt.as_deref(),
                 day_period_opt.as_deref(),
+                fractional_digits,
                 use_24h,
             )
         }
@@ -1344,6 +1372,16 @@ pub(crate) fn temporal_locale_string(
     let day_period_opt = get_opt("dayPeriod");
     let tz_name_opt = get_opt("timeZoneName");
     let tz_opt = get_opt("timeZone");
+    let fractional_digits = opts_obj.and_then(|o| {
+        let raw = get_field(o, "fractionalSecondDigits");
+        let v = JSValue::from_bits(raw.to_bits());
+        if v.is_undefined() {
+            None
+        } else {
+            let n = v.to_number();
+            (n.is_finite() && (1.0..=3.0).contains(&n)).then_some(n as u8)
+        }
+    });
 
     let has_style = date_style.is_some() || time_style.is_some();
     let has_component = year_opt.is_some()
@@ -1508,6 +1546,7 @@ pub(crate) fn temporal_locale_string(
             minute,
             second,
             secs,
+            epoch_ms,
             eff_year,
             eff_month,
             eff_day,
@@ -1517,6 +1556,7 @@ pub(crate) fn temporal_locale_string(
             weekday_opt.as_deref(),
             era_opt.as_deref(),
             day_period_opt.as_deref(),
+            fractional_digits,
             use_24h,
         ),
     };
