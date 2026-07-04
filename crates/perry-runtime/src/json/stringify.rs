@@ -991,7 +991,10 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         if (*(ptr as *const crate::ObjectHeader)).class_id != 0 {
             if let Some(to_json_val) = object_get_to_json(ptr) {
                 arm_to_json_result_guard(to_json_val);
-                stringify_value(to_json_val, TYPE_UNKNOWN, buf);
+                // Thread depth so a `toJSON` returning a cycle trips the
+                // circular-detection push instead of overflowing the stack —
+                // see the matching note in the keyed-object branch below.
+                stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
                 SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
                 return;
             }
@@ -1160,7 +1163,16 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
                 STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
             }
             arm_to_json_result_guard(to_json_val);
-            stringify_value(to_json_val, TYPE_UNKNOWN, buf);
+            // Thread the current depth into the toJSON-result walk (do NOT
+            // reset to the depth-0 `stringify_value` entry). A `toJSON` that
+            // returns a structure re-entering an object still open higher in
+            // the walk (`obj.toJSON = () => circular; circular.prop = obj`)
+            // would otherwise recurse forever: each re-entry restarted at
+            // depth 0, so the `depth > MAX_FAST_DEPTH` circular-detection push
+            // never engaged and the stack overflowed (SIGSEGV). Accumulating
+            // depth makes the detection fire and throw the spec TypeError
+            // (test262 JSON/stringify/value-tojson-object-circular).
+            stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
             return;
         }
