@@ -676,18 +676,26 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                     crate::closure::js_closure_alloc(promise_forward_reject as *const u8, 1);
                 crate::closure::js_closure_set_capture_ptr(reject_closure, 0, outer_i64);
 
-                // Register the forwarding callbacks on the inner promise
-                store_promise_closure_slot(
+                // #5437 bug#2: add the forwarding callbacks as an OVERFLOW
+                // reaction rather than OVERWRITING inner's inline
+                // on_fulfilled/on_rejected. The previous `store_promise_closure_slot`
+                // writes clobbered any existing reaction — e.g. an async-step
+                // awaiter's resume thunk registered by an earlier `await inner` —
+                // so when `inner` settled it fired only the forwarder and the
+                // awaiter hung forever (Next.js SSR render deadlock). Both the
+                // existing inline reaction AND this forwarder now fire when inner
+                // settles: the awaiter resumes AND `outer` adopts inner's state.
+                push_overflow_reaction(
                     inner,
-                    std::ptr::addr_of_mut!((*inner).on_fulfilled),
                     resolve_closure,
-                );
-                store_promise_closure_slot(
-                    inner,
-                    std::ptr::addr_of_mut!((*inner).on_rejected),
                     reject_closure,
+                    ptr::null_mut(),
+                    capture_context(),
                 );
-                // Don't chain; the forwarding callbacks handle resolution.
+                // Keep the original next-nulling: the forwarder handles adoption,
+                // and leaving a stale `inner.next` chained to `outer` can form a
+                // resolution cycle ("Chaining cycle detected"). The awaiter's
+                // reaction lives in on_fulfilled (untouched above), not in `next`.
                 store_promise_next_slot(
                     inner,
                     std::ptr::addr_of_mut!((*inner).next),

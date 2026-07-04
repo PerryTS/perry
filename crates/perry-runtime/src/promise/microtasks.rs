@@ -832,6 +832,15 @@ fn propagate_callback_result(result: f64, next: *mut Promise) {
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         let ptr = (bits & crate::value::POINTER_MASK) as usize;
         if ptr == next as usize {
+            // #5437: `result == next` is only a genuine chaining cycle when
+            // `next` is still PENDING (`p = x.then(() => p)`). In the async-step
+            // steady state, `js_async_step_done` already resolved this result
+            // promise before the thunk returned it, so `next` is already
+            // fulfilled and re-resolving it with itself is a harmless no-op,
+            // NOT a cycle. Only reject when still pending.
+            if unsafe { (*next).state } != PromiseState::Pending {
+                return;
+            }
             let msg = b"Chaining cycle detected for promise #<Promise>";
             let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
             let err_ptr = crate::error::js_typeerror_new(s);

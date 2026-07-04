@@ -195,6 +195,43 @@ pub extern "C" fn js_promise_resolved_then(
 ///   - One fewer closure dispatch per microtask (was: `then_v_arrow`
 ///     body called `step_closure`; is now `step_closure` is invoked
 ///     directly by the runner).
+///
+/// #5437: register the resume thunks on `awaited` AND keep the machine's
+/// result promise consistent so `js_async_step_done`'s reuse gate can
+/// settle it. When this machine was entered via `js_async_first_call`
+/// (which nulls `trap_next` per #691), a plain `js_promise_then` here
+/// yields a result promise that `done` cannot match (its reuse gate needs
+/// a non-null `trap_next`), so `done` mints a fresh promise and ORPHANS
+/// the result the caller awaits → the awaiter hangs (the Next.js SSR
+/// render deadlock). Allocate the result explicitly, back-patch the
+/// thunks' captured `trap_next` (capture slot 1) to it, and attach the
+/// handlers WITHOUT a chained `next` (a chained `next` would make a
+/// mid-chain await self-resolve → "Chaining cycle detected").
+fn then_backpatch_result(
+    awaited: *mut Promise,
+    fulfill: ClosurePtr,
+    reject: ClosurePtr,
+    trap_next: *mut Promise,
+) -> *mut Promise {
+    if trap_next.is_null() {
+        let result = super::then::js_promise_new_with_parent(awaited);
+        crate::closure::js_closure_set_capture_ptr(
+            fulfill as *mut crate::closure::ClosureHeader,
+            1,
+            result as i64,
+        );
+        crate::closure::js_closure_set_capture_ptr(
+            reject as *mut crate::closure::ClosureHeader,
+            1,
+            result as i64,
+        );
+        super::then::js_promise_attach_handlers(awaited, fulfill, reject);
+        result
+    } else {
+        js_promise_then(awaited, fulfill, reject)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *mut Promise {
     // PR #1004 followup: if `value` is a JS_HANDLE_TAG handle to a V8
@@ -296,14 +333,14 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
                     let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
-                    return js_promise_then(inner, fulfill, reject);
+                    return then_backpatch_result(inner, fulfill, reject, trap_next);
                 }
             }
         } else {
             bump(&MT_STEP_CHAIN_REUSE_MISS);
             let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
             let p = js_promise_resolved(value);
-            return js_promise_then(p, fulfill, reject);
+            return then_backpatch_result(p, fulfill, reject, trap_next);
         }
     } else {
         // Pointer-tagged but not a Promise (thenable etc.). Take the
@@ -311,7 +348,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         bump(&MT_STEP_CHAIN_REUSE_MISS);
         let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
         let p = js_promise_resolved(value);
-        return js_promise_then(p, fulfill, reject);
+        return then_backpatch_result(p, fulfill, reject, trap_next);
     };
 
     TASK_QUEUE.with(|q| {
