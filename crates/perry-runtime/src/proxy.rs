@@ -900,8 +900,16 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
 
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
         let value = unsafe { crate::symbol::js_object_get_symbol_property(target, key) };
-        return (value.to_bits() != TAG_UNDEFINED)
-            .then_some(OwnSetDescriptor::Data { writable: true });
+        if value.to_bits() == TAG_UNDEFINED {
+            return None;
+        }
+        // An existing symbol-keyed own data property is non-writable when the
+        // receiver is frozen or its per-symbol attrs say so — so a strict
+        // `obj[sym] = v` is rejected (throws) rather than silently no-op'd
+        // (test262 Object/freeze/frozen-object-contains-symbol-properties-strict).
+        // Mirrors the string-keyed / `set_symbol_property` guards.
+        let writable = !crate::symbol::symbol_property_is_non_writable(target, key);
+        return Some(OwnSetDescriptor::Data { writable });
     }
 
     let obj_ptr = extract_pointer(target.to_bits()) as usize;

@@ -365,6 +365,33 @@ fn object_symbol_data_property_exists(obj_key: usize, sym_key: usize) -> bool {
     })
 }
 
+/// True when an existing symbol-keyed own data property is non-writable — the
+/// receiver was frozen (`Object.freeze`), or the per-symbol attrs recorded via
+/// `Object.defineProperty(obj, sym, {writable:false})` say so. Mirrors the
+/// frozen / non-writable rejection in `set_symbol_property`, but as a query so
+/// the ordinary-`[[Set]]` walk (`own_set_descriptor`) can report the slot as
+/// read-only and let a strict write throw. `obj_f64` / `sym_f64` are the same
+/// NaN-boxed values passed to the symbol setters.
+pub(crate) fn symbol_property_is_non_writable(obj_f64: f64, sym_f64: f64) -> bool {
+    let obj_key = unsafe { obj_key_from_f64(obj_f64) };
+    let sym_key = unsafe { sym_key_from_f64(sym_f64) };
+    if obj_key == 0 || sym_key == 0 {
+        return false;
+    }
+    // Only heap receivers carry the GC integrity flag word.
+    if (obj_f64.to_bits() >> 48) == 0x7FFD
+        && obj_key >= 0x10000
+        && crate::object::is_valid_obj_ptr(obj_key as *const u8)
+    {
+        let gc = (obj_key - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let flags = unsafe { (*gc)._reserved };
+        if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return true;
+        }
+    }
+    get_symbol_property_attrs(obj_key, sym_key).is_some_and(|attrs| !attrs.writable())
+}
+
 /// `obj[sym] = value` where `sym` is a Symbol. Stores into the side table.
 /// Returns the value (NaN-boxed) for chained assignment semantics.
 #[no_mangle]

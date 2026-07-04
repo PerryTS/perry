@@ -41,7 +41,7 @@ pub(crate) use properties::{
     get_symbol_property_attrs, inspect_custom_symbol_ptr, js_object_define_symbol_accessor,
     js_object_delete_symbol_property, js_object_has_own_symbol_property,
     reflect_symbol_getter_closure_bits, set_symbol_property_attrs, symbol_accessor_descriptor_bits,
-    symbol_property_is_enumerable, symbol_property_root_bits,
+    symbol_property_is_enumerable, symbol_property_is_non_writable, symbol_property_root_bits,
 };
 pub use properties::{
     class_static_symbol_lookup, js_class_register_static_symbol, js_object_has_own_symbol,
