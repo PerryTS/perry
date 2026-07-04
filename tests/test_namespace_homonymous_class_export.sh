@@ -39,6 +39,7 @@ export function readRange() {
     range: util.NUMBER_FORMAT_RANGES.safeint,
     normalized: util.normalizeParams(),
     legacyType: typeof legacyUtil,
+    legacyKeys: legacyUtil.objectKeys({ a: 1, b: 2 }),
   };
 }
 TS
@@ -47,7 +48,7 @@ import { readRange } from "./checks.js";
 console.log(JSON.stringify(readRange()));
 TS
 
-EXPECTED='{"keys":["NUMBER_FORMAT_RANGES","normalizeParams"],"range":[-1,1],"normalized":{},"legacyType":"function"}'
+EXPECTED='{"keys":["NUMBER_FORMAT_RANGES","normalizeParams"],"range":[-1,1],"normalized":{},"legacyType":"function","legacyKeys":["a","b"]}'
 COMPILE_OUT="$(PERRY_ALLOW_PERRY_FEATURES=1 PERRY_RUNTIME_DIR="$REPO_ROOT/target/debug" \
     "$PERRY" compile --no-cache --no-auto-optimize "$TMPDIR/main.ts" -o "$TMPDIR/out" 2>&1)" || {
     echo "FAIL: perry compile errored"
