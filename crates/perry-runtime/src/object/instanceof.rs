@@ -353,6 +353,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    // `inst instanceof Intl.<Ctor>`: Intl instances are plain heap objects whose
+    // `[[Prototype]]` is `Intl.<Ctor>.prototype` but carry no class-id, so the
+    // arms above can't match them. Walk their static-prototype chain.
+    if let Some(is_inst) = crate::intl::intl_instanceof(value, type_ref) {
+        return if is_inst {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     js_instanceof_dynamic_tail(value, type_ref)
 }
 

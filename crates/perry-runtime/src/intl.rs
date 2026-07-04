@@ -1800,6 +1800,54 @@ pub(crate) unsafe fn intl_subclass_super(
     true
 }
 
+/// `value instanceof Intl.<Ctor>` (OrdinaryHasInstance) when the right operand
+/// is an Intl service constructor. Intl instances are plain heap objects whose
+/// `[[Prototype]]` is set to `Intl.<Ctor>.prototype` (via
+/// `object_set_static_prototype`), but the generic dynamic-`instanceof` path has
+/// no class-id for them and no generic prototype walk, so it returned `false`
+/// even though `Object.getPrototypeOf(inst) === Intl.<Ctor>.prototype`. Walk the
+/// value's static-prototype chain and compare each link against the
+/// constructor's `.prototype`. Returns `None` when `type_ref` is not an Intl
+/// constructor (caller keeps its existing resolution); `Some(bool)` otherwise.
+pub(crate) fn intl_instanceof(value: f64, type_ref: f64) -> Option<bool> {
+    if !is_intl_constructor_value(type_ref) {
+        return None;
+    }
+    let jsval = JSValue::from_bits(type_ref.to_bits());
+    let closure = jsval.as_pointer::<u8>() as usize;
+    let proto = crate::closure::closure_get_dynamic_prop(closure, "prototype");
+    let proto_js = JSValue::from_bits(proto.to_bits());
+    if !proto_js.is_pointer() {
+        return Some(false);
+    }
+    let target_bits = proto.to_bits();
+    // Walk `value`'s [[Prototype]] chain (bounded against cycles).
+    let mut cur = value.to_bits();
+    for _ in 0..64 {
+        let top16 = cur >> 48;
+        let raw = if top16 == 0x7FFD {
+            (cur & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            cur as usize
+        } else {
+            return Some(false);
+        };
+        if raw < 0x10000 {
+            return Some(false);
+        }
+        match crate::object::prototype_chain::object_static_prototype(raw) {
+            Some(p) => {
+                if p == target_bits {
+                    return Some(true);
+                }
+                cur = p;
+            }
+            None => return Some(false),
+        }
+    }
+    Some(false)
+}
+
 fn supported_locales_array(locales: f64, options: f64) -> f64 {
     // `supportedLocalesOf(locales, options)`:
     //   1. requestedLocales = ? CanonicalizeLocaleList(locales)   ← runs FIRST,
