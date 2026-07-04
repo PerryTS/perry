@@ -1438,6 +1438,27 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     // `Object.getPrototypeOf` and `.constructor` resolve through it (test262
     // `ctors*/use-custom-proto-if-object` / `use-default-proto-if-…`).
     if let Some(ta_name) = identify_global_builtin_constructor(func_value) {
+        // `Reflect.construct(Date, args, newTarget)` (#5989) — Next.js 16's
+        // cacheComponents Date extension constructs through exactly this
+        // shape: its installed wrapper runs
+        // `Reflect.construct(OriginalDate, arguments, new.target)`. The
+        // generic tail below allocates a PLAIN object and invokes the Date
+        // thunk against it, yielding an unbranded date (`getTime()` broken /
+        // "Invalid Date"). Build the real branded Date, then honor
+        // `GetPrototypeFromConstructor(newTarget)` like the typed-array arm
+        // below so `instanceof newTarget` and subclass prototypes hold.
+        if ta_name == "Date" {
+            let proto_bits = new_target_custom_object_prototype(nt);
+            let result = js_new_function_construct(func_value, args_ptr, args_len);
+            if let Some(proto_bits) = proto_bits {
+                let jv = crate::value::JSValue::from_bits(result.to_bits());
+                if jv.is_pointer() {
+                    let addr = (jv.bits() & crate::value::POINTER_MASK) as usize;
+                    super::super::prototype_chain::object_set_static_prototype(addr, proto_bits);
+                }
+            }
+            return result;
+        }
         if matches!(
             ta_name,
             "Int8Array"

@@ -50,9 +50,9 @@ pub(crate) use bigint_promise::{
     object_hasown_thunk, object_is_extensible_thunk, object_is_frozen_thunk,
     object_is_sealed_thunk, object_is_thunk, object_keys_thunk, object_prevent_extensions_thunk,
     object_seal_thunk, object_set_prototype_of_thunk, object_values_thunk,
-    promise_static_function_spec, reflect_apply_thunk, string_from_char_code_static,
-    string_from_code_point_static, string_raw_static, symbol_for_thunk, symbol_key_for_thunk,
-    typed_array_from_thunk, typed_array_of_thunk,
+    promise_static_function_spec, reflect_apply_thunk, reflect_construct_thunk,
+    string_from_char_code_static, string_from_code_point_static, string_raw_static,
+    symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk, typed_array_of_thunk,
 };
 pub use bigint_promise::{js_bigint_as_int_n_call, js_bigint_as_uint_n_call};
 pub use builtin_thunks::js_function_ctor_from_strings;
