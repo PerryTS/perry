@@ -1,3 +1,12 @@
+## v0.5.1230 — class-capture snapshot P0 pair: resolved-name re-registration + same-body assignment tracking
+
+Two defects in the decl-site class-capture snapshot (`js_class_register_capture_values`), both extracted from the #5437 Next.js branch:
+
+1. **End-of-body re-registration used the SOURCE class name while the body was compiled under the RENAMED one.** When a function-nested class collides with another declaration (`class_renames` in play), the end-of-body capture re-registration ran after the rename map was restored, so it registered under the wrong name and the refresh never reached the renamed class's id. Re-registration now happens before the `class_renames` restore and goes through `resolve_class_name`. (`crates/perry-hir/src/lower_decl/block.rs`, `crates/perry-hir/src/lower/expr_function.rs`)
+2. **The snapshot only refreshed before `return` statements — a captured local ASSIGNED after the class decl in the same body kept its stale decl-time value.** `insert_class_capture_refresh_after_assignments` now re-snapshots after every top-level assignment/update of a captured local that follows the class declaration in the same body (companion to the existing before-returns refresh).
+
+Salvages the stranded `issue_5437_incremental_cache_get_chain` e2e from the probe branch and adds `capture_rereg_renamed_class` (4 tests). Verified: parity vs the 2026-07-03 baseline shows 0 real newly-failing (one fs-fd flake ruled out by 6/6 local matches) and 6 newly-passing.
+
 ## v0.5.1229 — write-path hardening slice 2: transition_fast tags, structuredClone band, rejection printer (#5948)
 
 Continuation of #5943 (2026-07-02 audit §6). js_object_set_field_by_name_transition_fast — the first thing every generic `obj.field = v` hits until any defineProperty runs — admitted SSO strings/tag remnants via a `top16 >= 0x7FF8` catch-all then deref'd a bare GcHeader floor (a 2–5-char SSO payload lands in the 2–5.5TB range and passes the macOS heap floor — the write-side #5429 twin); now POINTER-tag-only, full handle band, try_read_gc_header, with return-0 deferring to the full dynamic path. structuredClone deref'd any POINTER payload ≥0x10000 as GcHeader bytes after the registry probes (fetch/zlib registry ids crashed); full-band gate + validated header probe, pass-through unchanged for non-probeables. The unhandled-rejection printer deref'd POINTER-tagged reasons with a bare ≥0x10000 (a thrown fetch Response id crashed instead of printing); is_plausible_heap_addr gate. e2e: write_path_band_slice2.rs.
