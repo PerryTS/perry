@@ -498,10 +498,15 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
     }
     let a = dynamic_number_operand(a);
     let b = dynamic_number_operand(b);
-    // Float modulo: a - trunc(a / b) * b
     let a = numify_arith_operand(a);
     let b = numify_arith_operand(b);
-    a - (a / b).trunc() * b
+    // JS `%` is C `fmod`: the result takes the *sign of the dividend*, so
+    // `-1 % -1` is `-0`, not `+0`. The old `a - (a / b).trunc() * b` closed-form
+    // lost that (`-1.0 - 1.0 * -1.0 == +0.0`) and also returned `NaN` for
+    // `x % Infinity` (should be `x`). Rust's `f64 % f64` *is* `fmod`, matching
+    // the spec exactly on the sign of zero, `x % ±Inf`, and `±Inf % y` / `x % 0`
+    // → `NaN` (test262 compound-assignment `mod-whitespace`: `-0` expected).
+    a % b
 }
 
 /// Dynamic negate: -BigInt if operand is BigInt, else -f64.
