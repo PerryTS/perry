@@ -1491,23 +1491,11 @@ fn lower_new_impl(
         while let Some(pname) = parent_name {
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
-                    // #5437: fill any unfilled parent cap param from the
-                    // parent's decl-site capture snapshot.
-                    //
-                    // #806: the ANCESTOR's cap params are never in
-                    // `lowered_args` here, so this fill is always
-                    // caps-absent. A bare-ident site appends the LEAF's
-                    // captures — and a capturing leaf always has a
-                    // (synthesized) own ctor (`synthesize_class_captures`
-                    // takes the no-ctor path only for capture-free
-                    // classes), so a leaf that reached this walk appended
-                    // nothing. Forwarding the SITE's flag instead made the
-                    // binder derive the tail-split from the ancestor's cap
-                    // params and eat trailing USER args: `class Wrapped
-                    // extends WithSuffix(Logged) {}` + `new Wrapped("alpha")`
-                    // bound the mixin ctor's `seed` to undefined (the
-                    // snapshot silently rescued the cap, so only the user
-                    // arg was lost).
+                    // #5437: snapshot-fill the parent's cap params. #806:
+                    // unconditionally caps-absent — a capturing leaf always
+                    // has a synthesized own ctor, so a leaf reaching this
+                    // walk appended no cap args; the site's flag split the
+                    // tail by the ANCESTOR's caps and ate user args.
                     let parent_capture_fill =
                         ctx.class_ids.get(pname).copied().map(|cid| CaptureFill {
                             cid,
