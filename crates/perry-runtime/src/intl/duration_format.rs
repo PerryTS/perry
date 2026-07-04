@@ -806,7 +806,10 @@ fn partition(obj: *const ObjectHeader, vals: &[f64]) -> Vec<DfPart> {
         .iter()
         .map(|parts| parts.iter().map(|p| p.value.as_str()).collect())
         .collect();
-    let lf_parts = super::list_format_parts(&strings, "unit", &list_style);
+    // DurationFormat historically used the base (en-US) list separators; pass
+    // "en-US" explicitly to preserve that output (locale-specific duration list
+    // patterns are out of scope here).
+    let lf_parts = super::list_format_parts("en-US", &strings, "unit", &list_style);
 
     let mut flattened: Vec<DfPart> = Vec::new();
     let mut elem = 0usize;

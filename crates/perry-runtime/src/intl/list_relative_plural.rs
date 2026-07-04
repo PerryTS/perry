@@ -124,9 +124,22 @@ pub(crate) fn collect_string_list(value: f64) -> Vec<String> {
 /// `pair` joins a 2-element list, `middle` joins all but the final boundary of a
 /// 3+-element list, and `last` joins the final boundary.
 pub(crate) fn list_separators(
+    locale: &str,
     list_type: &str,
     style: &str,
 ) -> (&'static str, &'static str, &'static str) {
+    // Spanish (`es`) `unit` list patterns (CLDR): the last boundary joins with
+    // " y " for long, but 3+-element short/narrow lists are comma/space-joined
+    // like the base. The 2-element `pair` uses " y " for long AND short.
+    // (The "y" -> "e" euphonic rule before /i/ words is not exercised here.)
+    if list_type == "unit" && (locale == "es" || locale.starts_with("es-")) {
+        match style {
+            "long" => return (" y ", ", ", " y "),
+            "short" => return (" y ", ", ", ", "),
+            // narrow: space-joined, identical to the base — fall through.
+            _ => {}
+        }
+    }
     match list_type {
         "unit" => {
             if style == "narrow" {
@@ -146,11 +159,12 @@ pub(crate) fn list_separators(
 }
 
 pub(crate) fn list_format_parts(
+    locale: &str,
     items: &[String],
     list_type: &str,
     style: &str,
 ) -> Vec<(&'static str, String)> {
-    let (pair, middle, last) = list_separators(list_type, style);
+    let (pair, middle, last) = list_separators(locale, list_type, style);
     let mut parts: Vec<(&'static str, String)> = Vec::new();
     let n = items.len();
     if n == 0 {
@@ -181,9 +195,10 @@ pub(crate) fn list_format_instance_parts(
     value: f64,
 ) -> Vec<(&'static str, String)> {
     let items = collect_string_list(value);
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
     let list_type = get_string_field(obj, KEY_TYPE).unwrap_or_else(|| "conjunction".to_string());
     let style = get_string_field(obj, KEY_LF_STYLE).unwrap_or_else(|| "long".to_string());
-    list_format_parts(&items, &list_type, &style)
+    list_format_parts(&locale, &items, &list_type, &style)
 }
 
 pub(crate) extern "C" fn list_format_format_thunk(
