@@ -495,8 +495,13 @@ pub extern "C" fn js_object_set_field_by_name(
             if raw.is_null() || top16 == 0x7FFC {
                 return;
             }
-            if (raw as usize) < 0x10000 {
-                // Small handle — dispatch to handle property set if registered
+            if crate::value::addr_class::is_small_handle(raw as usize) {
+                // Handle-band id (2026-07-02 audit P1: the old `< 0x10000`
+                // guard was one zero short of HANDLE_BAND_MAX, so a
+                // POINTER-tagged fetch (0x40000+) or zlib id skipped handle
+                // dispatch and reached the raw GcHeader deref below —
+                // `response.myProp = v` deref'd the id as memory). Dispatch
+                // to the registered handle property setter.
                 if let Some(dispatch) = handle_property_set_dispatch() {
                     if !key.is_null() {
                         unsafe {
@@ -514,8 +519,9 @@ pub extern "C" fn js_object_set_field_by_name(
             obj
         }
     };
-    if obj.is_null() || (obj as usize) < 0x10000 {
-        // Small non-null value — could be a stripped handle (after ensure_i64 stripped NaN-box tag)
+    if obj.is_null() || crate::value::addr_class::is_small_handle(obj as usize) {
+        // Handle-band value (full band, not the old `< 0x10000` — see above)
+        // or a stripped handle after ensure_i64 removed the NaN-box tag.
         if !obj.is_null() && (obj as usize) > 0 {
             if let Some(dispatch) = handle_property_set_dispatch() {
                 if !key.is_null() {
@@ -662,10 +668,20 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
         if gc_type != crate::gc::GC_TYPE_OBJECT && gc_type != crate::gc::GC_TYPE_CLOSURE {
+            // A RECOGNIZED non-object heap type (Map/Set/Buffer/TypedArray/…)
+            // must never fall through to the plain-object write below: their
+            // layouts alias ObjectHeader fields. A Map with EXACTLY one entry
+            // had MapHeader.size aliasing object_type == OBJECT_TYPE_REGULAR,
+            // so `m.customProp = 5` walked the Map's bytes as object fields —
+            // deterministic heap corruption (2026-07-02 audit P1). The
+            // object_type fallback exists ONLY for static/const objects whose
+            // preceding bytes decode to no known GC type.
+            if crate::gc::gc_type_info(gc_type).is_some() {
+                return;
+            }
             if !is_valid_obj_ptr(obj as *const u8) {
                 return;
             }
-            // Not a heap object/closure — only accept object_type == 1 (OBJECT_TYPE_REGULAR)
             let object_type = (*obj).object_type;
             if object_type != crate::error::OBJECT_TYPE_REGULAR {
                 return;
