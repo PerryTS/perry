@@ -478,11 +478,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProxyDelete { proxy, key } => {
             downgrade_unknown_call_expr(ctx, proxy);
             downgrade_unknown_call_expr(ctx, key);
+            let strict = if ctx.is_strict_fn { "1" } else { "0" };
             let p = lower_expr(ctx, proxy)?;
             let k = lower_expr(ctx, key)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_proxy_delete", &[(DOUBLE, &p), (DOUBLE, &k)]))
+            let blk = ctx.block();
+            // `js_proxy_delete` reports the `[[Delete]]` boolean; a strict-mode
+            // `delete proxy.key` that resolves to `false` (non-configurable
+            // property, forwarded through the trap chain) must throw a TypeError
+            // just like the ordinary member-delete path. Route the boolean
+            // through `js_delete_result` so both modes match spec (test262
+            // Proxy/deleteProperty/*-target-is-proxy `delete funcProxy.prototype`
+            // under "use strict").
+            let deleted_box = blk.call(DOUBLE, "js_proxy_delete", &[(DOUBLE, &p), (DOUBLE, &k)]);
+            let deleted_i32 = blk.call(I32, "js_is_truthy", &[(DOUBLE, &deleted_box)]);
+            Ok(blk.call(
+                DOUBLE,
+                "js_delete_result",
+                &[(I32, &deleted_i32), (I32, strict)],
+            ))
         }
         Expr::ProxyApply { proxy, args } => {
             downgrade_unknown_call_expr(ctx, proxy);

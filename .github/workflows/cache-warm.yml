@@ -41,7 +41,10 @@ jobs:
     # Best-effort cache population — must never block or fail anything.
     continue-on-error: true
     # Comfortably above the cold first run; later runs are far shorter.
-    timeout-minutes: 120
+    # 150: the release-compiler + gap-suite variant warm below adds up to
+    # ~60 min on a cold variant set (it is the same bill the smoke job was
+    # paying per-PR; here it is paid once per merge, off the critical path).
+    timeout-minutes: 150
     env:
       RUSTC_WRAPPER: sccache
       # Mirror test.yml's sccache config EXACTLY (local disk cache, NOT the GHA
@@ -96,6 +99,33 @@ jobs:
             echo "::endgroup::"
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete || true
           done
+
+      # Warm the RELEASE compiler + the auto-optimize archive variants for the
+      # conformance-smoke job. Diagnosis (2026-07-04, cancelled smoke job
+      # 85123031828): smoke restored this cache with a FULL match yet still
+      # timed out at 60 min — the debug units above share nothing with its
+      # release build (~10 min), and every gap test whose feature combo
+      # (`auto_optimized_cache_key`: regex/temporal/url/… × stdlib set) had no
+      # `target/perry-auto-<hash>` archive triggered an in-job cargo build of
+      # the runtime — orphan `cargo`/`rustc` processes were still compiling at
+      # the timeout. Running the gap suite ONCE here builds every variant the
+      # suite needs; they land in `target/perry-auto-*`, which rust-cache
+      # saves under the shared key. Variant keys embed CARGO_PKG_VERSION, and
+      # code-only PRs carry main's version, so PR smokes restore exact
+      # matches until the next merge bumps the version — at which point THIS
+      # workflow re-warms on that very push. `|| true`: this is a cache warm,
+      # not a gate — the smoke job is where gap failures are reported.
+      - name: Warm release compiler + gap-suite auto-opt variants
+        run: |
+          echo "::group::cargo build --release -p perry"
+          cargo build --release -p perry
+          echo "::endgroup::"
+          echo "::group::run_gap_tests (variant warm)"
+          ./scripts/run_gap_tests.sh || true
+          echo "::endgroup::"
+          echo "perry-auto variants warmed:"
+          du -sh target/perry-auto-* 2>/dev/null || echo "(none)"
+          df -h /home/runner 2>/dev/null | tail -1 || true
 
       - name: sccache stats
         if: always()

@@ -27,10 +27,15 @@ use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 mod date_collator;
 mod install;
 use install::install_constructor;
+mod subclass;
+pub(crate) use subclass::{intl_instanceof, intl_subclass_super, is_intl_constructor_value};
+use subclass::{locale_instance_tag, push_locale_element};
 mod list_relative_plural;
 mod number_format;
 mod number_format_digits;
 mod number_format_options;
+mod numbering_system;
+use numbering_system::{is_well_formed_numbering_system, resolve_numbering_system};
 mod segmenter;
 
 pub(crate) use date_collator::{
@@ -438,50 +443,6 @@ fn currency_fraction_digits(code: &str) -> u32 {
     }
 }
 
-/// A `numberingSystem` value is structurally valid when it is one or more
-/// hyphen-separated subtags of 3–8 alphanumerics (the `type` Unicode nonterminal).
-fn is_well_formed_numbering_system(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('-').all(|sub| {
-            (3..=8).contains(&sub.len()) && sub.bytes().all(|b| b.is_ascii_alphanumeric())
-        })
-}
-
-/// Extract the `-u-nu-<value>` numbering system from a (canonicalized) locale
-/// string, lower-cased. Returns `None` when no `nu` keyword is present.
-fn numbering_system_from_locale(locale: &str) -> Option<String> {
-    let lower = locale.to_ascii_lowercase();
-    let subtags: Vec<&str> = lower.split('-').collect();
-    let u = subtags.iter().position(|s| *s == "u")?;
-    let mut i = u + 1;
-    while i < subtags.len() {
-        let key = subtags[i];
-        // A keyword key is exactly two chars; everything up to the next key is its value.
-        if key.len() == 2 {
-            if key == "nu" {
-                let mut value = String::new();
-                let mut j = i + 1;
-                while j < subtags.len() && subtags[j].len() != 2 {
-                    if !value.is_empty() {
-                        value.push('-');
-                    }
-                    value.push_str(subtags[j]);
-                    j += 1;
-                }
-                return (!value.is_empty()).then_some(value);
-            }
-            i += 1;
-            while i < subtags.len() && subtags[i].len() != 2 {
-                i += 1;
-            }
-        } else {
-            // Hit another singleton extension (e.g. `-t-`); `nu` lives only under `u`.
-            break;
-        }
-    }
-    None
-}
-
 #[cold]
 fn throw_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -567,28 +528,6 @@ fn js_has_index(obj: f64, index: u32) -> bool {
     crate::object::js_object_has_property(obj, key).to_bits() == crate::value::TAG_TRUE
 }
 
-/// CanonicalizeLocaleList element handler: a present element must be a String or
-/// an Object (an `Intl.Locale` or anything ToString-able), else `TypeError`; the
-/// resulting tag is canonicalized (`RangeError` if structurally invalid) and
-/// pushed if not already present.
-fn push_locale_element(out: &mut Vec<String>, value: f64) {
-    let jv = JSValue::from_bits(value.to_bits());
-    let tag = if jv.is_any_string() {
-        string_from_string_value(value).unwrap_or_default()
-    } else if object_ptr_from_value(value).is_some() {
-        value_to_string(value)
-    } else {
-        // undefined / null / boolean / number / Symbol element → TypeError.
-        throw_type_error("locale must be a String or Object");
-    };
-    let Some(canonical) = canonicalize_language_tag(&tag) else {
-        throw_invalid_language_tag(&tag);
-    };
-    if !out.iter().any(|existing| existing == &canonical) {
-        out.push(canonical);
-    }
-}
-
 fn locales_from_value(locales: f64) -> Vec<String> {
     let js = JSValue::from_bits(locales.to_bits());
     // CanonicalizeLocaleList(undefined) is the empty list; `null` fails ToObject
@@ -602,6 +541,15 @@ fn locales_from_value(locales: f64) -> Vec<String> {
     // A String argument is treated as a single-element list (not iterated by char).
     if js.is_any_string() {
         let tag = string_from_string_value(locales).unwrap_or_default();
+        let Some(canonical) = canonicalize_language_tag(&tag) else {
+            throw_invalid_language_tag(&tag);
+        };
+        return vec![canonical];
+    }
+    // CanonicalizeLocaleList step 2: a value with an `[[InitializedLocale]]`
+    // slot (an `Intl.Locale` / subclass instance) is the single-element list
+    // « locale », read from its slot — not iterated nor `toString`-ed.
+    if let Some(tag) = locale_instance_tag(locales) {
         let Some(canonical) = canonicalize_language_tag(&tag) else {
             throw_invalid_language_tag(&tag);
         };
@@ -1135,15 +1083,23 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                     )),
                 }
             }
-            // `numberingSystem` must be a well-formed `type` nonterminal.
-            if let Some(ns) = get_locale_extension_option(options, "numberingSystem") {
+            // `numberingSystem` must be a well-formed `type` nonterminal. Read
+            // it here (preserving the GetOption order options-order.js asserts),
+            // then run ResolveLocale for `nu` — reconciling the option with the
+            // locale's `-u-nu-` keyword so `resolvedOptions().locale` /
+            // `.numberingSystem` reflect only the supported value actually used.
+            let dtf_opt_ns = get_locale_extension_option(options, "numberingSystem").map(|ns| {
                 if !is_well_formed_numbering_system(&ns) {
                     throw_range_error(&format!(
                         "Value {ns} out of range for Intl options property numberingSystem"
                     ));
                 }
-                set_internal_field(obj, KEY_NUMBERING_SYSTEM, string_value(&ns));
-            }
+                ns.to_ascii_lowercase()
+            });
+            let (dtf_locale, dtf_numbering) =
+                resolve_numbering_system(&locale, dtf_opt_ns.as_deref());
+            set_internal_field(obj, KEY_LOCALE, string_value(&dtf_locale));
+            set_internal_field(obj, KEY_NUMBERING_SYSTEM, string_value(&dtf_numbering));
             // hour12 (boolean) then hourCycle (enum) — both only surface in
             // `resolvedOptions` when the resolved pattern has an hour field.
             if let Some(h12) = get_bool_option(options, "hour12") {
@@ -1607,7 +1563,15 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
     if JSValue::from_bits(proto.to_bits()).is_pointer() {
         crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
     }
-    js_nanbox_pointer(obj as i64)
+    let instance = js_nanbox_pointer(obj as i64);
+    // ChainNumberFormat / ChainDateTimeFormat only (see `chain_legacy_constructed`):
+    // Intl.Collator ignores its this-value, so it is deliberately excluded.
+    if matches!(kind, KIND_NUMBER | KIND_DATE_TIME) {
+        if let Some(this_value) = ctor_guard::chain_legacy_constructed(closure, instance) {
+            return this_value;
+        }
+    }
+    instance
 }
 
 fn install_bound_instance_function(
@@ -1639,11 +1603,17 @@ fn install_bound_instance_function(
     closure
 }
 
-extern "C" fn number_format_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn number_format_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
     make_instance(closure, KIND_NUMBER, rest_arg(rest, 0), rest_arg(rest, 1))
 }
 
-extern "C" fn date_time_format_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn date_time_format_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
     make_instance(
         closure,
         KIND_DATE_TIME,
@@ -1652,11 +1622,17 @@ extern "C" fn date_time_format_constructor_thunk(closure: *const ClosureHeader, 
     )
 }
 
-extern "C" fn collator_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn collator_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
     make_instance(closure, KIND_COLLATOR, rest_arg(rest, 0), rest_arg(rest, 1))
 }
 
-extern "C" fn segmenter_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn segmenter_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
     require_new_target("Segmenter");
     make_instance(
         closure,
@@ -1666,7 +1642,10 @@ extern "C" fn segmenter_constructor_thunk(closure: *const ClosureHeader, rest: f
     )
 }
 
-extern "C" fn list_format_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn list_format_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
     require_new_target("ListFormat");
     make_instance(
         closure,
@@ -1676,7 +1655,7 @@ extern "C" fn list_format_constructor_thunk(closure: *const ClosureHeader, rest:
     )
 }
 
-extern "C" fn relative_time_format_constructor_thunk(
+pub(super) extern "C" fn relative_time_format_constructor_thunk(
     closure: *const ClosureHeader,
     rest: f64,
 ) -> f64 {
@@ -1689,7 +1668,10 @@ extern "C" fn relative_time_format_constructor_thunk(
     )
 }
 
-extern "C" fn plural_rules_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn plural_rules_constructor_thunk(
+    closure: *const ClosureHeader,
+    rest: f64,
+) -> f64 {
     require_new_target("PluralRules");
     make_instance(
         closure,

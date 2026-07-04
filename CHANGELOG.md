@@ -1,3 +1,36 @@
+## v0.5.1235 — renamed colliding classes: static calls + static field get/set resolve `class_renames`
+
+Follow-up to v0.5.1230's capture-snapshot work, fixing its own acceptance test (`same_class_name_across_factories_keeps_snapshots_separate`, red on main — invisible to PR CI per the #5960 blind spot): a body-local `class X` colliding with an outer/prior `class X` registers under a scope-local rename, and bare-ident references + `new X()` already resolve it — but the static-method-call arm (Ident + #private) and the static-field get/set arms looked up the raw name, binding the FIRST same-named registrant. Factory B's `e.who()` dispatched to factory A's static and read A's snapshot. All four arms now resolve the rename before the class lookups; imports keep the raw name. Adds `renamed_class_statics_dispatch_to_renamed_registrant` (statics + construction across two factories); full class/static/capture/5437/w6 e2e sweep green.
+
+## v0.5.1234 — #806: no-own-ctor walk binds the ancestor ctor with caps-absent semantics
+
+The parent walk for a ctor-free subclass forwarded the `new`-site's `caps_absent_from_args` into the ancestor's `CaptureFill`, deriving the user/cap tail-split from the ANCESTOR's cap params. But a bare-ident site appends the LEAF's captures, and a capturing leaf always synthesizes an own ctor — a leaf reaching the walk appended nothing, so trailing user args were eaten into cap slots (the decl-site snapshot silently rescued the cap itself; only the user args were lost). `new WrappedLogged("alpha")` bound the mixin ctor's `seed` to undefined. The ancestor fill is now unconditionally caps-absent.
+
+New e2e suite `issue_806_default_derived_ctor_forwarding` (5 node-validated cases; 3 green). Two sibling shapes remain `#[ignore]`d with traced mechanisms — the HIR fixed-arity default-ctor synthesis (rest/extends-expr parents truncate or drop forwarded args) and the sig-cap/rest gaps in the runtime construct dispatchers — tracked as #5957. `run_class_constructor_on_this_flat` gains the same `PERRY_SUPER_DEBUG` diagnostics `js_super_construct_apply` already had.
+
+## v0.5.1233 — CI: cache-warm primes the release compiler + gap-suite auto-opt variants
+
+The conformance-smoke job restored the shared rust-cache with a full match and still hit its 60-minute timeout: the warmed DEBUG units share nothing with its RELEASE build, and every gap test whose auto-optimize feature combination had no `target/perry-auto-<hash>` archive kicked off an in-job cargo build of the runtime (orphan cargo/rustc still compiling at cancellation). cache-warm now builds the release compiler and runs the gap suite once per main merge so every variant lands under the shared key; code-only PRs carry main's `CARGO_PKG_VERSION`, so their smoke jobs restore exact variant matches until the next merge re-warms (job timeout 120 → 150 for the cold first run).
+
+Also brings the version stream back in sync with two code-only fleet merges that landed without metadata: #5953 (#5898 — mutating array methods throw on frozen/non-writable length) and #5954 (#5909 — `JSON.stringify` of a toJSON-returned cycle throws instead of SIGSEGV).
+
+## v0.5.1232 — anchor inliner + deforest max-LocalId scans on the hardened id_scan
+
+The inliner (`inline/analysis.rs`) and deforestation (`deforest/walk.rs`) each carried their own ad-hoc max-LocalId scan to mint fresh locals; both were shallower than `generator::compute_max_local_id` (the scan hardened for #5143 to cover class field/static/computed-member/extends closures). A fresh local minted from an under-counting scan can collide with a LocalId owned by a closure the scan missed — the same defect class as #5143's FuncId collision. Both passes now seed from `crate::generator::compute_max_local_id(module)` and only extend it with their local maxima, so every future descent fix to the shared scan protects all three passes at once.
+
+## v0.5.1231 — #5869 residual: boxed locals must not feed the typed-ABI closure specializations
+
+A BOXED local's slot holds a box POINTER, never the typed value — but its declared type stayed in `module_local_types`, so the typed-ABI closure specialization (`__typed_f64`/i1/i32/string capture reps) read the capture RAW while only the generic variant went through `js_box_get`; the dispatcher picked the typed body and calls returned box-pointer bits as a denormal number (`2.58e-311` instead of `42`). Exposed by #5871's Labeled-descent fix, which made the type visible for closures inside labeled blocks. Fix: filter boxed ids out of `module_local_types` (`crates/perry-codegen/src/codegen/mod.rs`), so every type-directed unboxed access on a boxed slot is disqualified in one place and falls back to the generic box-aware paths. Un-ignores the `closure_inside_labeled_block_counts_as_capture` e2e.
+
+## v0.5.1230 — class-capture snapshot P0 pair: resolved-name re-registration + same-body assignment tracking
+
+Two defects in the decl-site class-capture snapshot (`js_class_register_capture_values`), both extracted from the #5437 Next.js branch:
+
+1. **End-of-body re-registration used the SOURCE class name while the body was compiled under the RENAMED one.** When a function-nested class collides with another declaration (`class_renames` in play), the end-of-body capture re-registration ran after the rename map was restored, so it registered under the wrong name and the refresh never reached the renamed class's id. Re-registration now happens before the `class_renames` restore and goes through `resolve_class_name`. (`crates/perry-hir/src/lower_decl/block.rs`, `crates/perry-hir/src/lower/expr_function.rs`)
+2. **The snapshot only refreshed before `return` statements — a captured local ASSIGNED after the class decl in the same body kept its stale decl-time value.** `insert_class_capture_refresh_after_assignments` now re-snapshots after every top-level assignment/update of a captured local that follows the class declaration in the same body (companion to the existing before-returns refresh).
+
+Salvages the stranded `issue_5437_incremental_cache_get_chain` e2e from the probe branch and adds `capture_rereg_renamed_class` (4 tests). Verified: parity vs the 2026-07-03 baseline shows 0 real newly-failing (one fs-fd flake ruled out by 6/6 local matches) and 6 newly-passing.
+
 ## v0.5.1229 — write-path hardening slice 2: transition_fast tags, structuredClone band, rejection printer (#5948)
 
 Continuation of #5943 (2026-07-02 audit §6). js_object_set_field_by_name_transition_fast — the first thing every generic `obj.field = v` hits until any defineProperty runs — admitted SSO strings/tag remnants via a `top16 >= 0x7FF8` catch-all then deref'd a bare GcHeader floor (a 2–5-char SSO payload lands in the 2–5.5TB range and passes the macOS heap floor — the write-side #5429 twin); now POINTER-tag-only, full handle band, try_read_gc_header, with return-0 deferring to the full dynamic path. structuredClone deref'd any POINTER payload ≥0x10000 as GcHeader bytes after the registry probes (fetch/zlib registry ids crashed); full-band gate + validated header probe, pass-through unchanged for non-probeables. The unhandled-rejection printer deref'd POINTER-tagged reasons with a bare ≥0x10000 (a thrown fetch Response id crashed instead of printing); is_plausible_heap_addr gate. e2e: write_path_band_slice2.rs.

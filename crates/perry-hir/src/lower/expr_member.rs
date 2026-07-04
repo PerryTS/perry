@@ -880,9 +880,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
-    // Check if this is a static field access (e.g., Counter.count)
+    // Check if this is a static field access (e.g., Counter.count).
+    // #5938 follow-up: resolve scope-local class renames first — a
+    // body-local colliding `class X` registers under `class_renames`, and
+    // the raw name would bind the FIRST same-named registrant's statics.
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-        let obj_name = obj_ident.sym.to_string();
+        let obj_name = ctx.resolve_class_name(obj_ident.sym.as_ref());
         if ctx.lookup_class(&obj_name).is_some() {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let field_name = prop_ident.sym.to_string();

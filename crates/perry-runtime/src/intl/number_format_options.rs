@@ -33,9 +33,11 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         "best fit",
     );
 
-    // numberingSystem: option (validated, lower-cased) overrides the locale
-    // `-u-nu-` keyword; default "latn".
-    let numbering = match get_option_string(options, "numberingSystem") {
+    // numberingSystem: validate the option (well-formed `type` nonterminal),
+    // then run ResolveLocale for the `nu` key — reconciling the option with the
+    // requested locale's `-u-nu-` keyword and updating the resolved locale so
+    // `resolvedOptions().locale` reflects only the supported value actually used.
+    let opt_ns = match get_option_string(options, "numberingSystem") {
         Some(value) => {
             let lower = value.to_ascii_lowercase();
             if !is_well_formed_numbering_system(&lower) {
@@ -43,10 +45,12 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
                     "Value {value} out of range for Intl.NumberFormat options property numberingSystem"
                 ));
             }
-            lower
+            Some(lower)
         }
-        None => numbering_system_from_locale(locale).unwrap_or_else(|| "latn".to_string()),
+        None => None,
     };
+    let (resolved_locale, numbering) = resolve_numbering_system(locale, opt_ns.as_deref());
+    set_internal_field(obj, KEY_LOCALE, string_value(&resolved_locale));
     set_internal_field(obj, KEY_NF_NUMBERING, string_value(&numbering));
 
     // SetNumberFormatUnitOptions.

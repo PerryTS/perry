@@ -797,3 +797,170 @@ pub extern "C" fn js_url_search_params_get_all(params: *mut ObjectHeader, name_v
     }
     f64::from_bits(i64::cast_unsigned(result as i64))
 }
+
+// ---- #5961: dynamic method dispatch for type-erased receivers ----
+//
+// The native URLSearchParams is an ordinary object (class_id == 0, leading
+// `_entries` slot — see `create_url_search_params_object` /
+// `try_read_as_search_params`); its method surface normally exists only via
+// static type-directed lowering (perry-codegen url_main.rs). When the
+// receiver's static type is lost (`any`, heterogeneous containers, minified
+// bundles), the generic dynamic member read used to find nothing and
+// `sp.append(...)` threw "append is not a function". These bound-method
+// thunks mirror the webcrypto_method_value pattern
+// (object/global_this/ctor_thunks.rs) with the receiver carried in a
+// GC-traced nanboxed capture slot.
+
+/// True when `obj` has the native URLSearchParams shape: an ordinary object
+/// (class_id == 0) whose leading own key is `_entries`. Mirrors the guard in
+/// [`try_read_as_search_params`] without materializing the entries.
+pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    unsafe {
+        if (*obj).class_id != 0 {
+            return false;
+        }
+        let keys_arr = (*obj).keys_array;
+        if keys_arr.is_null() || (*keys_arr).length == 0 {
+            return false;
+        }
+        let key0 = crate::array::js_array_get_f64(keys_arr, 0);
+        get_string_content(key0) == "_entries"
+    }
+}
+
+fn usp_thunk_receiver(closure: *const crate::closure::ClosureHeader) -> *mut ObjectHeader {
+    let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
+    (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
+}
+
+extern "C" fn usp_append_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    name: f64,
+    value: f64,
+) -> f64 {
+    js_url_search_params_append(usp_thunk_receiver(closure), name, value);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn usp_set_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    name: f64,
+    value: f64,
+) -> f64 {
+    js_url_search_params_set(usp_thunk_receiver(closure), name, value);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn usp_get_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+    // js_url_search_params_get returns a raw `*mut StringHeader` for the
+    // static-lowering path; rebuild the boxed value here instead.
+    let wanted = coerce_search_param_arg(name);
+    let entries = get_url_search_params_entries(usp_thunk_receiver(closure));
+    match entries.into_iter().find(|(k, _)| *k == wanted) {
+        Some((_, v)) => create_string_f64(&v),
+        None => f64::from_bits(crate::value::TAG_NULL),
+    }
+}
+
+extern "C" fn usp_has_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+    if js_url_search_params_has(usp_thunk_receiver(closure), name) != 0.0 {
+        f64::from_bits(crate::value::TAG_TRUE)
+    } else {
+        f64::from_bits(crate::value::TAG_FALSE)
+    }
+}
+
+extern "C" fn usp_delete_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+    js_url_search_params_delete(usp_thunk_receiver(closure), name);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Fused dynamic method call (`sp.append(...)` through `js_native_call_method`
+/// on a type-erased receiver): dispatch the covered URLSearchParams surface to
+/// the natives. Returns `None` for uncovered names so the generic dispatch
+/// keeps its existing behavior.
+pub(crate) fn url_search_params_dynamic_call(
+    params: *mut ObjectHeader,
+    name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg = |i: usize| -> f64 {
+        if !args_ptr.is_null() && i < args_len {
+            unsafe { *args_ptr.add(i) }
+        } else {
+            undefined
+        }
+    };
+    Some(match name {
+        "append" => {
+            js_url_search_params_append(params, arg(0), arg(1));
+            undefined
+        }
+        "set" => {
+            js_url_search_params_set(params, arg(0), arg(1));
+            undefined
+        }
+        "get" => {
+            let wanted = coerce_search_param_arg(arg(0));
+            match get_url_search_params_entries(params)
+                .into_iter()
+                .find(|(k, _)| *k == wanted)
+            {
+                Some((_, v)) => create_string_f64(&v),
+                None => f64::from_bits(crate::value::TAG_NULL),
+            }
+        }
+        "has" => {
+            if js_url_search_params_has(params, arg(0)) != 0.0 {
+                f64::from_bits(crate::value::TAG_TRUE)
+            } else {
+                f64::from_bits(crate::value::TAG_FALSE)
+            }
+        }
+        "delete" => {
+            js_url_search_params_delete(params, arg(0));
+            undefined
+        }
+        "toString" => {
+            let entries = get_url_search_params_entries(params);
+            let joined = entries
+                .iter()
+                .map(|(k, v)| format!("{}={}", url_encode(k), url_encode(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+            create_string_f64(&joined)
+        }
+        _ => return None,
+    })
+}
+
+/// Bound-method value for a dynamic property read on a native URLSearchParams
+/// object. Returns `None` for names outside the covered surface so unknown
+/// properties still read as `undefined`.
+pub(crate) fn url_search_params_method_value(obj: *const ObjectHeader, name: &str) -> Option<f64> {
+    let (func_ptr, arity): (*const u8, u32) = match name {
+        "append" => (usp_append_thunk as *const u8, 2),
+        "set" => (usp_set_thunk as *const u8, 2),
+        "get" => (usp_get_thunk as *const u8, 1),
+        "has" => (usp_has_thunk as *const u8, 1),
+        "delete" => (usp_delete_thunk as *const u8, 1),
+        _ => return None,
+    };
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    if closure.is_null() {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    // Nanboxed (not raw-ptr) capture so the GC traces the receiver.
+    crate::closure::js_closure_set_capture_f64(
+        closure,
+        0,
+        crate::value::js_nanbox_pointer(obj as i64),
+    );
+    Some(crate::value::js_nanbox_pointer(closure as i64))
+}

@@ -1421,12 +1421,15 @@ fn lower_new_impl(
         while let Some(pname) = parent_name {
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
-                    // #5437: fill any unfilled parent cap param from the
-                    // parent's decl-site capture snapshot.
+                    // #5437: snapshot-fill the parent's cap params. #806:
+                    // unconditionally caps-absent — a capturing leaf always
+                    // has a synthesized own ctor, so a leaf reaching this
+                    // walk appended no cap args; the site's flag split the
+                    // tail by the ANCESTOR's caps and ate user args.
                     let parent_capture_fill =
                         ctx.class_ids.get(pname).copied().map(|cid| CaptureFill {
                             cid,
-                            caps_absent_from_args,
+                            caps_absent_from_args: true,
                         });
                     let saved_scope = bind_inline_constructor_params(
                         ctx,

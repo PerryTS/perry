@@ -144,11 +144,18 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
 
     // A Proxy receiver is a small registered id, not a heap object — the
     // recording path below would deref the fake pointer and segfault. Route
-    // through the Reflect entry (which resolves the proxy to its target) and
-    // return the proxy per Object.setPrototypeOf's contract. (Proxy crash
-    // cluster.)
+    // through the Reflect entry (which resolves the proxy to its target and
+    // runs the trap chain, recursing through proxy targets). `Object.setPrototypeOf`
+    // must surface a `false` internal-method result as a `TypeError`
+    // (`Reflect.setPrototypeOf` returns the boolean without throwing). Without
+    // this, `Object.setPrototypeOf(proxyOfNonExtensibleProxy, x)` silently
+    // succeeded instead of throwing (test262
+    // Proxy/setPrototypeOf/trap-is-{missing,undefined}-target-is-proxy).
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-        crate::proxy::js_reflect_set_prototype_of(obj_value, proto);
+        let ok = crate::proxy::js_reflect_set_prototype_of(obj_value, proto);
+        if crate::value::js_is_truthy(ok) == 0 {
+            throw_object_type_error(b"#<Object> is not extensible");
+        }
         return obj_value;
     }
 

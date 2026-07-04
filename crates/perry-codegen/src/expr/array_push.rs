@@ -31,7 +31,7 @@ use crate::type_analysis::{
     is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
@@ -323,18 +323,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.br(&merge_label);
                 }
 
-                // No forwarding — read length & capacity, branch on
-                // capacity. inline_store on length < capacity, slow
-                // call on full.
+                // No forwarding — check the integrity flags, then read
+                // length & capacity and branch on capacity. inline_store on
+                // length < capacity, slow call on full.
+                //
+                // A frozen / sealed / non-extensible array, or one carrying
+                // per-index/`length` descriptors (`OBJ_FLAG_ARRAY_DESCRIPTORS`),
+                // must NOT take the raw inline store: `push` performs
+                // `Set(O,"length",…,true)`, so a frozen array or one whose
+                // `length` was made non-writable must throw a **TypeError**
+                // (test262 push/set-length-zero-array-is-frozen and
+                // set-length-zero-array-length-is-non-writable), and a
+                // descriptor-carrying array needs the descriptor-aware runtime
+                // store. All of these route to `js_array_push_f64`, which
+                // throws / handles them correctly. The integrity bits live in
+                // the GcHeader `_reserved` u16 at `arr - 6` (obj_type u8 at -8,
+                // gc_flags u8 at -7, `_reserved` u16 at -6): mask
+                // FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS = 0x407.
                 ctx.current_block = nofwd_idx;
                 {
                     let blk = ctx.block();
+                    let flags_addr = blk.sub(I64, &arr_handle, "6");
+                    let flags_ptr = blk.inttoptr(I64, &flags_addr);
+                    let obj_flags = blk.load(I16, &flags_ptr);
+                    // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
+                    let integrity_bits = blk.and(I16, &obj_flags, "1031");
+                    let clean = blk.icmp_eq(I16, &integrity_bits, "0");
                     let length = blk.safe_load_i32_from_ptr(&arr_handle);
                     let cap_addr = blk.add(I64, &arr_handle, "4");
                     let cap_ptr = blk.inttoptr(I64, &cap_addr);
                     let capacity = blk.load(I32, &cap_ptr);
                     let has_room = blk.icmp_ult(I32, &length, &capacity);
-                    blk.cond_br(&has_room, &inbounds_label, &realloc_label);
+                    // Take the inline store only when there is room AND no
+                    // integrity flag is set; otherwise fall to the runtime
+                    // (`js_array_push_f64` throws for frozen / non-writable
+                    // length and applies descriptors correctly).
+                    let inline_ok = blk.and(I1, &has_room, &clean);
+                    blk.cond_br(&inline_ok, &inbounds_label, &realloc_label);
                 }
 
                 // Inline store: arr+8+length*8 = value, length++.

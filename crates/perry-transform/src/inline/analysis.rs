@@ -6,7 +6,17 @@ use std::collections::{HashMap, HashSet};
 use super::*;
 
 pub fn find_max_local_id_in_module(module: &Module) -> LocalId {
-    let mut max_id: LocalId = 0;
+    // 2026-07-02 audit (#5143 family, prime #684/S1 suspect): this private
+    // scan missed class fields[].init / static_fields[].init /
+    // computed_members / extends_expr — containers whose closures CAN hold
+    // the module's numerically-highest LocalIds (they are the last-lowered
+    // constructs of a big module). The inliner mints ids at max+1, so a miss
+    // aliases a live id and the module-global loader silently skips loading
+    // (locals.contains_key already true) — reading the wrong value. Take the
+    // max of the legacy walk and the generator pass's hardened exhaustive
+    // scan (single source of truth; #5293) so no container is missed.
+    let hardened = crate::generator::compute_max_local_id(module);
+    let mut max_id: LocalId = hardened;
     max_id = max_id.max(find_max_local_id(&module.init));
     for func in &module.functions {
         for param in &func.params {

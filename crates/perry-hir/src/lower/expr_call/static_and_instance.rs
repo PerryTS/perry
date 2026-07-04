@@ -149,7 +149,16 @@ pub(super) fn try_static_method_and_instance(
                     .next()
                     .map(|c| c.is_uppercase())
                     .unwrap_or(false);
-            if !local_shadows_class && (ctx.lookup_class(&obj_name).is_some() || is_imported_upper)
+            // #5938 follow-up: a body-local `class X` colliding with an
+            // outer/prior `class X` is registered under a scope-local rename
+            // (`class_renames`), and a later `X.method()` in the same body
+            // must dispatch to the RENAMED class — the raw name binds the
+            // FIRST same-named registrant (factory B's `e.who()` read factory
+            // A's decl-site snapshot). Imports keep the raw name: a renamed
+            // class is by construction body-local, never imported.
+            let resolved_class = ctx.resolve_class_name(&obj_name);
+            if !local_shadows_class
+                && (ctx.lookup_class(&resolved_class).is_some() || is_imported_upper)
             {
                 match &member.prop {
                     ast::MemberProp::Ident(method_ident) => {
@@ -169,11 +178,12 @@ pub(super) fn try_static_method_and_instance(
                                 args,
                             }));
                         }
-                        if (ctx.has_static_method(&obj_name, &method_name) || is_imported_upper)
+                        if (ctx.has_static_method(&resolved_class, &method_name)
+                            || is_imported_upper)
                             && !static_call_has_spread
                         {
                             return Ok(Ok(Expr::StaticMethodCall {
-                                class_name: obj_name,
+                                class_name: resolved_class,
                                 method_name,
                                 args,
                             }));
@@ -182,10 +192,11 @@ pub(super) fn try_static_method_and_instance(
                     // Private static method: WithPrivateStatic.#helper()
                     ast::MemberProp::PrivateName(priv_ident) => {
                         let method_name = format!("#{}", priv_ident.name);
-                        if ctx.has_static_method(&obj_name, &method_name) && !static_call_has_spread
+                        if ctx.has_static_method(&resolved_class, &method_name)
+                            && !static_call_has_spread
                         {
                             return Ok(Ok(Expr::StaticMethodCall {
-                                class_name: obj_name,
+                                class_name: resolved_class,
                                 method_name,
                                 args,
                             }));

@@ -408,6 +408,26 @@ pub unsafe extern "C" fn js_super_construct_apply(
             );
         }
     }
+    // `class X extends Intl.<Ctor>` via `super(...spread)`: the decl-time parent
+    // value is the Intl constructor closure; run it (new.target set) and re-home
+    // the branded instance onto `this`, the spread counterpart of the
+    // `js_fetch_or_value_super` Intl branch.
+    {
+        let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
+        if crate::intl::is_intl_constructor_value(parent_val) {
+            let this_box = crate::value::js_nanbox_pointer(this_raw);
+            let n = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            } as usize;
+            let mut flat: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                flat.push(crate::array::js_array_get_f64(arr, i as u32));
+            }
+            crate::intl::intl_subclass_super(parent_val, this_box, flat.as_ptr(), flat.len());
+        }
+    }
     undef
 }
 
@@ -627,6 +647,16 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
         if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
             let caps = class_capture_values(cur).unwrap_or_default();
             let user_params = (total_params as usize).saturating_sub(caps.len());
+            if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
+                eprintln!(
+                    "flat_super cid={} total={} caps={} args_len={} rest={:?}",
+                    cur,
+                    total_params,
+                    caps.len(),
+                    args_len,
+                    crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+                );
+            }
             let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
             for i in 0..user_params {
                 if !args_ptr.is_null() && i < args_len {

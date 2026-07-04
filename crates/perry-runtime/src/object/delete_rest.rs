@@ -103,6 +103,13 @@ pub extern "C" fn js_object_delete_field(
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                    // An Array's `length` is a non-configurable exotic own
+                    // property with no descriptor-table entry, so the
+                    // `get_property_attrs` check below misses it. `delete
+                    // arr.length` must report failure (throws in strict mode).
+                    if name == "length" {
+                        return 0;
+                    }
                     if let Some(attrs) = get_property_attrs(obj as usize, name) {
                         if !attrs.configurable() {
                             return 0;
@@ -144,6 +151,21 @@ pub extern "C" fn js_object_delete_field(
         // user-attached props are dropped from the dynamic-prop table outright.
         if crate::closure::is_closure_ptr(obj as usize) {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // A plain (non-arrow, non-bound) function's `prototype` is a
+                // non-configurable own property. `get_property_attrs` only knows
+                // about it once #3655 has lazily registered a descriptor (on first
+                // access), so a fresh `function(){}` whose prototype was never
+                // read would otherwise report a successful delete. Reject it up
+                // front. (test262 Proxy/deleteProperty/*-target-is-proxy exercise
+                // `delete funcProxy.prototype` in strict mode.)
+                if name == "prototype" {
+                    let closure = obj as *const crate::closure::ClosureHeader;
+                    if !crate::closure::closure_is_arrow(closure)
+                        && !crate::closure::closure_is_bound_method(closure)
+                    {
+                        return 0;
+                    }
+                }
                 // A non-configurable slot — e.g. a constructor's `prototype`,
                 // which #3655 registers as `{configurable:false}` — can't be
                 // deleted: leave it intact and report failure (strict mode
