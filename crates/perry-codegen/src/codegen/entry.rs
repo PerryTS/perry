@@ -811,9 +811,13 @@ pub(super) fn compile_module_entry(
                 //   loop_body:   tick all queues, sleep 10ms, jump to header
                 //   loop_exit:   ret 0
                 let header_idx = ctx.new_block("event_loop.header");
+                let pending_idx = ctx.new_block("event_loop.check_pending");
+                let host_ret_idx = ctx.new_block("event_loop.host_return");
                 let body_idx = ctx.new_block("event_loop.body");
                 let exit_idx = ctx.new_block("event_loop.exit");
                 let header_label = ctx.block_label(header_idx);
+                let pending_label = ctx.block_label(pending_idx);
+                let host_ret_label = ctx.block_label(host_ret_idx);
                 let body_label = ctx.block_label(body_idx);
                 let exit_label = ctx.block_label(exit_idx);
 
@@ -829,14 +833,29 @@ pub(super) fn compile_module_entry(
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
 
-                // loop_header: check if there's any reason to keep running.
-                // Host-driven shells (watchOS SwiftUI tree renderer) flag the
-                // loop via js_set_event_loop_host_driven from perry_ui_app_run:
-                // the shell owns the run loop and ticks timers itself, so the
-                // entry must return (Swift calls it as perry_main_init and
-                // renders only after it comes back) even while timers are live.
+                // loop_header: host-driven shells (watchOS SwiftUI tree
+                // renderer) flag the loop via js_set_event_loop_host_driven
+                // from perry_ui_app_run: the shell owns the run loop and
+                // ticks timers itself, so the entry must return (Swift calls
+                // it as perry_main_init and renders only after it comes back)
+                // even while timers are live. Return PLAINLY — the process is
+                // not exiting, so the drained-exit epilogue below (beforeExit,
+                // exit finalization, unhandled-rejection reporting) must not
+                // run at what is effectively app launch.
                 ctx.current_block = header_idx;
+                let zero = "0".to_string();
                 let host_driven = ctx.block().call(I32, "js_event_loop_host_driven", &[]);
+                let host_cmp = ctx.block().icmp_ne(I32, &host_driven, &zero);
+                ctx.block()
+                    .cond_br(&host_cmp, &host_ret_label, &pending_label);
+
+                // host_return: hand control back to the host shell without
+                // the drained-exit epilogue.
+                ctx.current_block = host_ret_idx;
+                ctx.block().ret(I32, "0");
+
+                // check_pending: is there any reason to keep running?
+                ctx.current_block = pending_idx;
                 let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
                 let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
                 let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
@@ -852,11 +871,8 @@ pub(super) fn compile_module_entry(
                 let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
                 let any3 = ctx.block().or(I32, &any1, &any2);
                 let any = ctx.block().or(I32, &any3, &has_microtasks);
-                let zero = "0".to_string();
                 let cmp = ctx.block().icmp_ne(I32, &any, &zero);
-                let not_host = ctx.block().icmp_eq(I32, &host_driven, &zero);
-                let keep = ctx.block().and(crate::types::I1, &cmp, &not_host);
-                ctx.block().cond_br(&keep, &body_label, &exit_label);
+                ctx.block().cond_br(&cmp, &body_label, &exit_label);
 
                 // loop_body: tick everything, sleep, loop
                 ctx.current_block = body_idx;

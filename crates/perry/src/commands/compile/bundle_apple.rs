@@ -276,12 +276,13 @@ pub(super) fn bundle_for_watchos(
                     if let Some(s) = value.as_str() {
                         entries.push_str(&format!(
                             "    <key>{}</key>\n    <string>{}</string>\n",
-                            key, s
+                            xml_escape(key),
+                            xml_escape(s)
                         ));
                     } else if let Some(b) = value.as_bool() {
                         entries.push_str(&format!(
                             "    <key>{}</key>\n    <{}/>\n",
-                            key,
+                            xml_escape(key),
                             if b { "true" } else { "false" }
                         ));
                     }
