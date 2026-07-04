@@ -1910,6 +1910,27 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // #5961: native URLSearchParams is an ordinary object (class_id == 0,
+        // leading `_entries` slot) whose method surface normally exists only
+        // via static type-directed lowering. A type-erased receiver lands
+        // here instead — resolve the methods dynamically so `sp.append(...)`
+        // stays callable, and `size` reads as a number.
+        if !key.is_null() && crate::url::search_params::shape_is_url_search_params(obj) {
+            if let Ok(name) = std::str::from_utf8(key_bytes) {
+                if name == "size" {
+                    let n = crate::url::search_params::js_url_search_params_size(
+                        obj as *mut ObjectHeader,
+                    );
+                    return JSValue::from_bits((n as f64).to_bits());
+                }
+                if let Some(v) =
+                    crate::url::search_params::url_search_params_method_value(obj, name)
+                {
+                    return JSValue::from_bits(v.to_bits());
+                }
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }

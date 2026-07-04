@@ -717,6 +717,27 @@ pub unsafe extern "C" fn js_native_call_method(
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object, want_async);
     }
+    // #5961: native URLSearchParams is an ordinary object (class_id == 0,
+    // leading `_entries` slot) whose method surface normally resolves via
+    // static type-directed lowering. A fused dynamic call on a type-erased
+    // receiver lands here — dispatch the covered surface to the natives
+    // before the generic field-scan misses and throws "is not a function".
+    if matches!(
+        method_name,
+        "append" | "set" | "get" | "has" | "delete" | "toString"
+    ) {
+        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
+            if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
+                recv_ptr,
+                method_name,
+                args_ptr,
+                args_len,
+            ) {
+                return result;
+            }
+        }
+    }
     // Generic `Array.prototype` mutators borrowed onto a plain array-like
     // object (`Array.prototype.splice.call(obj, …)` whose synthesized member
     // call dispatches by name with no own method). The dense array arms further
