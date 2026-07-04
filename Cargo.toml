@@ -229,6 +229,34 @@ codegen-units = 16
 strip = false
 codegen-units = 16
 
+# Issue #5928: well-known "shared tokio" wrapper crates (#507) are built in
+# the SAME cargo invocation as perry-stdlib-static so cargo unifies their
+# shared dependency graph (tokio, hyper_util, rustls, and even core/std
+# monomorphizations) into identical compilation units. That unification only
+# holds if EVERY crate in that invocation uses the SAME `codegen-units`
+# setting — rustc partitions a crate's monomorphized code into N codegen
+# units based on this value, so two crates compiling the "same" shared
+# dependency with different `codegen-units` end up with differently-sized,
+# differently-partitioned .rcgu.o objects despite sharing an identical
+# crate/feature graph (confirmed empirically: perry-stdlib-static's `core`
+# codegen unit was 551 KB vs an ext crate's 2.4 MB for the identically
+# hash-named unit, before this fix). Without this, macOS's linker (which
+# has no `-multiply_defined suppress` / `-ld_classic` tolerance mode
+# anymore) hits thousands of `ld: duplicate symbol` errors once a program
+# needs 2+ of these wrapper crates simultaneously, because perry's
+# strip-dedup mechanism assumes same-named codegen units are byte-identical
+# and safe to drop duplicates from — an assumption this mismatch violated.
+[profile.release.package.perry-ext-fastify]
+codegen-units = 16
+[profile.release.package.perry-ext-http]
+codegen-units = 16
+[profile.release.package.perry-ext-ioredis]
+codegen-units = 16
+[profile.release.package.perry-ext-net]
+codegen-units = 16
+[profile.release.package.perry-ext-ws]
+codegen-units = 16
+
 # Fast developer profile (#5422). Optimized enough for realistic local runs but
 # without the distribution-grade settings that dominate compile time, so the
 # edit/build loop stays short. Intended local loop:
@@ -298,6 +326,20 @@ strip = false
 codegen-units = 16
 [profile.dist.package.perry-stdlib-static]
 strip = false
+codegen-units = 16
+
+# Issue #5928: mirrors the [profile.release.package.perry-ext-*] block above
+# — see its comment for why matching `codegen-units` across every crate in
+# the "shared tokio" (#507) cargo invocation is required.
+[profile.dist.package.perry-ext-fastify]
+codegen-units = 16
+[profile.dist.package.perry-ext-http]
+codegen-units = 16
+[profile.dist.package.perry-ext-ioredis]
+codegen-units = 16
+[profile.dist.package.perry-ext-net]
+codegen-units = 16
+[profile.dist.package.perry-ext-ws]
 codegen-units = 16
 
 [workspace.package]
