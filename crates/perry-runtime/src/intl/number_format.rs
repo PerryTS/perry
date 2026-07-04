@@ -1202,7 +1202,14 @@ pub(crate) fn intl_object_from_value(
     method: &str,
     expected_kind: &str,
 ) -> *mut ObjectHeader {
-    let Some(obj) = object_ptr_from_value(value) else {
+    // UnwrapNumberFormat / UnwrapDateTimeFormat: a receiver produced by the
+    // legacy `Intl.X.call(obj)` chain isn't itself an initialized instance — it
+    // carries the real instance under `%Intl%.[[FallbackSymbol]]`. A `Get` of
+    // that symbol also fires a Proxy `get` trap (so `resolvedOptions.call(proxy)`
+    // observes the symbol read, per intl-legacy-constructed-symbol-on-unwrap).
+    let unwrapped = unwrap_legacy_constructed(value);
+    let receiver = unwrapped.unwrap_or(value);
+    let Some(obj) = object_ptr_from_value(receiver) else {
         throw_type_error(&format!(
             "Intl.{expected_kind}.prototype.{method} called on incompatible receiver"
         ));
@@ -1214,6 +1221,36 @@ pub(crate) fn intl_object_from_value(
         ));
     }
     obj
+}
+
+/// If `value` is not itself an initialized Intl instance but carries
+/// `%Intl%.[[FallbackSymbol]]` (the legacy-constructed wrapper), return the
+/// wrapped instance value. Reads through a Proxy `get` trap when `value` is a
+/// Proxy. Returns `None` when there is nothing to unwrap.
+fn unwrap_legacy_constructed(value: f64) -> Option<f64> {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    // A Proxy is a small registered id, not a heap object — `object_ptr_from_value`
+    // would mis-classify it (its band overlaps the heap range on Linux) and
+    // dereference garbage. Route straight to the symbol `Get`, which fires the
+    // proxy `get` trap (intl-legacy-constructed-symbol-on-unwrap).
+    if crate::proxy::js_proxy_is_proxy(value) == 0 {
+        // A direct, already-initialized instance never needs unwrapping.
+        if let Some(obj) = object_ptr_from_value(value) {
+            if get_string_field(obj, KEY_KIND).is_some() {
+                return None;
+            }
+        }
+    }
+    let fallback_sym = crate::symbol::intl_legacy_constructed_symbol();
+    let wrapped = unsafe { crate::symbol::js_object_get_symbol_property(value, fallback_sym) };
+    if JSValue::from_bits(wrapped.to_bits()).is_pointer() {
+        Some(wrapped)
+    } else {
+        None
+    }
 }
 
 /// `get Intl.NumberFormat.prototype.format` — the ECMA-402 accessor. Validates

@@ -226,6 +226,40 @@ pub(crate) fn register_symbol_pointer(ptr: usize) {
     guard.as_mut().unwrap().insert(ptr);
 }
 
+// The `%Intl%.[[FallbackSymbol]]` — a single per-realm symbol whose description
+// is exactly `"IntlLegacyConstructedSymbol"` (no `Symbol.` prefix, so it is
+// *not* a well-known symbol). It is stashed on the receiver when a legacy Intl
+// service constructor (`Intl.NumberFormat` / `Intl.DateTimeFormat`) is called as
+// a plain function whose `this` is on the constructor's prototype chain (the
+// ChainNumberFormat / ChainDateTimeFormat normative-optional path), and read
+// back by the UnwrapXxx step so `nf.resolvedOptions()` on the wrapped object
+// still works.
+static INTL_FALLBACK_SYMBOL: Mutex<Option<usize>> = Mutex::new(None);
+
+/// Return the process-wide `%Intl%.[[FallbackSymbol]]` as a NaN-boxed
+/// (POINTER_TAG) JSValue, allocating & registering it lazily on first use.
+pub fn intl_legacy_constructed_symbol() -> f64 {
+    let mut guard = INTL_FALLBACK_SYMBOL.lock().unwrap();
+    if let Some(ptr) = *guard {
+        return f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK));
+    }
+    // Persistent (leaked) symbol so it outlives every GC cycle — its identity is
+    // realm-global. Description text lives in REGISTERED_SYMBOL_DESCRIPTIONS
+    // (readers materialize a fresh StringHeader on demand), matching the
+    // well-known-symbol contract.
+    let boxed = Box::new(SymbolHeader {
+        magic: SYMBOL_MAGIC,
+        registered: 0,
+        description: std::ptr::null_mut(),
+        id: next_id(),
+    });
+    let sym_ptr = Box::into_raw(boxed) as usize;
+    record_registered_symbol_description(sym_ptr, "IntlLegacyConstructedSymbol");
+    register_symbol_pointer(sym_ptr);
+    *guard = Some(sym_ptr);
+    f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
+}
+
 /// O(1) check whether a raw pointer (already untagged) is a known Symbol.
 /// Safe to call on any pointer-shaped value — no dereference is performed.
 pub fn is_registered_symbol(ptr: usize) -> bool {

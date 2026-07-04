@@ -1563,7 +1563,15 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
     if JSValue::from_bits(proto.to_bits()).is_pointer() {
         crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
     }
-    js_nanbox_pointer(obj as i64)
+    let instance = js_nanbox_pointer(obj as i64);
+    // ChainNumberFormat / ChainDateTimeFormat only (see `chain_legacy_constructed`):
+    // Intl.Collator ignores its this-value, so it is deliberately excluded.
+    if matches!(kind, KIND_NUMBER | KIND_DATE_TIME) {
+        if let Some(this_value) = ctor_guard::chain_legacy_constructed(closure, instance) {
+            return this_value;
+        }
+    }
+    instance
 }
 
 fn install_bound_instance_function(
