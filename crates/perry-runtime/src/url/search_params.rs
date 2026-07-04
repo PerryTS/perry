@@ -819,6 +819,20 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         return false;
     }
     unsafe {
+        // The receiver may be *any* pointer-tagged value -- a Date/Temporal
+        // cell, buffer, closure, small handle, etc. -- because callers reach
+        // this probe on a type-erased receiver before validating the object
+        // kind (#5964's dynamic-toString arm in js_native_call_method faults on
+        // a Date cell otherwise: date.toString() twice segfaulted while reading
+        // a Date cell's bytes at ObjectHeader offsets). Only ordinary objects
+        // carry the ObjectHeader layout, so classify the address and gate on the
+        // GC header type first -- a Date cell is GC_TYPE_DATE_CELL, an array
+        // GC_TYPE_ARRAY, and so on. `try_read_gc_header` also rejects small
+        // handles / slab buffers that would otherwise deref a fake header.
+        match crate::value::addr_class::try_read_gc_header(obj as usize) {
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            _ => return false,
+        }
         if (*obj).class_id != 0 {
             return false;
         }
