@@ -38,7 +38,13 @@ const parentProto = proto && Object.getPrototypeOf(proto);
 console.log(JSON.stringify({
   error: error instanceof Error,
   real: error instanceof Real,
-  errorProto: parentProto === Error.prototype || proto === Error.prototype,
+  // Pin the exact chain depth: error -> Real.prototype -> Error.prototype ->
+  // Object.prototype. A disjunctive `parentProto === Error.prototype || proto
+  // === Error.prototype` would accept a flattened (downgraded) chain too.
+  protoIsRealProto: proto === Real.prototype,
+  parentIsErrorProto: parentProto === Error.prototype,
+  protoNotErrorDirect: proto !== Error.prototype,
+  grandIsObjectProto: Object.getPrototypeOf(parentProto) === Object.prototype,
 }));
 TS
 
@@ -65,7 +71,7 @@ fi
 }
 
 cat > "$TMPDIR/expected.log" <<'EOF_EXPECTED'
-{"error":true,"real":true,"errorProto":true}
+{"error":true,"real":true,"protoIsRealProto":true,"parentIsErrorProto":true,"protoNotErrorDirect":true,"grandIsObjectProto":true}
 EOF_EXPECTED
 
 if ! diff -u "$TMPDIR/expected.log" "$TMPDIR/run.log"; then

@@ -38,6 +38,7 @@ function run(label: string, fn: () => unknown) {
 
 run("z.map", () => z.map("ok"));
 run("Holder.create", () => Holder.create("ok"));
+run("sameRef", () => z.map === Holder.create);
 TS
 
 BIN="$TMPDIR/out"
@@ -65,6 +66,7 @@ fi
 cat > "$TMPDIR/expected.log" <<'EOF_EXPECTED'
 z.map {"value":"ok"}
 Holder.create {"value":"ok"}
+sameRef true
 EOF_EXPECTED
 
 if ! diff -u "$TMPDIR/expected.log" "$TMPDIR/run.log"; then

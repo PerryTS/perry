@@ -41,7 +41,7 @@ TS
 cat >"$TMPDIR/main.ts" <<'TS'
 import defaultValue from "./defaultVar.js";
 import * as locales from "./locales/index.js";
-console.log(JSON.stringify({ defaultValue: defaultValue(), enType: typeof locales.en, es: locales.es().localeError({}) }));
+console.log(JSON.stringify({ defaultValue: defaultValue(), en: locales.en().localeError({}), es: locales.es().localeError({}) }));
 TS
 
 BIN="$TMPDIR/main"
@@ -55,7 +55,7 @@ OUT="$($BIN 2>&1)" || {
     echo "$OUT"
     exit 1
 }
-EXPECTED='{"defaultValue":"default-var","enType":"function","es":"locale-es"}'
+EXPECTED='{"defaultValue":"default-var","en":"locale-en","es":"locale-es"}'
 if [[ "$OUT" != "$EXPECTED" ]]; then
     echo "FAIL: unexpected output"
     echo "expected: $EXPECTED"
