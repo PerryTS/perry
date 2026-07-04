@@ -1570,7 +1570,22 @@ pub(crate) fn lower_stmt(
                     None
                 };
 
+                // Annex B B.3.4: track the (simple-ident) catch parameter name so
+                // a `var <name> = init` inside the catch body targets the catch
+                // binding, not the function-scoped hoisted `var`.
+                let mut pushed_catch_scope = false;
+                if let Some((_, ref pname)) = param {
+                    if matches!(catch_clause.param, Some(ast::Pat::Ident(_))) {
+                        let mut set = std::collections::HashSet::new();
+                        set.insert(pname.clone());
+                        ctx.catch_param_scopes.push(set);
+                        pushed_catch_scope = true;
+                    }
+                }
                 let mut catch_body = lower_block_stmt(ctx, &catch_clause.body)?;
+                if pushed_catch_scope {
+                    ctx.catch_param_scopes.pop();
+                }
                 for (i, stmt) in binding_stmts.into_iter().enumerate() {
                     catch_body.insert(i, stmt);
                 }

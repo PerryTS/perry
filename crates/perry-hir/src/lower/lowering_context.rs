@@ -374,6 +374,15 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// Names bound by an enclosing `catch (e)` parameter that is currently in
+    /// scope (a stack, innermost last). Annex B B.3.4: a `var e = init;` whose
+    /// name collides with a live catch parameter assigns to that *catch
+    /// parameter* binding, not the function-scoped hoisted `var` — so the outer
+    /// `var e` keeps its pre-catch value (test262 `annexB/language/statements/
+    /// try/catch-redeclared-var-statement`). `lower_var_decl_with_destructuring`
+    /// consults this to target the shadowing catch binding via `lookup_local`
+    /// instead of reusing the hoisted id. Pushed/popped around the catch body.
+    pub(crate) catch_param_scopes: Vec<HashSet<String>>,
     /// Annex B B.3.3 (#5297): for the function/program scope currently being
     /// lowered, maps each name declared by a *block-nested* `function f(){}`
     /// (legacy sloppy-mode block-level function declaration) to the enclosing-
