@@ -306,6 +306,13 @@ impl CopyingNurseryPreflight {
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
         visit_gc_rewrite_slots(header, |slot| unsafe {
+            // Weak-only reachability imposes no copy constraint: the
+            // collector never evacuates through a weak edge (a weak-only
+            // young target dies in place and tombstones), so a pinned
+            // target behind one must not force the fallback path.
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+                return;
+            }
             slot.record_layout_read();
             self.scan_slot(slot.slot as *const u64);
         });
@@ -367,6 +374,15 @@ pub(super) struct CopyingNurseryCollector {
     pub(super) sticky: StickyRememberedSet,
     pub(super) stats: CopyingNurseryTraceStats,
     pub(super) live_from_bytes: usize,
+    /// Weak target slots (WeakRef referent / WeakMap-WeakSet entry key /
+    /// FinalizationRegistry record target) seen during the copy scan. The
+    /// scan must NOT evacuate through them (that would strengthen the weak
+    /// edge), but a target moved via some strong edge AFTER the slot was
+    /// scanned still needs its address repaired — `repair_weak_slots` runs
+    /// them once more after the final drain. Slots are stable: they live in
+    /// to-space copies or non-moving objects, which don't move again within
+    /// the cycle.
+    pub(super) weak_slots: Vec<*mut u64>,
 }
 
 impl CopyingNurseryCollector {
@@ -384,6 +400,7 @@ impl CopyingNurseryCollector {
                 ..CopyingNurseryTraceStats::default()
             },
             live_from_bytes: 0,
+            weak_slots: Vec::new(),
         }
     }
 
@@ -545,6 +562,26 @@ impl CopyingNurseryCollector {
         if slot.is_null() {
             return;
         }
+        // Weak target edge (WeakRef referent / weak entry key / finreg
+        // record target): never evacuate through it — the mark/barrier
+        // paths skip these (`is_weak_target_trace_slot`), and copying
+        // through them strengthened the reference, so WeakMap entries
+        // never tombstoned and FinalizationRegistry never fired while
+        // copied-minor was the operative cycle. Repair an already-moved
+        // target's address now and queue the slot so `repair_weak_slots`
+        // fixes targets evacuated after this visit; the after-mark pass
+        // (`process_weak_targets_after_mark`) then tombstones dead ones.
+        // No remembered-set entry either — the write barrier skips weak
+        // slots the same way.
+        if !parent_header.is_null()
+            && crate::weakref::is_weak_target_trace_slot(parent_header, slot)
+        {
+            if let Some(new_bits) = self.rewrite_value_bits(*slot) {
+                *slot = new_bits;
+            }
+            self.weak_slots.push(slot);
+            return;
+        }
         let bits = *slot;
         if let Some(new_bits) = self.visit_value_bits(bits) {
             *slot = new_bits;
@@ -570,6 +607,22 @@ impl CopyingNurseryCollector {
                 continue;
             }
             self.scan_object_fields(header);
+        }
+    }
+
+    /// Second pass over the weak target slots collected during the scan:
+    /// a weak target evacuated via a strong edge AFTER its slot was
+    /// visited still points at the from-space original — rewrite it to
+    /// the forwarding address so `process_weak_targets_after_mark` (and
+    /// the mutator) read the live copy. Targets never forwarded are
+    /// either old-gen/pinned live (no rewrite needed) or dead (left for
+    /// the after-mark tombstone pass).
+    pub(super) unsafe fn repair_weak_slots(&mut self) {
+        let slots = std::mem::take(&mut self.weak_slots);
+        for slot in slots {
+            if let Some(new_bits) = self.rewrite_value_bits(*slot) {
+                *slot = new_bits;
+            }
         }
     }
 
@@ -833,13 +886,14 @@ pub(super) fn gc_collect_minor_copying_fast_path(
     trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
     let eligibility = CopiedMinorEligibility::evaluate(trigger_kind);
-    gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility)
+    gc_collect_minor_copying_fast_path_with_eligibility(trace, start, eligibility, trigger_kind)
 }
 
 pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     trace: &mut Option<GcCycleTrace>,
     start: Instant,
     eligibility: CopiedMinorEligibility,
+    trigger_kind: GcTriggerKind,
 ) -> Option<CopiedMinorFastPathOutcome> {
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
@@ -977,6 +1031,34 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
     trace_phase_record(trace, "copying_nursery", phase_start);
+
+    // Weak semantics for the copied-minor fast path. This path bypasses
+    // cycle.rs's `WeakProcessing` subphase entirely, so before this block
+    // existed NOTHING here tombstoned dead weak targets — and the scan
+    // used to evacuate THROUGH weak slots, so the targets never died in
+    // the first place: WeakMap entries never tombstoned and
+    // FinalizationRegistry never fired while copied-minor was the
+    // operative cycle (unbounded retention in long-running servers).
+    // Now the scan records weak slots without evacuating; here we repair
+    // any whose target was moved via a strong edge after the slot was
+    // visited, then run the shared after-mark tombstone pass. Must run
+    // BEFORE `copying_reset_from_spaces_and_flip` below: liveness is
+    // MARKED|PINNED on pre-flip headers (to-space copies carry MARKED
+    // until `clear_marks`). Gated on the weak-holder latch so programs
+    // that never allocate a weak container skip the full arena walk.
+    unsafe {
+        collector.repair_weak_slots();
+    }
+    if crate::weakref::weak_target_holders_allocated() {
+        let phase_start = trace_phase_start(trace);
+        let valid_ptrs = build_valid_pointer_set();
+        crate::weakref::process_weak_targets_after_mark(
+            &valid_ptrs,
+            /* minor_only = */ true,
+            matches!(trigger_kind, GcTriggerKind::Manual),
+        );
+        trace_phase_record(trace, "weak_processing", phase_start);
+    }
 
     if gc_verify_evacuation_enabled() {
         let phase_start = trace_phase_start(trace);

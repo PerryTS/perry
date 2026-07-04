@@ -53,6 +53,23 @@ struct PendingFinalizationJob {
 thread_local! {
     static PENDING_FINALIZATION_JOBS: RefCell<Vec<PendingFinalizationJob>> =
         const { RefCell::new(Vec::new()) };
+    /// One-way latch: set the first time this thread allocates a weak
+    /// TARGET holder (WeakRef, WeakMap/WeakSet entry, FinalizationRegistry
+    /// record). The copied-minor fast path consults it to decide whether
+    /// `process_weak_targets_after_mark` (a full arena walk) needs to run —
+    /// programs that never touch weak containers keep the fast path
+    /// walk-free. Never cleared: a dead weak holder costs one redundant
+    /// walk per cycle, which is the price of not tracking deallocation.
+    static WEAK_TARGET_HOLDERS_ALLOCATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// See `WEAK_TARGET_HOLDERS_ALLOCATED`.
+pub(crate) fn weak_target_holders_allocated() -> bool {
+    WEAK_TARGET_HOLDERS_ALLOCATED.with(|latch| latch.get())
+}
+
+fn note_weak_target_holder_allocated() {
+    WEAK_TARGET_HOLDERS_ALLOCATED.with(|latch| latch.set(true));
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -336,6 +353,7 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     unsafe {
         (*obj).class_id = CLASS_ID_WEAKREF;
     }
+    note_weak_target_holder_allocated();
     obj
 }
 
@@ -418,6 +436,7 @@ fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader
     unsafe {
         (*record).class_id = CLASS_ID_FINALIZATION_RECORD;
     }
+    note_weak_target_holder_allocated();
     record
 }
 
@@ -781,6 +800,7 @@ fn weak_entry_new(key: f64, value: f64) -> *mut ObjectHeader {
     unsafe {
         (*entry).class_id = CLASS_ID_WEAK_ENTRY;
     }
+    note_weak_target_holder_allocated();
     entry
 }
 

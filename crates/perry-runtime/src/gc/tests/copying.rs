@@ -1,4 +1,5 @@
 mod survival_and_malloc;
+mod weak_semantics;
 use super::super::*;
 use super::support::*;
 
