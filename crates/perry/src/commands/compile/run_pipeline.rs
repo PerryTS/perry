@@ -2247,8 +2247,34 @@ pub fn run_with_parse_cache(
                             for (export_name, origin_path) in exports {
                                 let origin_prefix =
                                     compute_module_prefix(origin_path, &ctx.project_root);
+                                // Issue #5927: namespace members are a
+                                // best-effort fallback in the flat
+                                // `import_function_prefixes` map — the
+                                // authoritative lookup for genuine
+                                // namespace-member accesses is the
+                                // per-namespace `namespace_member_prefixes`
+                                // map populated unconditionally below. Use
+                                // `or_insert` (never overwrite) so a PLAIN
+                                // named import of the same bare name (which
+                                // has NO other resolution path — a bare
+                                // call has no namespace to scope against)
+                                // always wins the flat map, regardless of
+                                // which import statement is processed
+                                // first. Pre-fix, `import { omit } from
+                                // "remeda"` in the same file as `import {
+                                // Context } from "effect"` (where
+                                // effect's Context.ts also exports `omit`)
+                                // meant whichever import was LATER in
+                                // source order silently overwrote the
+                                // other's flat-map entry — opencode's
+                                // `provider.ts` has `Context` imported
+                                // after `omit`, so `omit(...)` (a bare
+                                // remeda call) resolved against
+                                // `Context.ts`'s prefix instead of
+                                // remeda's chunk.
                                 import_function_prefixes
-                                    .insert(export_name.clone(), origin_prefix.clone());
+                                    .entry(export_name.clone())
+                                    .or_insert_with(|| origin_prefix.clone());
                                 // Issue #678: surface origin-name overrides
                                 // for namespace-imported members too. A
                                 // member reached via a re-export rename
@@ -2261,8 +2287,14 @@ pub fn run_with_parse_cache(
                                     .cloned();
                                 if let Some(ref origin_name) = resolved_origin_name {
                                     if origin_name != export_name {
+                                        // Issue #5927: same `or_insert`
+                                        // rationale as `import_function_prefixes`
+                                        // above — never let a namespace
+                                        // member's origin-name rename
+                                        // overwrite a plain import's entry.
                                         import_function_origin_names
-                                            .insert(export_name.clone(), origin_name.clone());
+                                            .entry(export_name.clone())
+                                            .or_insert_with(|| origin_name.clone());
                                     }
                                 }
                                 // Issue #5924: unconditionally register every
@@ -2536,8 +2568,18 @@ pub fn run_with_parse_cache(
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
+                                    // Issue #5927: `or_insert` — see the
+                                    // matching rationale on the
+                                    // `namespace_like_local` branch above.
+                                    // A namespace member is a best-effort
+                                    // fallback in this flat map; a PLAIN
+                                    // named import of the same bare name
+                                    // has no other resolution path and
+                                    // must always win, regardless of
+                                    // import-statement order.
                                     import_function_prefixes
-                                        .insert(export_name.clone(), origin_prefix.clone());
+                                        .entry(export_name.clone())
+                                        .or_insert_with(|| origin_prefix.clone());
                                     // Issue #5922 (companion to #680): also
                                     // register under the per-namespace key so
                                     // `Context.foo` and `Option.foo` resolve to
@@ -2563,8 +2605,11 @@ pub fn run_with_parse_cache(
                                         .cloned();
                                     if let Some(ref origin_name) = resolved_origin_name {
                                         if origin_name != export_name {
+                                            // Issue #5927: `or_insert` — see
+                                            // the matching rationale above.
                                             import_function_origin_names
-                                                .insert(export_name.clone(), origin_name.clone());
+                                                .entry(export_name.clone())
+                                                .or_insert_with(|| origin_name.clone());
                                         }
                                     }
                                     // Issue #5924: unconditionally register
