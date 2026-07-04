@@ -1044,6 +1044,8 @@ pub fn lower_fn_body_block_stmt(
     // refresh-before-EVERY-return placement.
     {
         let mut re_regs: Vec<Stmt> = Vec::new();
+        let mut re_reg_capsets: Vec<(Stmt, std::collections::HashSet<perry_types::LocalId>)> =
+            Vec::new();
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
                 let cname = ctx.resolve_class_name(class_decl.ident.sym.as_str());
@@ -1070,15 +1072,26 @@ pub fn lower_fn_body_block_stmt(
                         for s in body.iter_mut() {
                             super::class_captures::append_new_args_stmt(s, &cname, &cap_args, true);
                         }
-                        re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                        let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
                             class_name: cname,
                             captures,
-                        }));
+                        });
+                        re_reg_capsets.push((re_reg.clone(), captured.iter().copied().collect()));
+                        re_regs.push(re_reg);
                     }
                 }
             }
         }
         if !re_regs.is_empty() {
+            // Audit P0-B: the decl-site snapshot is authoritative at
+            // construct time, so keep it TRACKING same-body assignments —
+            // refresh after every statement that assigns a captured local
+            // (else `let x=1; class C{..x..}; x=2; new C()` reads 1 and the
+            // capture write-back resets x to 1).
+            crate::lower::expr_function::insert_class_capture_refresh_after_assignments(
+                &mut body,
+                &re_reg_capsets,
+            );
             crate::lower::expr_function::insert_class_capture_refresh_before_returns(
                 &mut body, &re_regs,
             );

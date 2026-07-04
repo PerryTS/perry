@@ -121,3 +121,58 @@ console.log("C-late:", makeC(false)());
     );
     assert_eq!(stdout, "C-early: 2\nC-late: 3\n");
 }
+
+/// Audit P0-B: a same-body assignment AFTER the class declaration must be
+/// visible to a mid-body construct (the decl-site snapshot is authoritative
+/// at construct time, so it must track assignments), and the capture
+/// write-back must not reset the outer local to the stale value.
+#[test]
+fn mid_body_construct_sees_assignment_after_class_decl() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+function f() {
+  let x = 1;
+  class C {
+    m() {
+      return x;
+    }
+  }
+  x = 2;
+  const c = new C();
+  console.log("m:", c.m(), "x:", x);
+}
+f();
+"#,
+    );
+    assert_eq!(stdout, "m: 2 x: 2\n");
+}
+
+/// Assignment inside an if-branch after the declaration (the zod
+/// enum-namespace-after-class shape): static reads are snapshot-only, so
+/// the branch's refresh must land at its own nesting level.
+#[test]
+fn branch_assignment_refreshes_snapshot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+function g(flag: boolean) {
+  let cfg: any = null;
+  class D {
+    static read() {
+      return cfg === null ? "null" : cfg.mode;
+    }
+  }
+  if (flag) {
+    cfg = { mode: "live" };
+  }
+  console.log("D:", D.read());
+}
+g(true);
+g(false);
+"#,
+    );
+    assert_eq!(stdout, "D: live\nD: null\n");
+}
