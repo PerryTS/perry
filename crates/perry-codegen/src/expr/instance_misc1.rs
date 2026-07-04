@@ -329,6 +329,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
             }
+            // A known non-constructor built-in namespace RHS (`Math`, `JSON`,
+            // `Reflect`, `Atomics`) has no [[Call]]/[[Construct]], so
+            // `x instanceof Math` throws a TypeError rather than folding to
+            // `false`. These never map to a real class id, so without this they
+            // would take the `cid == 0` → `js_instanceof(_, 0)` → `false` path.
+            // The LHS `v` was already lowered above (its side effects run), so
+            // just emit the throwing helper. Only fires for a bare identifier
+            // RHS (no member/dynamic `ty_expr`) that isn't shadowed by a user
+            // binding — a user `const Math = class {}` lands in `class_ids`.
+            if matches!(ty.as_str(), "Math" | "JSON" | "Reflect" | "Atomics")
+                && !ctx.class_ids.contains_key(ty)
+            {
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_instanceof_noncallable_rhs", &[]));
+            }
             // Built-in Error subclasses have reserved CLASS_ID_* constants
             // in the runtime (see crates/perry-runtime/src/error.rs). Map
             // them by name here so `e instanceof TypeError` works even

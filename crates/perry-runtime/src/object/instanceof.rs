@@ -631,6 +631,22 @@ fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
     false
 }
 
+/// `x instanceof <non-constructor built-in>` — the RHS (e.g. `Math`, `JSON`,
+/// `Reflect`, `Atomics`) is a namespace object with no `[[Call]]`/`[[Construct]]`,
+/// so `InstanceofOperator` throws a `TypeError` ("Right-hand side ... is not
+/// callable") regardless of the LHS. The codegen recognizes these statically
+/// (they never map to a real class id) and calls this instead of the
+/// `js_instanceof(_, 0)` fold, which would wrongly return `false`. Honors the
+/// `SUPPRESS_INSTANCEOF_RHS_THROW` scope used by `Symbol.hasInstance` helpers.
+#[no_mangle]
+pub extern "C" fn js_instanceof_noncallable_rhs() -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    if SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.get()) {
+        return f64::from_bits(TAG_FALSE);
+    }
+    throw_type_error(b"Right-hand side of 'instanceof' is not callable");
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
