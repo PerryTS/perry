@@ -85,15 +85,14 @@ factory();
     );
 }
 
-/// Closure created INSIDE the labeled block, reassignment outside. The
-/// codegen-side walkers now see it, but perry-hir's lowering still
-/// classifies the capture as non-mutable (`--trace hir` shows the closure
-/// under `Labeled { body: DoWhile }` with `mutable_captures: []`), so the
-/// creation site stores the box pointer while the body reads it raw — the
-/// call returns a denormal number (box-pointer bits). Tracked as the
-/// residual half of #5869; un-ignore when the HIR mutable-capture
-/// classifier learns the Labeled wrapper.
-#[ignore = "residual #5869: HIR mutable_captures misses closures under Labeled wrappers"]
+/// Closure created INSIDE the labeled block, reassignment outside. Root
+/// cause of the former residual (un-ignored by the fix): a BOXED local's
+/// declared type stayed in `module_local_types`, so the typed-ABI closure
+/// specialization (`__typed_f64`) read the capture RAW while the generic
+/// variant went through `js_box_get` — and the dispatcher picked the typed
+/// body, returning box-pointer bits as a denormal. Boxed ids are now
+/// filtered out of `module_local_types`, so boxed captures always take the
+/// generic (box-aware) paths.
 #[test]
 fn closure_inside_labeled_block_counts_as_capture() {
     let dir = tempfile::tempdir().expect("tempdir");

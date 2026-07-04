@@ -1745,7 +1745,21 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
     // Module-wide boxed-var union + LocalId→Type map. See `boxed_locals`.
     let module_boxed_vars = boxed_locals::collect_module_boxed_vars(hir);
-    let module_local_types = boxed_locals::collect_module_local_types(hir);
+    let mut module_local_types = boxed_locals::collect_module_local_types(hir);
+    // #5869 residual: a BOXED local's slot holds a BOX POINTER, never the
+    // typed value — advertising its declared type to the typed-ABI layer
+    // made the typed closure specializations (typed_f64/i1/i32/string
+    // capture reps) read the capture RAW while the generic variant
+    // box_get's, and the dispatcher picked the typed body: the call
+    // returned box-pointer bits as a denormal number. Observable repro:
+    //   let n = 0; let get: any = null;
+    //   tag: { get = () => n; break tag; }
+    //   n = 42; get()          // → 2.58e-311 instead of 42
+    // (#5871's Labeled-descent fix EXPOSED this — the type became visible
+    // for closures inside labeled blocks.) Removing boxed ids here
+    // disqualifies every type-directed unboxed access on a boxed slot in
+    // one place; consumers fall back to the generic (box-aware) paths.
+    module_local_types.retain(|id, _| !module_boxed_vars.contains(id));
 
     // Cross-module function declares are emitted lazily by `lower_call`
     // via `FnCtx.pending_declares` (drained back into `llmod` at the

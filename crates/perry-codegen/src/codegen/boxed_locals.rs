@@ -66,6 +66,30 @@ pub(crate) fn collect_module_boxed_vars(hir: &HirModule) -> std::collections::Ha
             module_boxed_vars.extend(collect_boxed_vars(&ctor.body));
             module_boxed_vars.extend(collect_boxed_param_ids(&ctor.params, &ctor.body));
         }
+        // 2026-07-02 audit (#684/S1 candidate): closures inside class FIELD
+        // initializers (instance + static), computed-member key expressions,
+        // and the extends expression ARE compiled, but were invisible to
+        // this module-wide union — a captured+mutated local there was never
+        // boxed, so reads skipped js_box_get and returned box-pointer bits
+        // as a denormal (the documented #907 `(number).replace` signature).
+        let mut extra_stmts: Vec<perry_hir::Stmt> = Vec::new();
+        for f in c.fields.iter().chain(c.static_fields.iter()) {
+            if let Some(init) = &f.init {
+                extra_stmts.push(perry_hir::Stmt::Expr(init.clone()));
+            }
+            if let Some(k) = &f.key_expr {
+                extra_stmts.push(perry_hir::Stmt::Expr(k.clone()));
+            }
+        }
+        for member in &c.computed_members {
+            extra_stmts.push(perry_hir::Stmt::Expr(member.key_expr.clone()));
+        }
+        if let Some(ext) = &c.extends_expr {
+            extra_stmts.push(perry_hir::Stmt::Expr((**ext).clone()));
+        }
+        if !extra_stmts.is_empty() {
+            module_boxed_vars.extend(collect_boxed_vars(&extra_stmts));
+        }
     }
     module_boxed_vars.extend(collect_boxed_vars(&hir.init));
     module_boxed_vars
