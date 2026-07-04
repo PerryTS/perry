@@ -31,5 +31,11 @@
     "added": "2026-05-18",
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
+  },
+  "test_gap_class_advanced": {
+    "issue": "5952",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "Regression tracked in #5952: a mixin factory that DIRECTLY returns `class extends <param> {}` (dynamic parent) loses its binding - `const M = make(Base); typeof M` is undefined. Workaround: assign to a local first (`const C = ...; return C`). Passes at merge-base bfa0f258d; introduced by the class-expression/factory work in #5874. Fix belongs in the HIR factory-class-inlining pass (skip dynamic-parent mixins)."
   }
 }
