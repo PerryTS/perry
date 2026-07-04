@@ -113,7 +113,7 @@ pub(crate) use construct::{
     extends_target_must_throw, function_would_have_own_prototype, is_callable_function_value,
     js_value_is_constructor, lookup_prototype_method, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
     nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
-    ordinary_function_prototype_value_for_read,
+    ordinary_function_prototype_value_for_read, promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_function_prototype_value_for_read, js_new_function_construct,

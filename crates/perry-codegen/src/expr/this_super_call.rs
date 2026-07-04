@@ -664,6 +664,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         )?;
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
+                    // `class X extends Promise` — `super(executor)` runs the
+                    // ECMA-262 27.2.3.1 Promise constructor against a hidden
+                    // backing `Promise` cell stashed on `this`. Inherited
+                    // `then`/`catch`/`finally` unwrap that cell (see
+                    // `promise::subclass::subclass_backing_promise`), so a
+                    // subclass instance behaves as a promise while keeping its
+                    // own `constructor`/`instanceof` identity.
+                    if parent_name.as_str() == "Promise" {
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
+                        for a in super_args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        let executor = lowered.first().cloned().unwrap_or_else(|| undef.clone());
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => undef.clone(),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_promise_subclass_init",
+                            &[(DOUBLE, &this_box), (DOUBLE, &executor)],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
                     let fetch_subclass_fn = match parent_name.as_str() {
                         "Request" => Some("js_request_subclass_init"),
                         "Response" => Some("js_response_subclass_init"),

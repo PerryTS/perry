@@ -1282,6 +1282,11 @@ fn promise_prototype_receiver(method: &str) -> *mut Promise {
     if js_value_is_promise(receiver) != 0 {
         return crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
     }
+    // `class X extends Promise` instance: unwrap its hidden backing Promise cell
+    // so `inst.then/catch(...)` dispatches against the real promise state.
+    if let Some(backing) = super::subclass::subclass_backing_promise(receiver) {
+        return backing;
+    }
     throw_promise_prototype_incompatible_receiver(method, receiver)
 }
 
@@ -1322,11 +1327,14 @@ fn throw_type_error_thunk(msg: &str) -> ! {
     crate::exception::js_throw(v)
 }
 
-// True iff `value` is a JavaScript Object (heap-pointer tagged, not a Symbol or handle).
+// True iff `value` is a JavaScript Object (heap-pointer tagged, not a Symbol or
+// handle). A user-class constructor (`p.constructor` for a `class X extends
+// Promise` instance) is an INT32-tagged ClassRef but is still an Object per spec,
+// so accept any constructor value too — needed by SpeciesConstructor.
 fn is_promise_species_object(value: f64) -> bool {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
-        return false;
+        return crate::object::js_value_is_constructor(value);
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::is_handle_band(raw) {
@@ -1656,10 +1664,16 @@ pub(crate) extern "C" fn promise_prototype_then_thunk(
 ) -> f64 {
     ensure_spec_finally_arities_registered();
     let receiver = crate::object::js_implicit_this_get();
-    if js_value_is_promise(receiver) == 0 {
+    let promise = if js_value_is_promise(receiver) != 0 {
+        crate::value::js_nanbox_get_pointer(receiver) as *mut Promise
+    } else if let Some(backing) = super::subclass::subclass_backing_promise(receiver) {
+        // `class X extends Promise` instance: dispatch against its backing cell,
+        // but keep `receiver` for SpeciesConstructor (`receiver.constructor` is
+        // the subclass, so the slow path chains a subclass promise per spec).
+        backing
+    } else {
         throw_promise_prototype_incompatible_receiver("then", receiver);
-    }
-    let promise = crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
+    };
 
     // SpeciesConstructor(promise, %Promise%) — reads this.constructor once.
     let c = promise_species_constructor(receiver);

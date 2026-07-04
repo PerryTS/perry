@@ -1505,6 +1505,25 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // `class X extends Promise`: inherited `then`/`catch`/`finally` dispatch
+    // against the hidden backing Promise cell. A subclass override (own field /
+    // vtable / prototype method) has already been consulted above, so only a
+    // genuinely inherited builtin reaches here. Bind `this` to the instance so
+    // the reified thunk unwraps the backing cell and species-chains via
+    // `receiver.constructor`. (Covers the `X.resolve().finally().then()` chains
+    // that codegen dispatches straight through `js_native_call_method`.)
+    if jsval.is_pointer() && matches!(method_name, "then" | "catch" | "finally") {
+        if crate::promise::subclass_backing_promise(object).is_some() {
+            if let Some(m) = crate::promise::promise_proto_method(method_name) {
+                let args = refreshed_args();
+                let prev_this = crate::object::js_implicit_this_set(object);
+                let result = crate::closure::js_native_call_value(m, args.as_ptr(), args.len());
+                crate::object::js_implicit_this_set(prev_this);
+                return result;
+            }
+        }
+    }
+
     // `class X extends Temporal.<Type>`: the prototype methods (`add`/`abs`/
     // `toString`/…) dispatch via the Temporal brand on the underlying cell, not
     // the JS prototype chain. All user-defined dispatch (own fields, vtable,

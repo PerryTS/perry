@@ -56,7 +56,12 @@ pub extern "C" fn js_promise_then_checked(
         crate::object::js_implicit_this_set(prev);
         return result;
     }
-    if promise_has_own_constructor(promise_addr) {
+    if promise_has_own_constructor(promise_addr)
+        || subclass::subclass_backing_promise(promise_val).is_some()
+    {
+        // Own `constructor` override OR a `class X extends Promise` instance:
+        // route through the SpeciesConstructor-aware thunk, which unwraps the
+        // backing cell and reads `this.constructor` for species chaining.
         let prev = crate::object::js_implicit_this_set(promise_val);
         let result = promise_prototype_then_thunk(std::ptr::null(), on_fulfilled, on_rejected);
         crate::object::js_implicit_this_set(prev);
@@ -73,7 +78,10 @@ pub extern "C" fn js_promise_then_checked(
 #[no_mangle]
 pub extern "C" fn js_promise_catch_checked(promise_val: f64, on_rejected: f64) -> f64 {
     let promise_addr = (promise_val.to_bits() & crate::value::POINTER_MASK) as usize;
-    if promise_has_own_property(promise_addr, "then") || promise_has_own_constructor(promise_addr) {
+    if promise_has_own_property(promise_addr, "then")
+        || promise_has_own_constructor(promise_addr)
+        || subclass::subclass_backing_promise(promise_val).is_some()
+    {
         let prev = crate::object::js_implicit_this_set(promise_val);
         let result = promise_prototype_catch_thunk(std::ptr::null(), on_rejected);
         crate::object::js_implicit_this_set(prev);
@@ -86,7 +94,10 @@ pub extern "C" fn js_promise_catch_checked(promise_val: f64, on_rejected: f64) -
 #[no_mangle]
 pub extern "C" fn js_promise_finally_checked(promise_val: f64, on_finally: f64) -> f64 {
     let promise_addr = (promise_val.to_bits() & crate::value::POINTER_MASK) as usize;
-    if promise_has_own_property(promise_addr, "then") || promise_has_own_constructor(promise_addr) {
+    if promise_has_own_property(promise_addr, "then")
+        || promise_has_own_constructor(promise_addr)
+        || subclass::subclass_backing_promise(promise_val).is_some()
+    {
         let prev = crate::object::js_implicit_this_set(promise_val);
         let result = promise_prototype_finally_thunk(std::ptr::null(), on_finally);
         crate::object::js_implicit_this_set(prev);

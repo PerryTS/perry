@@ -26,6 +26,7 @@ pub mod microtasks;
 pub mod native_async;
 pub mod scanners;
 pub mod spec_combinators;
+pub mod subclass;
 pub mod then;
 
 // ─── Explicit named re-exports ────────────────────────────────────
@@ -67,6 +68,8 @@ pub use spec_combinators::{
     js_promise_reject_spec, js_promise_resolve_spec, js_promise_try_spec,
     js_promise_with_resolvers_spec,
 };
+pub use subclass::js_promise_subclass_init;
+pub(crate) use subclass::subclass_backing_promise;
 pub(crate) use then::{
     box_promise_ptr, js_promise_attach_handlers, js_promise_attach_settle_listener,
     mark_rejection_handled, promise_has_own_constructor, promise_has_own_property,

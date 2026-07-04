@@ -1197,6 +1197,26 @@ pub unsafe extern "C" fn js_class_static_method_call(
     {
         return result;
     }
+    // `class X extends Promise` — inherited builtin static (`X.all(...)`,
+    // `X.resolve(...)`, …). Dispatch the spec static with `this` = the subclass
+    // receiver so `NewPromiseCapability(X)` constructs the subclass. Resolves the
+    // reified static value and calls it (its thunk reads `this` from the
+    // implicit-this slot, already bound to `receiver` by the caller above).
+    if super::promise_parent_in_chain(class_id)
+        && crate::object::promise_static_function_spec(name).is_some()
+    {
+        let static_val = crate::object::js_promise_static_function_value(name.as_ptr(), name.len());
+        if static_val.to_bits() != crate::value::TAG_UNDEFINED {
+            // The reified static thunk reads its `this` constructor from the
+            // implicit-this slot, so bind it to the subclass receiver for the
+            // duration of the call — `NewPromiseCapability(receiver)` then
+            // constructs the subclass.
+            let prev_this = crate::object::js_implicit_this_set(receiver);
+            let result = crate::closure::js_native_call_value(static_val, args_ptr, args_len);
+            crate::object::js_implicit_this_set(prev_this);
+            return result;
+        }
+    }
     // True miss: no static method and no callable static field resolved on the
     // class chain. We hand back the receiver (load-bearing for effect's
     // `.pipe()`-during-init chains, #687) — but that silent class-ref is exactly

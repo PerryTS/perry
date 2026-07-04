@@ -9,6 +9,31 @@
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
+use crate::types::DOUBLE;
+
+/// Emit `js_promise_subclass_init(this, executor)` for a no-own-ctor
+/// `class X extends Promise {}` on the runtime `new X(executor)` path. Runs the
+/// ECMA-262 Promise constructor against a hidden backing cell stashed on the
+/// freshly-allocated instance. `lowered_args` are the already-lowered `new`
+/// arguments; the first is the executor.
+pub(crate) fn emit_promise_subclass_init(ctx: &mut FnCtx<'_>, lowered_args: &[String]) {
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let executor = lowered_args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| undef.clone());
+    let this_box = ctx
+        .this_stack
+        .last()
+        .cloned()
+        .map(|slot| ctx.block().load(DOUBLE, &slot))
+        .unwrap_or(undef);
+    ctx.block().call(
+        DOUBLE,
+        "js_promise_subclass_init",
+        &[(DOUBLE, &this_box), (DOUBLE, &executor)],
+    );
+}
 
 /// Generic "does any statement in this ctor body satisfy `stmt_pred` or
 /// contain an expression satisfying `expr_pred`" walker, shared by the

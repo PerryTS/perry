@@ -1374,6 +1374,34 @@ fn new_target_class_id(new_target: f64) -> Option<u32> {
     constructor_class_ref_id(new_target).or_else(|| class_object_class_id(new_target))
 }
 
+/// True when class `cid` (or an ancestor) `extends Promise` — its registered
+/// dynamic-parent value resolves to the intrinsic `Promise` constructor. Used to
+/// run `js_promise_subclass_init` on the dynamic (runtime) `new Subclass(exec)`
+/// path, where codegen's `super()` Promise branch never emitted the init (e.g.
+/// `NewPromiseCapability(Subclass)` inside a combinator, which calls the runtime
+/// `js_new_function_construct` directly rather than a compiled `new`).
+pub(crate) fn promise_parent_in_chain(class_id: u32) -> bool {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while depth < 32 && cid != 0 {
+        let parent_val = js_get_dynamic_parent_value(cid);
+        if matches!(
+            identify_global_builtin_constructor(parent_val),
+            Some("Promise")
+        ) {
+            return true;
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 unsafe fn construct_registered_class_ref(
     target_cid: u32,
     instance_cid: u32,
@@ -1417,6 +1445,20 @@ unsafe fn construct_registered_class_ref(
     if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
         if super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
             super::super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
+        }
+    }
+    // ClassRef `new` of a Promise subclass — run the Promise constructor against
+    // a hidden backing cell (only when the compiled ctor's `super()` didn't
+    // already attach one). `NewPromiseCapability(Subclass)` reaches here.
+    if promise_parent_in_chain(target_cid) {
+        let inst_val = crate::value::js_nanbox_pointer(inst as i64);
+        if crate::promise::subclass_backing_promise(inst_val).is_none() {
+            let executor = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            crate::promise::js_promise_subclass_init(inst_val, executor);
         }
     }
     crate::value::js_nanbox_pointer(inst as i64)

@@ -118,6 +118,34 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // `class X extends Promise` instance — a value read of `then`/`catch`/
+    // `finally` (`p.then` / `typeof p.finally`, and codegen's `p.finally(cb)`
+    // which reads the property first) must resolve the reified Promise prototype
+    // method. The generic prototype walk does not surface these builtin
+    // `Promise.prototype` methods for a subclass instance, so hook them here when
+    // no own key shadows them. The method thunks unwrap the backing cell from the
+    // implicit-this receiver (see `promise_prototype_receiver`).
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        unsafe {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            let name =
+                std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).unwrap_or("");
+            if matches!(name, "then" | "catch" | "finally")
+                && !super::super::own_key_present(obj as *mut ObjectHeader, key)
+            {
+                let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+                if crate::promise::subclass_backing_promise(boxed).is_some() {
+                    if let Some(m) = crate::promise::promise_proto_method(name) {
+                        return JSValue::from_bits(m.to_bits());
+                    }
+                }
+            }
+        }
+    }
     // A per-evaluation class object (`ClassExprFresh`, #1772/#1787) reaches
     // here as a RAW heap pointer (a real ObjectHeader, so its top 16 address
     // bits are 0 — distinguishing it from a `0x7FFE` class-ref value or any
@@ -752,6 +780,18 @@ pub extern "C" fn js_object_get_field_by_name(
                         };
                         let result = js_class_method_bind(class_value, heap_name, name_len);
                         return JSValue::from_bits(result.to_bits());
+                    }
+                    // `class X extends Promise` — a value read of an inherited
+                    // builtin static (`X.resolve`, `X.all`, …) resolves to the
+                    // reified Promise static (so `X.resolve.bind(X)` works). Only
+                    // fires when no user static shadowed it above.
+                    if super::super::promise_parent_in_chain(class_id)
+                        && super::super::promise_static_function_spec(name).is_some()
+                    {
+                        let v = super::super::js_promise_static_function_value(name_ptr, name_len);
+                        if v.to_bits() != crate::value::TAG_UNDEFINED {
+                            return JSValue::from_bits(v.to_bits());
+                        }
                     }
                     if let Some(v) =
                         super::super::class_registry::class_static_accessor_getter_value(

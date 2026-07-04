@@ -270,6 +270,26 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         }
     }
 
+    // A user-class ClassRef (`class X extends Promise` etc.) reaching this
+    // generic dynamic getter — `GetPromiseResolve(C)`'s `Get(C, "resolve")`, a
+    // `Subclass.resolve.bind(Subclass)` read — must resolve through the
+    // class-ref-aware `js_object_get_field_by_name`, which checks a user static
+    // override (`Subclass.resolve = fn`) FIRST and only then falls back to the
+    // inherited builtin static. The plain pointer path below can't see class
+    // refs and would return `undefined`.
+    if crate::object::class_ref_id(obj_value).is_some() {
+        let name_slice = if property_name_ptr.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        } else if property_name_len > 0 {
+            std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len)
+        } else {
+            std::ffi::CStr::from_ptr(property_name_ptr as *const std::ffi::c_char).to_bytes()
+        };
+        let key = crate::string::js_string_from_bytes(name_slice.as_ptr(), name_slice.len() as u32);
+        let class_ref_obj = obj_value.to_bits() as *const crate::object::ObjectHeader;
+        return crate::object::js_object_get_field_by_name_f64(class_ref_obj, key);
+    }
+
     // Not a JS handle - it's a native object pointer
     let ptr = js_nanbox_get_pointer(obj_value);
 

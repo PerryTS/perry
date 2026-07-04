@@ -199,6 +199,11 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             || func_ptr == weak_map_constructor_call_thunk as *const u8 as usize
             || func_ptr == weak_set_constructor_call_thunk as *const u8 as usize
             || func_ptr == weak_ref_constructor_call_thunk as *const u8 as usize
+            // `class X extends Promise` needs its parent VALUE recognized as the
+            // Promise constructor (for the runtime `new Subclass` /
+            // `NewPromiseCapability(Subclass)` path). The Promise ctor value
+            // carries `promise_constructor_call_thunk`.
+            || func_ptr == promise_constructor_call_thunk as *const u8 as usize
             || func_ptr
                 == crate::messaging::js_message_channel_constructor_call_error as *const u8
                     as usize

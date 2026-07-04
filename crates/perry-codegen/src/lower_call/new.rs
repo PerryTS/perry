@@ -14,8 +14,9 @@ use super::lower_builtin_new;
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
     ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
-    effective_constructor_param_count, local_constructor_symbol_exists, map_set_default_super_kind,
-    node_stream_parent_kind, restore_imported_ctor_new_target, set_imported_ctor_new_target,
+    effective_constructor_param_count, emit_promise_subclass_init, local_constructor_symbol_exists,
+    map_set_default_super_kind, node_stream_parent_kind, restore_imported_ctor_new_target,
+    set_imported_ctor_new_target,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -1313,6 +1314,10 @@ fn lower_new_impl(
     } else {
         None
     };
+    // `class X extends Promise {}` with no own ctor — `new X(executor)` runs the
+    // Promise constructor against a hidden backing cell (see new_helpers).
+    let promise_parent_runtime =
+        !has_own_ctor && !has_imported_ctor && class.extends_name.as_deref() == Some("Promise");
     let map_set_parent_kind = if !has_own_ctor && !has_imported_ctor {
         map_set_default_super_kind(ctx.classes, class.extends_name.as_deref())
     } else {
@@ -1653,6 +1658,10 @@ fn lower_new_impl(
             );
             found_inherited_ctor = true;
         }
+        if promise_parent_runtime {
+            emit_promise_subclass_init(ctx, &lowered_args);
+            found_inherited_ctor = true;
+        }
         // If no parent constructor was found (imported class with no
         // inlineable constructor body), call the cross-module constructor.
         // Refs #420: walk past empty-bodied ancestors with param_count==0
@@ -1909,6 +1918,7 @@ fn lower_new_impl(
     if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
         if builtin_parent_runtime.is_some()
             || fetch_parent_runtime.is_some()
+            || promise_parent_runtime
             || (class.extends_expr.is_some() && !has_extends)
         {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
