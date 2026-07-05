@@ -84,9 +84,13 @@ console.log(m.getA(), m.b);
 }
 
 /// The single-field NUMERIC generic instance is scalar-replaced down to its
-/// raw-f64 field, so the instance becomes the number and method dispatch on
-/// it throws. Distinct from the dispatch fix above — tracked as #6040.
-#[ignore = "#6040: single-field numeric generic instance scalar-replaced to its raw-f64 field"]
+/// raw-f64 field. Its `get()` reads the (private, now concrete-numeric) field,
+/// so the scalar-method summary can inline it — but only when codegen resolves
+/// the receiver to the monomorphized `SimpleContainer$num` (matching the class
+/// the escape analysis used to authorize scalar replacement). #6040 was the
+/// mismatch where codegen resolved to the base `SimpleContainer` (fields still
+/// `T`), the summary rejected `get()`, and dispatch fell through to an
+/// uninitialized dummy-slot receiver (`(number).get is not a function`).
 #[test]
 fn generic_class_single_field_numeric_arg_method_dispatch() {
     let dir = tempfile::tempdir().expect("tempdir");
