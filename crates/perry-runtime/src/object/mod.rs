@@ -800,7 +800,14 @@ fn transition_edge_places_key(
             return false;
         }
         let keys = next_keys as *const ArrayHeader;
-        if slot_idx >= (*keys).length {
+        // A single-key transition edge (prev + key) always produces a target
+        // shape of exactly `slot_idx + 1` keys, with `key` at the last slot.
+        // Requiring the EXACT length (not just `slot_idx < length`) also
+        // rejects the "shared target grew in place after caching" case — where
+        // the cached `target_len` still matches but the actual array is now
+        // longer, so adopting it would give the object a keys_array with more
+        // keys than field_count tracks (keys present, values undefined).
+        if (*keys).length != slot_idx.wrapping_add(1) {
             return false;
         }
         let stored = crate::array::js_array_get(keys, slot_idx);

@@ -692,6 +692,50 @@ fn transition_cache_lookup_rejects_slot_key_mismatch() {
 }
 
 #[test]
+fn transition_cache_lookup_rejects_grown_shared_target() {
+    // #6006: a cached edge's `target_len` is a snapshot. The shared target
+    // keys_array can grow IN PLACE after caching (a later object extends the
+    // same shape), so `target_len == slot_idx + 1` still passes while the
+    // actual array is now longer. Adopting it would give the object a
+    // keys_array with more keys than field_count tracks — keys present, values
+    // undefined. The exact-length content check must catch the grown array.
+    let key = crate::string::js_string_from_bytes(b"gamma".as_ptr(), 5);
+    let extra = crate::string::js_string_from_bytes(b"delta".as_ptr(), 5);
+
+    // A 1-key target with spare capacity, cached as a slot-0 edge (target_len=1).
+    let keys = crate::array::js_array_alloc(4);
+    let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
+    transition_cache_insert(0, key, keys as usize, 0);
+    assert!(
+        transition_cache_lookup(0, key).is_some(),
+        "sanity: a genuine 1-key edge hits before the target grows (#6006)"
+    );
+
+    // Grow the SAME array in place to length 2 (as a sibling object would).
+    let keys2 = crate::array::js_array_push(keys, JSValue::string_ptr(extra));
+    // `js_array_push` grows in place when capacity allows (cap was 4), so the
+    // cached `next_keys` pointer still points at the now-length-2 array.
+    assert_eq!(keys2, keys, "test setup: push must grow in place, not realloc");
+
+    assert!(
+        transition_cache_lookup(0, key).is_none(),
+        "a cache edge whose shared target grew past slot_idx+1 must be rejected (#6006)"
+    );
+
+    let slot = transition_cache_slot(0, key as usize);
+    with_transition_cache(|t| unsafe {
+        // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
+        (*t)[slot] = TransitionEntry {
+            prev_keys: 0,
+            key_ptr: 0,
+            next_keys: 0,
+            slot_idx: 0,
+            target_len: 0,
+        };
+    });
+}
+
+#[test]
 fn entries_and_values_skip_non_enumerable_descriptor_slots() {
     // #5046: Object.defineProperty(o, 'hidden', { value: 1 }) defaults to
     // enumerable: false. Object.keys filtered it; entries/values did not.
