@@ -194,8 +194,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                 let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                // `arr.length = v` is a strict `Set(O,"length",v,true)`: a frozen
+                // array's `length` is non-writable, so route to the throwing
+                // variant instead of the silent internal helper.
                 blk.call_void(
-                    "js_array_set_length",
+                    "js_array_set_length_strict",
                     &[(I64, &arr_handle), (DOUBLE, &val_double)],
                 );
                 return Ok(val_double);

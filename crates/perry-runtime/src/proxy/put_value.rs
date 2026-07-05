@@ -188,7 +188,14 @@ pub extern "C" fn js_put_value_set(
         }
         if target.to_bits() == receiver.to_bits() && key_is_length(property_key) {
             if let Some(arr) = array_ptr_from_value(target) {
-                crate::array::js_array_set_length(arr, value);
+                // PutValue(`arr.length = v`) is `Set(O, "length", v, Throw)`. In
+                // strict mode a frozen array's non-writable `length` makes the
+                // write throw a TypeError instead of silently no-oping.
+                if strict != 0 {
+                    crate::array::js_array_set_length_strict(arr, value);
+                } else {
+                    crate::array::js_array_set_length(arr, value);
+                }
                 return value;
             }
         }

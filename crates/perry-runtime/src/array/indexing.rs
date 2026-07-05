@@ -16,6 +16,31 @@ const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 /// benchmark for 6 hours (Regression Check, v0.5.1129–v0.5.1150).
 const DENSE_ARRAY_GAP_LIMIT: u32 = 1024;
 
+/// A strict-mode element write (`arr[i] = v`) to a **frozen** array's existing
+/// index is `[[Set]]` on a non-writable data property with `Throw = true`
+/// (ECMA-262 §10.4.2.4 → OrdinarySetWithOwnDescriptor step 2.b.i), so it must
+/// throw a **TypeError** rather than silently no-op. Perry compiles everything
+/// strict, so the codegen `arr[i] = v` fast paths — which call these
+/// `js_array_set_f64*` helpers directly — carry the strict-`Set` contract.
+/// Matches V8's message. (test262 built-ins/Array element-write-on-frozen.)
+#[cold]
+fn throw_frozen_array_index_write(index: u32) -> ! {
+    crate::collection_iter::throw_type_error(&format!(
+        "Cannot assign to read only property '{index}' of object '[object Array]'"
+    ));
+}
+
+/// A strict-mode write that would *add* a new index to a non-extensible
+/// (frozen / sealed / preventExtensions'd) array — `arr[i] = v` with
+/// `i >= length` — is `CreateDataProperty` on a non-extensible object with
+/// `Throw = true`, so it must throw a **TypeError**. Matches V8's message.
+#[cold]
+fn throw_array_not_extensible_add(index: u32) -> ! {
+    crate::collection_iter::throw_type_error(&format!(
+        "Cannot add property {index}, object is not extensible"
+    ));
+}
+
 /// Lazily-memoized address of the `Array.prototype` array, and a sticky flag
 /// recording whether anyone has installed an indexed property on it. An
 /// out-of-bounds element read on an ordinary array must fall through to
@@ -830,6 +855,61 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
     }
 }
 
+/// Strict-mode `arr[i] = v` — the user-visible element assignment, i.e.
+/// `Set(O, ToString(i), v, true)` (PutValue with `Throw = true`). On a frozen
+/// array this must throw a **TypeError** instead of silently no-oping: writing
+/// an existing index is a read-only violation; adding a new index (or writing
+/// any index of a sealed / preventExtensions'd array past its length) is a
+/// not-extensible violation.
+///
+/// Kept separate from `js_array_set_f64_extend` so the *internal* callers of the
+/// latter — `Object.defineProperty(arr, i, …)` (which uses it as a raw
+/// `[[DefineOwnProperty]]` slot-writer after clearing attrs),
+/// `polymorphic_index`, and freshly-allocated runtime arrays — retain their
+/// silent, non-throwing contract. Only the `arr[i] = v` assignment codegen
+/// (`index_set` / `index` / `field_set_by_name`) routes here.
+/// test262 built-ins/Array element/add on frozen|sealed|non-extensible.
+/// Strict-mode guard for a would-be `arr[index] = v` element write: throws the
+/// spec `Set`-with-`Throw` TypeError when `arr` is frozen (existing index →
+/// read-only) or non-extensible and the index is new (→ not-extensible). No-op
+/// for writable slots, buffers, and typed arrays (which own their store
+/// semantics). Shared by the strict element-write entry points.
+#[inline]
+pub(crate) fn array_strict_index_write_guard(arr: *mut ArrayHeader, index: u32) {
+    let clean = clean_arr_ptr_mut(arr);
+    if clean.is_null()
+        || crate::buffer::is_registered_buffer(clean as usize)
+        || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()
+    {
+        return;
+    }
+    let flags = array_object_flags(clean);
+    let length = unsafe { (*clean).length };
+    if index < length {
+        // Existing index: only a *frozen* array's data is non-writable; a
+        // sealed / non-extensible array still permits overwriting it.
+        if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            throw_frozen_array_index_write(index);
+        }
+    } else if flags
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
+        != 0
+    {
+        // New index on a non-extensible array: cannot add the property.
+        throw_array_not_extensible_add(index);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_array_set_f64_extend_strict(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> *mut ArrayHeader {
+    array_strict_index_write_guard(arr, index);
+    js_array_set_f64_extend(arr, index, value)
+}
+
 /// Set an element in an array by index, extending the array if needed
 /// Returns the (possibly reallocated) array pointer
 /// This mimics JavaScript's arr[i] = value behavior
@@ -1484,4 +1564,64 @@ pub extern "C" fn js_array_set_index_or_string(
         }
     }
     arr
+}
+
+/// Strict-mode `arr[key] = v` (dynamic index-or-string key) — `Set` with
+/// `Throw = true`. For a canonical numeric index this enforces the frozen /
+/// non-extensible guard (throwing a TypeError) before delegating; non-index
+/// keys fall through to the ordinary path unchanged. This is the assignment
+/// entry point behind `js_typed_feedback_array_set_index_or_string`; the plain
+/// `js_array_set_index_or_string` keeps its silent contract for any internal
+/// caller. test262 built-ins/Array element-write-on-frozen (string/dynamic key).
+#[no_mangle]
+pub extern "C" fn js_array_set_index_or_string_strict(
+    arr: *mut ArrayHeader,
+    idx: f64,
+    value: f64,
+) -> *mut ArrayHeader {
+    if !arr.is_null() {
+        // Resolve the canonical array-index interpretation of the key (mirrors
+        // the numeric branch of `js_array_set_index_or_string`), and guard it.
+        // A string key that spells an index (`"0"`) also targets the element
+        // store, so ToString it and re-parse.
+        let index = canonical_index_of_set_key(idx);
+        if let Some(i) = index {
+            array_strict_index_write_guard(arr, i);
+        }
+    }
+    js_array_set_index_or_string(arr, idx, value)
+}
+
+/// The canonical array index (`0..2^32-1`) a dynamic `arr[key] = v` key targets,
+/// or `None` for a non-index key. Numbers use the array-index boundary; string
+/// keys are parsed via their ToString so `arr["3"]` on a frozen array throws
+/// like `arr[3]`.
+fn canonical_index_of_set_key(idx: f64) -> Option<u32> {
+    let bits = idx.to_bits();
+    let top16 = bits >> 48;
+    // Heap string / SSO key: parse the string as a canonical index.
+    if top16 == 0x7FFF || top16 == 0x7FF9 {
+        let s = crate::value::js_get_string_pointer_unified(idx) as *const crate::StringHeader;
+        if s.is_null() {
+            return None;
+        }
+        let len = unsafe { (*s).byte_len as usize };
+        let data = unsafe { (s as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        let name = std::str::from_utf8(bytes).ok()?;
+        return crate::object::canonical_array_index(name);
+    }
+    // Numeric key.
+    let n = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+        crate::value::JSValue::from_bits(bits).as_int32() as f64
+    } else if !(0x7FF8..=0x7FFF).contains(&top16) {
+        idx
+    } else {
+        return None;
+    };
+    if n.is_finite() && n.trunc() == n && n >= 0.0 && n < u32::MAX as f64 {
+        Some(n as u32)
+    } else {
+        None
+    }
 }

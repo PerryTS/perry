@@ -577,7 +577,12 @@ pub extern "C" fn js_object_set_field_by_name(
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                crate::array::js_array_set_length(obj as *mut crate::array::ArrayHeader, value);
+                // Assignment (`arr.length = v`) is a strict `Set` with
+                // `Throw = true`: throw on a frozen array's non-writable length.
+                crate::array::js_array_set_length_strict(
+                    obj as *mut crate::array::ArrayHeader,
+                    value,
+                );
                 return;
             }
         }
@@ -614,11 +619,13 @@ pub extern "C" fn js_object_set_field_by_name(
             };
             let arr = obj as *mut crate::array::ArrayHeader;
             if name == "length" {
-                crate::array::js_array_set_length(arr, value);
+                // Strict `Set(arr, "length", v, true)` — throw on frozen.
+                crate::array::js_array_set_length_strict(arr, value);
                 return;
             }
             if let Some(index) = super::canonical_array_index(name) {
-                crate::array::js_array_set_f64_extend(arr, index, value);
+                // Strict `Set(arr, i, v, true)` — throw on frozen/non-extensible.
+                crate::array::js_array_set_f64_extend_strict(arr, index, value);
                 return;
             }
             // Own-accessor short-circuit — an Array can carry a named accessor
