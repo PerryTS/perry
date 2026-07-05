@@ -177,6 +177,29 @@ pub(super) unsafe fn dispatch_primitive(
     }
 
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
+        // An own `valueOf`/`toString`/`toLocaleString` data property shadows the
+        // intrinsic wrapper method: `var s = new String(); s.valueOf =
+        // Number.prototype.valueOf; s.valueOf()` must run the *transferred*
+        // method (which brand-checks its receiver and throws a TypeError),
+        // not this boxed-primitive fast path that unwraps the [[StringData]]
+        // (test262 Number/prototype/valueOf/S15.7.4.4_A2_*, Boolean/prototype/
+        // valueOf/S15.6.4.3_A2_*). Fall through to the own-property dispatch in
+        // `common_methods::dispatch_common` when such a shadow exists.
+        if jsval.is_pointer() && matches!(method_name, "valueOf" | "toString" | "toLocaleString") {
+            let own = crate::object::js_object_get_own_field_or_undef(
+                object,
+                method_name.as_ptr(),
+                method_name.len(),
+            );
+            let own_jsv = JSValue::from_bits(own.to_bits());
+            if own_jsv.is_pointer()
+                && crate::closure::is_closure_ptr(
+                    (own.to_bits() & crate::value::POINTER_MASK) as usize,
+                )
+            {
+                return None;
+            }
+        }
         match method_name {
             "valueOf" => return Some(payload),
             "toString" | "toLocaleString" => {

@@ -288,7 +288,16 @@ pub(crate) extern "C" fn error_prototype_to_string_thunk(
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     let this_jsv = crate::value::JSValue::from_bits(this_value.to_bits());
-    if !this_jsv.is_pointer() || this_jsv.is_null() || this_jsv.is_undefined() {
+    // ECMA-262 20.5.3.4 step 2: `If Type(O) is not Object, throw a TypeError`.
+    // A Symbol is a POINTER_TAG value (registered-symbol id), so it slips past
+    // the `is_pointer` gate — reject it explicitly (test262 Error/prototype/
+    // toString/invalid-receiver, which drives undefined/null/1/true/string/
+    // Symbol through `.call`).
+    if !this_jsv.is_pointer()
+        || this_jsv.is_null()
+        || this_jsv.is_undefined()
+        || unsafe { crate::symbol::js_is_symbol(this_value) } != 0
+    {
         super::super::object_ops::throw_object_type_error(
             b"Error.prototype.toString called on non-object",
         );
@@ -321,6 +330,11 @@ fn error_to_string_property(this_value: f64, key: &'static [u8], default: &str) 
     if value_jsv.is_undefined() {
         return default.to_string();
     }
+    // ECMA-262 20.5.3.4 step 6/10: `msg`/`name` are coerced with ToString,
+    // which throws a TypeError for a Symbol (test262 Error/prototype/toString/
+    // tostring-message-throws-symbol). `js_jsvalue_to_string` otherwise renders
+    // `Symbol(desc)` and swallows the throw.
+    crate::builtins::reject_symbol_to_string(value);
     let string = crate::value::js_jsvalue_to_string(value);
     unsafe { string_header_to_owned(string) }
 }

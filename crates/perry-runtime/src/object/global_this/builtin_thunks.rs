@@ -138,10 +138,24 @@ pub(crate) extern "C" fn math_round_thunk(
     value: f64,
 ) -> f64 {
     let x = math_number_arg(value);
+    js_math_round_value(x)
+}
+
+/// ECMA-262 21.3.2.28 `Math.round`. The naive `floor(x + 0.5)` is wrong for
+/// two families the spec calls out (test262 Math/round/S15.8.2.15_A7):
+///   * `x = 0.5 - ε/4` (just under a half): `x + 0.5` rounds *up* to exactly
+///     `1.0` in f64, so `floor` yields 1 — but the true value is < 0.5 and must
+///     round to +0.
+///   * large odd integers where `x + 0.5 == x` loses the `.5`.
+/// Rounding via `r = floor(x)` then comparing the *exact* fractional part
+/// `x - r` against 0.5 avoids the pre-rounding of the `+ 0.5` add. Half rounds
+/// toward +∞ (the larger integer), and the `[-0.5, -0)` band returns -0.
+pub(crate) fn js_math_round_value(x: f64) -> f64 {
     if x == 0.0 || x.is_nan() || x.is_infinite() {
         return x;
     }
-    let rounded = (x + 0.5).floor();
+    let r = x.floor();
+    let rounded = if x - r >= 0.5 { r + 1.0 } else { r };
     if rounded == 0.0 && x.is_sign_negative() {
         -0.0
     } else {

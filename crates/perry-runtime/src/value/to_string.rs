@@ -1017,14 +1017,17 @@ unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
         } else {
             trimmed.parse::<f64>().unwrap_or(f64::NAN)
         }
+    } else if jsval.is_number() {
+        radix_value
     } else {
-        // Plain f64 number (or some other heap pointer that does not coerce
-        // to a finite radix — treat as NaN so it triggers RangeError).
-        if jsval.is_number() {
-            radix_value
-        } else {
-            f64::NAN
-        }
+        // An object radix runs ToNumber → OrdinaryToPrimitive(number), i.e. its
+        // `valueOf`/`toString`. An abrupt completion there must propagate rather
+        // than be swallowed into a `RangeError` (test262 Number/prototype/
+        // toString/numeric-literal-tostring-radix-poisoned:
+        // `0..toString({valueOf(){throw}})` must throw the poison, not a
+        // RangeError). `js_number_coerce` performs that coercion (and yields NaN
+        // for a non-coercible object, still landing on the RangeError path).
+        crate::builtins::js_number_coerce(radix_value)
     }
 }
 

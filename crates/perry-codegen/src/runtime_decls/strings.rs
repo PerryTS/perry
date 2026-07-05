@@ -70,6 +70,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
     module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_math_trunc", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_round", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_sign", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_imul", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_pow", DOUBLE, &[DOUBLE, DOUBLE]);

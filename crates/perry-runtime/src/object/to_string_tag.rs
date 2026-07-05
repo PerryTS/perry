@@ -273,6 +273,27 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    // Intrinsic primitive-wrapper prototypes carry the corresponding internal
+    // slot: `%Number.prototype%` has `[[NumberData]]` (+0), `%Boolean.prototype%`
+    // has `[[BooleanData]]` (false), `%String.prototype%` has `[[StringData]]`
+    // (""). ECMA-262 20.1.3.6 (`Object.prototype.toString`) therefore brands them
+    // `[object Number]` / `[object Boolean]` / `[object String]` rather than the
+    // generic `[object Object]` — observable once their own `toString` is deleted
+    // or overwritten with `Object.prototype.toString` (test262
+    // Number/prototype/S15.7.3.1_A2_T1, Boolean/prototype/S15.6.3.1_A1). This is
+    // placed after the `@@toStringTag` check so a user-installed tag still wins.
+    if jsv.is_pointer() {
+        for (name, tag) in [
+            ("Number", b"[object Number]".as_slice()),
+            ("Boolean", b"[object Boolean]".as_slice()),
+            ("String", b"[object String]".as_slice()),
+        ] {
+            if value.to_bits() == crate::object::builtin_prototype_value(name).to_bits() {
+                let str_ptr = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+                return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+            }
+        }
+    }
     if (raw_addr >= 0x10000 && crate::closure::is_closure_ptr(raw_addr))
         || crate::object::is_class_object_ptr(raw_addr as *const u8)
         || is_function_prototype_object_value(value)
