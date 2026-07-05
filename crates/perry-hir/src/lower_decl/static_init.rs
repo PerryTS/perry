@@ -34,9 +34,18 @@ pub(crate) fn build_interleaved_static_init_stmts(
     static_methods: &[Function],
 ) -> Vec<Stmt> {
     let emit_field = |out: &mut Vec<Stmt>, sf: &ClassField| {
-        let Some(init) = &sf.init else { return };
+        // A COMPUTED-key static field with no initializer still performs
+        // CreateDataProperty(F, key, undefined) at class-eval time, so it must
+        // be emitted (value = undefined) rather than dropped: (1) the key
+        // expression has observable side effects, and (2) a key that evaluates
+        // to "prototype" is a TypeError (test262 fields-computed-name-static-
+        // *propname-prototype). A NON-computed uninit static field is a plain
+        // named slot and keeps the pre-existing "skip when no init" behavior.
+        if sf.init.is_none() && sf.key_expr.is_none() {
+            return;
+        }
         // `this` in a static field initializer is the class constructor.
-        let mut init_value = init.clone();
+        let mut init_value = sf.init.clone().unwrap_or(Expr::Undefined);
         crate::analysis::substitute_lexical_this_in_expr(
             &mut init_value,
             &Expr::ClassRef(class_name.to_string()),
