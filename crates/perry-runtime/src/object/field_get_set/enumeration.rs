@@ -554,6 +554,46 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
     if keys.is_null() {
         return false;
     }
+    // Hot on the JSON.stringify path — called once per serialized object
+    // (#6009). Keys arrays are always materialized dense GC arrays, so read
+    // the element slots raw instead of paying the exported `js_array_get`
+    // validation per element, and reject on the first byte: a canonical
+    // array index must start with an ASCII digit, which almost no object key
+    // does, so the utf8 + numeric parse runs only for digit-leading keys.
+    {
+        let keys_addr = keys as usize;
+        let aligned = (keys_addr as u64) >> 48 == 0 && keys_addr >= 0x10000 && keys_addr & 0x7 == 0;
+        if aligned {
+            let keys_gc =
+                (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY && (*keys).length <= (*keys).capacity
+            {
+                let len = (*keys).length as usize;
+                let elements =
+                    (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                for i in 0..len {
+                    let key_val = crate::JSValue::from_bits((*elements.add(i)).to_bits());
+                    let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
+                    else {
+                        continue;
+                    };
+                    if !bytes.first().is_some_and(|b| b.is_ascii_digit()) {
+                        continue;
+                    }
+                    if std::str::from_utf8(bytes)
+                        .ok()
+                        .and_then(canonical_array_index)
+                        .is_some()
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+    }
+    // Fallback for anything that doesn't look like a plain dense keys array.
     let len = crate::array::js_array_length(keys);
     let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for i in 0..len {

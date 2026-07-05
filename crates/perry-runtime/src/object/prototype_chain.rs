@@ -36,6 +36,11 @@ pub(crate) fn array_static_proto_recorded() -> bool {
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
 static OBJECT_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+/// Latched true by the first recorded `Object.setPrototypeOf`. Lets hot
+/// per-object probes (e.g. JSON.stringify's `toJSON` fast-negative check,
+/// #6009) skip the map mutex entirely in processes that never re-prototype
+/// an object — the overwhelmingly common case.
+static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -68,6 +73,7 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
         *slot = proto_bits;
         slot_addr = slot as *mut u64 as usize;
     }
+    OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
     if slot_addr != 0 {
         crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, proto_bits);
     }
@@ -77,6 +83,9 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
 /// when no explicit prototype has been recorded (the object still has its
 /// default prototype); `Some(TAG_NULL)` when it was explicitly set to `null`.
 pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return None;
+    }
     get_object_prototypes()
         .lock()
         .ok()

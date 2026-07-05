@@ -51,6 +51,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 static EXTERNAL_BUFFER_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+/// Latched true by the first external-buffer registration. Lets the hot
+/// `is_registered_buffer` probe — which JSON.stringify runs for every pointer
+/// value it serializes (#6009) — skip the registry mutex entirely in the
+/// (overwhelmingly common) processes that never register an external buffer.
+static EXTERNAL_BUFFERS_NONEMPTY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKeyMeta>>> =
     OnceLock::new();
@@ -305,10 +311,11 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
-    if external_buffers()
-        .lock()
-        .map(|r| r.contains(&addr))
-        .unwrap_or(false)
+    if EXTERNAL_BUFFERS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
+        && external_buffers()
+            .lock()
+            .map(|r| r.contains(&addr))
+            .unwrap_or(false)
     {
         return true;
     }
@@ -332,6 +339,7 @@ pub extern "C" fn js_buffer_register_external(addr: usize) {
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
+    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
 }
 
 #[no_mangle]
@@ -392,6 +400,7 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
+    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_uint8arrays().lock() {
         r.insert(addr);
     }

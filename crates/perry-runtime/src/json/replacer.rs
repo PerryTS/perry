@@ -35,6 +35,9 @@ pub(crate) unsafe fn call_replacer(
     let prev_this = crate::object::js_implicit_this_set(holder_f64);
     let result = crate::js_closure_call2(replacer, key_f64, value_f64);
     crate::object::js_implicit_this_set(prev_this);
+    // The user callback may have installed/removed `Object.prototype.toJSON`
+    // (#6009 fast-probe cache).
+    super::stringify::invalidate_object_proto_tojson_state();
     result
 }
 
@@ -533,8 +536,11 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     });
     // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
     // entry so a throw during a prior stringify can't leak it across calls.
+    // Arbitrary user code ran since the last stringify, so the cached
+    // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+        super::stringify::invalidate_object_proto_tojson_state();
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
@@ -1370,8 +1376,11 @@ pub unsafe extern "C" fn js_json_stringify_full(
     });
     // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
     // entry so a throw during a prior stringify can't leak it across calls.
+    // Arbitrary user code ran since the last stringify, so the cached
+    // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+        super::stringify::invalidate_object_proto_tojson_state();
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
