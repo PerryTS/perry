@@ -693,14 +693,20 @@ jobs:
     # any failure NOT already triaged in test-parity/known_failures.json
     # (run_gap_tests.sh's no-new-untriaged gate).
     #
-    # MEASUREMENT PHASE: deliberately not yet in the branch-protection
-    # required set. Once wall-time on real PRs is confirmed acceptable, add
-    # `conformance-smoke` to the required contexts; until then a red here is
-    # a loud non-blocking signal.
-    continue-on-error: true
+    # Sharded across 8 parallel runners (--shard N/8) so the ~258-test suite
+    # runs in ~1/8 the wall-time — the 258 sequential Perry compiles dominate
+    # the cost and split evenly, taking the single-job ~57 min down to ~15 min
+    # per shard. The fan-in job `conformance-smoke-complete` below is the ONE
+    # status branch protection requires; a single shard's red bubbles up
+    # through it. Each shard's no-new-untriaged gate (run_gap_tests.sh) covers
+    # only its own slice, which is exactly the right per-shard semantics.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -717,15 +723,40 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run gap suite
-        run: ./scripts/run_gap_tests.sh
+      - name: Run gap suite (shard ${{ matrix.shard }}/8)
+        run: ./scripts/run_gap_tests.sh --shard ${{ matrix.shard }}/8
 
       - name: Upload gap report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gap-suite-report
+          name: gap-suite-report-shard-${{ matrix.shard }}
           path: test-parity/reports/
+
+  # ---------------------------------------------------------------------------
+  # Fan-in for the sharded gap suite. `needs.conformance-smoke.result` is
+  # "success" only when EVERY shard succeeded, so this single context is a
+  # faithful all-shards-green gate — the one branch protection requires.
+  # `if: always()` guarantees it runs and reports even when a shard fails
+  # (a required check that got *skipped* would otherwise wedge the PR on
+  # "Expected"); the event guard mirrors the shards so it no-ops off the PR
+  # path just like they do.
+  # ---------------------------------------------------------------------------
+  conformance-smoke-complete:
+    needs: conformance-smoke
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every gap-suite shard to pass
+        run: |
+          result='${{ needs.conformance-smoke.result }}'
+          echo "conformance-smoke (all 8 shards) => $result"
+          if [[ "$result" != "success" ]]; then
+            echo "::error::gap suite failed, was cancelled, or was skipped in one or more shards"
+            exit 1
+          fi
+          echo "All gap-suite shards passed."
 
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)

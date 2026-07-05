@@ -39,7 +39,9 @@ echo "==> Running gap suite (test-files/test_gap_*.ts) via run_parity_tests.sh -
 # run_parity_tests.sh exits 1 when AGGREGATE parity < 80%. We gate on "no NEW
 # untriaged failures" instead (below), so don't let its aggregate exit abort us.
 set +e
-./run_parity_tests.sh --filter test_gap_
+# Forward extra args (notably --shard N/M) so CI can fan the gap suite out
+# across parallel runners; with no args this is the full serial gap suite.
+./run_parity_tests.sh --filter test_gap_ "$@"
 set -e
 
 REPORT="test-parity/reports/latest.json"
