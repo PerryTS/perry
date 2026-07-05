@@ -1473,6 +1473,27 @@ pub(crate) fn insert_class_capture_refresh_after_assignments(
         // collector) assign any watched capture?
         let mut assigned = Vec::new();
         collect_assigned_locals_stmt(&stmts[i], &mut assigned);
+        // #6037: a forward-captured `var`/`let` re-bound later in the same body
+        // — including a DESTRUCTURING leaf (`var { t: dSq } = f()`) — lowers to
+        // a `Stmt::Let` that REUSES the pre-registered forward-decl id (see the
+        // `lexical_forward_decls` / `PreallocateBoxes` machinery). Such a Let
+        // IS an assignment of the captured value, but `collect_assigned_locals_
+        // stmt` classifies every `Let` as a fresh binding and skips it, so the
+        // decl-site snapshot (taken while the forward-decl still held
+        // `undefined`) was never refreshed and the class method read the
+        // capture as undefined (semver's `Comparator` reading `dSq.COMPARATOR`).
+        // A non-`undefined` init re-binding a watched id triggers the refresh;
+        // the `undefined` forward-decl init itself is skipped (it snapshots the
+        // same pre-assignment value the decl-site `RegisterClassCaptures`
+        // already recorded).
+        if let Stmt::Let {
+            id, init: Some(v), ..
+        } = &stmts[i]
+        {
+            if !matches!(v, Expr::Undefined) {
+                assigned.push(*id);
+            }
+        }
         if !assigned.is_empty() {
             let mut inserts: Vec<Stmt> = Vec::new();
             for (re_reg, capset) in regs {
