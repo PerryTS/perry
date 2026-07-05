@@ -151,12 +151,12 @@ pub use field_ops::{
 };
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
-pub use has_property::js_object_has_property;
 pub(super) use has_property::native_module_own_field_by_key;
 pub(crate) use has_property::{
     closure_dynamic_prop_by_key, reified_function_method_name, wide_key_index_lookup,
     wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
+pub use has_property::{js_in_operator, js_object_has_property};
 pub(crate) use ic_miss::{
     is_array_method_value_name, is_primitive_proto_method, is_timer_handle_method_key,
     set_method_value_name,

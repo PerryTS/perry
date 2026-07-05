@@ -762,16 +762,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- "key" in obj --------
-        // js_object_has_property takes two NaN-boxed doubles and returns
-        // a NaN-boxed boolean (1.0/0.0 already in our ABI).
+        // js_in_operator takes two NaN-boxed doubles and returns a NaN-boxed
+        // boolean (1.0/0.0 already in our ABI). Unlike the bare
+        // js_object_has_property helper (used internally by Reflect.has / proxy
+        // traps / `with` / rest-destructuring), the `in`-operator entry point
+        // first enforces ECMA-262 13.10.1 step 5: a non-Object right operand
+        // (`"x" in 5`, `... in null`, `... in Symbol()`, …) throws a TypeError.
         Expr::In { property, object } => {
             let key = lower_expr(ctx, property)?;
             let obj = lower_expr(ctx, object)?;
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_object_has_property",
-                &[(DOUBLE, &obj), (DOUBLE, &key)],
-            ))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_in_operator", &[(DOUBLE, &obj), (DOUBLE, &key)]))
         }
         Expr::PrivateBrandCheck {
             class_name,

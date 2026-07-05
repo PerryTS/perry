@@ -3,6 +3,116 @@
 
 use super::*;
 
+/// Render a value the way V8 does inside the `in`-operator TypeError message.
+/// Only the primitive RHS shapes that reach `throw_in_operator_non_object` need
+/// handling: `null`/`undefined` render literally, a Symbol as `Symbol(desc)`,
+/// and every other primitive via its natural string coercion. We must special-
+/// case Symbols because `js_jsvalue_to_string` on a Symbol itself throws.
+unsafe fn describe_in_operand(value: f64) -> String {
+    let jv = JSValue::from_bits(value.to_bits());
+    if jv.is_undefined() {
+        return "undefined".to_string();
+    }
+    if jv.is_null() {
+        return "null".to_string();
+    }
+    if crate::symbol::js_is_symbol(value) != 0 {
+        let desc = crate::symbol::js_symbol_description(value);
+        let dv = JSValue::from_bits(desc.to_bits());
+        if dv.is_undefined() {
+            return "Symbol()".to_string();
+        }
+        return format!(
+            "Symbol({})",
+            string_header_to_rust(crate::value::js_jsvalue_to_string(desc))
+        );
+    }
+    string_header_to_rust(crate::value::js_jsvalue_to_string(value))
+}
+
+/// Materialize a `*mut StringHeader` into an owned Rust `String` (empty on
+/// null). Mirrors the inline conversion in `descriptor_helpers.rs`.
+unsafe fn string_header_to_rust(s: *mut crate::string::StringHeader) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    let len = (*s).byte_len as usize;
+    let data = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).unwrap_or("").to_string()
+}
+
+/// Throw `TypeError: Cannot use 'in' operator to search for '<key>' in <rhs>`,
+/// the ECMA-262 13.10.1 step-5 rejection when the right operand of `in` is not
+/// an Object. Matches V8's wording; test262 negative cases only assert the
+/// error type, but the message keeps parity with Node.
+#[cold]
+fn throw_in_operator_non_object(obj: f64, key: f64) -> ! {
+    let (key_str, rhs_str) = unsafe { (describe_in_operand(key), describe_in_operand(obj)) };
+    let msg = format!("Cannot use 'in' operator to search for '{key_str}' in {rhs_str}");
+    let msg_val = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(msg_val);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Does the right operand of `in` count as an Object (ECMA-262 13.10.1 step 5)?
+/// Mirrors every object-like representation `js_object_has_property` already
+/// understands, so the throwing guard in `js_in_operator` never rejects a value
+/// that the lookup below would have handled:
+///
+///   * heap `POINTER_TAG` values — plain objects, arrays, functions/closures,
+///     proxies, and every handle-band registry id (Headers/Request/streams/…) —
+///     **except** Symbols, which are pointer-tagged but are primitives;
+///   * INT32-tagged *registered* class refs (a class used as a value is its
+///     constructor object — `"prototype" in SomeClass`);
+///   * Web Streams handles — raw finite-integer f64 ids in the stream-id band
+///     (`"closed" in reader`).
+///
+/// Everything else (number, boolean, string, BigInt, null, undefined, Symbol,
+/// and any unregistered INT32) is a primitive and makes `in` throw. A numeric
+/// literal that happens to land inside the stream-id band is treated as
+/// object-like here — a deliberately conservative false-negative that avoids
+/// ever regressing a real stream handle; test262's primitive-RHS cases use
+/// small literals well below that band.
+fn in_rhs_is_object(obj: f64) -> bool {
+    let jv = JSValue::from_bits(obj.to_bits());
+    if jv.is_pointer() {
+        return unsafe { crate::symbol::js_is_symbol(obj) } == 0;
+    }
+    if crate::object::class_ref_id(obj).is_some() {
+        return true;
+    }
+    let f = f64::from_bits(obj.to_bits());
+    f.is_finite()
+        && f > 0.0
+        && f.fract() == 0.0
+        && crate::value::addr_class::is_stream_id_band(f as usize)
+}
+
+/// The `in` operator: `key in obj`. ECMA-262 13.10.1 (RelationalExpression `in`)
+/// step 5 requires the right operand to be an Object, throwing a `TypeError`
+/// otherwise. This is the dedicated codegen entry point for the source-level
+/// `in` operator; it performs that spec check and then delegates the actual
+/// property lookup to `js_object_has_property`.
+///
+/// The guard lives here rather than in `js_object_has_property` because that
+/// helper is also called internally (Reflect.has, proxy traps, `with`
+/// environments, rest-destructuring exclusion, descriptor validation) with
+/// receivers that are always objects — routing those through the throwing check
+/// would be pointless and risks over-throwing on an internal edge. Only the
+/// user-visible `in` operator can legitimately be handed a primitive RHS.
+///
+/// test262: `language/expressions/in/*` primitive-RHS cases (`"x" in 5`,
+/// `... in null`, `... in Symbol()`, `... in ""`, `... in true`, `... in 1n`
+/// ⇒ TypeError).
+#[no_mangle]
+pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
+    if !in_rhs_is_object(obj) {
+        throw_in_operator_non_object(obj, key);
+    }
+    js_object_has_property(obj, key)
+}
+
 /// Check if a property exists in an object by its string key name
 /// Returns NaN-boxed true if the property exists, NaN-boxed false otherwise
 /// This implements the JavaScript 'in' operator: "key" in obj
