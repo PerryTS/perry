@@ -162,7 +162,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(class) = ctx.classes.get(cn.as_str()).copied() {
                     let bits = ctx.block().bitcast_double_to_i64(&result);
                     let inst_handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle);
+                    crate::lower_call::emit_class_capture_writeback(ctx, class, &inst_handle, &[]);
                 }
             }
             Ok(result)

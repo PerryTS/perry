@@ -25,6 +25,12 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         return true;
     }
+    // INT32-tagged class references (top 16 bits = 0x7FFE) are callable
+    // constructors emitted by codegen. `is_pointer()` only checks 0x7FFD,
+    // so they would fall through to `return false` without this guard.
+    if (value.to_bits() >> 48) == 0x7FFE {
+        return true;
+    }
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return false;
@@ -347,6 +353,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    // `inst instanceof Intl.<Ctor>`: Intl instances are plain heap objects whose
+    // `[[Prototype]]` is `Intl.<Ctor>.prototype` but carry no class-id, so the
+    // arms above can't match them. Walk their static-prototype chain.
+    if let Some(is_inst) = crate::intl::intl_instanceof(value, type_ref) {
+        return if is_inst {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     js_instanceof_dynamic_tail(value, type_ref)
 }
 
@@ -368,6 +384,12 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
     match name {
         "Map" => 0xFFFF0022,
         "Set" => 0xFFFF0023,
+        // #5834: kept in sync with the reserved ids in
+        // perry-codegen/src/expr/instance_misc1.rs so a dynamic
+        // `x instanceof ctorVar` (ctorVar holding WeakMap/WeakSet) resolves
+        // through the same runtime probe as the compile-time-literal form.
+        "WeakMap" => 0xFFFF002C,
+        "WeakSet" => 0xFFFF002D,
         "RegExp" => 0xFFFF0021,
         "ArrayBuffer" => 0xFFFF0025,
         "Array" => 0xFFFF0024,
@@ -607,6 +629,22 @@ fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
         return unsafe { probe(handle) };
     }
     false
+}
+
+/// `x instanceof <non-constructor built-in>` — the RHS (e.g. `Math`, `JSON`,
+/// `Reflect`, `Atomics`) is a namespace object with no `[[Call]]`/`[[Construct]]`,
+/// so `InstanceofOperator` throws a `TypeError` ("Right-hand side ... is not
+/// callable") regardless of the LHS. The codegen recognizes these statically
+/// (they never map to a real class id) and calls this instead of the
+/// `js_instanceof(_, 0)` fold, which would wrongly return `false`. Honors the
+/// `SUPPRESS_INSTANCEOF_RHS_THROW` scope used by `Symbol.hasInstance` helpers.
+#[no_mangle]
+pub extern "C" fn js_instanceof_noncallable_rhs() -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    if SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.get()) {
+        return f64::from_bits(TAG_FALSE);
+    }
+    throw_type_error(b"Right-hand side of 'instanceof' is not callable");
 }
 
 /// Check if a value is an instance of a class with the given class_id
@@ -1023,6 +1061,33 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             }
         }
         return false_val;
+    }
+    // #5834: `x instanceof WeakMap`/`WeakSet` for a REAL instance. These
+    // reserved ids (kept in sync with perry-codegen/src/expr/instance_misc1.rs)
+    // are distinct from the runtime `CLASS_ID_WEAKMAP`/`CLASS_ID_WEAKSET`
+    // stamped on actual instances (weakref.rs) — the subclass-chain walk above
+    // only matches a `class S extends WeakMap {}` instance (whose chain reaches
+    // this reserved id), so a genuine `new WeakMap()` still needs its own probe
+    // here, same shape as Map/Set above.
+    const CLASS_ID_WEAKMAP_RESERVED: u32 = 0xFFFF002C;
+    const CLASS_ID_WEAKSET_RESERVED: u32 = 0xFFFF002D;
+    if class_id == CLASS_ID_WEAKMAP_RESERVED {
+        return if crate::weakref::weak_class_id_from_receiver(value)
+            == Some(crate::weakref::CLASS_ID_WEAKMAP)
+        {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_WEAKSET_RESERVED {
+        return if crate::weakref::weak_class_id_from_receiver(value)
+            == Some(crate::weakref::CLASS_ID_WEAKSET)
+        {
+            true_val
+        } else {
+            false_val
+        };
     }
     if class_id == CLASS_ID_REGEXP {
         if jsval.is_pointer() {

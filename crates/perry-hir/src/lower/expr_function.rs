@@ -1144,6 +1144,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // trailing `return`).
     if let Some(ref block) = fn_expr.function.body {
         let mut re_regs: Vec<Stmt> = Vec::new();
+        let mut re_reg_capsets: Vec<(Stmt, std::collections::HashSet<LocalId>)> = Vec::new();
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
                 // A colliding `class X` may have been renamed during body
@@ -1159,15 +1160,21 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                         for s in body.iter_mut() {
                             crate::lower_decl::append_new_args_stmt(s, &cname, &cap_args, true);
                         }
-                        re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                        let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
                             class_name: cname,
                             captures,
-                        }));
+                        });
+                        re_reg_capsets.push((re_reg.clone(), captured.iter().copied().collect()));
+                        re_regs.push(re_reg);
                     }
                 }
             }
         }
         if !re_regs.is_empty() {
+            // Audit P0-B twin of the block-body path: refresh after every
+            // same-body assignment to a captured local so mid-body constructs
+            // read the live value through the authoritative snapshot.
+            insert_class_capture_refresh_after_assignments(&mut body, &re_reg_capsets);
             // Refresh the snapshot before EVERY reachable `return` in the body
             // (not only a trailing one): an EARLY `return <class>` after the
             // captured locals are assigned would otherwise return a class with
@@ -1262,7 +1269,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
 /// — a closure's `return` exits a different function and must keep its own
 /// snapshot. Each return path then records the live capture values at that
 /// point. See the call site in `lower_fn_expr_anon` (CodeRabbit #5739).
-fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>, re_regs: &[Stmt]) {
+pub(crate) fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>, re_regs: &[Stmt]) {
     let mut i = 0;
     while i < stmts.len() {
         insert_class_capture_refresh_into_stmt(&mut stmts[i], re_regs);
@@ -1398,4 +1405,89 @@ fn compute_closure_captures(
         .collect();
 
     (captures, mutable_captures)
+}
+
+/// Insert a class-capture refresh immediately AFTER every statement that
+/// assigns one of the class's captured locals (2026-07-02 audit capture
+/// P0-B). The decl-site snapshot is AUTHORITATIVE at construct time (the
+/// appended cap arg can be a mis-boxed multi-level capture — the W6 class),
+/// so a same-body assignment after the class declaration must update the
+/// snapshot or every later construct reads the stale decl-time value and
+/// `emit_class_capture_writeback` then resets the outer local to it:
+///
+///   let x = 1;
+///   class C { m() { return x; } }
+///   x = 2;                    // ← refresh inserted after this statement
+///   new C().m()               // reads 2 (was: 1, and x reset to 1)
+///
+/// Descends into nested statement bodies (assignments inside if/loop arms
+/// get their refresh at that level) but not into closures — a closure's
+/// assignment happens at ITS call time, not lexically here. Refreshes
+/// inserted before the class's own declaration are harmless: the decl-site
+/// registration overwrites them in program order.
+pub(crate) fn insert_class_capture_refresh_after_assignments(
+    stmts: &mut Vec<Stmt>,
+    regs: &[(Stmt, std::collections::HashSet<perry_types::LocalId>)],
+) {
+    let mut i = 0;
+    while i < stmts.len() {
+        // Recurse first so nested bodies get their own refreshes.
+        match &mut stmts[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                insert_class_capture_refresh_after_assignments(then_branch, regs);
+                if let Some(eb) = else_branch {
+                    insert_class_capture_refresh_after_assignments(eb, regs);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                insert_class_capture_refresh_after_assignments(body, regs);
+            }
+            Stmt::For { body, .. } => {
+                insert_class_capture_refresh_after_assignments(body, regs);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                insert_class_capture_refresh_after_assignments(body, regs);
+                if let Some(c) = catch {
+                    insert_class_capture_refresh_after_assignments(&mut c.body, regs);
+                }
+                if let Some(f) = finally {
+                    insert_class_capture_refresh_after_assignments(f, regs);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    insert_class_capture_refresh_after_assignments(&mut case.body, regs);
+                }
+            }
+            _ => {}
+        }
+        // Does this statement (at THIS level, closures excluded by the
+        // collector) assign any watched capture?
+        let mut assigned = Vec::new();
+        collect_assigned_locals_stmt(&stmts[i], &mut assigned);
+        if !assigned.is_empty() {
+            let mut inserts: Vec<Stmt> = Vec::new();
+            for (re_reg, capset) in regs {
+                if matches!(&stmts[i], Stmt::Expr(Expr::RegisterClassCaptures { .. })) {
+                    continue;
+                }
+                if assigned.iter().any(|id| capset.contains(id)) {
+                    inserts.push(re_reg.clone());
+                }
+            }
+            for (j, s) in inserts.iter().cloned().enumerate() {
+                stmts.insert(i + 1 + j, s);
+            }
+            i += inserts.len();
+        }
+        i += 1;
+    }
 }

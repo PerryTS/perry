@@ -257,7 +257,24 @@ fn lower_object_assignment_from_expr(
                     ));
                 }
             }
-            ast::ObjectPatProp::Rest(_) => {}
+            ast::ObjectPatProp::Rest(rest) => {
+                // `{ ...rest } = source` → rest = ObjectRest(source, [named keys]).
+                // Previously skipped (same gap as assignment_expr.rs), leaving the
+                // rest binding undefined and collapsing spread-through props.
+                let exclude_keys =
+                    super::helpers::collect_static_object_pattern_keys(&obj_pat.props);
+                let rest_expr = Expr::ObjectRest {
+                    object: Box::new(source.clone()),
+                    exclude_keys,
+                };
+                // Bind through the general target machinery so both an identifier
+                // and a member-expression target (`({ ...a.b } = q)`) work — the
+                // same path the KeyValue arm above uses. Rest patterns carry no
+                // default.
+                let (prepare, target, _default) = prepare_target_with_default(ctx, &rest.arg)?;
+                result.extend(prepare);
+                result.extend(assign_prepared_target(ctx, target, rest_expr)?);
+            }
         }
     }
 

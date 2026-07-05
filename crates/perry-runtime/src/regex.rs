@@ -29,6 +29,8 @@ type CompiledRegex = regex::Regex;
 type CompiledRegex = ();
 
 #[cfg(feature = "regex-engine")]
+mod class_range_validate;
+#[cfg(feature = "regex-engine")]
 mod compile;
 mod escape;
 #[cfg(feature = "regex-engine")]
@@ -40,6 +42,8 @@ mod match_all;
 #[cfg(feature = "regex-engine")]
 mod replace_expand;
 mod replace_fn;
+#[cfg(feature = "regex-engine")]
+use class_range_validate::has_out_of_order_double_dash_class_range;
 #[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
@@ -582,6 +586,16 @@ pub extern "C" fn js_regexp_new(
         });
         if !in_cache {
             if has_invalid_repeated_quantifier(pattern_str) {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
+            // `--` is the real ClassSetExpression subtraction operator under
+            // the `v` flag (UTS #51) — `[a--z]` there means "a minus z", not
+            // a malformed range — so only legacy/`u`-mode patterns are
+            // subject to the doubled-hyphen range-order check.
+            if !flags_str.contains('v') && has_out_of_order_double_dash_class_range(pattern_str) {
                 throw_regexp_syntax_error(&format!(
                     "Invalid regular expression: /{}/: invalid pattern",
                     pattern_str

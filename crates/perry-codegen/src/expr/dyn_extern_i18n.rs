@@ -201,6 +201,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             paths,
             filename,
             options,
+            is_eval: _,
         } => {
             let _ = lower_expr(ctx, filename)?;
             let options_val = if let Some(options) = options {

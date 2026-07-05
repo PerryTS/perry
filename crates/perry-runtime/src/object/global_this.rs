@@ -26,7 +26,7 @@ pub(crate) use array_error::{
     array_prototype_shift_thunk, array_prototype_slice_thunk, array_prototype_sort_thunk,
     array_prototype_splice_thunk, array_prototype_unshift_thunk, date_prototype_to_string_thunk,
     error_prototype_to_string_thunk, function_prototype_apply_thunk, function_prototype_bind_thunk,
-    function_prototype_call_thunk, function_prototype_to_string_thunk,
+    function_prototype_call_thunk, function_prototype_to_string_thunk, generic_array_like_to_vec,
     global_this_clear_immediate_thunk, global_this_clear_interval_thunk,
     global_this_clear_timeout_thunk, global_this_queue_microtask_thunk,
     global_this_rest_array_values, global_this_set_immediate_thunk, global_this_set_interval_thunk,
@@ -50,9 +50,9 @@ pub(crate) use bigint_promise::{
     object_hasown_thunk, object_is_extensible_thunk, object_is_frozen_thunk,
     object_is_sealed_thunk, object_is_thunk, object_keys_thunk, object_prevent_extensions_thunk,
     object_seal_thunk, object_set_prototype_of_thunk, object_values_thunk,
-    promise_static_function_spec, reflect_apply_thunk, string_from_char_code_static,
-    string_from_code_point_static, string_raw_static, symbol_for_thunk, symbol_key_for_thunk,
-    typed_array_from_thunk, typed_array_of_thunk,
+    promise_static_function_spec, reflect_apply_thunk, reflect_construct_thunk,
+    string_from_char_code_static, string_from_code_point_static, string_raw_static,
+    symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk, typed_array_of_thunk,
 };
 pub use bigint_promise::{js_bigint_as_int_n_call, js_bigint_as_uint_n_call};
 pub use builtin_thunks::js_function_ctor_from_strings;
@@ -67,7 +67,7 @@ pub(crate) use builtin_thunks::{
     global_this_string_thunk, global_this_structured_clone_thunk, global_this_unescape_thunk,
     math_atan2_thunk, math_clz32_thunk, math_f16round_thunk, math_hypot_thunk, math_imul_thunk,
     math_max_thunk, math_min_thunk, math_pow_thunk, math_random_thunk, math_round_thunk,
-    math_sign_thunk,
+    math_sign_thunk, proxy_revocable_thunk,
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
 pub(crate) use ctor_thunks::{
@@ -75,14 +75,14 @@ pub(crate) use ctor_thunks::{
     cryptokey_type_getter_thunk, cryptokey_usages_getter_thunk, error_constructor_call_thunk,
     eval_error_constructor_call_thunk, global_this_crypto_getter_thunk,
     global_this_url_pattern_call_thunk, is_function_prototype_object_value,
-    map_constructor_call_thunk, normalize_eval_this_body, range_error_constructor_call_thunk,
-    reference_error_constructor_call_thunk, set_constructor_call_thunk, subtle_crypto_method_value,
-    syntax_error_constructor_call_thunk, type_error_constructor_call_thunk,
-    typed_array_constructor_call_thunk, uri_error_constructor_call_thunk,
-    weak_map_constructor_call_thunk, weak_ref_constructor_call_thunk,
-    weak_set_constructor_call_thunk, webcrypto_get_random_values_thunk,
-    webcrypto_illegal_constructor_thunk, webcrypto_method_value, webcrypto_random_uuid_thunk,
-    webcrypto_subtle_getter_thunk,
+    map_constructor_call_thunk, normalize_eval_this_body, promise_constructor_call_thunk,
+    range_error_constructor_call_thunk, reference_error_constructor_call_thunk,
+    set_constructor_call_thunk, subtle_crypto_method_value, syntax_error_constructor_call_thunk,
+    type_error_constructor_call_thunk, typed_array_constructor_call_thunk,
+    uri_error_constructor_call_thunk, weak_map_constructor_call_thunk,
+    weak_ref_constructor_call_thunk, weak_set_constructor_call_thunk,
+    webcrypto_get_random_values_thunk, webcrypto_illegal_constructor_thunk, webcrypto_method_value,
+    webcrypto_random_uuid_thunk, webcrypto_subtle_getter_thunk,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;

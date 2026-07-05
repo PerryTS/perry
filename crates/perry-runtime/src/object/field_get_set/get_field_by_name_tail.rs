@@ -1302,6 +1302,21 @@ pub(crate) fn get_field_by_name_object_tail(
                     return v;
                 }
                 let class_id = (*obj).class_id;
+                // #5834: WeakMap/WeakSet instances carry a reserved class_id
+                // (not a registered declared-class one), so none of the
+                // arms below resolve them and `(new WeakMap()).constructor`
+                // fell through to `undefined`.
+                if class_id == crate::weakref::CLASS_ID_WEAKMAP
+                    || class_id == crate::weakref::CLASS_ID_WEAKSET
+                {
+                    let name: &[u8] = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
+                        b"WeakMap"
+                    } else {
+                        b"WeakSet"
+                    };
+                    let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+                    return JSValue::from_bits(v.to_bits());
+                }
                 if class_id != 0 && class_has_own_method(class_id, "constructor") {
                     let value = class_prototype_method_value_for_name(class_id, "constructor");
                     return JSValue::from_bits(value.to_bits());
@@ -1891,6 +1906,27 @@ pub(crate) fn get_field_by_name_object_tail(
                     };
                     let bound = js_class_method_bind(this_f64, heap_name, key_bytes.len());
                     return JSValue::from_bits(bound.to_bits());
+                }
+            }
+        }
+
+        // #5961: native URLSearchParams is an ordinary object (class_id == 0,
+        // leading `_entries` slot) whose method surface normally exists only
+        // via static type-directed lowering. A type-erased receiver lands
+        // here instead — resolve the methods dynamically so `sp.append(...)`
+        // stays callable, and `size` reads as a number.
+        if !key.is_null() && crate::url::search_params::shape_is_url_search_params(obj) {
+            if let Ok(name) = std::str::from_utf8(key_bytes) {
+                if name == "size" {
+                    let n = crate::url::search_params::js_url_search_params_size(
+                        obj as *mut ObjectHeader,
+                    );
+                    return JSValue::from_bits((n as f64).to_bits());
+                }
+                if let Some(v) =
+                    crate::url::search_params::url_search_params_method_value(obj, name)
+                {
+                    return JSValue::from_bits(v.to_bits());
                 }
             }
         }

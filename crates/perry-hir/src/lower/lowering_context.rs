@@ -374,6 +374,15 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// Names bound by an enclosing `catch (e)` parameter that is currently in
+    /// scope (a stack, innermost last). Annex B B.3.4: a `var e = init;` whose
+    /// name collides with a live catch parameter assigns to that *catch
+    /// parameter* binding, not the function-scoped hoisted `var` — so the outer
+    /// `var e` keeps its pre-catch value (test262 `annexB/language/statements/
+    /// try/catch-redeclared-var-statement`). `lower_var_decl_with_destructuring`
+    /// consults this to target the shadowing catch binding via `lookup_local`
+    /// instead of reusing the hoisted id. Pushed/popped around the catch body.
+    pub(crate) catch_param_scopes: Vec<HashSet<String>>,
     /// Annex B B.3.3 (#5297): for the function/program scope currently being
     /// lowered, maps each name declared by a *block-nested* `function f(){}`
     /// (legacy sloppy-mode block-level function declaration) to the enclosing-
@@ -733,6 +742,41 @@ pub struct LoweringContext {
     /// module reports `true` and every imported module reports `false`. Set
     /// by `lower_module_with_class_id_types_seed_and_entry`; default false.
     pub(crate) is_entry_module: bool,
+    /// #5833: true once lowering has produced at least one `Expr::GlobalThisExpr`
+    /// from a top-level `this` (global-script mode, `PERRY_GLOBAL_SCRIPT_THIS`).
+    /// `Module::references_global_this` gates codegen's reflection of
+    /// top-level `function`/`var` declarations onto the global object, but it
+    /// was computed by a plain substring scan for the literal token
+    /// `globalThis` in the module source — a program that reads the global
+    /// object only through top-level `this` (as Test262's `verifyProperty(this,
+    /// ...)` idiom does) never contains that literal, so the reflection
+    /// silently never ran. OR'd into `references_global_this` once lowering
+    /// finishes (test262 `language/global-code/decl-func.js`,
+    /// `language/global-code/decl-var.js`).
+    pub(crate) saw_global_this_expr: bool,
+    /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
+    /// expression statement — see
+    /// `collect_direct_top_level_reassigned_identifiers`, which deliberately
+    /// does NOT reuse the deeper, name-only (no scope tracking)
+    /// `collect_assigned_function_binding_candidates` scan: that would
+    /// false-positive on a same-named binding shadowed in a nested block.
+    /// Consulted when lowering a top-level `class` declaration: a class name
+    /// is normally
+    /// resolved purely through the class registry (`ctx.lookup_class` /
+    /// `Expr::ClassRef`), with no backing local variable, so every read
+    /// re-derives the same class-id value and every write is a silent no-op
+    /// special-cased in `expr_assign.rs` (the class binding is otherwise
+    /// treated as immutable). GlobalDeclarationInstantiation says a class
+    /// declaration creates a MUTABLE binding, so `Foo = 5` must actually take
+    /// (test262 `language/global-code/decl-lex.js`). Giving *every* class a
+    /// real local would fix that, but it also makes plain reads of the name
+    /// resolve to `Expr::LocalGet` instead of `Expr::ClassRef` everywhere —
+    /// breaking call sites that pattern-match `Expr::ClassRef` after lowering
+    /// a bare class-name identifier (e.g. `export default Widget;`, #665).
+    /// Only seeding a local for names already known to be reassigned keeps
+    /// the overwhelmingly common (never-reassigned) case byte-for-byte
+    /// unchanged.
+    pub(crate) reassigned_top_level_identifiers: HashSet<String>,
     /// Strictness inherited from the module/script directive prologue or from
     /// ECMAScript module syntax. Function lowering consults this before
     /// deciding whether its `arguments` object should be mapped.

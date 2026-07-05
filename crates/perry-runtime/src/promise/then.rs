@@ -163,7 +163,14 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
     let bits = reason.to_bits();
     if (bits >> 48) == 0x7FFD {
         let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if ptr >= 0x10000 && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR {
+        // Band+plausibility gate (2026-07-02 audit): a POINTER-tagged
+        // rejection reason can be a registry HANDLE (a fetch Response id in
+        // the 0x40000 band — `fetch().then(r => { throw r })` uncaught) —
+        // the old bare `>= 0x10000` deref'd the id as memory instead of
+        // printing the fallback line.
+        if crate::value::addr_class::is_plausible_heap_addr(ptr)
+            && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR
+        {
             let eh = ptr as *const crate::error::ErrorHeader;
             let stack_str = unsafe { crate::exception::string_header_to_string((*eh).stack) };
             if !stack_str.is_empty() {
@@ -676,23 +683,41 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                     crate::closure::js_closure_alloc(promise_forward_reject as *const u8, 1);
                 crate::closure::js_closure_set_capture_ptr(reject_closure, 0, outer_i64);
 
-                // Register the forwarding callbacks on the inner promise
-                store_promise_closure_slot(
+                // #5437 bug#2: add the forwarding callbacks as an OVERFLOW
+                // reaction rather than OVERWRITING inner's inline
+                // on_fulfilled/on_rejected. The previous `store_promise_closure_slot`
+                // writes clobbered any existing reaction — e.g. an async-step
+                // awaiter's resume thunk registered by an earlier `await inner` —
+                // so when `inner` settled it fired only the forwarder and the
+                // awaiter hung forever (Next.js SSR render deadlock). Both the
+                // existing inline reaction AND this forwarder now fire when inner
+                // settles: the awaiter resumes AND `outer` adopts inner's state.
+                push_overflow_reaction(
                     inner,
-                    std::ptr::addr_of_mut!((*inner).on_fulfilled),
                     resolve_closure,
-                );
-                store_promise_closure_slot(
-                    inner,
-                    std::ptr::addr_of_mut!((*inner).on_rejected),
                     reject_closure,
-                );
-                // Don't chain; the forwarding callbacks handle resolution.
-                store_promise_next_slot(
-                    inner,
-                    std::ptr::addr_of_mut!((*inner).next),
                     ptr::null_mut(),
+                    capture_context(),
                 );
+                // #5941: null `inner.next` ONLY when it already points at
+                // `outer` — the re-adoption case where leaving it would have
+                // the runner's settle propagation resolve `outer` on top of
+                // the forwarder ("Chaining cycle detected"). Any OTHER
+                // promise in `inner.next` is an EARLIER dependent's chain —
+                // a prior adoption's fast-path edge (the `store_promise_next_slot`
+                // above) or a `.then` child — and the old unconditional null
+                // severed it: with two dependents adopting one shared inner
+                // promise (Next.js RSC render, shared React work promises),
+                // the second adoption orphaned the first dependent, its
+                // async-step machine's result never settled, and the render
+                // parked forever (the #5437/#5941 dynamic-route deadlock).
+                if outer == (*inner).next {
+                    store_promise_next_slot(
+                        inner,
+                        std::ptr::addr_of_mut!((*inner).next),
+                        ptr::null_mut(),
+                    );
+                }
             }
         }
     }
@@ -835,11 +860,16 @@ pub extern "C" fn js_promise_then(
         // user `.then` racing a combinator's per-element `.then` when
         // `Promise.resolve(p) === p`). The inline slot holds the FIRST reaction;
         // 2nd+ reactions overflow into a side table and replay in registration
-        // order. Detect prior occupancy via the reaction closures (NOT `next`,
-        // which `.finally` deliberately nulls) — a reaction always sets at least
-        // one of `on_fulfilled`/`on_rejected` except a degenerate no-arg
-        // `then()`, where parking it under the slot is still harmless.
-        let slot_occupied = !(*promise).on_fulfilled.is_null() || !(*promise).on_rejected.is_null();
+        // order. Occupancy = any of the two reaction closures OR `next`: a
+        // degenerate no-arg `then()` parks with BOTH closures null and only
+        // `next` set, and overwriting that `next` here stranded its chained
+        // promise (the spec combinators attach per-element reactions through
+        // this very path via `invoke_then`, so `const c = p.then();
+        // Promise.all([p])` lost `c`). `.finally` deliberately nulls `next`
+        // but always sets both wrapper closures, so it is still detected.
+        let slot_occupied = !(*promise).on_fulfilled.is_null()
+            || !(*promise).on_rejected.is_null()
+            || !(*promise).next.is_null();
 
         if !slot_occupied {
             // Fast path: first reaction uses the inline slot (unchanged behavior).
@@ -945,6 +975,70 @@ pub(crate) fn js_promise_attach_handlers(
     }
     mark_rejection_handled(promise);
     unsafe {
+        // The inline handler slots are single-valued. Combinators reach here
+        // with USER promises (`promise_resolve_for_combinator` returns the
+        // input promise identity), so an unconditional store clobbered any
+        // reaction attached earlier: `p.then(cb); Promise.all([p])` lost
+        // `cb`, and two combinators sharing one pending input destroyed each
+        // other's forwarder — the loser's remaining-count never reached zero,
+        // a permanent hang on shared chunk promises (#5437 family). Mirror
+        // `js_promise_then`: the first reaction takes the slot, later ones
+        // divert to the overflow table (pending) or dispatch as their own
+        // inline task (settled). `next` stays null throughout — these
+        // callers own their settlement.
+        //
+        // `next` counts as occupancy too: a degenerate no-arg `p.then()`
+        // parks with BOTH handler slots null and only `next` set, and its
+        // chained promise must still resolve with the pass-through value —
+        // storing handlers next to it would resolve that chain with the
+        // handler's return instead.
+        let slot_occupied = !(*promise).on_fulfilled.is_null()
+            || !(*promise).on_rejected.is_null()
+            || !(*promise).next.is_null();
+        if slot_occupied {
+            let context = capture_context();
+            match (*promise).state {
+                PromiseState::Pending => {
+                    push_overflow_reaction(
+                        promise,
+                        on_fulfilled,
+                        on_rejected,
+                        ptr::null_mut(),
+                        context,
+                    );
+                }
+                PromiseState::Fulfilled => {
+                    if !on_fulfilled.is_null() {
+                        let value = (*promise).value;
+                        TASK_QUEUE.with(|q| {
+                            q.borrow_mut().push_back(Task::Inline(
+                                on_fulfilled,
+                                value,
+                                ptr::null_mut(),
+                                true,
+                                context,
+                            ));
+                        });
+                    }
+                }
+                PromiseState::Rejected => {
+                    if !on_rejected.is_null() {
+                        let reason = (*promise).reason;
+                        TASK_QUEUE.with(|q| {
+                            q.borrow_mut().push_back(Task::Inline(
+                                on_rejected,
+                                reason,
+                                ptr::null_mut(),
+                                false,
+                                context,
+                            ));
+                        });
+                    }
+                }
+            }
+            return;
+        }
+
         store_promise_closure_slot(
             promise,
             std::ptr::addr_of_mut!((*promise).on_fulfilled),
@@ -1051,48 +1145,96 @@ pub extern "C" fn js_promise_finally(
     // so the microtask runner does NOT attempt to resolve `next` after calling
     // the wrapper — each wrapper handles `next` settlement itself via the
     // extra-tick passthrough pattern.
+    //
+    // ALREADY-SETTLED promises must NOT go through the slot stores: the
+    // handler slots are single-valued, and a queued `Task::Promise` re-reads
+    // them at drain time. Attaching `.finally()` to a settled promise that
+    // already queued another reaction (`p.catch(cb); p.finally(end)`) — or
+    // attaching several `.finally()`s to one settled promise (Turbopack's
+    // `loadChunkAsync` returns a shared pre-fulfilled `loadedChunk` constant,
+    // and Next's CacheSignal does `chunkPromise.finally(endRead)` per load) —
+    // overwrote the slot, so WHICHEVER wrapper was stored last ran once per
+    // queued task: one callback fired twice (or N times) while the others
+    // never ran. Next.js's cache-read count went negative, `cacheReady()`
+    // never resolved, the prerender was never aborted, and the dynamic-SSR
+    // routes hung forever (#5437). Dispatch each settled attach as a
+    // `Task::Inline` carrying ITS OWN wrapper instead; the slots stay
+    // untouched.
     unsafe {
-        store_promise_closure_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).on_fulfilled),
-            fulfill_wrap,
-        );
-        store_promise_closure_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).on_rejected),
-            reject_wrap,
-        );
-        // Wrappers own next; runner must not touch it.
-        store_promise_next_slot(
-            promise,
-            std::ptr::addr_of_mut!((*promise).next),
-            ptr::null_mut(),
-        );
-        set_promise_callback_context(promise);
-
-        // If the promise is already settled, push its task now.
         match (*promise).state {
-            PromiseState::Fulfilled => {
-                TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::Promise(
+            PromiseState::Pending => {
+                // The slots are single-valued: if a reaction is already
+                // registered (`p.then(cb); p.finally(end)` while pending, or
+                // two pending `.finally()`s), the old unconditional store
+                // overwrote its wrapper AND nulled `promise.next`, so the
+                // earlier callback never ran and its chained promise never
+                // settled. Divert later reactions to the overflow table; the
+                // wrapper owns its `next` (null here), matching the settled
+                // arms below.
+                //
+                // A non-null `next` also counts as occupancy: a degenerate
+                // no-arg `p.then()` parks with both handler slots null and
+                // only `next` set — nulling that `next` here would strand its
+                // chained promise forever.
+                let slot_occupied = !(*promise).on_fulfilled.is_null()
+                    || !(*promise).on_rejected.is_null()
+                    || !(*promise).next.is_null();
+                if slot_occupied {
+                    push_overflow_reaction(
                         promise,
+                        fulfill_wrap,
+                        reject_wrap,
+                        ptr::null_mut(),
+                        capture_context(),
+                    );
+                } else {
+                    store_promise_closure_slot(
+                        promise,
+                        std::ptr::addr_of_mut!((*promise).on_fulfilled),
+                        fulfill_wrap,
+                    );
+                    store_promise_closure_slot(
+                        promise,
+                        std::ptr::addr_of_mut!((*promise).on_rejected),
+                        reject_wrap,
+                    );
+                    // Wrappers own next; runner must not touch it.
+                    store_promise_next_slot(
+                        promise,
+                        std::ptr::addr_of_mut!((*promise).next),
+                        ptr::null_mut(),
+                    );
+                    set_promise_callback_context(promise);
+                }
+            }
+            PromiseState::Fulfilled => {
+                // Capture the attach-time async context: these arms no longer
+                // store into the promise's context slot, so
+                // `context_for_promise` could hand back a context stored by
+                // an EARLIER reaction on the same promise.
+                let context = capture_context();
+                TASK_QUEUE.with(|q| {
+                    q.borrow_mut().push_back(Task::Inline(
+                        fulfill_wrap,
                         (*promise).value,
+                        ptr::null_mut(),
                         true,
-                        context_for_promise(promise),
+                        context,
                     ));
                 });
             }
             PromiseState::Rejected => {
+                let context = capture_context();
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::Promise(
-                        promise,
+                    q.borrow_mut().push_back(Task::Inline(
+                        reject_wrap,
                         (*promise).reason,
+                        ptr::null_mut(),
                         false,
-                        context_for_promise(promise),
+                        context,
                     ));
                 });
             }
-            PromiseState::Pending => {}
         }
     }
 
@@ -1110,7 +1252,7 @@ pub extern "C" fn js_promise_finally(
 // `typeof p.then === "function"` and a deferred `p.then(cb)` both behave.
 
 #[inline]
-fn arg_to_closure(v: f64) -> ClosurePtr {
+pub(crate) fn arg_to_closure(v: f64) -> ClosurePtr {
     let bits = v.to_bits();
     let top = bits >> 48;
     // Pointer- or string-tagged values carry a heap pointer in the low 48 bits;
@@ -1123,7 +1265,7 @@ fn arg_to_closure(v: f64) -> ClosurePtr {
 }
 
 #[inline]
-fn box_promise_ptr(p: *mut Promise) -> f64 {
+pub(crate) fn box_promise_ptr(p: *mut Promise) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(p as *const u8).bits())
 }
 
@@ -1150,19 +1292,34 @@ fn promise_prototype_receiver(method: &str) -> *mut Promise {
     if js_value_is_promise(receiver) != 0 {
         return crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
     }
+    // `class X extends Promise` instance: unwrap its hidden backing Promise cell
+    // so `inst.then/catch(...)` dispatches against the real promise state.
+    if let Some(backing) = super::subclass::subclass_backing_promise(receiver) {
+        return backing;
+    }
     throw_promise_prototype_incompatible_receiver(method, receiver)
 }
 
+/// ECMA-262 Invoke(receiver, "then", args): read the `then` property and call it.
+/// Unlike `js_native_call_method`, this reads the own/inherited `then` property
+/// first (invoking accessor getters) and throws TypeError if it is not callable —
+/// correctly propagating overridden `then` properties on Promise instances.
 fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
-    unsafe {
-        crate::object::js_native_call_method(
-            receiver,
-            b"then".as_ptr() as *const i8,
-            b"then".len(),
-            args.as_ptr(),
-            args.len(),
-        )
+    let then_fn = unsafe {
+        crate::value::js_dynamic_object_get_property(receiver, b"then".as_ptr() as *const i8, 4)
+    };
+    if !super::spec_combinators::is_callable_value(then_fn) {
+        let msg = b"Promise method called on non-callable 'then'";
+        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_str);
+        let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
+        crate::exception::js_throw(f64::from_bits(err_val));
     }
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let result =
+        unsafe { crate::closure::js_native_call_value(then_fn, args.as_ptr(), args.len()) };
+    crate::object::js_implicit_this_set(prev_this);
+    result
 }
 
 fn throw_promise_finally_non_object() -> ! {
@@ -1180,21 +1337,52 @@ fn throw_type_error_thunk(msg: &str) -> ! {
     crate::exception::js_throw(v)
 }
 
-// True iff `value` is a JavaScript Object (heap-pointer tagged, not a Symbol or handle).
+// True iff `value` is a JavaScript Object (heap-pointer tagged, not a Symbol or
+// handle). A user-class constructor (`p.constructor` for a `class X extends
+// Promise` instance) is an INT32-tagged ClassRef but is still an Object per spec,
+// so accept any constructor value too — needed by SpeciesConstructor.
 fn is_promise_species_object(value: f64) -> bool {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
-        return false;
+        return crate::object::js_value_is_constructor(value);
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::is_handle_band(raw) {
-        return false;
+        // Proxies are encoded as handle-band values but are valid objects.
+        return crate::proxy::js_proxy_is_proxy(value) != 0;
     }
     !crate::symbol::is_registered_symbol(raw)
 }
 
 fn get_intrinsic_promise() -> f64 {
     crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len())
+}
+
+/// Return the `Promise.prototype[name]` closure (then/catch/finally), or `None`.
+/// Used by the dynamic dispatch path to route spec-path calls when a promise has
+/// own properties that modify observable behavior.
+pub(crate) fn promise_proto_method(name: &str) -> Option<f64> {
+    unsafe { js_promise_bound_method(std::ptr::null_mut(), name) }
+}
+
+/// True iff the given promise has an own "constructor" expando property.
+/// Used by primitive_methods.rs to decide whether SpeciesConstructor must run.
+pub(crate) fn promise_has_own_constructor(promise_addr: usize) -> bool {
+    crate::object::exotic_expando::exotic_has_own_property(
+        crate::object::exotic_expando::ExoticKind::Promise,
+        promise_addr,
+        "constructor",
+    )
+}
+
+/// True iff the given promise has an own property with the given name.
+/// Used by primitive_methods.rs to decide whether to bypass the fast path.
+pub(crate) fn promise_has_own_property(promise_addr: usize, name: &str) -> bool {
+    crate::object::exotic_expando::exotic_has_own_property(
+        crate::object::exotic_expando::ExoticKind::Promise,
+        promise_addr,
+        name,
+    )
 }
 
 // SpeciesConstructor(promiseReceiver, %Promise%) per ECMA-262 §7.3.25.
@@ -1486,10 +1674,16 @@ pub(crate) extern "C" fn promise_prototype_then_thunk(
 ) -> f64 {
     ensure_spec_finally_arities_registered();
     let receiver = crate::object::js_implicit_this_get();
-    if js_value_is_promise(receiver) == 0 {
+    let promise = if js_value_is_promise(receiver) != 0 {
+        crate::value::js_nanbox_get_pointer(receiver) as *mut Promise
+    } else if let Some(backing) = super::subclass::subclass_backing_promise(receiver) {
+        // `class X extends Promise` instance: dispatch against its backing cell,
+        // but keep `receiver` for SpeciesConstructor (`receiver.constructor` is
+        // the subclass, so the slow path chains a subclass promise per spec).
+        backing
+    } else {
         throw_promise_prototype_incompatible_receiver("then", receiver);
-    }
-    let promise = crate::value::js_nanbox_get_pointer(receiver) as *mut Promise;
+    };
 
     // SpeciesConstructor(promise, %Promise%) — reads this.constructor once.
     let c = promise_species_constructor(receiver);
@@ -1598,24 +1792,37 @@ extern "C" fn promise_finally_bound(
     box_promise_ptr(js_promise_finally(p, arg_to_closure(on_finally)))
 }
 
-/// Return a NaN-boxed bound function for a promise's `then`/`catch`/`finally`
-/// value-read, or `None` for any other property. The returned closure captures
-/// the promise (slot 0) so the GC keeps it alive and updates the pointer on
-/// move, exactly like the existing forward wrappers above.
-pub unsafe fn js_promise_bound_method(promise: *mut Promise, property: &str) -> Option<f64> {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_arity};
-    let (thunk, arity): (*const u8, u32) = match property {
-        "then" => (promise_then_bound as *const u8, 2),
-        "catch" => (promise_catch_bound as *const u8, 1),
-        "finally" => (promise_finally_bound as *const u8, 1),
-        _ => return None,
-    };
-    js_register_closure_arity(thunk, arity);
-    let closure = js_closure_alloc(thunk, 1);
-    js_closure_set_capture_ptr(closure, 0, promise as i64);
-    Some(f64::from_bits(
-        crate::value::JSValue::pointer(closure as *const u8).bits(),
-    ))
+/// Return the `Promise.prototype[property]` closure for a promise's
+/// `then`/`catch`/`finally` value-read, or `None` for any other property.
+/// Returns the shared prototype method so `p.then === Promise.prototype.then`
+/// (spec-required identity) and `.call(receiver)` properly receives the caller's
+/// `this` via IMPLICIT_THIS rather than a captured pointer.
+pub unsafe fn js_promise_bound_method(_promise: *mut Promise, property: &str) -> Option<f64> {
+    if !matches!(property, "then" | "catch" | "finally") {
+        return None;
+    }
+    let ctor = get_intrinsic_promise();
+    let ctor_bits = ctor.to_bits();
+    if (ctor_bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return None;
+    }
+    let proto_val = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    if proto_val.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    let method = crate::value::js_dynamic_object_get_property(
+        proto_val,
+        property.as_ptr() as *const i8,
+        property.len(),
+    );
+    if method.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    Some(method)
 }
 
 /// Fulfilled-path wrapper for `.finally()`.
@@ -1722,7 +1929,27 @@ fn finally_wrapper_common(
             // On cleanup rejection: reject `next` with the cleanup reason.
             let on_err = js_closure_alloc(finally_cleanup_reject as *const u8, 1);
             js_closure_set_capture_ptr(on_err, 0, next as i64);
-            js_promise_then(inner, on_ok, on_err);
+            // Use Invoke(cleanup, "then", …) to respect any user-installed own
+            // `then` property on the cleanup promise (observable-then-calls tests).
+            // Wrap in a try-frame: call_receiver_then can throw (e.g. non-callable
+            // `then`, or a getter that throws) after the earlier frame has ended.
+            let on_ok_f = f64::from_bits(crate::value::JSValue::pointer(on_ok as *const u8).bits());
+            let on_err_f =
+                f64::from_bits(crate::value::JSValue::pointer(on_err as *const u8).bits());
+            let args = [on_ok_f, on_err_f];
+            let trap2 = crate::exception::js_try_push();
+            let jumped2 = unsafe { crate::ffi::setjmp::setjmp(trap2 as *mut std::os::raw::c_int) };
+            if jumped2 != 0 {
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::exception::js_try_end();
+                if !next.is_null() {
+                    js_promise_reject(next, exc);
+                }
+                return undef;
+            }
+            call_receiver_then(cleanup, &args);
+            crate::exception::js_try_end();
             return undef;
         }
     }

@@ -678,10 +678,17 @@ fn js_structured_clone_inner(value: f64) -> f64 {
         0x7FFD => {
             // POINTER_TAG — could be array/object/Map/Set/RegExp. Deep clone recursively.
             let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-            if (ptr as usize) < 0x10000 {
+            let addr = ptr as usize;
+            // Full handle band, not the legacy `< 0x10000` (2026-07-02
+            // audit): a POINTER-tagged fetch/zlib registry id (0x40000+)
+            // reached the raw GcHeader byte read below and deref'd the id
+            // as memory. Registry handles aren't structured-cloneable heap
+            // graphs — return them as-is (matching the unknown-type
+            // fallback; the spec's DataCloneError refinement is tracked
+            // separately).
+            if crate::value::addr_class::is_small_handle(addr) || addr < 0x10000 {
                 return value;
             }
-            let addr = ptr as usize;
             if crate::symbol::is_registered_symbol(addr) {
                 throw_data_clone_error("Symbol could not be cloned");
             }
@@ -725,9 +732,12 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                 return f64::from_bits(new_bits);
             }
             unsafe {
-                // GcHeader is stored BEFORE the user pointer (at ptr - GC_HEADER_SIZE)
-                let gc_header_ptr = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE);
-                let gc_type = *gc_header_ptr;
+                // Validated probe (plausibility + band + slab) before reading
+                // header bytes; non-probeable pointers pass through unchanged.
+                let gc_type = match crate::value::addr_class::try_read_gc_header(addr) {
+                    Some(h) => h.obj_type,
+                    None => return value,
+                };
                 if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Clone array using existing clone, then recursively clone elements
                     let arr = ptr as *const crate::array::ArrayHeader;

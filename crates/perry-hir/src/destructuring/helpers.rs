@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// Collect the statically-known property keys explicitly bound by an object
+/// pattern's KeyValue/Assign props — the keys to EXCLUDE from an object
+/// `...rest` binding (`Expr::ObjectRest`). Computed keys have no static name and
+/// are skipped, matching the KeyValue key lowering which skips them too. Shared
+/// by the destructuring declaration and assignment (expr + stmt) lowering paths.
+pub(crate) fn collect_static_object_pattern_keys(props: &[ast::ObjectPatProp]) -> Vec<String> {
+    props
+        .iter()
+        .filter_map(|p| match p {
+            ast::ObjectPatProp::KeyValue(kv) => match &kv.key {
+                ast::PropName::Ident(i) => Some(i.sym.to_string()),
+                ast::PropName::Str(s) => Some(s.value.as_str().unwrap_or("").to_string()),
+                ast::PropName::Num(n) => Some(n.value.to_string()),
+                _ => None,
+            },
+            ast::ObjectPatProp::Assign(a) => Some(a.key.sym.to_string()),
+            ast::ObjectPatProp::Rest(_) => None,
+        })
+        .collect()
+}
+
 /// Returns `Some("fetch")` when `expr` is a bare-`Ident` fetch-like call —
 /// `fetch(url)` / `fetchWithAuth(...)` / `fetchPostWithAuth(...)`. The caller
 /// registers the binding as a fetch `Response` native instance.

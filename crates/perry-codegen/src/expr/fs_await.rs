@@ -192,15 +192,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // patterns eventually resolve. Without the timer ticks the
             // await loop busy-waits forever.
             ctx.current_block = wait_idx;
-            ctx.block().call_void("js_promise_run_microtasks", &[]);
+            ctx.block()
+                .call_void("js_promise_run_microtasks_await_loop", &[]);
             // Drain the stdlib's tokio async queue — fetch, database
             // queries, and other async stdlib operations queue their
             // results via queue_promise_resolution and need this pump
             // to actually resolve the promises on the main thread.
             ctx.block().call_void("js_run_stdlib_pump", &[]);
-            let _ = ctx.block().call(I32, "js_timer_tick", &[]);
-            let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
-            let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
+            // #5437: tick through the await-loop entry, which suspends the
+            // timer dispatch guard — a busy-wait await inside a timer /
+            // setImmediate callback (every HTTP request handler) must still
+            // fire due timers or a setImmediate-scheduled resolution (React's
+            // server renderer) can never settle.
+            let _ = ctx.block().call(I32, "js_await_loop_tick_timers", &[]);
 
             if !ctx.is_async_fn {
                 let wait_for_event_idx = ctx.new_block("await.wait_for_event");

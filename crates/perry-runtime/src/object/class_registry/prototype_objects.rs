@@ -197,7 +197,19 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         // DROPPED: store it as the closure's `prototype` dynamic prop so reads
         // reflect it and `js_new_function_construct` links instances to it
         // (test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*, map/15.4.4.19-9-3).
-        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        // `foo.prototype = someOtherFunction` — a function/closure-valued
+        // prototype can't join the class-id machinery either (it has no
+        // ObjectHeader): store it the same way as the array case so
+        // `js_new_function_construct`'s `linked_user_proto` check links new
+        // instances to it (test262 built-ins/Function/prototype/apply/
+        // S15.3.4.3_A1_T1, call/S15.3.4.4_A1_T1 — `FACTORY.prototype =
+        // Function()` was silently dropped, so `new FACTORY` instances kept
+        // the auto-created empty prototype instead of inheriting the real
+        // function's methods).
+        if obj_type == crate::gc::GC_TYPE_ARRAY
+            || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            || obj_type == crate::gc::GC_TYPE_CLOSURE
+        {
             let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
             if func_ptr != 0 && crate::closure::is_closure_ptr(func_ptr) {
                 crate::closure::closure_set_dynamic_prop(func_ptr, "prototype", proto);

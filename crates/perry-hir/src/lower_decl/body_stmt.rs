@@ -318,40 +318,15 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // declaration is evaluated. Without this, an in-function
                 // class's `static x = …` fields and `static { … }` blocks
                 // silently stayed at their zero default — only top-level
-                // classes initialized. Mirrors the top-level emission order
-                // (fields then blocks, per ClassDefinitionEvaluation), with
-                // lexical `this` in field initializers bound to the class ref.
-                for sf in &class.static_fields {
-                    if let Some(init) = &sf.init {
-                        let mut init_value = init.clone();
-                        crate::analysis::substitute_lexical_this_in_expr(
-                            &mut init_value,
-                            &Expr::ClassRef(class.name.clone()),
-                        );
-                        if let Some(key) = sf.key_expr.as_ref() {
-                            result.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
-                                class_name: class.name.clone(),
-                                key: Box::new(key.clone()),
-                                value: Box::new(init_value),
-                            }));
-                        } else {
-                            result.push(Stmt::Expr(Expr::StaticFieldSet {
-                                class_name: class.name.clone(),
-                                field_name: sf.name.clone(),
-                                value: Box::new(init_value),
-                            }));
-                        }
-                    }
-                }
-                for sm in &class.static_methods {
-                    if sm.name.starts_with("__perry_static_init_") {
-                        result.push(Stmt::Expr(Expr::StaticMethodCall {
-                            class_name: class.name.clone(),
-                            method_name: sm.name.clone(),
-                            args: Vec::new(),
-                        }));
-                    }
-                }
+                // classes initialized. Interleaved in source order (see
+                // `build_interleaved_static_init_stmts`), with lexical `this`
+                // in field initializers bound to the class ref.
+                result.extend(crate::lower_decl::build_interleaved_static_init_stmts(
+                    &class_decl.class.body,
+                    &class.name,
+                    &class.static_fields,
+                    &class.static_methods,
+                ));
                 ctx.pending_classes.push(class);
                 // #5251 follow-up — a function-nested `class X { … }` whose
                 // name collides with an OUTER same-named local must SHADOW

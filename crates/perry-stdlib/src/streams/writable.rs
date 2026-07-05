@@ -217,6 +217,8 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
     if !close_request.is_null() {
         js_promise_reject(close_request, reason);
     }
+    // #5437: writable stream aborted (terminal Errored) — drop expandos.
+    super::expando::stream_expando_clear(id);
     js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
     promise
 }
@@ -465,6 +467,8 @@ unsafe fn finish_writable_close_success(stream_id: usize, promise: *mut Promise)
     if !closed.is_null() {
         js_promise_resolve(closed, f64::from_bits(TAG_UNDEFINED));
     }
+    // #5437: writable stream reached its terminal Closed state — drop expandos.
+    super::expando::stream_expando_clear(stream_id);
 }
 
 unsafe fn finish_writable_close_error(stream_id: usize, promise: *mut Promise, reason: f64) {
@@ -490,6 +494,8 @@ unsafe fn finish_writable_close_error(stream_id: usize, promise: *mut Promise, r
     if !closed.is_null() {
         js_promise_reject(closed, reason);
     }
+    // #5437: writable stream reached its terminal Errored state — drop expandos.
+    super::expando::stream_expando_clear(stream_id);
 }
 
 pub(super) unsafe fn run_writable_write(
@@ -767,6 +773,9 @@ pub unsafe extern "C" fn js_writer_release_lock(writer_handle: f64) -> f64 {
     if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.writer_handle = None;
     }
+    // #5437: writer instance done — drop its expando entries (see the reader
+    // release path in streams.rs).
+    super::expando::stream_expando_clear(writer_id);
     f64::from_bits(TAG_UNDEFINED)
 }
 

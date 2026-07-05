@@ -161,10 +161,16 @@ pub(crate) fn class_accessor_function_value(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     unsafe { crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64) };
-    super::super::native_module::set_builtin_closure_length(
-        closure as usize,
-        if is_setter { 1 } else { 0 },
-    );
+    // Spec `.length`: params before the first default/rest. A getter takes no
+    // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
+    // has `.length === 0` (defaults don't count). Codegen registers the raw
+    // accessor func_ptr's default-aware spec length via
+    // `js_register_closure_length`; consult it so a defaulted setter reports 0.
+    // Fall back to the fixed 1/0 when no registration exists (e.g. native or
+    // cross-module accessors whose length wasn't emitted).
+    let spec_length = crate::closure::lookup_closure_length(raw_ptr as *const u8)
+        .unwrap_or(if is_setter { 1 } else { 0 });
+    super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     // Spec `.name` = "get <key>" / "set <key>" with attributes
     // { writable: false, enumerable: false, configurable: true } (mirrors the

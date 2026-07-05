@@ -215,21 +215,36 @@ pub fn synthesize_class_captures(
         let mut id_map: std::collections::HashMap<LocalId, LocalId> =
             std::collections::HashMap::new();
         let mut prologue: Vec<Stmt> = Vec::new();
-        for &outer_id in &captures_vec {
+        for (index, &outer_id) in captures_vec.iter().enumerate() {
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             let ty = captured_outer_types
                 .get(&outer_id)
                 .cloned()
                 .unwrap_or(Type::Any);
+            // FIELD-FIRST with a decl-site-snapshot fallback: the
+            // `this.__perry_cap_*` stash is written by the constructor AFTER
+            // `super()` returns, but a method can run EARLIER — a base-class
+            // constructor may virtual-dispatch into this class's override
+            // (Next.js: base `Server`'s ctor calls `this.getHasStaticDir()`,
+            // the `NextNodeServer` override, which reads the module-level
+            // `_fs` interop binding through its cap field → it read
+            // `undefined` and threw at boot, #5437). When the field is still
+            // undefined, fall back to the class's decl-site capture snapshot
+            // (same machinery as the ctor param rebinds above).
             prologue.push(Stmt::Let {
                 id: new_id,
                 name: format!("__perry_cap_{}", outer_id),
                 ty,
                 mutable: true,
-                init: Some(Expr::PropertyGet {
-                    object: Box::new(Expr::This),
-                    property: format!("__perry_cap_{}", outer_id),
+                init: Some(Expr::ClassCaptureValue {
+                    class_name: name.to_string(),
+                    index: index as u32,
+                    fallback: Some(Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: format!("__perry_cap_{}", outer_id),
+                    })),
+                    prefer_fallback: true,
                 }),
             });
         }
@@ -537,21 +552,41 @@ pub fn synthesize_class_captures(
     // ctor may read a captured outer before calling `super()`, and that read
     // must already see the recovered value. Only the `this.__perry_cap_* =
     // param` field STASHES must wait until after `super()` (no `this` exists
-    // before super). A non-derived ctor has no `super`, so both groups land at
-    // entry (assignments right after the rebinds).
+    // before super) AND after all user stmts (see comment below).
     let rebind_count = rebind_stmts.len();
     for (i, stmt) in rebind_stmts.into_iter().enumerate() {
         ctor.body.insert(i, stmt);
     }
-    // `super_pos` is recomputed AFTER inserting the rebinds (they shifted the
-    // body), so the assignments land just past the (now-relocated) `super()`.
+    // The field STASHES (`this.__perry_cap_* = param`) must come AFTER
+    // `super()` (no `this` exists before super in derived classes) AND after
+    // ALL user body stmts — user code may mutate the outer-local after
+    // `super()` (e.g. `++called` in the TemporalHelpers sub-check pattern).
+    // Inserting immediately after `super()` captured the pre-mutation value.
+    // Insert stashes before each explicit `return` so they run on every exit
+    // path, then append at the end for the fall-through path.
+    //
+    // BUT the stashes must ALSO run right after `super()` (or at entry for a
+    // non-derived ctor): the ctor body may invoke instance methods
+    // (`this.has = this.getHas()`), and a method reading a captured outer
+    // resolves it through the `this.__perry_cap_*` field. Stashing only at
+    // the end left those reads undefined — Next.js's base `Server`
+    // constructor calls `this.getHasStaticDir()`, which reads the
+    // module-level `_fs` interop binding via its cap field and threw
+    // "Cannot read properties of undefined (reading 'default')" at boot
+    // (#5437). So stash EARLY for intra-ctor method calls AND re-stash at
+    // the end / before returns so post-`super()` mutations still win in the
+    // final state. The assignments are idempotent.
     let super_pos = ctor
         .body
         .iter()
         .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
-    let assignment_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
-    for (i, stmt) in assignment_stmts.into_iter().enumerate() {
-        ctor.body.insert(assignment_insert_at + i, stmt);
+    let early_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
+    for (i, stmt) in assignment_stmts.iter().cloned().enumerate() {
+        ctor.body.insert(early_insert_at + i, stmt);
+    }
+    insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
+    for stmt in assignment_stmts {
+        ctor.body.push(stmt);
     }
     *constructor = Some(ctor);
 
@@ -576,6 +611,73 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Recursively insert `stashes` immediately before every `Stmt::Return` in
+/// `body` so that cap-field stash assignments run on EVERY early-exit path,
+/// not just the fall-through.  Does not descend into nested function
+/// expressions (closures defined inside the constructor) — only direct
+/// control-flow of the constructor body itself.
+fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
+    let mut i = 0;
+    while i < body.len() {
+        // Check via shared ref first to decide what to do.
+        let is_return = matches!(body[i], Stmt::Return(_));
+        if is_return {
+            for (j, s) in stashes.iter().enumerate() {
+                body.insert(i + j, s.clone());
+            }
+            i += stashes.len() + 1;
+            continue;
+        }
+        // Recurse into nested control-flow via mutable ref.
+        match &mut body[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                insert_stashes_before_returns(then_branch, stashes);
+                if let Some(eb) = else_branch {
+                    insert_stashes_before_returns(eb, stashes);
+                }
+            }
+            Stmt::While { body: wb, .. } | Stmt::DoWhile { body: wb, .. } => {
+                insert_stashes_before_returns(wb, stashes);
+            }
+            Stmt::For { body: fb, .. } => {
+                insert_stashes_before_returns(fb, stashes);
+            }
+            Stmt::Labeled { body: lb, .. } => match lb.as_mut() {
+                Stmt::While { body: wb, .. }
+                | Stmt::DoWhile { body: wb, .. }
+                | Stmt::For { body: wb, .. } => {
+                    insert_stashes_before_returns(wb, stashes);
+                }
+                _ => {}
+            },
+            Stmt::Try {
+                body: tb,
+                catch,
+                finally,
+            } => {
+                insert_stashes_before_returns(tb, stashes);
+                if let Some(c) = catch {
+                    insert_stashes_before_returns(&mut c.body, stashes);
+                }
+                if let Some(f) = finally {
+                    insert_stashes_before_returns(f, stashes);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    insert_stashes_before_returns(&mut case.body, stashes);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
 
 /// Append `cap_args` (the `.1` ids) to every `new <class_name>(…)` site in

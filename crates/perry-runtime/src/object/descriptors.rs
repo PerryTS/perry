@@ -1368,6 +1368,7 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
     let proto_jv = crate::value::JSValue::from_bits(proto_value.to_bits());
     let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto_value) != 0 };
     let proto_ok = proto_jv.is_null()
+        || crate::proxy::js_proxy_is_proxy(proto_value) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto_value) }
                 || super::class_ref_id(proto_value).is_some()));

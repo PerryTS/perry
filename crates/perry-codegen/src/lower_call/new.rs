@@ -14,7 +14,8 @@ use super::lower_builtin_new;
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
     ctor_body_has_value_return, ctor_body_uses_new_target, ctor_body_uses_this,
-    node_stream_parent_kind,
+    ctor_chain_uses_new_target, effective_constructor_param_count, emit_promise_subclass_init,
+    local_constructor_symbol_exists, node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -48,11 +49,16 @@ pub(crate) fn bind_inline_constructor_params(
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for (param, arg_val) in params.iter().zip(values.iter()) {
-        let slot = ctx.func.alloca_entry(DOUBLE);
-        if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
-            let box_ptr = ctx.block().call(I64, "js_box_alloc", &[(DOUBLE, arg_val)]);
-            let boxed = ctx.block().bitcast_i64_to_double(&box_ptr);
-            ctx.block().store(DOUBLE, &boxed, &slot);
+        let boxed_param = ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none();
+        let slot = ctx
+            .func
+            .alloca_entry(if boxed_param { I64 } else { DOUBLE });
+        if boxed_param {
+            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
+            let box_ptr = ctx
+                .block()
+                .call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
+            ctx.block().store(I64, &box_ptr, &slot);
         } else {
             ctx.block().store(DOUBLE, arg_val, &slot);
         }
@@ -250,6 +256,14 @@ fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
     nanbox_pointer_inline(ctx.block(), &current)
 }
 
+fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<String> {
+    let prev_discard = ctx.discard_expr_value;
+    ctx.discard_expr_value = false;
+    let lowered = lower_expr(ctx, arg);
+    ctx.discard_expr_value = prev_discard;
+    lowered
+}
+
 /// Marshal the lowered `new`-site args into the value list a cross-module
 /// imported constructor symbol expects. The source module compiled the
 /// standalone `<class>_constructor(this, p0, …)` with `ctor.param_count`
@@ -299,76 +313,6 @@ fn marshal_imported_ctor_args(
 /// ancestor-with-a-ctor's param count (the synthesized default ctor forwards
 /// `super(...args)`). Matches the standalone-ctor signature emitted in
 /// `codegen/artifacts.rs`, so callers pass the right number of args.
-fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> usize {
-    if let Some(ctor) = class.constructor.as_ref() {
-        return ctor.params.len();
-    }
-    let mut parent = class.extends_name.as_deref();
-    while let Some(pname) = parent {
-        if let Some(ctor) = ctx.imported_class_ctors.get(pname) {
-            if ctor.stops_constructor_walk() {
-                return ctor.param_count;
-            }
-        }
-        match ctx.classes.get(pname).copied() {
-            Some(pc) => {
-                if let Some(pctor) = pc.constructor.as_ref() {
-                    return pctor.params.len();
-                }
-                parent = pc.extends_name.as_deref();
-            }
-            None => break,
-        }
-    }
-    0
-}
-
-/// True when the standalone `<class>_constructor` symbol exists (so the
-/// recursion-guard / capture-collision redirect can call it instead of
-/// inlining). Mirrors the lookup in `call_local_constructor_symbol`.
-fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
-    let ctor_method_name = format!("{}_constructor", class.name);
-    ctx.methods
-        .contains_key(&(class.name.clone(), ctor_method_name))
-}
-
-/// #2768: true when the standalone `<class>_constructor` symbol's body reads
-/// `new.target` — either the class's OWN ctor body, or an ancestor ctor body
-/// it reaches through `super(...)`. The symbol is a separately compiled
-/// function whose only `new.target` source is the runtime cell, and a
-/// `super(...)` call inlines the parent ctor body into that same symbol, so an
-/// ancestor that reads `new.target` (e.g. an abstract-class guard in a base)
-/// still observes the cell. Gating the cell write on the WHOLE chain keeps
-/// `new Child()` correct when only the inherited body reads `new.target`, while
-/// a chain with no reader anywhere stays on the zero-overhead fast path. The
-/// walk follows `extends_name` through the codegen class map; an unresolved
-/// parent name just stops the walk, and a depth cap guards a cyclic graph.
-fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
-    let reads = |c: &perry_hir::Class| {
-        c.constructor
-            .as_ref()
-            .is_some_and(|f| ctor_body_uses_new_target(&f.body))
-    };
-    if reads(class) {
-        return true;
-    }
-    let mut parent = class.extends_name.as_deref();
-    let mut depth = 0;
-    while let Some(parent_name) = parent {
-        depth += 1;
-        if depth > 64 {
-            break;
-        }
-        let Some(pc) = ctx.classes.get(parent_name).copied() else {
-            break;
-        };
-        if reads(pc) {
-            return true;
-        }
-        parent = pc.extends_name.as_deref();
-    }
-    false
-}
 
 /// Emit a call to the shared standalone `<class>_constructor` symbol and
 /// return the raw value it produced. The standalone ctor function returns
@@ -678,7 +622,7 @@ fn lower_new_impl(
                 )?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    lowered_args.push(lower_constructor_arg(ctx, a)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -699,7 +643,7 @@ fn lower_new_impl(
             if class_name == "Function" {
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    lowered_args.push(lower_constructor_arg(ctx, a)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -729,7 +673,7 @@ fn lower_new_impl(
     // Lower the args first (constructor params).
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
-        lowered_args.push(lower_expr(ctx, a)?);
+        lowered_args.push(lower_constructor_arg(ctx, a)?);
     }
 
     // Compute total field count including inherited parent fields.
@@ -1153,7 +1097,7 @@ fn lower_new_impl(
     // function that captures `t` (the `const t = this` alias). When `new F`
     // inside that arrow is inlined, the inlined ctor's `const t = this` reuses
     // the same LocalId — which is a capture in this closure — so reads/writes
-    // of `t` resolve through `js_closure_get_capture_f64` and land on the
+    // of `t` resolve through `js_closure_get_capture_bits` and land on the
     // CAPTURED outer instance instead of the freshly-allocated one (the new
     // instance gets no fields → wall 44 `BaseContext.setValue` → "Cannot read
     // properties of undefined"). The standalone symbol takes `this` as an
@@ -1245,7 +1189,14 @@ fn lower_new_impl(
             // updates the outer local's alloca slot. Read the fields back here so
             // the enclosing scope sees the updated values (e.g. `++called` in a
             // subclass constructor is visible after `new SubClass(...)` returns).
-            emit_class_capture_writeback(ctx, class, &obj_handle);
+            // When `caps_absent_from_args` is true (member-callee `new ns.C()`
+            // path), the HIR `args` slice contains ONLY user args — the cap args
+            // were NOT appended. Passing `args` to `emit_class_capture_writeback`
+            // would let the position-based lookup misidentify a user `LocalGet` as
+            // a cap arg and write to the wrong outer slot. Fall back to suffix-based
+            // lookup (empty slice) in that case.
+            let writeback_args = if caps_absent_from_args { &[][..] } else { args };
+            emit_class_capture_writeback(ctx, class, &obj_handle, writeback_args);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1368,6 +1319,10 @@ fn lower_new_impl(
     } else {
         None
     };
+    // `class X extends Promise {}` with no own ctor — `new X(executor)` runs the
+    // Promise constructor against a hidden backing cell (see new_helpers). (#5991)
+    let promise_parent_runtime =
+        !has_own_ctor && !has_imported_ctor && class.extends_name.as_deref() == Some("Promise");
     let inherited_ctor_class: Option<String> = if !has_own_ctor && has_extends {
         // Walk the inheritance chain to find the closest ancestor with
         // an explicit ctor — same logic as the body-inlining loop below.
@@ -1471,12 +1426,15 @@ fn lower_new_impl(
         while let Some(pname) = parent_name {
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
-                    // #5437: fill any unfilled parent cap param from the
-                    // parent's decl-site capture snapshot.
+                    // #5437: snapshot-fill the parent's cap params. #806:
+                    // unconditionally caps-absent — a capturing leaf always
+                    // has a synthesized own ctor, so a leaf reaching this
+                    // walk appended no cap args; the site's flag split the
+                    // tail by the ANCESTOR's caps and ate user args.
                     let parent_capture_fill =
                         ctx.class_ids.get(pname).copied().map(|cid| CaptureFill {
                             cid,
-                            caps_absent_from_args,
+                            caps_absent_from_args: true,
                         });
                     let saved_scope = bind_inline_constructor_params(
                         ctx,
@@ -1700,6 +1658,10 @@ fn lower_new_impl(
             );
             found_inherited_ctor = true;
         }
+        if promise_parent_runtime {
+            emit_promise_subclass_init(ctx, &lowered_args);
+            found_inherited_ctor = true;
+        }
         // If no parent constructor was found (imported class with no
         // inlineable constructor body), call the cross-module constructor.
         // Refs #420: walk past empty-bodied ancestors with param_count==0
@@ -1878,10 +1840,11 @@ fn lower_new_impl(
                     ));
                     (ptr_reg, lowered_args.len().to_string())
                 };
-                let this_box = match ctx.this_stack.last().cloned() {
-                    Some(slot) => ctx.block().load(DOUBLE, &slot),
-                    None => undef_lit.clone(),
-                };
+                // Bug #5587: in the no-own-ctor path, `this_stack` was never
+                // pushed for this `new` call, so `last()` would return the
+                // outer function's `this` (or undef at module scope). Use
+                // `obj_box` — the freshly-allocated object — directly.
+                let this_box = obj_box.clone();
                 let _ = ctx.block().call(
                     DOUBLE,
                     "js_fetch_or_value_super",
@@ -1928,6 +1891,7 @@ fn lower_new_impl(
     if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
         if builtin_parent_runtime.is_some()
             || fetch_parent_runtime.is_some()
+            || promise_parent_runtime
             || (class.extends_expr.is_some() && !has_extends)
         {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;

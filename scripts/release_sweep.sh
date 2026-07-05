@@ -61,6 +61,7 @@ TIER_REGISTRY=(
     "10|android_emu|macos,linux|Android emulator via avdmanager + adb"
     "11|windows_smoke|windows|Native Windows app smoke (smoke_windows_app.ps1)"
     "12|link_smoke|all|cross-compile + link a tiny App per target triple"
+    "13|native_abi_evidence|all|native ABI evidence packet smoke gate"
 )
 
 # ---------------------------------------------------------------------------

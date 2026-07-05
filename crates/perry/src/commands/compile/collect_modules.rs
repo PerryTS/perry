@@ -33,6 +33,7 @@ use super::{
 
 mod crypto_ns;
 mod dynamic_glob;
+mod eval_worker;
 mod feature_detect;
 mod import_helpers;
 mod native_addon;
@@ -43,6 +44,7 @@ mod tests;
 mod wasm_asset;
 
 use dynamic_glob::expand_dynamic_import_glob;
+use eval_worker::materialize_eval_worker_source;
 use import_helpers::{
     cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
 };
@@ -930,12 +932,20 @@ fn collect_module_one(
     let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
     perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
         if let perry_hir::Expr::WorkerNew {
-            paths, filename, ..
+            paths,
+            filename,
+            is_eval,
+            ..
         } = expr
         {
             if !paths.is_empty() {
                 return;
             }
+            // Eval-mode Worker (`new Worker(src, { eval: true })`): the resolved
+            // value is the worker SOURCE, not a path — parsed from the options
+            // object at lowering (authoritative; handles single-line sources and
+            // doesn't misclassify multi-line filenames).
+            let eval_mode = *is_eval;
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             match perry_hir::resolve_import_path_with_context(
                 filename.as_ref(),
@@ -944,8 +954,8 @@ fn collect_module_one(
                 &dynamic_local_literals,
                 &mut visiting,
             ) {
-                perry_hir::Resolution::Set(set) => {
-                    if set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
+                perry_hir::Resolution::Set(mut set) => {
+                    if !eval_mode && set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                         dyn_errors.push(format!(
                             "worker_threads Worker in module {}: filename resolves to {} possible paths \
                              (limit: {})",
@@ -962,6 +972,25 @@ fn collect_module_one(
                             set.len()
                         ));
                         return;
+                    }
+                    if eval_mode {
+                        // Eval-mode Worker (`new Worker(src, { eval: true })`):
+                        // the resolved value is the worker SOURCE, not a path.
+                        // Materialize it to a content-addressed temp `.js` file
+                        // so the existing file-worker machinery compiles it as a
+                        // module — instead of erroring "Worker target was not
+                        // compiled" on a "path" that is actually source code.
+                        match materialize_eval_worker_source(&set[0]) {
+                            Ok(temp_path) => set[0] = temp_path,
+                            Err(e) => {
+                                dyn_errors.push(format!(
+                                    "worker_threads eval Worker in module {}: failed to \
+                                     materialize inline source: {}",
+                                    module_name, e
+                                ));
+                                return;
+                            }
+                        }
                     }
                     for p in &set {
                         if !new_dyn_imports.contains(p) {

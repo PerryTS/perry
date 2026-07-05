@@ -273,6 +273,18 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # #5892 — the auto-opt archive cache (target/perry-auto-<hash>) keys on
+      # perry-runtime's source hash and does NOT account for ext-crate sources,
+      # so a rust-cache-restored stale dir keeps linking OUTDATED ext archives
+      # into test-compiled binaries even after the ext sources were fixed (this
+      # is how the #5911 shim fix failed to clear the issue_4903 hang: the
+      # restored cache still carried pre-fix optimized archives). Evict it so
+      # every run links archives built from the checked-out tree; costs one
+      # ~6-9 min rebuild on the first perry compile of the run.
+      - name: Evict stale auto-opt archives (#5892)
+        run: |
+          rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
+
       - name: Run cargo test
         # Exclude UI backends that don't build on the ubuntu-latest CI image:
         # - perry-ui-macos / perry-ui-ios / perry-ui-tvos / perry-ui-watchos
@@ -517,6 +529,9 @@ jobs:
       - name: Run harness unit tests
         run: python3 -m unittest tests.test_compiler_output_regression
 
+      - name: Run native ABI evidence report unit tests
+        run: python3 -m unittest tests.test_native_abi_evidence_report
+
       - name: Gate native-region proof compiler output
         run: |
           python3 scripts/compiler_output_regression.py suite \
@@ -525,7 +540,24 @@ jobs:
             --benchmark-mode smoke \
             --runs 1 \
             --perf-counters off \
+            --gate \
             --print-summary
+
+      - name: Gate native-ABI proof compiler output
+        run: |
+          python3 scripts/compiler_output_regression.py suite \
+            --suite native-abi-proof \
+            --perry target/debug/perry \
+            --benchmark-mode smoke \
+            --runs 1 \
+            --perf-counters off \
+            --gate \
+            --print-summary
+
+      - name: Gate typed feedback runtime evidence
+        env:
+          PERRY_BIN: ${{ github.workspace }}/target/debug/perry
+        run: python3 -m unittest tests.test_typed_feedback_runtime_evidence
 
       - name: Gate positive vectorization compiler output
         run: |
@@ -581,6 +613,119 @@ jobs:
         with:
           name: compiler-output-regression
           path: target/compiler-output-regression/
+
+  # ---------------------------------------------------------------------------
+  # Native ABI evidence packet
+  #
+  # Full material-performance packet for the type-lowering gate. This is heavier
+  # than the per-PR compiler-output smoke because it runs the native-ABI proof
+  # packet with timing-quality samples, runtime checks, and release/LTO symbol
+  # freshness. Gate tag pushes and opt-in PR/manual runs; ordinary PRs rely on
+  # the lighter report/unit and compiler-output structural gates above.
+  # ---------------------------------------------------------------------------
+  native-abi-evidence-packet:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache sccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Gate native ABI evidence packet
+        env:
+          RUSTC_WRAPPER: ""
+          RUSTFLAGS: -Awarnings
+        run: |
+          PYTHON=python3 bash tests/test_native_abi_evidence_packet_smoke.sh \
+            target/native-abi-evidence-packet
+
+      - name: Upload native ABI evidence packet
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-abi-evidence-packet
+          path: target/native-abi-evidence-packet/
+
+  # ---------------------------------------------------------------------------
+  # Gap-suite conformance smoke (every PR + main push)
+  # ---------------------------------------------------------------------------
+  conformance-smoke:
+    # 2026-07-02 audit §11: nothing on the default PR path exercised
+    # TypeScript SEMANTICS — lint/cargo-test/api-docs-drift build and unit-
+    # test the compiler but never diff a compiled program against node, so
+    # behavioral regressions landed silently between tags (the 2026-06-23
+    # 851-case test262 regression and the #5763 setPrototypeOf boot breakage
+    # both shipped through green required checks). This job runs the gap
+    # suite — every test-files/test_gap_*.ts (258) AOT-compiled and diffed
+    # byte-for-byte against `node --experimental-strip-types` — and fails on
+    # any failure NOT already triaged in test-parity/known_failures.json
+    # (run_gap_tests.sh's no-new-untriaged gate).
+    #
+    # MEASUREMENT PHASE: deliberately not yet in the branch-protection
+    # required set. Once wall-time on real PRs is confirmed acceptable, add
+    # `conformance-smoke` to the required contexts; until then a red here is
+    # a loud non-blocking signal.
+    continue-on-error: true
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Run gap suite
+        run: ./scripts/run_gap_tests.sh
+
+      - name: Upload gap report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gap-suite-report
+          path: test-parity/reports/
 
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)

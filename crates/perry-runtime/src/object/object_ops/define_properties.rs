@@ -144,11 +144,18 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
 
     // A Proxy receiver is a small registered id, not a heap object — the
     // recording path below would deref the fake pointer and segfault. Route
-    // through the Reflect entry (which resolves the proxy to its target) and
-    // return the proxy per Object.setPrototypeOf's contract. (Proxy crash
-    // cluster.)
+    // through the Reflect entry (which resolves the proxy to its target and
+    // runs the trap chain, recursing through proxy targets). `Object.setPrototypeOf`
+    // must surface a `false` internal-method result as a `TypeError`
+    // (`Reflect.setPrototypeOf` returns the boolean without throwing). Without
+    // this, `Object.setPrototypeOf(proxyOfNonExtensibleProxy, x)` silently
+    // succeeded instead of throwing (test262
+    // Proxy/setPrototypeOf/trap-is-{missing,undefined}-target-is-proxy).
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
-        crate::proxy::js_reflect_set_prototype_of(obj_value, proto);
+        let ok = crate::proxy::js_reflect_set_prototype_of(obj_value, proto);
+        if crate::value::js_is_truthy(ok) == 0 {
+            throw_object_type_error(b"#<Object> is not extensible");
+        }
         return obj_value;
     }
 
@@ -167,6 +174,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     let proto_is_null = proto_bits == TAG_NULL;
     let proto_is_symbol = unsafe { crate::symbol::js_is_symbol(proto) != 0 };
     let proto_ok = proto_is_null
+        || crate::proxy::js_proxy_is_proxy(proto) != 0
         || (!proto_is_symbol
             && (unsafe { value_is_object_like(proto) }
                 || super::super::class_ref_id(proto).is_some()));
@@ -206,11 +214,31 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // can't form a fresh cycle by setting obj's proto to `proto`.
     if !proto_is_null {
         const TAG_NULL_U64: u64 = 0x7FFC_0000_0000_0002;
+        const TAG_UNDEFINED_U64: u64 = 0x7FFC_0000_0000_0001;
         let advance = |bits: u64| -> u64 {
             let val = f64::from_bits(bits);
+            // OrdinarySetPrototypeOf step 7.b.ii.1: if `p`'s [[GetPrototypeOf]]
+            // is not the ordinary internal method (a Proxy's is exotic — it may
+            // run arbitrary trap code), the walk stops here without invoking it.
+            // Without this guard the cycle-detection walk called the target's
+            // `getPrototypeOf` trap as a side effect of unrelated cycle-safety
+            // bookkeeping (test262 has/call-in-prototype-index.js,
+            // set/call-parameters-prototype-index.js observe a `getPrototypeOf`
+            // trap the test handler never installs).
+            if crate::proxy::js_proxy_is_proxy(val) != 0 {
+                return TAG_NULL_U64;
+            }
             let next = js_object_get_prototype_of(val);
             let nb = next.to_bits();
-            if nb == TAG_NULL_U64 {
+            // Treat undefined as chain-end like null: `js_object_get_prototype_of`
+            // returns undefined (not spec's object-or-null) for some exotic
+            // receivers, and feeding that back into the next advance would call
+            // `js_object_get_prototype_of(undefined)`, which throws "Cannot
+            // convert undefined or null to object". comment-json's `__extends`
+            // feature-test `{__proto__: []}` hit this at Next.js server boot. A
+            // genuine cycle can never contain undefined, so ending the walk is
+            // sound.
+            if nb == TAG_NULL_U64 || nb == TAG_UNDEFINED_U64 {
                 TAG_NULL_U64
             } else {
                 nb
@@ -227,13 +255,20 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             if tortoise == TAG_NULL_U64 {
                 break;
             }
-            // Advance tortoise one step, hare two steps.  Guard the second
-            // advance: if the first step lands on null, calling advance(null)
-            // would invoke js_object_get_prototype_of(null) which throws
-            // "Cannot convert undefined or null to object" (test262
-            // setPrototypeOf/success.js — plain object proto chain ends at null).
+            // Advance tortoise one step, hare two steps.
             tortoise = advance(tortoise);
-            hare = {
+            // The hare reaches the chain end (null) before the tortoise on any
+            // acyclic chain longer than one link (e.g. a function proto:
+            // fn → Function.prototype → Object.prototype → null). Freeze it at
+            // null instead of advancing again — advance(null) would call
+            // js_object_get_prototype_of(null), which throws "Cannot convert
+            // undefined or null to object". comment-json's `__extends` hit this
+            // on every transpiled subclass at Next.js server boot. The tortoise
+            // still walks the remaining chain alone, so the obj-membership
+            // (cycle) check stays complete.
+            hare = if hare == TAG_NULL_U64 {
+                TAG_NULL_U64
+            } else {
                 let h1 = advance(hare);
                 if h1 == TAG_NULL_U64 {
                     TAG_NULL_U64

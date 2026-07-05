@@ -380,12 +380,10 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
     }
-    install_proto_method(
-        proto_obj,
-        "values",
-        global_this_builtin_noop_thunk as *const u8,
-        0,
-    );
+    // Read the already-installed `values` method (installed by
+    // `install_typed_array_proto_methods` just before this call) and bind it as
+    // `@@iterator`. ECMA-262 §23.2.3.35: `%TypedArray%.prototype[@@iterator]`
+    // is the same function object as `%TypedArray%.prototype.values`.
     unsafe {
         let values_key = crate::string::js_string_from_bytes(b"values".as_ptr(), 6);
         let values = js_object_get_field_by_name(proto_obj, values_key);
@@ -467,7 +465,6 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // `Object.getOwnPropertyDescriptor(getPrototypeOf(Int8Array.prototype),
     // "length")` to keep working.
     install_typed_array_proto_accessors(proto);
-    install_typed_array_iterator_symbol(proto);
     install_typed_array_to_string_tag(proto);
     // The per-kind prototypes (`Int8Array.prototype`, …) inherit ALL of their
     // methods from this shared `%TypedArray%.prototype` (their `[[Prototype]]`),
@@ -475,14 +472,15 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // `Int8Array.prototype.map === %TypedArray%.prototype.map` (test262's
     // `prototype/*/inherited.js`).
     //
-    // NOTE: the generic `Object.prototype` data methods + a `toString` are
-    // intentionally NOT installed here. The intrinsic prototype is allocated
-    // with zero inline field slots and already carries ~34 own properties
-    // (accessors + `@@iterator` + the spec methods below); adding the extra ~6
-    // crosses an inline-storage boundary that trips a latent field-count
+    // NOTE: the generic `Object.prototype` data methods (`hasOwnProperty`,
+    // `valueOf`, …) are intentionally NOT installed here. The intrinsic prototype
+    // is allocated with zero inline field slots and already carries ~34 own
+    // properties (accessors + `@@iterator` + the spec methods below); adding the
+    // extra ~5 crosses an inline-storage boundary that trips a latent field-count
     // overflow (a heap-layout-dependent SIGSEGV under GC pressure). They are not
-    // needed for parity — `toLocaleString` is already a brand-checking method
-    // below, and `hasOwnProperty`/`valueOf`/etc. dispatch natively on instances.
+    // needed for parity — `hasOwnProperty`/`valueOf`/etc. dispatch natively.
+    // `toString` is aliased after all constructors are set up in
+    // `populate.rs:alias_typed_array_proto_to_string` (ECMA-262 §23.2.3.33).
     // Install the brand-checking spec methods on the shared `%TypedArray%`
     // intrinsic prototype. test262's `testTypedArray.js` harness reads
     // `TypedArray.prototype.<m>` (where `TypedArray ===
@@ -491,6 +489,10 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // is read off the intrinsic, and the per-kind protos resolve their reads
     // here via the `[[Prototype]]` chain.
     typed_array_proto_thunks::install_typed_array_proto_methods(proto);
+    // @@iterator must be installed AFTER install_typed_array_proto_methods so
+    // that it captures the final `values` closure (the `%TypedArray%.prototype
+    // [@@iterator] === %TypedArray%.prototype.values` identity invariant).
+    install_typed_array_iterator_symbol(proto);
     install_constructor_static_with_call_arity(
         ctor,
         "from",

@@ -219,8 +219,42 @@ pub(crate) fn lower_destructuring_assignment(
                             ));
                         }
                     }
-                    ast::ObjectPatProp::Rest(_) => {
-                        // Rest pattern: { ...rest } - skip for now
+                    ast::ObjectPatProp::Rest(rest) => {
+                        // `({ a, b, ...rest } = obj)` → rest = ObjectRest(obj, ["a","b"]).
+                        // Previously skipped, leaving `rest` undefined — which broke
+                        // every React-Compiler-memoized component that spreads its
+                        // remaining props via `...rest` (e.g. ink's Box/Text pass
+                        // the style props through the rest), collapsing layout to
+                        // defaults. Collect the statically-named keys to exclude and
+                        // bind the rest to a fresh object of the remaining own keys.
+                        let exclude_keys =
+                            super::helpers::collect_static_object_pattern_keys(&obj_pat.props);
+                        let rest_expr = Expr::ObjectRest {
+                            object: value.clone(),
+                            exclude_keys,
+                        };
+                        match &*rest.arg {
+                            ast::Pat::Ident(ident) => {
+                                let name = ident.id.sym.to_string();
+                                if let Some(id) = ctx.lookup_local(&name) {
+                                    exprs.push(Expr::LocalSet(id, Box::new(rest_expr)));
+                                } else {
+                                    return Err(anyhow!(
+                                        "Assignment to undeclared variable in destructuring rest: {}",
+                                        name
+                                    ));
+                                }
+                            }
+                            // A non-identifier object-rest target (e.g. `({...a.b} = q)`)
+                            // is legal JS but not emitted by real codegen (the React
+                            // Compiler always binds a fresh identifier); fail loudly
+                            // instead of silently dropping the rest.
+                            _ => {
+                                return Err(anyhow!(
+                                    "Unsupported object-rest assignment target: only a plain identifier is supported"
+                                ));
+                            }
+                        }
                     }
                 }
             }

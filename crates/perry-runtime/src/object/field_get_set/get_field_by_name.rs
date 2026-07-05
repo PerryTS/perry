@@ -27,6 +27,18 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // #5972: a null key reaches here when the property-key expression didn't
+    // yield a usable string handle — e.g. `js_get_string_pointer_unified`
+    // returned 0 for a NaN/number key that fell through its coercion branches.
+    // Several arms below deref `(*key).byte_len` without a null check, so a
+    // null key would SIGSEGV at offset 4 (KERN_INVALID_ADDRESS at 0x4). Per JS
+    // semantics such a lookup simply misses → undefined. Same defensive shape
+    // as the #2128 invalid-key guard further down. Every in-runtime caller
+    // passes an interned non-null key, so this only affects the codegen
+    // computed-access path.
+    if key.is_null() {
+        return JSValue::undefined();
+    }
     // #2846: the receiver may be a Proxy value that arrived through a generic
     // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
     // Proxies are encoded as small fake pointers; deref-ing one as an
@@ -85,6 +97,34 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::number(crate::set::js_set_size(s) as f64);
                         }
                         None => {}
+                    }
+                }
+            }
+        }
+    }
+    // `class X extends Promise` instance — a value read of `then`/`catch`/
+    // `finally` (`p.then` / `typeof p.finally`, and codegen's `p.finally(cb)`
+    // which reads the property first) must resolve the reified Promise prototype
+    // method. The generic prototype walk does not surface these builtin
+    // `Promise.prototype` methods for a subclass instance, so hook them here when
+    // no own key shadows them. The method thunks unwrap the backing cell from the
+    // implicit-this receiver (see `promise_prototype_receiver`).
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        unsafe {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            let name =
+                std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).unwrap_or("");
+            if matches!(name, "then" | "catch" | "finally")
+                && !super::super::own_key_present(obj as *mut ObjectHeader, key)
+            {
+                let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+                if crate::promise::subclass_backing_promise(boxed).is_some() {
+                    if let Some(m) = crate::promise::promise_proto_method(name) {
+                        return JSValue::from_bits(m.to_bits());
                     }
                 }
             }
@@ -725,6 +765,18 @@ pub extern "C" fn js_object_get_field_by_name(
                         let result = js_class_method_bind(class_value, heap_name, name_len);
                         return JSValue::from_bits(result.to_bits());
                     }
+                    // `class X extends Promise` — a value read of an inherited
+                    // builtin static (`X.resolve`, `X.all`, …) resolves to the
+                    // reified Promise static (so `X.resolve.bind(X)` works). Only
+                    // fires when no user static shadowed it above.
+                    if super::super::promise_parent_in_chain(class_id)
+                        && super::super::promise_static_function_spec(name).is_some()
+                    {
+                        let v = super::super::js_promise_static_function_value(name_ptr, name_len);
+                        if v.to_bits() != crate::value::TAG_UNDEFINED {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
                     if let Some(v) =
                         super::super::class_registry::class_static_accessor_getter_value(
                             class_id,
@@ -975,4 +1027,33 @@ pub extern "C" fn js_object_get_field_by_name(
         }
     }
     get_field_by_name_object_tail(obj, key)
+}
+
+#[cfg(test)]
+mod null_key_guard_5972 {
+    use super::*;
+
+    /// #5972 part 2: a null key (produced when a NaN/number property-key
+    /// coerces to no usable string handle) must miss → `undefined`, never
+    /// SIGSEGV by dereferencing `(*key).byte_len` at offset 4.
+    #[test]
+    fn null_key_returns_undefined_not_segfault() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
+            crate::object::js_object_set_field_by_name(obj, key, 42.0);
+
+            // Sanity: the real key resolves.
+            let hit = js_object_get_field_by_name(obj, key);
+            assert_eq!(f64::from_bits(hit.bits()), 42.0);
+
+            // The regression: a null key must not crash and must read undefined.
+            let miss = js_object_get_field_by_name(obj, std::ptr::null());
+            assert_eq!(
+                miss.bits(),
+                crate::value::TAG_UNDEFINED,
+                "null key should miss → undefined"
+            );
+        }
+    }
 }

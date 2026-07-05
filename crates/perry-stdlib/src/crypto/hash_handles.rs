@@ -111,8 +111,8 @@ fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
         HashState::Sha384(x) => Sha256Digest::update(x, bytes),
         HashState::Sha512(x) => Sha256Digest::update(x, bytes),
         HashState::Sha512_256(x) => Sha256Digest::update(x, bytes),
-        HashState::Shake128(x) => sha3::digest::Update::update(x, bytes),
-        HashState::Shake256(x) => sha3::digest::Update::update(x, bytes),
+        HashState::Shake128(x) => shake::Update::update(x, bytes),
+        HashState::Shake256(x) => shake::Update::update(x, bytes),
         HashState::Md5(x) => Md5Digest::update(x, bytes),
     }
 }

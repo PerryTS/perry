@@ -174,13 +174,56 @@ pub unsafe extern "C" fn js_native_call_method_str_key(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    if name_handle == 0 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) =
+        crate::string::perry_string_ref_from_dispatch_id(name_handle, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    js_native_call_method(
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_ptr,
+        args_len,
+    )
+}
+
+/// Static-name compiled callsites pass an interned method id rather than raw
+/// bytes. For now the id is the interned heap StringHeader pointer emitted by
+/// the StringPool, which lets the runtime preserve the existing dispatch tower
+/// while codegen stops plumbing byte pointer + length pairs through hot paths.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_by_id(
+    object: f64,
+    method_id: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if method_id == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let str_ptr = name_handle as *const crate::StringHeader;
-    let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
-    let bytes_len = (*str_ptr).byte_len as usize;
-    js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len)
+    js_native_call_method_str_key(object, method_id, args_ptr, args_len)
+}
+
+/// Apply/spread sibling of `js_native_call_method_by_id`.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_apply_by_id(
+    object: f64,
+    method_id: i64,
+    args_array_handle: i64,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    js_native_call_method_apply(
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_array_handle,
+    )
 }
 
 /// Dispatch `obj[key](args)` where `key` is a *runtime value* whose static type
@@ -673,6 +716,27 @@ pub unsafe extern "C" fn js_native_call_method(
         let want_async =
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object, want_async);
+    }
+    // #5961: native URLSearchParams is an ordinary object (class_id == 0,
+    // leading `_entries` slot) whose method surface normally resolves via
+    // static type-directed lowering. A fused dynamic call on a type-erased
+    // receiver lands here — dispatch the covered surface to the natives
+    // before the generic field-scan misses and throws "is not a function".
+    if matches!(
+        method_name,
+        "append" | "set" | "get" | "has" | "delete" | "toString"
+    ) {
+        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
+            if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
+                recv_ptr,
+                method_name,
+                args_ptr,
+                args_len,
+            ) {
+                return result;
+            }
+        }
     }
     // Generic `Array.prototype` mutators borrowed onto a plain array-like
     // object (`Array.prototype.splice.call(obj, …)` whose synthesized member
@@ -1399,6 +1463,25 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // `class X extends Promise`: inherited `then`/`catch`/`finally` dispatch
+    // against the hidden backing Promise cell. A subclass override (own field /
+    // vtable / prototype method) has already been consulted above, so only a
+    // genuinely inherited builtin reaches here. Bind `this` to the instance so
+    // the reified thunk unwraps the backing cell and species-chains via
+    // `receiver.constructor`. (Covers the `X.resolve().finally().then()` chains
+    // that codegen dispatches straight through `js_native_call_method`.)
+    if jsval.is_pointer() && matches!(method_name, "then" | "catch" | "finally") {
+        if crate::promise::subclass_backing_promise(object).is_some() {
+            if let Some(m) = crate::promise::promise_proto_method(method_name) {
+                let args = refreshed_args();
+                let prev_this = crate::object::js_implicit_this_set(object);
+                let result = crate::closure::js_native_call_value(m, args.as_ptr(), args.len());
+                crate::object::js_implicit_this_set(prev_this);
+                return result;
+            }
+        }
+    }
+
     // `class X extends Temporal.<Type>`: the prototype methods (`add`/`abs`/
     // `toString`/…) dispatch via the Temporal brand on the underlying cell, not
     // the JS prototype chain. All user-defined dispatch (own fields, vtable,
@@ -1436,6 +1519,31 @@ pub unsafe extern "C" fn js_native_call_method(
                     args.as_ptr(),
                     args.len(),
                 );
+            }
+        }
+    }
+
+    // Exotic receivers (RegExp / Date / Error) with a user-assigned own
+    // property that is a callable: `var r = /x/; r.f = function(){...}; r.f()`
+    // and `String.prototype.toLowerCase.call`-style borrows like
+    // `reg.toLowerCase = String.prototype.toLowerCase; reg.toLowerCase()`
+    // (test262 String/prototype/{toLowerCase,toUpperCase,...}/*_A1_T14). These
+    // objects store dynamic props in the exotic-expando side table, not the
+    // ObjectHeader field map, so the field/vtable/prototype dispatch above
+    // never sees them. Look the name up there; if it is a callable, invoke it
+    // with the receiver bound as `this` (via IMPLICIT_THIS, matching the
+    // closure-field dispatch path above).
+    if jsval.is_pointer() {
+        if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(object) {
+            if let Some(bits) = super::exotic_expando::value_lookup(kind, addr, method_name) {
+                let candidate = f64::from_bits(bits);
+                if crate::collection_iter::is_callable(candidate) {
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                    let result =
+                        crate::closure::js_native_call_value(candidate, args_ptr, args_len);
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
             }
         }
     }

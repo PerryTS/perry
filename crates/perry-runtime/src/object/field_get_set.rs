@@ -162,7 +162,8 @@ pub(crate) use ic_miss::{
     set_method_value_name,
 };
 pub use ic_miss::{
-    js_object_get_field_by_name_f64, js_object_get_field_ic_miss, js_private_brand_check,
+    js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
+    js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_check,
     js_private_guard,
 };
 

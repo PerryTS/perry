@@ -128,6 +128,12 @@ pub(crate) enum GcMoveHookKind {
     /// move. Used by `GC_TYPE_PROMISE`, whose `status`/`value` expandos
     /// (#5142) live in `object::exotic_expando` keyed by the promise address.
     ExoticExpandoOwner,
+    /// Rekey the error side tables (`node_submodules::diagnostics`:
+    /// ERROR_MESSAGE_{CODES,SYSCALLS,ERRNOS,PATHS,DESTS,HOSTNAMES} and
+    /// ERROR_USER_PROPS — all keyed by the ErrorHeader address) after a
+    /// move. Errors are movable; without this a moved error lost its
+    /// `err.code`/`err.syscall`/user-assigned props.
+    ErrorSideTables,
 }
 
 #[allow(dead_code)]
@@ -152,6 +158,10 @@ pub(crate) enum GcFinalizeHookKind {
     /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
     /// released when the cell is swept. POD variants drop to a no-op.
     TemporalCleanup,
+    /// Drop a swept error's entries from the address-keyed error side tables
+    /// so a fresh error allocated at the recycled address doesn't inherit
+    /// the dead error's codes/props.
+    ErrorSideTables,
 }
 
 #[allow(dead_code)]
@@ -310,9 +320,9 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
-        GcMoveHookKind::None,
+        GcMoveHookKind::ErrorSideTables,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::None,
+        GcFinalizeHookKind::ErrorSideTables,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_MAP,
@@ -576,6 +586,11 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::ExoticExpandoOwner => {
             crate::object::exotic_expando::exotic_expando_owner_moved(old_user, new_user);
         }
+        GcMoveHookKind::ErrorSideTables => {
+            crate::node_submodules::diagnostics_gc::error_side_tables_owner_moved(
+                old_user, new_user,
+            );
+        }
     }
 }
 
@@ -583,6 +598,9 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
     match gc_type_info(obj_type).map_or(GcMoveHookKind::None, |info| info.move_hook_kind) {
         GcMoveHookKind::ObjectOverflowFields => {
             crate::object::clear_overflow_for_ptr(user_ptr);
+        }
+        GcMoveHookKind::ErrorSideTables => {
+            crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
         }
         GcMoveHookKind::None
         | GcMoveHookKind::ClosureDynamicProps
@@ -630,6 +648,9 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             crate::temporal::finalize_temporal_cell_for_gc(
                 user_ptr as *mut crate::temporal::TemporalCell,
             );
+        }
+        GcFinalizeHookKind::ErrorSideTables => {
+            crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr as usize);
         }
     }
 }

@@ -776,17 +776,6 @@ pub extern "C" fn js_array_numeric_value_to_raw_f64(value: f64) -> f64 {
     value_bits_to_number(value.to_bits()).unwrap_or(f64::NAN)
 }
 
-/// Keepalive anchor for the runtime-only link path (generated-code-only callee;
-/// see project_autoopt_ffi_symbol_link_break). Representation-aware numeric array
-/// lowering (#5291) emits calls to `js_array_numeric_value_to_raw_f64` from
-/// generated machine code only — nothing in the runtime crate references it — so
-/// without this `#[used]` anchor the linker dead-strips it from
-/// `libperry_runtime.a`, breaking cold `PERRY_NO_AUTO_OPTIMIZE=1` compiles with
-/// `Undefined symbols: _js_array_numeric_value_to_raw_f64`.
-#[used]
-static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
-    js_array_numeric_value_to_raw_f64;
-
 #[inline]
 fn canonical_raw_f64(value: f64) -> f64 {
     if value.is_nan() {
@@ -1158,6 +1147,24 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
     }
     0
 }
+
+// These raw numeric-array helpers are called from generated code, so release/LTO
+// builds may otherwise internalize and strip the `#[no_mangle]` exports.
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
+    js_array_numeric_value_to_raw_f64;
+#[used]
+static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern "C" fn(*mut ArrayHeader) -> i32 =
+    js_array_mark_numeric_f64_layout;
+#[used]
+static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
+    js_array_clear_numeric_layout;
+#[used]
+static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
+    js_array_note_numeric_write;
+#[used]
+static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =
+    js_array_is_numeric_f64_layout;
 
 /// Calculate the byte size for an array with N elements capacity
 #[inline]

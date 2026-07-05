@@ -373,6 +373,14 @@ pub fn lower_perry_ui_table_call(
             .chain(args.iter().cloned())
             .collect();
         &synthesised_args[..]
+    } else if sig.method == "appSetActivationPolicy" && args.len() == 1 && sig.args.len() == 2 {
+        // User-facing `appSetActivationPolicy(policy)` → 2-arg ABI
+        // `(app_handle, policy)`; synthesise the ignored 0 app-handle,
+        // mirroring the `appSetTimer` adapter above.
+        synthesised_args = std::iter::once(Expr::Integer(0))
+            .chain(args.iter().cloned())
+            .collect();
+        &synthesised_args[..]
     } else if sig.method == "drawImage" && sig.args.len() == 9 {
         // Canvas.drawImage mirrors HTML Canvas' three overloads, but the
         // native FFI surface uses one fixed ABI:

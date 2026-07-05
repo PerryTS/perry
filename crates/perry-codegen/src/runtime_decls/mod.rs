@@ -108,6 +108,14 @@ pub fn declare_phase1(module: &mut LlModule) {
     // Type checks.
     module.declare_function("js_is_truthy", I32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_f64", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_typed_f64_arg_guard", I32, &[DOUBLE]);
+    module.declare_function("js_typed_f64_arg_to_raw", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_typed_i32_arg_guard", I32, &[DOUBLE]);
+    module.declare_function("js_typed_i32_arg_to_raw", I32, &[DOUBLE]);
+    module.declare_function("js_typed_i1_arg_guard", I32, &[DOUBLE]);
+    module.declare_function("js_typed_i1_arg_to_raw", I32, &[DOUBLE]);
+    module.declare_function("js_typed_string_arg_guard", I32, &[DOUBLE]);
+    module.declare_function("js_typed_string_arg_to_raw", I64, &[DOUBLE]);
     module.declare_function("js_native_abi_check_f32", F32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_i32", I32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_i64", I64, &[DOUBLE]);

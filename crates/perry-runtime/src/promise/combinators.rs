@@ -316,8 +316,24 @@ pub(crate) fn combinator_iterable_to_array(
 ) -> Result<*mut crate::array::ArrayHeader, f64> {
     use crate::value::JSValue;
 
-    // Arrays and strings are always iterable.
+    // Arrays and strings are always iterable. #5849: `GetIterator` still
+    // performs `Get(obj, @@iterator)` first — a poisoned/throwing own
+    // `[Symbol.iterator]` accessor (`Object.defineProperty(arr,
+    // Symbol.iterator, {get(){throw ...}})`) must reject the combinator
+    // promise with that thrown value, not be silently skipped by this
+    // fast path. `own_symbol_property` performs that `Get` (invoking an
+    // own accessor getter, which throws via the normal longjmp path
+    // straight through to `combinator_iterable_to_array_caught`'s
+    // setjmp) purely for its side effect; arrays with no own override
+    // (the overwhelming common case) pay one extra side-table probe and
+    // keep the existing raw clone.
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
+        let iter_sym = crate::symbol::well_known_symbol("iterator");
+        if !iter_sym.is_null() {
+            let sym_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+            let _ = unsafe { crate::symbol::own_symbol_property(value, sym_f64) };
+        }
         return Ok(crate::array::js_array_clone(
             crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader,
         ));

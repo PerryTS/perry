@@ -598,6 +598,24 @@ pub(super) fn register_module_globals_as_gc_roots(
         ctx.block()
             .call_void("js_gc_register_global_root", &[(I64, &addr)]);
     }
+
+    // Static class-field globals (`@perry_static_<mod>__<Class>__<field>`)
+    // hold NaN-boxed any-values just like module globals but were never
+    // registered (2026-07-02 audit P0 — byte-for-byte the #5042 class-keys
+    // shape): the global's copy was never rewritten on evacuation, and when
+    // the write-site class-id lookup misses it is the ONLY reference, so the
+    // value was collectable while `C.field` still read it. The map can hold
+    // one global under several keys (class name + import alias) — dedupe.
+    // Cross-module duplicates (defining module + importers both register the
+    // same linked address) are harmless: GLOBAL_ROOTS tolerates duplicate
+    // entries (double mark/rewrite is idempotent).
+    let static_names: std::collections::BTreeSet<&String> =
+        ctx.static_field_globals.values().collect();
+    for global_name in static_names {
+        let addr = ctx.block().ptrtoint(&format!("@{}", global_name), I64);
+        ctx.block()
+            .call_void("js_gc_register_global_root", &[(I64, &addr)]);
+    }
 }
 
 /// Early static-field setup: registrations that don't read any
@@ -966,22 +984,54 @@ pub(super) fn init_static_fields_late(
     Ok(())
 }
 
-/// Returns true if `stmt` is a top-level `Expr(StaticMethodCall)`
-/// invoking the (`class_name`, `method_name`) pair — the shape HIR
-/// lowering emits at the class-decl position for each
+/// Returns true if `stmt` contains, at any nesting depth (through
+/// if/while/do-while/for/labeled/try/switch bodies), an `Expr(
+/// StaticMethodCall)` invoking the (`class_name`, `method_name`) pair —
+/// the shape HIR lowering emits at the class-decl position for each
 /// `__perry_static_init_*` synthetic method. Used by
 /// `init_static_fields_late` to skip per-(class, block) pairs that
 /// have already been invoked inline. (#2278)
+///
+/// Must recurse: a class declared inside `try { class C { static {...}
+/// } }` (test262 static-init-abrupt.js wraps its whole class this way)
+/// lowers its inline `StaticMethodCall` into the `Try`'s `body`, not at
+/// `hir.init`'s top level. A shallow top-level-only scan missed it, so
+/// this late fallback re-invoked the block a second time — outside the
+/// user's `try`, so a throwing block's second run surfaced as an
+/// uncaught exception instead of staying silently absent.
 fn init_calls_static_block(stmt: &perry_hir::Stmt, class_name: &str, method_name: &str) -> bool {
-    if let perry_hir::Stmt::Expr(perry_hir::Expr::StaticMethodCall {
-        class_name: c,
-        method_name: m,
-        ..
-    }) = stmt
-    {
-        c == class_name && m == method_name
-    } else {
-        false
+    use perry_hir::Stmt;
+    let any_calls = |stmts: &[Stmt]| {
+        stmts
+            .iter()
+            .any(|s| init_calls_static_block(s, class_name, method_name))
+    };
+    match stmt {
+        Stmt::Expr(perry_hir::Expr::StaticMethodCall {
+            class_name: c,
+            method_name: m,
+            ..
+        }) => c == class_name && m == method_name,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => any_calls(then_branch) || else_branch.as_ref().is_some_and(|b| any_calls(b)),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            any_calls(body)
+        }
+        Stmt::Labeled { body, .. } => init_calls_static_block(body, class_name, method_name),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            any_calls(body)
+                || catch.as_ref().is_some_and(|c| any_calls(&c.body))
+                || finally.as_ref().is_some_and(|f| any_calls(f))
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|case| any_calls(&case.body)),
+        _ => false,
     }
 }
 

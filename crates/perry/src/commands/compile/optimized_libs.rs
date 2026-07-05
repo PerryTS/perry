@@ -31,7 +31,8 @@ mod paths;
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use freshness::{
     auto_optimized_archives_are_fresh, auto_optimized_build_stamp, auto_optimized_cache_key,
-    auto_optimized_cross_features, binding_needs_shared_tokio, resolve_auto_well_known_libs,
+    auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_needs_shared_tokio,
+    resolve_auto_well_known_libs,
 };
 pub(crate) use no_auto::{
     build_missing_prebuilt_ext_lib, resolve_no_auto_optimized_libs, resolve_prebuilt_ext_libs,

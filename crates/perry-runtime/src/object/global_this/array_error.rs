@@ -348,6 +348,19 @@ pub(crate) extern "C" fn object_prototype_to_locale_string_thunk(
     unsafe { super::super::js_object_default_to_locale_string(this_value) }
 }
 
+/// Spec `CreateListFromArrayLike`'s implementation-defined cap on the
+/// generic index-walk (Node/V8 throw a `RangeError` — "Maximum call stack
+/// size exceeded" or "Invalid array length" depending on magnitude — well
+/// before honoring a huge `length`). Chosen generously above any legitimate
+/// argument list while still bounding the loop/allocation below.
+const MAX_GENERIC_ARRAY_LIKE_LENGTH: i64 = 1_000_000;
+
+fn throw_apply_range_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
     let value = JSValue::from_bits(args_array.to_bits());
     if value.is_undefined() || value.is_null() {
@@ -364,27 +377,107 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
         }
     }
     let is_array = JSValue::from_bits(crate::array::js_array_is_array(args_array).to_bits());
-    if !is_array.is_bool() || !is_array.as_bool() {
-        return Vec::new();
+    if is_array.is_bool() && is_array.as_bool() {
+        let arr = if value.is_pointer() {
+            value.as_pointer::<crate::array::ArrayHeader>()
+        } else if (args_array.to_bits() >> 48) == 0 {
+            args_array.to_bits() as *const crate::array::ArrayHeader
+        } else {
+            std::ptr::null()
+        };
+        if arr.is_null() {
+            return Vec::new();
+        }
+        let len = crate::array::js_array_length(arr) as usize;
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            out.push(f64::from_bits(
+                crate::array::js_array_get(arr, i as u32).bits(),
+            ));
+        }
+        return out;
     }
-    let arr = if value.is_pointer() {
-        value.as_pointer::<crate::array::ArrayHeader>()
-    } else if (args_array.to_bits() >> 48) == 0 {
-        args_array.to_bits() as *const crate::array::ArrayHeader
+    // Spec `CreateListFromArrayLike` (7.3.24) step 2: a non-nullish,
+    // non-object `argArray` is a `TypeError` — a Symbol/Number/String/
+    // Boolean/BigInt was passed directly to `.apply` (test262
+    // apply/argarray-not-object). Nullish was already handled above; a real
+    // Array and an arguments object were handled above too, so anything left
+    // that isn't an Object must be a primitive. A `Symbol` is POINTER_TAG'd
+    // like a real heap object, so `!value.is_pointer()` alone doesn't catch
+    // it — check `js_is_symbol` explicitly.
+    if !value.is_pointer() || crate::symbol::js_is_symbol(args_array) != 0 {
+        throw_type_error_message(b"CreateListFromArrayLike called on non-object");
+    }
+    generic_array_like_to_vec(args_array)
+}
+
+fn throw_type_error_message(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// Generic `CreateListFromArrayLike` (spec 7.3.24) for an `argArray` that is
+/// neither an arguments object nor a real Array — notably a Proxy or plain
+/// object with a numeric `length` and indexed properties. Reads `length` via
+/// `Get` (ToNumber-coerced, clamped to `ToLength`), then reads each index
+/// `0..length` via `Get` in order. `js_get_property` is the generic
+/// dynamic-property-get entry point (Proxy-trap aware, throws through on
+/// failure) also used by codegen for computed member access — so a throwing
+/// `length`/indexed `Get` trap propagates as the abrupt completion the spec
+/// requires (test262 built-ins/Function/prototype/apply/get-index-abrupt),
+/// instead of being silently swallowed into an empty list.
+///
+/// `args_array` and every collected element are rooted in a
+/// `RuntimeHandleScope` for the duration of the walk: each `js_get_property`
+/// call can run arbitrary JS (a getter, a Proxy trap) that may trigger a GC
+/// cycle, and a plain `Vec<f64>` accumulator lives on the Rust heap — outside
+/// the conservative stack scanner's reach — so an already-collected heap
+/// pointer would go stale under a moving/evacuating cycle without explicit
+/// rooting.
+pub(crate) unsafe fn generic_array_like_to_vec(args_array: f64) -> Vec<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array_handle = scope.root_nanbox_f64(args_array);
+    let len_key = b"length";
+    let len_val = crate::value::js_get_property(
+        array_handle.get_nanbox_f64(),
+        len_key.as_ptr() as i64,
+        len_key.len() as i64,
+    );
+    // Spec `ToLength` runs `ToIntegerOrInfinity`, which itself runs
+    // `ToNumber` — and `ToNumber(BigInt)` is a `TypeError`, not an implicit
+    // narrowing conversion (test262 length-property-is-bigint-value).
+    // `js_number_coerce` doesn't special-case BigInt, so reject it here first.
+    if JSValue::from_bits(len_val.to_bits()).is_bigint() {
+        throw_type_error_message(b"Cannot convert a BigInt value to a number");
+    }
+    let len_num = crate::builtins::js_number_coerce(len_val);
+    let len = if len_num.is_nan() {
+        0
     } else {
-        std::ptr::null()
+        let n = len_num.trunc();
+        if n <= 0.0 {
+            0
+        } else if n > 9_007_199_254_740_991.0 {
+            9_007_199_254_740_991_i64
+        } else {
+            n as i64
+        }
     };
-    if arr.is_null() {
-        return Vec::new();
+    if len > MAX_GENERIC_ARRAY_LIKE_LENGTH {
+        throw_apply_range_error(b"Maximum call stack size exceeded");
     }
-    let len = crate::array::js_array_length(arr) as usize;
-    let mut out = Vec::with_capacity(len);
+    let mut handles = Vec::with_capacity(len as usize);
     for i in 0..len {
-        out.push(f64::from_bits(
-            crate::array::js_array_get(arr, i as u32).bits(),
-        ));
+        let key = i.to_string();
+        let v = crate::value::js_get_property(
+            array_handle.get_nanbox_f64(),
+            key.as_ptr() as i64,
+            key.len() as i64,
+        );
+        handles.push(scope.root_nanbox_f64(v));
     }
-    out
+    crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&handles)
 }
 
 pub(crate) extern "C" fn function_prototype_apply_thunk(

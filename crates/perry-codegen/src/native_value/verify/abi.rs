@@ -167,10 +167,11 @@ pub(crate) fn validate_native_abi_type_record(
         "string" | "ptr" | "i64_str" => {
             matches!(
                 &record.native_rep,
-                NativeRep::NativeHandle | NativeRep::JsValue
+                NativeRep::StringRef | NativeRep::NativeHandle | NativeRep::JsValue
             )
         }
-        "bool" | "i32" => matches!(&record.native_rep, NativeRep::I32),
+        "bool" => matches!(&record.native_rep, NativeRep::I1 | NativeRep::I32),
+        "i32" => matches!(&record.native_rep, NativeRep::I32),
         "i64" => matches!(&record.native_rep, NativeRep::I64),
         "u32" => matches!(&record.native_rep, NativeRep::U32),
         "u64" => matches!(&record.native_rep, NativeRep::U64),

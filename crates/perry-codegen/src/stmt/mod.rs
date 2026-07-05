@@ -7,7 +7,8 @@
 use anyhow::{anyhow, bail, Result};
 use perry_hir::Stmt;
 
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::{lower_expr, lower_expr_value, materialize_js_value, FnCtx};
+use crate::native_value::{LoweredValue, MaterializationReason};
 use crate::types::DOUBLE;
 
 mod if_stmt;
@@ -21,6 +22,27 @@ pub(crate) use let_stmt::lower_let;
 pub(crate) use loops::{lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
 pub(crate) use try_stmt::lower_try;
+
+pub(crate) fn record_boxed_slot_js_value_bits(
+    ctx: &mut FnCtx<'_>,
+    local_id: u32,
+    box_ptr: &str,
+    consumer: &'static str,
+) {
+    let lowered = LoweredValue::js_value_bits(box_ptr);
+    ctx.record_lowered_value(
+        "BoxedLocalSlot",
+        Some(local_id),
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec!["raw_box_pointer_carried_as_i64".to_string()],
+    );
+}
 
 /// Lower a sequence of statements into the current block of `ctx`. If any
 /// statement splits control flow, `ctx.current_block` is updated to the
@@ -191,6 +213,17 @@ pub(crate) fn emit_shadow_slot_clears(ctx: &mut FnCtx<'_>, slots: &[u32]) {
     }
 }
 
+fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<String> {
+    if let Some(lowered) = lower_expr_value(ctx, expr)? {
+        return Ok(materialize_js_value(
+            ctx,
+            lowered,
+            MaterializationReason::ReturnAbi,
+        ));
+    }
+    lower_expr(ctx, expr)
+}
+
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     match stmt {
         Stmt::Expr(e) => {
@@ -224,7 +257,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().br(&target.after_label);
                 return Ok(());
             }
-            let v = lower_expr(ctx, e)?;
+            let v = lower_return_expr(ctx, e)?;
             // Phase E: async functions wrap their return value in
             // js_promise_resolved so callers can await the result.
             // If the value is already a promise (e.g. `return
@@ -520,7 +553,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // Issue #569: pre-allocate slot+box for hoisted FnDecl ids and any
         // function-body let/const captured by a hoisted closure. Each id
         // gets an alloca'd entry-block slot whose value is a pointer to a
-        // `js_box_alloc(undefined)` heap cell. Subsequent `Stmt::Let`s for
+        // `js_box_alloc_bits(undefined_bits)` heap cell. Subsequent `Stmt::Let`s for
         // these ids skip the allocation and only `js_box_set` the init
         // value. `LocalGet` / `LocalSet` / `Update` already route through
         // the box because the id is in `ctx.boxed_vars`.
@@ -533,11 +566,41 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                     ctx.boxed_vars.insert(*id);
                     continue;
                 }
-                let undef =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let is_i32_control =
+                    crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
+                let is_i1_control =
+                    crate::expr::is_compiler_private_async_i1_control_local(ctx, *id);
                 let blk = ctx.block();
-                let box_ptr = blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
-                let slot = ctx.func.alloca_entry(DOUBLE);
+                let (box_ptr, cell_note) = if is_i32_control {
+                    (
+                        blk.call(
+                            crate::types::I64,
+                            "js_i32_box_alloc",
+                            &[(crate::types::I32, "0")],
+                        ),
+                        "primitive_i32_control_cell",
+                    )
+                } else if is_i1_control {
+                    (
+                        blk.call(
+                            crate::types::I64,
+                            "js_bool_box_alloc",
+                            &[(crate::types::I32, "0")],
+                        ),
+                        "primitive_i1_control_cell",
+                    )
+                } else {
+                    let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+                    (
+                        blk.call(
+                            crate::types::I64,
+                            "js_box_alloc_bits",
+                            &[(crate::types::I64, &undef_bits)],
+                        ),
+                        "jsvalue_box_cell",
+                    )
+                };
+                let slot = ctx.func.alloca_entry(crate::types::I64);
                 // perry#4926: PreallocateBoxes can sit nested inside an
                 // If/Try/Labeled body (e.g. the async state-machine
                 // wrapper), so this block's box-pointer store doesn't
@@ -545,9 +608,31 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 // the slot to TAG_UNDEFINED so paths that bypass this
                 // statement read a defined sentinel instead of `undef`
                 // (see the boxed `Stmt::Let` arm in let_stmt.rs).
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
-                let box_as_double = ctx.block().bitcast_i64_to_double(&box_ptr);
-                ctx.block().store(DOUBLE, &box_as_double, &slot);
+                let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+                ctx.func
+                    .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
+                ctx.block().store(crate::types::I64, &box_ptr, &slot);
+                record_boxed_slot_js_value_bits(
+                    ctx,
+                    *id,
+                    &box_ptr,
+                    "preallocate_boxes.box_ptr_slot",
+                );
+                if cell_note != "jsvalue_box_cell" {
+                    let lowered = LoweredValue::js_value_bits(&box_ptr);
+                    ctx.record_lowered_value(
+                        "CompilerPrivateAsyncControlCell",
+                        Some(*id),
+                        cell_note,
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        Vec::new(),
+                    );
+                }
                 ctx.locals.insert(*id, slot);
                 ctx.prealloc_boxes.insert(*id);
                 ctx.boxed_vars.insert(*id);

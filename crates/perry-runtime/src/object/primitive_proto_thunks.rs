@@ -99,6 +99,18 @@ pub(super) fn install_primitive_proto_methods(
                 bigint_proto_value_of_thunk as *const u8,
                 0,
             );
+            // `.length` is 0 despite the optional `(locales?, options?)`
+            // params (both are optional, so neither counts per the built-in
+            // function `.length` rule) — installed rest-based like
+            // `Date.prototype.toLocaleString` so the fixed call arity stays 0
+            // while `locales`/`options` still arrive via `rest`.
+            super::global_this::install_proto_method_rest_with_length(
+                proto_obj,
+                "toLocaleString",
+                bigint_proto_to_locale_string_thunk as *const u8,
+                0,
+                0,
+            );
         }
         _ => return false,
     }
@@ -358,6 +370,20 @@ pub(super) extern "C" fn bigint_proto_to_string_thunk(
     string_value(crate::value::js_jsvalue_to_string_radix(
         bigint_receiver_or_throw("toString"),
         radix,
+    ))
+}
+
+pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    let value = bigint_receiver_or_throw("toLocaleString");
+    let args = super::global_this::global_this_rest_array_values(rest);
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let locales = args.first().copied().unwrap_or(undef);
+    let options = args.get(1).copied().unwrap_or(undef);
+    string_value(crate::intl::bigint_to_locale_string(
+        value, locales, options,
     ))
 }
 

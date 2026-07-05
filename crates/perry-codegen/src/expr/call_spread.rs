@@ -290,17 +290,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     let key_idx = ctx.strings.intern(property);
                     let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let name_len_str = entry.byte_len.to_string();
+                    let key_handle_global = format!("@{}", entry.handle_global);
+                    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+                    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+                    let method_id =
+                        ctx.block()
+                            .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
                     return Ok(ctx.block().call(
                         DOUBLE,
-                        "js_native_call_method_apply",
-                        &[
-                            (DOUBLE, &recv_box),
-                            (PTR, &bytes_global),
-                            (I64, &name_len_str),
-                            (I64, &acc_handle),
-                        ],
+                        "js_native_call_method_apply_by_id",
+                        &[(DOUBLE, &recv_box), (I64, &method_id), (I64, &acc_handle)],
                     ));
                 }
             }

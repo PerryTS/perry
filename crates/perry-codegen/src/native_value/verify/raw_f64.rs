@@ -20,6 +20,10 @@ pub(crate) fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool 
         "js_array_numeric_get_f64_unboxed"
             | "js_array_numeric_set_f64_unboxed"
             | "js_array_numeric_push_f64_unboxed"
+            | "packed_f64_loop_load"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_load"
+            | "packed_f64_loop_store"
             | "class_field_get.raw_f64_load"
             | "class_field_set.raw_f64_store"
     )
@@ -58,13 +62,16 @@ pub(crate) fn validate_js_value_bits_record(record: &NativeRepRecord, errors: &m
             .as_ref()
             .or(record.scalar_conversion.as_ref());
         if !transition.is_some_and(|conversion| {
-            conversion.from_native_rep == NativeRep::JsValue.name()
-                && conversion.to_native_rep == NativeRep::JsValueBits.name()
-                && conversion.op == NativeAbiTransitionOp::JsValueToBits
-                && !conversion.lossy
+            valid_native_abi_transition(
+                conversion.from_native_rep.as_str(),
+                conversion.to_native_rep.as_str(),
+                &conversion.op,
+                conversion.lossy,
+                &record.native_rep,
+            )
         }) {
             errors.push(format!(
-                "{} materialized js_value_bits record must carry js_value_to_bits transition",
+                "{} materialized js_value_bits record must carry a valid native-to-bits transition",
                 prefix()
             ));
         }
@@ -83,6 +90,13 @@ pub(crate) fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool 
                 "NumericArrayIndexSet",
                 "js_typed_feedback_array_index_set_fallback_boxed"
             )
+            | (
+                "PackedF64LoopStore",
+                "js_typed_feedback_array_index_set_fallback_boxed"
+            )
+            | ("PackedF64LoopGuard", "packed_f64_loop_fallback")
+            | ("PackedI32LoopGuard", "packed_i32_loop_fallback")
+            | ("PackedU32LoopGuard", "packed_u32_loop_fallback")
             | ("ClassFieldGet", "js_object_get_field_by_name_f64")
             | ("ClassFieldSet", "js_object_set_field_by_name")
     )
@@ -186,5 +200,86 @@ pub(crate) fn validate_native_owned_unchecked_access(
             "{} unchecked native-owned view access missing alias proof",
             prefix()
         ));
+    }
+}
+
+pub(crate) fn validate_fact_uses(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    for (field, facts) in [
+        ("consumed_facts", record.consumed_facts.as_slice()),
+        ("rejected_facts", record.rejected_facts.as_slice()),
+    ] {
+        for fact in facts {
+            if fact.fact_id.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty fact_id",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if fact.kind.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty kind",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if fact.state.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty state",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if field == "rejected_facts"
+                && fact.reason.is_none()
+                && fact.detail.trim().is_empty()
+                && !matches!(fact.state.as_str(), "rejected" | "invalidated" | "missing")
+            {
+                errors.push(format!(
+                    "{}:{} {} rejected fact {} lacks reason/detail",
+                    record.function, record.block_label, record.consumer, fact.fact_id
+                ));
+            }
+        }
+    }
+}
+
+fn record_has_note(record: &NativeRepRecord, note: &str) -> bool {
+    record.notes.iter().any(|candidate| candidate == note)
+}
+
+pub(crate) fn validate_packed_f64_loop_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    if !matches!(
+        record.consumer.as_str(),
+        "packed_f64_loop_guard"
+            | "packed_f64_loop_load"
+            | "packed_f64_loop_store"
+            | "packed_i32_loop_guard"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_guard"
+            | "packed_u32_loop_load"
+    ) {
+        return;
+    }
+    for required in ["index_range=nonnegative_i32", "length_range=guarded_i32"] {
+        if !record_has_note(record, required) {
+            errors.push(format!(
+                "{}:{} {} packed-f64 loop access missing {} proof note",
+                record.function, record.block_label, record.consumer, required
+            ));
+        }
+    }
+    if record.consumer == "packed_f64_loop_store" {
+        for required in [
+            "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard",
+            "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64",
+            "array_reloaded_after_rhs=1",
+            "array_reloaded_after_store_guard=1",
+            "array_reloaded_after_canonicalization=1",
+        ] {
+            if !record_has_note(record, required) {
+                errors.push(format!(
+                    "{}:{} {} packed-f64 loop store missing {} safety note",
+                    record.function, record.block_label, record.consumer, required
+                ));
+            }
+        }
     }
 }

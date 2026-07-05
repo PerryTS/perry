@@ -10,7 +10,7 @@ use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
 use super::{
     attach_native_owned_view_fact, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
     buffer_view_lowered_value, can_lower_expr_as_i32, effective_alias_state_for_access,
-    is_numeric_expr, lower_expr, lower_expr_native, FnCtx,
+    int_range_expr, is_numeric_expr, lower_expr, lower_expr_native, FnCtx,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -214,8 +214,7 @@ fn lower_index_i32_value(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<LoweredVal
     ) {
         lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value
     } else {
-        let d = lower_expr(ctx, index)?;
-        ctx.block().fptosi(DOUBLE, &d, I32)
+        lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value
     };
     Ok(LoweredValue::i32(value))
 }
@@ -234,9 +233,23 @@ fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
     ) {
         Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
     } else {
-        let v = lower_expr(ctx, value)?;
-        Ok(ctx.block().fptosi(DOUBLE, &v, I32))
+        Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
     }
+}
+
+fn can_lower_integer_typed_array_store_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    can_lower_expr_as_i32(
+        value,
+        &ctx.i32_counter_slots,
+        ctx.flat_const_arrays,
+        &ctx.array_row_aliases,
+        ctx.native_facts.integer_locals(),
+        ctx.clamp3_functions,
+        ctx.clamp_u8_functions,
+        ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
+    ) || int_range_expr(ctx, value)
+        .is_some_and(|range| range.min >= i32::MIN as i64 && range.max <= i32::MAX as i64)
 }
 
 pub(crate) fn lower_buffer_access_proof(
@@ -256,6 +269,23 @@ pub(crate) fn lower_buffer_access_proof(
         },
         _ => return Ok(None),
     };
+
+    // A closure-captured buffer local is hazardous even before any escape
+    // walk stamped `buffer_hazard_reasons` — the closure may mutate/realloc
+    // the buffer between the proof and the access. Consult the capture map
+    // directly (mirroring `buffer_access_materialization_reason`) and persist
+    // the decision so later gates agree.
+    if ctx.closure_captures.contains_key(&buffer_local_id)
+        || matches!(
+            ctx.buffer_hazard_reasons.get(&buffer_local_id),
+            Some(MaterializationReason::ClosureCapture)
+        )
+    {
+        ctx.buffer_hazard_reasons
+            .entry(buffer_local_id)
+            .or_insert(MaterializationReason::ClosureCapture);
+        return Ok(None);
+    }
 
     let bounds =
         bounds_for_buffer_access_width(ctx, buffer_local_id, index_expr, spec.bounds_width_units());
@@ -634,17 +664,8 @@ pub(crate) fn lower_typed_array_store(
             | BufferElem::U16
             | BufferElem::I32
             | BufferElem::U32
-    ) && !can_lower_expr_as_i32(
-        value_expr,
-        &ctx.i32_counter_slots,
-        ctx.flat_const_arrays,
-        &ctx.array_row_aliases,
-        ctx.native_facts.integer_locals(),
-        ctx.clamp3_functions,
-        ctx.clamp_u8_functions,
-        ctx.integer_returning_functions,
-        ctx.i32_identity_functions,
-    ) {
+    ) && !can_lower_integer_typed_array_store_value(ctx, value_expr)
+    {
         return Ok(None);
     }
     if matches!(view.elem, BufferElem::F32 | BufferElem::F64) && !is_numeric_expr(ctx, value_expr) {

@@ -112,7 +112,9 @@ fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
     write_file(&runtime, b"!<arch>\n");
     write_file(&stdlib, b"!<arch>\n");
     let cross_features = auto_optimized_cross_features(&ctx, &features, &[]);
-    let stamp = auto_optimized_build_stamp(&key_input, None, &cross_features, &[]);
+    let source_fingerprint = auto_optimized_source_fingerprint(&workspace_root, &[]);
+    let stamp =
+        auto_optimized_build_stamp(&key_input, None, &cross_features, &[], &source_fingerprint);
     write_file(
         &target_dir.join(".perry-auto-build.stamp"),
         stamp.as_bytes(),
@@ -194,6 +196,98 @@ fn auto_optimized_freshness_ignores_nested_target_dirs() {
         &stamp,
         "test-stamp"
     ));
+}
+
+/// #5892 layer 2 / #5778 warm-cache trap: the auto-opt freshness gate must be
+/// keyed on the CONTENT of every source tree that lands in the archives — an
+/// ext-crate edit must rotate the fingerprint even when mtimes lie (cache
+/// restores, fresh checkouts), and rewriting identical bytes must NOT.
+#[test]
+fn source_fingerprint_tracks_ext_crate_content_not_mtimes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    minimal_auto_workspace(dir.path());
+    write_file(
+        &dir.path().join("crates/perry-ext-http/Cargo.toml"),
+        b"[package]\n",
+    );
+    write_file(
+        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
+        b"pub fn http() {}\n",
+    );
+    let bindings = vec![(
+        "perry-ext-http".to_string(),
+        "perry_ext_http".to_string(),
+        None,
+    )];
+
+    let fp1 = auto_optimized_source_fingerprint(dir.path(), &bindings);
+
+    // Rewriting identical bytes (mtime-only churn) must not rotate the key.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_file(
+        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
+        b"pub fn http() {}\n",
+    );
+    assert_eq!(
+        fp1,
+        auto_optimized_source_fingerprint(dir.path(), &bindings)
+    );
+
+    // A content edit in the ext crate must rotate it — this is exactly the
+    // stale-archive reuse that masked #5911 in CI.
+    write_file(
+        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
+        b"pub fn http_changed() {}\n",
+    );
+    let fp2 = auto_optimized_source_fingerprint(dir.path(), &bindings);
+    assert_ne!(fp1, fp2);
+
+    // A binding crate that isn't routed must not affect the key.
+    assert_ne!(
+        auto_optimized_source_fingerprint(dir.path(), &[]),
+        fp2,
+        "fingerprint should include routed binding crates"
+    );
+}
+
+/// The fingerprint must follow transitive workspace path-deps: an edit in a
+/// crate reachable only through another crate's manifest (here perry-ext-net
+/// via perry-ext-http) still lands in the archives, so it must rotate the key.
+#[test]
+fn source_fingerprint_follows_workspace_dep_closure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    minimal_auto_workspace(dir.path());
+    write_file(
+        &dir.path().join("crates/perry-ext-http/Cargo.toml"),
+        b"[package]\n[dependencies]\nperry-ext-net = { path = \"../perry-ext-net\" }\n",
+    );
+    write_file(
+        &dir.path().join("crates/perry-ext-http/src/lib.rs"),
+        b"pub fn http() {}\n",
+    );
+    write_file(
+        &dir.path().join("crates/perry-ext-net/Cargo.toml"),
+        b"[package]\n",
+    );
+    write_file(
+        &dir.path().join("crates/perry-ext-net/src/lib.rs"),
+        b"pub fn net() {}\n",
+    );
+    let bindings = vec![(
+        "perry-ext-http".to_string(),
+        "perry_ext_http".to_string(),
+        None,
+    )];
+
+    let fp1 = auto_optimized_source_fingerprint(dir.path(), &bindings);
+    write_file(
+        &dir.path().join("crates/perry-ext-net/src/lib.rs"),
+        b"pub fn net_changed() {}\n",
+    );
+    assert_ne!(
+        fp1,
+        auto_optimized_source_fingerprint(dir.path(), &bindings)
+    );
 }
 
 /// Closes #507. The well-known flip's "shared tokio" allowlist

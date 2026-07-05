@@ -15,6 +15,7 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
@@ -129,6 +130,7 @@ fn module_with_recursive_constructor_return() -> Module {
         functions: Vec::new(),
         script_global_functions: Vec::new(),
         references_global_this: false,
+        annexb_global_undefined_names: Vec::new(),
         init: vec![Stmt::Expr(Expr::New {
             class_name: "RecursiveCtor".to_string(),
             args: vec![Expr::Bool(true), Expr::Undefined],

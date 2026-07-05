@@ -6,9 +6,34 @@
 //! to drive `lower_new`'s static no-super-throw / inline-vs-call decisions,
 //! plus `node_stream_parent_kind` and `collect_decl_local_ids`.
 
-use perry_hir::Expr;
+use perry_hir::{Class, Expr};
 
 use crate::expr::FnCtx;
+use crate::types::DOUBLE;
+
+/// Emit `js_promise_subclass_init(this, executor)` for a no-own-ctor
+/// `class X extends Promise {}` on the runtime `new X(executor)` path. Runs the
+/// ECMA-262 Promise constructor against a hidden backing cell stashed on the
+/// freshly-allocated instance. `lowered_args` are the already-lowered `new`
+/// arguments; the first is the executor.
+pub(crate) fn emit_promise_subclass_init(ctx: &mut FnCtx<'_>, lowered_args: &[String]) {
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let executor = lowered_args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| undef.clone());
+    let this_box = ctx
+        .this_stack
+        .last()
+        .cloned()
+        .map(|slot| ctx.block().load(DOUBLE, &slot))
+        .unwrap_or(undef);
+    ctx.block().call(
+        DOUBLE,
+        "js_promise_subclass_init",
+        &[(DOUBLE, &this_box), (DOUBLE, &executor)],
+    );
+}
 
 /// Generic "does any statement in this ctor body satisfy `stmt_pred` or
 /// contain an expression satisfying `expr_pred`" walker, shared by the
@@ -306,4 +331,75 @@ pub(super) fn collect_decl_local_ids(
             _ => {}
         }
     }
+}
+
+pub(crate) fn effective_constructor_param_count(ctx: &FnCtx<'_>, class: &Class) -> usize {
+    if let Some(ctor) = class.constructor.as_ref() {
+        return ctor.params.len();
+    }
+    let mut parent = class.extends_name.as_deref();
+    while let Some(pname) = parent {
+        if let Some(ctor) = ctx.imported_class_ctors.get(pname) {
+            if ctor.stops_constructor_walk() {
+                return ctor.param_count;
+            }
+        }
+        match ctx.classes.get(pname).copied() {
+            Some(pc) => {
+                if let Some(pctor) = pc.constructor.as_ref() {
+                    return pctor.params.len();
+                }
+                parent = pc.extends_name.as_deref();
+            }
+            None => break,
+        }
+    }
+    0
+}
+
+/// True when the standalone `<class>_constructor` symbol exists (so the
+/// recursion-guard / capture-collision redirect can call it instead of
+/// inlining). Mirrors the lookup in `call_local_constructor_symbol`.
+pub(crate) fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &Class) -> bool {
+    let ctor_method_name = format!("{}_constructor", class.name);
+    ctx.methods
+        .contains_key(&(class.name.clone(), ctor_method_name))
+}
+
+/// #2768: true when the standalone `<class>_constructor` symbol's body reads
+/// `new.target` — either the class's OWN ctor body, or an ancestor ctor body
+/// it reaches through `super(...)`. The symbol is a separately compiled
+/// function whose only `new.target` source is the runtime cell, and a
+/// `super(...)` call inlines the parent ctor body into that same symbol, so an
+/// ancestor that reads `new.target` (e.g. an abstract-class guard in a base)
+/// still observes the cell. Gating the cell write on the WHOLE chain keeps
+/// `new Child()` correct when only the inherited body reads `new.target`, while
+/// a chain with no reader anywhere stays on the zero-overhead fast path. The
+/// walk follows `extends_name` through the codegen class map; an unresolved
+/// parent name just stops the walk, and a depth cap guards a cyclic graph.
+pub(crate) fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &Class) -> bool {
+    let reads = |c: &Class| {
+        c.constructor
+            .as_ref()
+            .is_some_and(|f| ctor_body_uses_new_target(&f.body))
+    };
+    if reads(class) {
+        return true;
+    }
+    let mut parent = class.extends_name.as_deref();
+    let mut depth = 0;
+    while let Some(parent_name) = parent {
+        depth += 1;
+        if depth > 64 {
+            break;
+        }
+        let Some(pc) = ctx.classes.get(parent_name).copied() else {
+            break;
+        };
+        if reads(pc) {
+            return true;
+        }
+        parent = pc.extends_name.as_deref();
+    }
+    false
 }

@@ -141,6 +141,34 @@ pub(crate) fn emit_jsvalue_slot_store_on_block(
         slot_addr,
         write_barrier_needed,
         false,
+        None,
+    )
+}
+
+pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+    value_bits: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+) -> Option<String> {
+    emit_jsvalue_slot_store_on_block_inner(
+        blk,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        slot_index,
+        layout_note_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        false,
+        Some(value_bits),
     )
 }
 
@@ -176,6 +204,7 @@ pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
         slot_addr,
         write_barrier_needed,
         true,
+        None,
     )
 }
 
@@ -191,6 +220,7 @@ fn emit_jsvalue_slot_store_on_block_inner(
     slot_addr: &str,
     write_barrier_needed: bool,
     scalar_aware: bool,
+    value_bits_override: Option<&str>,
 ) -> Option<String> {
     // The scalar-aware layout note needs the slot's PREVIOUS value to decide
     // whether the slot's pointer-ness actually changed; load it before the
@@ -218,7 +248,9 @@ fn emit_jsvalue_slot_store_on_block_inner(
     if !layout_note_needed && !write_barrier_needed {
         return None;
     }
-    let value_bits = blk.bitcast_double_to_i64(value_double);
+    let value_bits = value_bits_override
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| blk.bitcast_double_to_i64(value_double));
     if layout_note_needed {
         match old_bits.as_deref() {
             // Scalar-over-scalar stores leave the GC slot layout unchanged — the

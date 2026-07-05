@@ -59,11 +59,18 @@ added.
   requires proven or guarded bounds before it can appear.
 - `dynamic_fallback`: runtime helper or generic dispatch path.
 
-## Native ABI Contract
+## Selected Native ABI / Region-Local Contract
 
-Schema version 12 records explicit native ABI transitions and internal boxed
-bits counts. Native values may stay
-region-local with their LLVM ABI type:
+Schema version 12 records explicit native ABI transitions, internal boxed bits
+counts, and the LLVM ABI type for values that stay native within a verified
+region:
+
+Scope note: these records do not describe a general typed function, method, or
+closure ABI. User-defined function and method signatures still use the generic
+`double`/NaN-box ABI at call boundaries, and closure bodies still use
+`i64 this_closure` plus `double` arguments and return `double`. The contract
+covers selected native binding adapters and optimizer-local native values inside
+a verified function/region.
 
 - `I32`, `U32`, and `BufferLen`: LLVM `i32`; `U32` and `BufferLen` materialize
   with unsigned integer-to-double conversion.
@@ -142,3 +149,6 @@ PERRY_DISABLE_BUFFER_FAST_PATH=1 python3 scripts/compiler_output_regression.py c
   its own bounds facts.
 - Scalar-replaced objects: record field-level native reps and materialize only
   when an object identity, dynamic property access, or escape requires it.
+- Typed clones/trampolines: add a real typed function/method/closure ABI only
+  when clone generation, generic trampoline dispatch, method call routing, and
+  closure capture/call lowering are implemented together.

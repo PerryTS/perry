@@ -23,8 +23,8 @@ use abi::{
 };
 use layout::{expected_llvm_type, valid_native_abi_transition, validate_pod_layout};
 use raw_f64::{
-    validate_js_value_bits_record, validate_native_owned_unchecked_access,
-    validate_raw_f64_layout_facts,
+    validate_fact_uses, validate_js_value_bits_record, validate_native_owned_unchecked_access,
+    validate_packed_f64_loop_record, validate_raw_f64_layout_facts,
 };
 
 pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<()> {
@@ -253,7 +253,9 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        validate_fact_uses(record, &mut errors);
         validate_raw_f64_layout_facts(record, &mut errors);
+        validate_packed_f64_loop_record(record, &mut errors);
     }
     validate_buffer_span_pairs(records, &mut errors);
     validate_pod_view_span_pairs(records, &mut errors);

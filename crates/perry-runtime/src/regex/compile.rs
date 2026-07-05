@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use regex::Regex;
 
+use super::class_range_validate::has_out_of_order_double_dash_class_range;
 use super::grammar::{
     has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape,
     has_unicode_forbidden_pattern, js_regex_to_rust,
@@ -87,6 +88,14 @@ pub extern "C" fn js_regexp_compile_value(
     // Same SyntaxError validation as `js_regexp_new`: only reject patterns that
     // neither the `regex` crate nor `fancy-regex` accept.
     if has_invalid_repeated_quantifier(pattern_str) {
+        throw_regexp_syntax_error(&format!(
+            "Invalid regular expression: /{}/: invalid pattern",
+            pattern_str
+        ));
+    }
+    // `--` is the real ClassSetExpression subtraction operator under the `v`
+    // flag (UTS #51) — see the matching comment in `js_regexp_new`.
+    if !flags_str.contains('v') && has_out_of_order_double_dash_class_range(pattern_str) {
         throw_regexp_syntax_error(&format!(
             "Invalid regular expression: /{}/: invalid pattern",
             pattern_str

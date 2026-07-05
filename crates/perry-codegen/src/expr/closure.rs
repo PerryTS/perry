@@ -20,7 +20,7 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 #[allow(unused_imports)]
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::POINTER_MASK_I64;
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -106,52 +106,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //
             // Boxed captures are special: the CAPTURE VALUE is the
             // box pointer itself (not the value inside the box). We
-            // store the box pointer (as a bit-castable double) in
-            // the closure's capture slot, so reads/writes inside the
+            // store the box pointer bits in the closure's capture slot,
+            // so reads/writes inside the
             // closure body can deref it via js_box_get/set. Without
             // this, each closure would get a snapshot of the box's
             // current value.
-            let mut captured_values: Vec<String> = Vec::with_capacity(auto_captures.len());
+            let mut captured_value_bits: Vec<String> = Vec::with_capacity(auto_captures.len());
             for cap_id in &auto_captures {
                 if ctx.boxed_vars.contains(cap_id) {
                     // If the enclosing function has this id boxed,
                     // we want to forward the BOX POINTER through
-                    // the capture slot, not the value inside the
-                    // box. Read the slot (which holds the box
-                    // pointer bit-cast to double) directly without
+                    // the capture slot as raw bits, not the value inside
+                    // the box. Read the slot directly without
                     // going through the normal LocalGet path (which
                     // would deref via js_box_get).
                     if let Some(&_capture_idx) = ctx.closure_captures.get(cap_id) {
                         // We're inside a closure and this id is a
                         // transitively-captured box. Read the
                         // capture slot RAW (it holds the box ptr
-                        // as a double) and propagate directly.
+                        // bits) and propagate directly.
                         let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
                             anyhow!("nested boxed capture but no current_closure_ptr")
                         })?;
                         let idx_str = _capture_idx.to_string();
                         let v = ctx.block().call(
-                            DOUBLE,
-                            "js_closure_get_capture_f64",
+                            I64,
+                            "js_closure_get_capture_bits",
                             &[(I64, &closure_ptr), (I32, &idx_str)],
                         );
-                        captured_values.push(v);
+                        captured_value_bits.push(v);
                     } else if let Some(slot) = ctx.locals.get(cap_id).cloned() {
-                        // Enclosing function owns the box: slot
-                        // holds the box pointer as a double.
-                        let v = ctx.block().load(DOUBLE, &slot);
-                        captured_values.push(v);
+                        // Enclosing function owns the box: slot holds
+                        // the raw box pointer as i64.
+                        let box_ptr = ctx.block().load(I64, &slot);
+                        captured_value_bits.push(box_ptr);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
                         // Global boxed var (rare).
                         let g_ref = format!("@{}", global_name);
                         let v = ctx.block().load(DOUBLE, &g_ref);
-                        captured_values.push(v);
+                        let v_bits = ctx.block().bitcast_double_to_i64(&v);
+                        captured_value_bits.push(v_bits);
                     } else {
-                        captured_values.push(double_literal(0.0));
+                        captured_value_bits.push("0".to_string());
                     }
                 } else {
                     let v = lower_expr(ctx, &Expr::LocalGet(*cap_id))?;
-                    captured_values.push(v);
+                    let v_bits = ctx.block().bitcast_double_to_i64(&v);
+                    captured_value_bits.push(v_bits);
                 }
             }
 
@@ -338,10 +339,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let buf = ctx.func.alloca_entry_array(I64, n_total);
                 {
                     let blk = ctx.block();
-                    for (i, v) in captured_values.iter().enumerate() {
+                    for (i, v_bits) in captured_value_bits.iter().enumerate() {
                         let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", i))]);
-                        let v_bits = blk.bitcast_double_to_i64(v);
-                        blk.store(I64, &v_bits, &slot);
+                        blk.store(I64, v_bits, &slot);
                     }
                     if let Some(new_target_v) = &new_target_value_for_cache {
                         let slot =
@@ -386,11 +386,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // other paths still need explicit per-slot writes.
             if !captured_singleton {
                 let blk = ctx.block();
-                for (idx, val) in captured_values.iter().enumerate() {
+                for (idx, val_bits) in captured_value_bits.iter().enumerate() {
                     let idx_str = idx.to_string();
                     blk.call_void(
-                        "js_closure_set_capture_f64",
-                        &[(I64, &closure_handle), (I32, &idx_str), (DOUBLE, val)],
+                        "js_closure_set_capture_bits",
+                        &[(I64, &closure_handle), (I32, &idx_str), (I64, val_bits)],
                     );
                 }
             }
@@ -429,13 +429,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().call(DOUBLE, "js_implicit_this_get", &[])
                 };
                 let blk = ctx.block();
+                let this_bits = blk.bitcast_double_to_i64(&this_value);
                 blk.call_void(
-                    "js_closure_set_capture_f64",
-                    &[
-                        (I64, &closure_handle),
-                        (I32, &this_idx),
-                        (DOUBLE, &this_value),
-                    ],
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_handle), (I32, &this_idx), (I64, &this_bits)],
                 );
             }
             if *captures_new_target {
@@ -446,12 +443,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().call(DOUBLE, "js_new_target_get", &[])
                 };
                 let blk = ctx.block();
+                let new_target_bits = blk.bitcast_double_to_i64(&new_target_value);
                 blk.call_void(
-                    "js_closure_set_capture_f64",
+                    "js_closure_set_capture_bits",
                     &[
                         (I64, &closure_handle),
                         (I32, &new_target_idx),
-                        (DOUBLE, &new_target_value),
+                        (I64, &new_target_bits),
                     ],
                 );
             }

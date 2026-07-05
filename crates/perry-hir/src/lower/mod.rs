@@ -37,7 +37,7 @@
 mod context;
 pub(crate) mod expr_assign;
 mod expr_call;
-mod expr_function;
+pub(crate) mod expr_function;
 pub(crate) use expr_function::capture_function_source;
 mod expr_member;
 pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_WRITE};
@@ -106,8 +106,9 @@ pub use lower_module_fn::{
 
 mod lower_expr;
 pub(crate) use lower_expr::{
-    lower_expr, lower_expr_assignment, throw_reference_error_expr, try_desugar_reactive_text,
-    with_implicit_unset_let, with_set_fallback_for_ident,
+    lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
+    throw_reference_error_expr, try_desugar_reactive_text, with_implicit_unset_let,
+    with_set_fallback_for_ident,
 };
 
 // Re-export extracted module functions

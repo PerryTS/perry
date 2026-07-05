@@ -1025,23 +1025,30 @@ pub fn lower_fn_body_block_stmt(
             return Err(err);
         }
     };
-    ctx.forward_class_names = saved_forward_class_names;
-    ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
-    ctx.class_renames = saved_class_renames;
-
     // Re-register capture snapshots for classes declared in this body at
     // its END. The decl-site `RegisterClassCaptures` runs before later
     // statements assign captured vars (tsc emits TS-enum namespaces AFTER
     // the classes that reference them — vendored zod's
     // ZodFirstPartyTypeKind), so static-method snapshot reads and post-
-    // return dynamic constructions need the FINAL values. Inserted before
-    // a trailing `return` when present; bodies with early returns keep the
-    // decl-site snapshot for those paths.
+    // return dynamic constructions need the FINAL values.
+    //
+    // MUST run while this body's `class_renames` are still ACTIVE, using the
+    // RESOLVED class name (2026-07-02 audit P0): with the restore-first +
+    // raw-ident order, factory B's renamed `class e` (→ `e$0`) re-registered
+    // the OUTER factory's `e` with B's out-of-scope ids — codegen's LocalGet
+    // soft-fallback then clobbered A's snapshot to all-undefined the moment
+    // B ran, resurrecting the W6 undefined-captures class for every dynamic
+    // construct of A's class; meanwhile `e$0` itself never got refreshed and
+    // its forward-ref `new` sites never got their cap args appended.
+    // Mirrors the function-expression twin (`lower_fn_expr`), including the
+    // refresh-before-EVERY-return placement.
     {
         let mut re_regs: Vec<Stmt> = Vec::new();
+        let mut re_reg_capsets: Vec<(Stmt, std::collections::HashSet<perry_types::LocalId>)> =
+            Vec::new();
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
-                let cname = class_decl.ident.sym.to_string();
+                let cname = ctx.resolve_class_name(class_decl.ident.sym.as_str());
                 if let Some(captured) = ctx.lookup_class_captures(&cname) {
                     if !captured.is_empty() {
                         let captures: Vec<Expr> =
@@ -1065,25 +1072,34 @@ pub fn lower_fn_body_block_stmt(
                         for s in body.iter_mut() {
                             super::class_captures::append_new_args_stmt(s, &cname, &cap_args, true);
                         }
-                        re_regs.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                        let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
                             class_name: cname,
                             captures,
-                        }));
+                        });
+                        re_reg_capsets.push((re_reg.clone(), captured.iter().copied().collect()));
+                        re_regs.push(re_reg);
                     }
                 }
             }
         }
         if !re_regs.is_empty() {
-            let insert_at = if matches!(body.last(), Some(Stmt::Return(_))) {
-                body.len() - 1
-            } else {
-                body.len()
-            };
-            for (i, s) in re_regs.into_iter().enumerate() {
-                body.insert(insert_at + i, s);
-            }
+            // Audit P0-B: the decl-site snapshot is authoritative at
+            // construct time, so keep it TRACKING same-body assignments —
+            // refresh after every statement that assigns a captured local
+            // (else `let x=1; class C{..x..}; x=2; new C()` reads 1 and the
+            // capture write-back resets x to 1).
+            crate::lower::expr_function::insert_class_capture_refresh_after_assignments(
+                &mut body,
+                &re_reg_capsets,
+            );
+            crate::lower::expr_function::insert_class_capture_refresh_before_returns(
+                &mut body, &re_regs,
+            );
         }
     }
+    ctx.forward_class_names = saved_forward_class_names;
+    ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
+    ctx.class_renames = saved_class_renames;
 
     // Undefined-initialised entry slots for hoisted `var`s declared in
     // nested blocks (see predefine_var_bindings_in_function_body docs).
@@ -1351,8 +1367,54 @@ fn collect_refs_in_closure_bodies_expr(expr: &Expr, out: &mut std::collections::
 /// NOT recurse into nested blocks (those are block-scoped — their lets
 /// aren't hoisted to function-entry).
 pub fn collect_top_level_let_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
-    if let Stmt::Let { id, .. } = stmt {
-        out.insert(*id);
+    match stmt {
+        Stmt::Let { id, .. } => {
+            out.insert(*id);
+        }
+        // Array-destructuring bindings (`let [a, b] = it`) lower to the iterator
+        // protocol wrapped in a `Try` (see
+        // `destructuring::pattern_binding::lower_array_pattern_binding`), so the
+        // leaf `let`s live INSIDE the try body / its `if`s, not at the top level.
+        // Recurse into those so a hoisted FnDecl that captures a destructured var
+        // still gets its box preallocated at function entry. Without this, the
+        // hoisted closure captures the not-yet-assigned, unboxed slot and reads
+        // `undefined` — e.g. `const [K,_] = useState(0)` captured by a hoisted
+        // handler. Loops are intentionally NOT recursed: a per-iteration `let`
+        // needs a fresh box, not a single entry-prealloc.
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                collect_top_level_let_ids_stmt(s, out);
+            }
+            if let Some(c) = catch {
+                for s in &c.body {
+                    collect_top_level_let_ids_stmt(s, out);
+                }
+            }
+            if let Some(f) = finally {
+                for s in f {
+                    collect_top_level_let_ids_stmt(s, out);
+                }
+            }
+        }
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            for s in then_branch {
+                collect_top_level_let_ids_stmt(s, out);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    collect_top_level_let_ids_stmt(s, out);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

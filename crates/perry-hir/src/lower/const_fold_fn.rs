@@ -756,7 +756,7 @@ pub(crate) fn try_indirect_eval_general(
     // environment, never any enclosing module/function bindings. A completion-
     // tracking IIFE captures the *enclosing* scope, so it only matches global
     // eval semantics where the enclosing scope already IS the global scope:
-    // module top level (`scope_depth == 0`, no enclosing class / `with` / ESM)
+    // module top level (`scope_depth == 0`, no `with` / ESM)
     // under global-script mode, where module-top `var`s/functions and `this`
     // are the global bindings (#5608/#5609). There, fold the body to the shared
     // completion-value IIFE so `(0,eval)('x = 1')` mutates the global `x` and
@@ -805,6 +805,30 @@ pub(crate) fn try_indirect_eval_general(
         // indirect/cptn-nrml-* with declarations, var-env-var-* completion.)
         if eval_body_iife_foldable(&body_stmts) {
             return build_eval_completion_iife(ctx, body_stmts, eval_strict, span);
+        }
+    }
+    // Even when not at module top (e.g. inside a callback passed to
+    // `assert.throws`), a declaration-bearing body in global-script mode can
+    // still be folded via `apply_global_eval_hoist` — IF the body contains no
+    // var declarations with initializers. When a var has an initializer, the
+    // hoisted rewrite emits a bare `name = init` assignment that would wrongly
+    // capture an enclosing function-local of the same name rather than the
+    // global. Function/generator declarations and init-free vars are safe: their
+    // hoisted prelude exclusively uses `Object.defineProperty(globalThis, …)` /
+    // `globalThis["name"] = void 0` and never resolves through the local scope.
+    //
+    // This handles `(0,eval)("function NaN(){}")` from inside a nested function:
+    // the hoisted body throws a TypeError via `CanDeclareGlobalFunction`
+    // (test262 `*/non-definable-global-{function,generator,var}`).
+    if !module_top_global
+        && super::lower_expr::global_script_this_enabled()
+        && eval_body_no_var_initializers(&body_stmts)
+    {
+        let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
+        if !eval_strict {
+            if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+                return build_eval_completion_iife(ctx, hoisted, false, span);
+            }
         }
     }
     let _ = span;
@@ -861,6 +885,63 @@ fn stmt_declares_binding(stmt: &ast::Stmt) -> bool {
         // Statements that cannot introduce a binding. Listed explicitly (no
         // `_` catch-all) so a future `ast::Stmt` variant that *can* nest a
         // declaration is a compile error here rather than a silent miss.
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
+    }
+}
+
+/// Is an eval body safe to fold via [`apply_global_eval_hoist`] from a *nested*
+/// (non-module-top) scope? The hoisted rewrite emits a bare `name = init`
+/// assignment for `var` declarations that have an initializer, which would
+/// capture an enclosing function-local of the same name rather than the global.
+/// Var declarations without initializers and function/generator declarations
+/// only produce `globalThis.*` writes, so they are safe from nested scopes.
+fn eval_body_no_var_initializers(stmts: &[ast::Stmt]) -> bool {
+    !stmts.iter().any(stmt_has_var_with_initializer)
+}
+
+fn stmt_has_var_with_initializer(stmt: &ast::Stmt) -> bool {
+    use ast::Stmt;
+    match stmt {
+        Stmt::Decl(ast::Decl::Var(v)) => {
+            matches!(v.kind, ast::VarDeclKind::Var) && v.decls.iter().any(|d| d.init.is_some())
+        }
+        Stmt::Decl(_) => false,
+        Stmt::Block(b) => b.stmts.iter().any(stmt_has_var_with_initializer),
+        Stmt::Labeled(l) => stmt_has_var_with_initializer(&l.body),
+        Stmt::If(i) => {
+            stmt_has_var_with_initializer(&i.cons)
+                || i.alt.as_deref().is_some_and(stmt_has_var_with_initializer)
+        }
+        Stmt::For(f) => {
+            matches!(
+                &f.init,
+                Some(ast::VarDeclOrExpr::VarDecl(v)) if v.decls.iter().any(|d| d.init.is_some())
+            ) || stmt_has_var_with_initializer(&f.body)
+        }
+        Stmt::ForIn(f) => stmt_has_var_with_initializer(&f.body),
+        Stmt::ForOf(f) => stmt_has_var_with_initializer(&f.body),
+        Stmt::While(w) => stmt_has_var_with_initializer(&w.body),
+        Stmt::DoWhile(d) => stmt_has_var_with_initializer(&d.body),
+        Stmt::With(w) => stmt_has_var_with_initializer(&w.body),
+        Stmt::Try(t) => {
+            t.block.stmts.iter().any(stmt_has_var_with_initializer)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.stmts.iter().any(stmt_has_var_with_initializer))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.stmts.iter().any(stmt_has_var_with_initializer))
+        }
+        Stmt::Switch(s) => s
+            .cases
+            .iter()
+            .any(|c| c.cons.iter().any(stmt_has_var_with_initializer)),
         Stmt::Expr(_)
         | Stmt::Empty(_)
         | Stmt::Debugger(_)
@@ -1614,9 +1695,16 @@ fn try_const_fold_eval(
 /// place the Annex B.3.3.3 global var-scoped hoisting ([`apply_global_eval_hoist`])
 /// applies? (Mirrors the `module_top_this`/`module_top_global` guards.)
 fn eval_is_module_top_global(ctx: &LoweringContext) -> bool {
+    // `current_class` may be set when we are inside a class field initializer
+    // that is at module top level (`scope_depth == 0`). That context does not
+    // create a new variable environment — the enclosing scope is still the
+    // global scope in global-script mode. Class methods do enter their own
+    // scope (scope_depth >= 1), so they are excluded by the scope_depth check.
+    // Declaration-free bodies (checked by the caller) have no bindings to
+    // misplace, so the IIFE captures only global reads/writes — correct for
+    // global indirect eval semantics (#5592).
     super::lower_expr::global_script_this_enabled()
         && ctx.scope_depth == 0
-        && ctx.current_class.is_none()
         && ctx.with_env_stack.is_empty()
         && !ctx.is_external_module
 }

@@ -65,6 +65,53 @@ fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32)> {
         .copied()
 }
 
+/// Per-class-id flags for a registered standalone constructor: whether its
+/// trailing param is the HIR-synthesized `arguments` slot and/or a user rest
+/// param (`constructor(a, ...rest)`). The `arguments` slot must receive ALL
+/// call args (packed from index 0) whereas a user rest slot receives only the
+/// args from the rest position onward — the same distinction `call_vtable_
+/// method` draws via `has_synthetic_arguments` / `has_rest`. Registered by
+/// codegen (`js_register_class_constructor_flags`) alongside the ctor itself so
+/// the `super(...spread)` apply path (`js_super_construct_apply`) can forward
+/// the flat spread args and let `call_vtable_method` pack the trailing slot
+/// correctly. Absent entry ⇒ neither flag (a plain fixed-arity ctor).
+static CLASS_CONSTRUCTOR_FLAGS: RwLock<Option<HashMap<u32, (bool, bool)>>> = RwLock::new(None);
+
+/// Codegen FFI: record `(has_synthetic_arguments, has_rest)` for a class ctor.
+/// See [`CLASS_CONSTRUCTOR_FLAGS`].
+#[no_mangle]
+pub extern "C" fn js_register_class_constructor_flags(
+    class_id: i64,
+    has_synthetic_arguments: i64,
+    has_rest: i64,
+) {
+    if class_id == 0 {
+        return;
+    }
+    let mut guard = CLASS_CONSTRUCTOR_FLAGS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert(
+        class_id as u32,
+        (has_synthetic_arguments != 0, has_rest != 0),
+    );
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_REGISTER_CLASS_CONSTRUCTOR_FLAGS: extern "C" fn(i64, i64, i64) =
+    js_register_class_constructor_flags;
+
+/// Look up a class ctor's `(has_synthetic_arguments, has_rest)` flags.
+fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool) {
+    CLASS_CONSTRUCTOR_FLAGS
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
+        .unwrap_or((false, false))
+}
+
 thread_local! {
     /// Decl-site snapshots of a function-nested class DECLARATION's captured
     /// outer locals, keyed by class_id. Filled by the codegen-emitted
@@ -350,16 +397,48 @@ pub unsafe extern "C" fn js_super_construct_apply(
             } else {
                 crate::array::js_array_length(arr)
             } as usize;
-            let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-            for i in 0..user_params {
-                if i < n {
-                    final_args.push(crate::array::js_array_get_f64(arr, i as u32));
-                } else {
-                    final_args.push(undef);
-                }
+            // Flatten every SPREAD-expanded arg into a contiguous f64 buffer and
+            // let `call_vtable_method` pack the trailing param. When the parent
+            // ctor uses `arguments` (a zero-declared-param pass-through ctor:
+            // `super(...[3,4,5])` → parent reads `arguments.length`), the
+            // synthesized `arguments` slot must hold ALL args (packed from index
+            // 0); a user rest param (`constructor(a, ...rest)`) holds only the
+            // args from the rest position onward. The old truncation to
+            // `user_params` (and `has_synth=false`/`has_rest=false`) dropped the
+            // extra spread args and left `arguments.length == 0`. `caps` (the
+            // decl-site capture snapshot for a function-nested class) are
+            // appended AFTER the user args, mirroring the fixed-arity super path.
+            // `call_vtable_method`'s synth/rest packing bundles the trailing
+            // param from the flat arg buffer — but it packs from index 0 for
+            // synthesized `arguments` and would swallow any trailing capture
+            // params. Function-nested capturing ctors never combine caps with a
+            // synth/rest trailing param in practice, so only take the flat-
+            // forward path when there are no caps; otherwise keep the original
+            // fixed-arity truncation (caps appended after user args).
+            let (mut has_synth, mut has_rest_flag) = lookup_class_constructor_flags(cur);
+            if !caps.is_empty() {
+                has_synth = false;
+                has_rest_flag = false;
             }
-            for bits in &caps {
-                final_args.push(f64::from_bits(*bits));
+            let mut final_args: Vec<f64> = Vec::with_capacity(user_params.max(n) + caps.len());
+            if has_synth || has_rest_flag {
+                // Forward all n spread args flat; call_vtable_method packs the
+                // trailing synthesized-`arguments` / rest slot (from index 0 for
+                // `arguments`, from the rest position for a user rest param).
+                for i in 0..n {
+                    final_args.push(crate::array::js_array_get_f64(arr, i as u32));
+                }
+            } else {
+                for i in 0..user_params {
+                    if i < n {
+                        final_args.push(crate::array::js_array_get_f64(arr, i as u32));
+                    } else {
+                        final_args.push(undef);
+                    }
+                }
+                for bits in &caps {
+                    final_args.push(f64::from_bits(*bits));
+                }
             }
             let _ = call_vtable_method(
                 ctor_ptr,
@@ -367,8 +446,8 @@ pub unsafe extern "C" fn js_super_construct_apply(
                 final_args.as_ptr(),
                 final_args.len(),
                 total_params,
-                false,
-                false,
+                has_synth,
+                has_rest_flag,
             );
             return undef;
         }
@@ -406,6 +485,26 @@ pub unsafe extern "C" fn js_super_construct_apply(
                 flat.as_ptr(),
                 flat.len(),
             );
+        }
+    }
+    // `class X extends Intl.<Ctor>` via `super(...spread)`: the decl-time parent
+    // value is the Intl constructor closure; run it (new.target set) and re-home
+    // the branded instance onto `this`, the spread counterpart of the
+    // `js_fetch_or_value_super` Intl branch.
+    {
+        let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
+        if crate::intl::is_intl_constructor_value(parent_val) {
+            let this_box = crate::value::js_nanbox_pointer(this_raw);
+            let n = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            } as usize;
+            let mut flat: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                flat.push(crate::array::js_array_get_f64(arr, i as u32));
+            }
+            crate::intl::intl_subclass_super(parent_val, this_box, flat.as_ptr(), flat.len());
         }
     }
     undef
@@ -627,6 +726,16 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
         if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
             let caps = class_capture_values(cur).unwrap_or_default();
             let user_params = (total_params as usize).saturating_sub(caps.len());
+            if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
+                eprintln!(
+                    "flat_super cid={} total={} caps={} args_len={} rest={:?}",
+                    cur,
+                    total_params,
+                    caps.len(),
+                    args_len,
+                    crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+                );
+            }
             let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
             for i in 0..user_params {
                 if !args_ptr.is_null() && i < args_len {

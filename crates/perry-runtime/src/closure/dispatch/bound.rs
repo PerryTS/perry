@@ -13,6 +13,45 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
 
+    // Private-method value (`const f = this.#m; f.call(o)`): a `#`-named method
+    // read off an instance yields the OWNER class's method function. Unlike a
+    // public method, its invocation must dispatch the OWNER's `#m` body with the
+    // call-time `this` — NOT re-resolve `#m` on the receiver's own class (a plain
+    // object has no `#m`, so the by-name path throws "#m is not a function").
+    // The brand check already happened at the READ site (`this.#m`), so here we
+    // simply bind the owner's body to whatever `this` the call supplies (spec:
+    // `PrivateMethodOrAccessorAdd` installs the shared function; calling it does
+    // no brand check). The canonical closure captures the owner class's
+    // prototype-ref in slot 0, which carries the owner id.
+    if method_name_len > 0 && !method_name_ptr.is_null() {
+        if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(
+            method_name_ptr as *const u8,
+            method_name_len,
+        )) {
+            if name.starts_with('#') {
+                if let Some(owner_id) = crate::object::class_prototype_ref_id(namespace_obj) {
+                    if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
+                        crate::object::lookup_class_method_in_chain(owner_id, name)
+                    {
+                        // The call-time `this` (IMPLICIT_THIS) is the receiver the
+                        // private method body runs against — for `f.call(o)` it is
+                        // `o`, for a bare `f()` it is undefined.
+                        let call_this = crate::object::js_implicit_this_get();
+                        return crate::object::call_vtable_method(
+                            func_ptr,
+                            call_this.to_bits() as i64,
+                            args.as_ptr(),
+                            args.len(),
+                            param_count,
+                            has_synth_args,
+                            has_rest,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Canonical class method value (test262 method identity): a class method is
     // a single shared function object whose captured receiver is the OWNER
     // class's prototype-ref — a marker, not the real `this`. The actual receiver

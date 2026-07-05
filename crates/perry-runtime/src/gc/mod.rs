@@ -71,7 +71,7 @@ pub fn gc_collect_minor() -> u64 {
         .emit_after_current()
 }
 
-fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     // Phase C4b-γ-3: re-entrancy guard. Without this, the evacuation
     // pass's `arena_alloc_gc_old` can trigger `gc_check_trigger` (via
     // `arena.alloc`'s slow-path block-fill) DURING the outer collection
@@ -313,6 +313,19 @@ pub fn gc_init() {
         crate::timer::scan_timer_roots_mut_step,
         crate::timer::new_timer_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
+    );
+    // 2026-07-02 audit P0 (ported from be73b4f8d): string-keyed descriptor
+    // tables (defineProperty accessors/attrs) and the proxy registry +
+    // reflect-metadata store were invisible to GC — values swept/moved under
+    // live references, owner keys stale after evacuation.
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+    gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
+    // Object/string-valued `err.<prop> = v` user props live as raw bits in
+    // ERROR_USER_PROPS — invisible to GC without this scanner (collectable
+    // while reachable; stale addresses after a move). The address KEYS are
+    // maintained by the ErrorSideTables move/finalize hooks.
+    gc_register_mutable_root_scanner(
+        crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,
     );
     gc_register_mutable_root_scanner(exception_mutable_root_scanner);
     gc_register_mutable_root_scanner(async_context_mutable_root_scanner);

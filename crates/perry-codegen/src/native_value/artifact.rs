@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::types::LlvmType;
+use crate::types::{LlvmType, DOUBLE};
 
 use super::buffer::{
     AliasState, BoundsState, BufferAccessFacts, BufferAccessMode, NativeOwnedViewFact,
@@ -21,6 +21,7 @@ pub(crate) struct NativeFactUse {
     pub kind: String,
     pub local_id: Option<u32>,
     pub state: String,
+    pub detail: String,
     pub reason: Option<MaterializationReason>,
 }
 
@@ -44,6 +45,9 @@ pub(crate) enum NativeAbiTransitionOp {
     PointerBox,
     NativeHandleBox,
     PromiseBox,
+    BoolToJsValue,
+    #[serde(rename = "bigint_box")]
+    BigIntBox,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -281,6 +285,52 @@ pub(crate) struct NativeRepRecord {
     pub notes: Vec<String>,
 }
 
+pub(crate) fn typed_clone_rejection_record(
+    source_function: impl Into<String>,
+    consumer: impl Into<String>,
+    reason: impl Into<String>,
+    mut notes: Vec<String>,
+) -> NativeRepRecord {
+    let source_function = source_function.into();
+    let consumer = consumer.into();
+    let reason = reason.into();
+    notes.insert(0, format!("typed_clone_rejected={reason}"));
+    NativeRepRecord {
+        function: source_function.clone(),
+        block_label: "typed_clone_decision".to_string(),
+        region_id: None,
+        source_function,
+        lowering_block: "typed_clone_decision".to_string(),
+        local_id: None,
+        expr_kind: "TypedCloneDecision".to_string(),
+        source_key: None,
+        semantic: SemanticKind::JsValue,
+        native_rep: NativeRep::JsValue,
+        native_rep_name: NativeRep::JsValue.name().to_string(),
+        llvm_ty: DOUBLE,
+        llvm_value: "0.0".to_string(),
+        consumer,
+        bounds_state: None,
+        alias_state: None,
+        access_mode: None,
+        buffer_access: None,
+        native_owned_view: None,
+        materialization_reason: None,
+        fallback_reason: None,
+        native_value_state: NativeValueState::RegionLocal,
+        native_abi_transition: None,
+        scalar_conversion: None,
+        native_abi_type: None,
+        pod_layout: None,
+        pod_record_view: None,
+        consumed_facts: Vec::new(),
+        rejected_facts: Vec::new(),
+        emitted_inbounds: false,
+        emitted_noalias: false,
+        notes,
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct NativeRepArtifact<'a> {
     schema_version: u32,
@@ -303,8 +353,12 @@ struct NativeRepSummary {
     unsafe_unchecked_unknown_bounds_accesses: usize,
     consumed_fact_count: usize,
     rejected_fact_count: usize,
+    consumed_fact_kind_counts: BTreeMap<String, usize>,
+    rejected_fact_kind_counts: BTreeMap<String, usize>,
+    typed_path_decision_counts: BTreeMap<String, usize>,
     raw_f64_layout_fact_counts: BTreeMap<String, usize>,
     js_value_bits_count: usize,
+    write_barrier_elided_count: usize,
     native_owned_view_count: usize,
     pod_layout_count: usize,
     pod_record_count: usize,
@@ -324,12 +378,16 @@ impl NativeRepSummary {
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
         let mut consumed_fact_count = 0;
         let mut rejected_fact_count = 0;
+        let mut consumed_fact_kind_counts = BTreeMap::new();
+        let mut rejected_fact_kind_counts = BTreeMap::new();
+        let mut typed_path_decision_counts = BTreeMap::new();
         let mut raw_f64_layout_fact_counts = BTreeMap::from([
             ("consumed".to_string(), 0),
             ("rejected".to_string(), 0),
             ("invalidated".to_string(), 0),
         ]);
         let mut js_value_bits_count = 0;
+        let mut write_barrier_elided_count = 0;
         let mut native_owned_view_count = 0;
         let mut pod_layout_count = 0;
         let mut pod_record_count = 0;
@@ -341,6 +399,9 @@ impl NativeRepSummary {
                 .or_insert(0) += 1;
             if matches!(record.native_rep, NativeRep::JsValueBits) {
                 js_value_bits_count += 1;
+            }
+            if record.expr_kind == "WriteBarrierElided" {
+                write_barrier_elided_count += 1;
             }
             if record.materialization_reason.is_some() {
                 materialization_count += 1;
@@ -377,6 +438,8 @@ impl NativeRepSummary {
                     NativeAbiTransitionOp::PointerBox => "pointer_box",
                     NativeAbiTransitionOp::NativeHandleBox => "native_handle_box",
                     NativeAbiTransitionOp::PromiseBox => "promise_box",
+                    NativeAbiTransitionOp::BoolToJsValue => "bool_to_js_value",
+                    NativeAbiTransitionOp::BigIntBox => "bigint_box",
                 };
                 *native_abi_transition_op_counts
                     .entry(op_name.to_string())
@@ -417,6 +480,52 @@ impl NativeRepSummary {
             }
             consumed_fact_count += record.consumed_facts.len();
             rejected_fact_count += record.rejected_facts.len();
+            for fact in &record.consumed_facts {
+                *consumed_fact_kind_counts
+                    .entry(fact.kind.clone())
+                    .or_insert(0) += 1;
+            }
+            for fact in &record.rejected_facts {
+                *rejected_fact_kind_counts
+                    .entry(fact.kind.clone())
+                    .or_insert(0) += 1;
+            }
+            if record
+                .notes
+                .iter()
+                .any(|note| note.contains("typed_clone="))
+                || record
+                    .consumed_facts
+                    .iter()
+                    .any(|fact| fact.kind.starts_with("typed_") || fact.kind == "type_fact")
+            {
+                *typed_path_decision_counts
+                    .entry("selected".to_string())
+                    .or_insert(0) += 1;
+            }
+            if record.notes.iter().any(|note| {
+                note.contains("generic_wrapper=")
+                    || note.contains("generic_method=")
+                    || note.contains("generic_closure=")
+            }) || record.fallback_reason.is_some()
+            {
+                *typed_path_decision_counts
+                    .entry("fallback".to_string())
+                    .or_insert(0) += 1;
+            }
+            if record
+                .notes
+                .iter()
+                .any(|note| note.contains("typed_clone_rejected="))
+                || record
+                    .rejected_facts
+                    .iter()
+                    .any(|fact| fact.kind.starts_with("typed_") || fact.kind == "type_fact")
+            {
+                *typed_path_decision_counts
+                    .entry("rejected".to_string())
+                    .or_insert(0) += 1;
+            }
             for fact in record
                 .consumed_facts
                 .iter()
@@ -441,8 +550,12 @@ impl NativeRepSummary {
             unsafe_unchecked_unknown_bounds_accesses,
             consumed_fact_count,
             rejected_fact_count,
+            consumed_fact_kind_counts,
+            rejected_fact_kind_counts,
+            typed_path_decision_counts,
             raw_f64_layout_fact_counts,
             js_value_bits_count,
+            write_barrier_elided_count,
             native_owned_view_count,
             pod_layout_count,
             pod_record_count,
@@ -496,7 +609,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 12,
+        schema_version: 15,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

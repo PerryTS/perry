@@ -187,3 +187,109 @@ console.log("add-month:", later.month);                        // 8
          add-month: 8\n"
     );
 }
+
+#[test]
+fn temporal_subclass_capture_writeback_inner_class() {
+    // Regression for #5587 (Bug 1a + Bug 1b):
+    //
+    // Bug 1a — stash placement: the `this.__perry_cap_called = param` stash
+    // was inserted immediately after `super()`. When user code runs `++called`
+    // AFTER `super()` the stash recorded the pre-mutation value 0 and
+    // `emit_class_capture_writeback` wrote 0 back to the outer slot.
+    // Fix: append stash at END of ctor body (after all user stmts).
+    //
+    // Bug 1b — inlined-scope ID mismatch: when `check(...)` is called at
+    // module level, Perry inlines its body into module-init and alpha-renames
+    // locals (`called` id=2 → id=9). The old suffix-based writeback looked
+    // up `ctx.locals[2]` (not found) and silently skipped. Fix: position-
+    // based cap-arg lookup resolves the current-scope id from the `New` args.
+    //
+    // Two variants: post-super mutation (Bug 1a) and module-level inlining
+    // (Bug 1b, exercised by calling check() at module level below).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+function check(construct: any, constructArgs: any[]) {
+  let called = 0;
+  class MySubclass extends construct {
+    constructor() {
+      super(...constructArgs);
+      ++called;  // mutates AFTER super() — exercises Bug 1a stash placement
+    }
+  }
+  new MySubclass();
+  return called;
+}
+
+// Called at module level → inlined into module-init (Bug 1b: alpha-renamed ids)
+console.log("duration called:", check(Temporal.Duration, [0, 0, 0, -4]));   // 1
+console.log("plain-date called:", check(Temporal.PlainDate, [2021, 7, 20])); // 1
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "duration called: 1\n\
+         plain-date called: 1\n"
+    );
+}
+
+#[test]
+fn temporal_plain_date_no_ctor_subclass_cell_stashed() {
+    // Regression for #5587: a subclass with NO explicit constructor that
+    // overrides getters must still have the Temporal cell stashed so that
+    // `compare()` / `instanceof` / inherited methods use internal slots, not
+    // the (potentially throwing) getter overrides.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+class AvoidGettersDate extends Temporal.PlainDate {
+  // Throw so that any call to this getter causes an observable failure —
+  // compare() must use internal slots and never invoke this accessor.
+  get year() { throw new Error("year accessor must not be called by compare()"); }
+}
+
+const a = new AvoidGettersDate(2000, 5, 2);
+const b = new Temporal.PlainDate(2006, 3, 25);
+console.log("instanceof:", a instanceof Temporal.PlainDate);  // true
+// compare() must use internal slots, NOT the overridden .year getter
+const cmp = Temporal.PlainDate.compare(a, b);
+console.log("compare:", cmp);  // -1 (2000 < 2006)
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "instanceof: true\n\
+         compare: -1\n"
+    );
+}
+
+#[test]
+fn duration_add_f64_representable_precision() {
+    // Regression for #5587 / test262 float64-representable-integer:
+    // After `add()`, `subtract()`, and `round()`, Duration fields must be
+    // clamped to their nearest float64-representable value — they must not
+    // carry sub-float64 precision that JS Numbers can't express.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+// 9007199254740991 + 9007199254740990 = 18014398509481981 (not f64-exact)
+// ℝ(𝔽(18014398509481981)) = 18014398509481980
+const d = new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, Number.MAX_SAFE_INTEGER, 0);
+const result = d.add({ microseconds: Number.MAX_SAFE_INTEGER - 1 });
+
+console.log("microseconds:", result.microseconds);  // 18014398509481980
+console.log("toString:", result.toString());        // PT18014398509.48198S
+// subsequent add of 1 µs must still compare equal (internal value = 18014398509481980)
+console.log("compare:", Temporal.Duration.compare(result.add({ microseconds: 1 }), result));  // 0
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "microseconds: 18014398509481980\n\
+         toString: PT18014398509.48198S\n\
+         compare: 0\n"
+    );
+}

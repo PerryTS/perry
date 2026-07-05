@@ -324,9 +324,66 @@ pub(super) unsafe fn dispatch_primitive(
     if matches!(method_name, "then" | "catch" | "finally")
         && crate::promise::js_value_is_promise(object_handle.get_nanbox_f64()) != 0
     {
-        let promise_ptr = (object_handle.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF)
-            as *mut crate::Promise;
+        let promise_val = object_handle.get_nanbox_f64();
+        let promise_ptr = (promise_val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::Promise;
         let promise_handle = root_scope.root_raw_mut_ptr(promise_ptr);
+
+        // Check for own properties that require the spec path:
+        //  - own "then": the user replaced the method (spy / non-callable / accessor)
+        //  - own "constructor": SpeciesConstructor must read it (then/catch/finally all
+        //    chain a new promise through the species constructor)
+        let promise_addr = promise_handle.get_raw_mut_ptr::<crate::Promise>() as usize;
+        let has_own_then = crate::promise::promise_has_own_property(promise_addr, "then");
+        let has_own_ctor = crate::promise::promise_has_own_constructor(promise_addr);
+
+        if has_own_then || has_own_ctor {
+            // Spec path: look up the prototype method and call it with
+            // IMPLICIT_THIS set to the promise value so the thunk can read it.
+            if has_own_then && method_name == "then" {
+                // For "then" with own "then": Invoke(promise, "then", args) directly.
+                // exotic_get_own_property invokes accessor getters (propagating throws)
+                // and returns the data value; is_callable_value checks callability.
+                let own_then = unsafe {
+                    crate::object::exotic_expando::exotic_get_own_property(
+                        promise_addr,
+                        crate::object::exotic_expando::ExoticKind::Promise,
+                        "then",
+                        promise_val,
+                    )
+                }
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                if !crate::promise::spec_combinators::is_callable_value(own_then) {
+                    let msg = b"'then' property on Promise is not callable";
+                    let msg_str =
+                        crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                    let err = crate::error::js_typeerror_new(msg_str);
+                    crate::exception::js_throw(f64::from_bits(
+                        JSValue::pointer(err as *const u8).bits(),
+                    ));
+                }
+                let args = refreshed_args();
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(promise_val.to_bits()));
+                let result = unsafe {
+                    crate::closure::js_native_call_value(own_then, args.as_ptr(), args.len())
+                };
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return Some(result);
+            }
+            // For "catch"/"finally" with own "then", or "then" with own "constructor":
+            // call the prototype thunk with IMPLICIT_THIS = promise_val so it can
+            // read the receiver and invoke call_receiver_then / SpeciesConstructor.
+            if let Some(proto_method) = crate::promise::promise_proto_method(method_name) {
+                let args = refreshed_args();
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(promise_val.to_bits()));
+                let result = unsafe {
+                    crate::closure::js_native_call_value(proto_method, args.as_ptr(), args.len())
+                };
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return Some(result);
+            }
+            // Fallthrough to fast path if prototype method lookup fails.
+        }
+
         let args = refreshed_args();
         let arg0_box = if !args.is_empty() {
             args[0]

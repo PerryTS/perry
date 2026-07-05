@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::types::{LlvmType, DOUBLE, F32, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, F32, I1, I128, I32, I64, I8, PTR};
 
 use super::buffer::{AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewRep};
 
@@ -9,6 +9,7 @@ use super::buffer::{AliasState, BoundsState, BufferElem, BufferIndexUnit, Buffer
 pub(crate) enum SemanticKind {
     JsNumber,
     JsValue,
+    BigInt,
     TypedArrayElement,
     BufferObject,
     PodRecord,
@@ -23,6 +24,11 @@ pub(crate) enum NativeRep {
     /// boxed values where preserving payload bits matters.
     JsValueBits,
     JsValue,
+    /// Raw, proven string-like runtime reference carried as an integer
+    /// (`StringHeader*` after string guards/unboxing). Public ABI remains
+    /// `JsValue`; this rep is for region-local string-key/string-ABI helper
+    /// boundaries that consume a raw string handle.
+    StringRef,
     I32,
     /// Legacy signed 64-bit scalar. Kept for existing native-library
     /// manifests that declare `"i64"` and expect a JS-number bridge.
@@ -36,6 +42,9 @@ pub(crate) enum NativeRep {
     U64,
     /// Native `usize` on Perry's supported 64-bit native runtime targets.
     USize,
+    /// Native boolean carried as an LLVM `i1`. JS-visible boundaries must
+    /// materialize this as TAG_TRUE/TAG_FALSE rather than as a numeric 0/1.
+    I1,
     F64,
     /// Native/storage-only 32-bit float. It may be region-local, but JS-visible
     /// number boundaries must materialize through an explicit `fpext`.
@@ -53,6 +62,11 @@ pub(crate) enum NativeRep {
     /// Raw promise handle at an async/native boundary. Region-local unless
     /// boxed by a dedicated promise-boundary transition.
     PromiseBoundary,
+    /// Compiler-owned BigInt value represented as raw native integer SSA.
+    /// JS-visible BigInt semantics are restored by allocating a BigInt object
+    /// and NaN-boxing it at the boundary.
+    #[serde(rename = "small_bigint")]
+    SmallBigInt,
     /// Region-local view over buffer bytes. This is not a JS pointer contract:
     /// it may be consumed only inside the native region that proved its bounds
     /// and alias facts.
@@ -79,11 +93,13 @@ impl NativeRep {
         match self {
             Self::JsValueBits => "js_value_bits",
             Self::JsValue => "js_value",
+            Self::StringRef => "string_ref",
             Self::I32 => "i32",
             Self::I64 => "i64",
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::USize => "usize",
+            Self::I1 => "i1",
             Self::F64 => "f64",
             Self::F32 => "f32",
             Self::U8 => "u8",
@@ -91,6 +107,7 @@ impl NativeRep {
             Self::HandleId => "handle_id",
             Self::NativeHandle => "native_handle",
             Self::PromiseBoundary => "promise_boundary",
+            Self::SmallBigInt => "small_bigint",
             Self::BufferView(_) => "buffer_view",
             Self::PodRecord { .. } => "pod_record",
             Self::PodRecordView { .. } => "pod_record_view",
@@ -109,8 +126,10 @@ pub(crate) enum ExpectedNativeRep {
     U32,
     U64,
     USize,
+    I1,
     F64,
     F32,
+    StringRef,
     BufferLen,
     HandleId,
     // #854: expected-rep variants matched by is_rep but not yet constructed by
@@ -164,6 +183,10 @@ impl LoweredValue {
         Self::new(SemanticKind::JsNumber, NativeRep::USize, I64, value)
     }
 
+    pub(crate) fn i1(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsValue, NativeRep::I1, I1, value)
+    }
+
     pub(crate) fn u8(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::TypedArrayElement, NativeRep::U8, I8, value)
     }
@@ -192,6 +215,10 @@ impl LoweredValue {
         Self::new(SemanticKind::JsValue, NativeRep::JsValueBits, I64, value)
     }
 
+    pub(crate) fn string_ref(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsValue, NativeRep::StringRef, I64, value)
+    }
+
     pub(crate) fn native_handle(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::JsValue, NativeRep::NativeHandle, I64, value)
     }
@@ -203,6 +230,10 @@ impl LoweredValue {
             I64,
             value,
         )
+    }
+
+    pub(crate) fn small_bigint(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::BigInt, NativeRep::SmallBigInt, I128, value)
     }
 
     pub(crate) fn buffer_view(
@@ -247,8 +278,10 @@ impl LoweredValue {
                 | (ExpectedNativeRep::U32, NativeRep::U32)
                 | (ExpectedNativeRep::U64, NativeRep::U64)
                 | (ExpectedNativeRep::USize, NativeRep::USize)
+                | (ExpectedNativeRep::I1, NativeRep::I1)
                 | (ExpectedNativeRep::F64, NativeRep::F64)
                 | (ExpectedNativeRep::F32, NativeRep::F32)
+                | (ExpectedNativeRep::StringRef, NativeRep::StringRef)
                 | (ExpectedNativeRep::BufferLen, NativeRep::BufferLen)
                 | (ExpectedNativeRep::HandleId, NativeRep::HandleId)
                 | (ExpectedNativeRep::NativeHandle, NativeRep::NativeHandle)

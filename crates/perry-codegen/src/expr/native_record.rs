@@ -49,6 +49,7 @@ fn native_fact_use(
         kind: kind.to_string(),
         local_id,
         state: state.to_string(),
+        detail: detail.to_string(),
         reason,
     }
 }
@@ -60,6 +61,24 @@ pub(crate) fn raw_f64_layout_fact(
     reason: Option<MaterializationReason>,
 ) -> NativeFactUse {
     native_fact_use("raw_f64_layout", local_id, state, detail, reason)
+}
+
+pub(crate) fn array_kind_fact(
+    local_id: Option<u32>,
+    state: &'static str,
+    detail: &str,
+    reason: Option<MaterializationReason>,
+) -> NativeFactUse {
+    native_fact_use("array_kind", local_id, state, detail, reason)
+}
+
+pub(crate) fn effect_fact(
+    local_id: Option<u32>,
+    state: &'static str,
+    detail: &str,
+    reason: Option<MaterializationReason>,
+) -> NativeFactUse {
+    native_fact_use("effect", local_id, state, detail, reason)
 }
 
 pub(super) fn native_fact_uses_for_record(
@@ -81,6 +100,13 @@ pub(super) fn native_fact_uses_for_record(
             None,
         )),
         NativeRep::JsValue => {}
+        NativeRep::StringRef => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "string_ref",
+            None,
+        )),
         NativeRep::I32 => consumed.push(native_fact_use(
             "representation",
             local_id,
@@ -114,6 +140,13 @@ pub(super) fn native_fact_uses_for_record(
             local_id,
             "consumed",
             "usize",
+            None,
+        )),
+        NativeRep::I1 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "i1",
             None,
         )),
         NativeRep::F64 => consumed.push(native_fact_use(
@@ -163,6 +196,13 @@ pub(super) fn native_fact_uses_for_record(
             local_id,
             "consumed",
             "promise_boundary",
+            None,
+        )),
+        NativeRep::SmallBigInt => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "small_bigint",
             None,
         )),
         NativeRep::BufferView(_) => consumed.push(native_fact_use(

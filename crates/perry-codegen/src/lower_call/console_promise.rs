@@ -785,11 +785,17 @@ pub fn try_lower_native_method_str_dispatch(
             for a in args {
                 lowered_args.push(lower_expr(ctx, a)?);
             }
-            // Intern the method name and reference its rodata byte global.
+            // Intern the method name and pass its heap string handle as the
+            // static-name method id. The typed-feedback wrapper resolves the
+            // id to bytes only at the runtime boundary.
             let key_idx = ctx.strings.intern(property);
             let entry = ctx.strings.entry(key_idx);
-            let bytes_global = format!("@{}", entry.bytes_global);
-            let name_len_str = entry.byte_len.to_string();
+            let key_handle_global = format!("@{}", entry.handle_global);
+            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let method_id = ctx
+                .block()
+                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
             // Stack-allocate the args array if any. The alloca MUST live in
             // the function entry block — emitting it into the current block
             // (which may be a loop body) makes LLVM lower it as a runtime
@@ -821,12 +827,11 @@ pub fn try_lower_native_method_str_dispatch(
             let blk = ctx.block();
             return Ok(Some(blk.call(
                 DOUBLE,
-                "js_typed_feedback_native_call_method",
+                "js_typed_feedback_native_call_method_by_id",
                 &[
                     (I64, &site_id),
                     (DOUBLE, &recv_box),
-                    (PTR, &bytes_global),
-                    (I64, &name_len_str),
+                    (I64, &method_id),
                     (PTR, &args_ptr),
                     (I64, &args_len_str),
                 ],

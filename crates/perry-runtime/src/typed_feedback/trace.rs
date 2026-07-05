@@ -364,6 +364,10 @@ pub extern "C" fn js_typed_feedback_maybe_dump_trace() {
 #[rustfmt::skip]
 mod keep_typed_feedback {
     use super::*;
+    use crate::typed_feedback::guards::{
+        js_typed_feedback_native_call_method_apply_by_id,
+        js_typed_feedback_native_call_method_by_id,
+    };
     #[used] static K00: extern "C" fn(u64, u32, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize) = js_typed_feedback_register_site;
     #[used] static K01: extern "C" fn(u64) = js_typed_feedback_record_guard_pass;
     #[used] static K02: extern "C" fn(u64) = js_typed_feedback_record_guard_fail;
@@ -372,21 +376,28 @@ mod keep_typed_feedback {
     #[used] static K05: extern "C" fn(u64, *mut ObjectHeader, *const crate::StringHeader) = js_typed_feedback_observe_property_set;
     #[used] static K06: extern "C" fn(u64, *const ObjectHeader, *const crate::StringHeader) -> f64 = js_typed_feedback_object_get_field_by_name_f64;
     #[used] static K07: extern "C" fn(u64, *mut ObjectHeader, *const crate::StringHeader, f64) = js_typed_feedback_object_set_field_by_name;
-    #[used] static K08: unsafe extern "C" fn(u64, f64, *const i8, usize, *const f64, usize) -> f64 = js_typed_feedback_native_call_method;
-    #[used] static K09: unsafe extern "C" fn(u64, f64, *const i8, usize, i64) -> f64 = js_typed_feedback_native_call_method_apply;
-    #[used] static K10: extern "C" fn(u64, *const ArrayHeader, u32) -> f64 = js_typed_feedback_array_get_f64;
-    #[used] static K11: extern "C" fn(u64, f64, f64, i32, i32) -> i32 = js_typed_feedback_plain_array_index_get_guard;
-    #[used] static K12: extern "C" fn(u64, f64, f64) -> f64 = js_typed_feedback_array_index_get_fallback_boxed;
-    #[used] static K13: extern "C" fn(u64, *mut ArrayHeader, u32, f64) = js_typed_feedback_array_set_f64;
-    #[used] static K14: extern "C" fn(u64, *mut ArrayHeader, u32, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_f64_extend;
-    #[used] static K15: extern "C" fn(u64, f64, i32, f64, i32) -> i32 = js_typed_feedback_plain_array_index_set_guard;
-    #[used] static K16: extern "C" fn(u64, f64, f64, f64) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
-    #[used] static K17: extern "C" fn(u64, *const ArrayHeader, u32) = js_typed_feedback_observe_array_element;
-    #[used] static K18: extern "C" fn(u64, *mut ArrayHeader, *const crate::StringHeader, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_string_key;
-    #[used] static K19: extern "C" fn(u64, *mut ArrayHeader, f64, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_index_or_string;
-    #[used] static K20: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
-    #[used] static K21: extern "C" fn(u64, *mut ObjectHeader, u32, *const crate::StringHeader, f64) = js_typed_feedback_object_set_unboxed_f64_field;
-    #[used] static K22: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
-    #[cfg(feature = "diagnostics")]
-    #[used] static K23: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
+    #[used] static K08: extern "C" fn(u64, *mut ObjectHeader, *const crate::StringHeader, f64) = js_typed_feedback_object_set_field_by_name_fast;
+    #[used] static K09: unsafe extern "C" fn(u64, f64, *const i8, usize, *const f64, usize) -> f64 = js_typed_feedback_native_call_method;
+    #[used] static K10: unsafe extern "C" fn(u64, f64, *const i8, usize, i64) -> f64 = js_typed_feedback_native_call_method_apply;
+    #[used] static K11: extern "C" fn(u64, *const ArrayHeader, u32) -> f64 = js_typed_feedback_array_get_f64;
+    #[used] static K12: extern "C" fn(u64, f64, i32, i32) -> i32 = js_typed_feedback_plain_array_index_get_guard;
+    #[used] static K13: extern "C" fn(u64, f64, i32, i32) -> i32 = js_typed_feedback_numeric_array_index_get_guard;
+    #[used] static K14: extern "C" fn(u64, f64) -> i32 = js_typed_feedback_packed_f64_array_loop_guard;
+    #[used] static K15: extern "C" fn(u64, f64) -> i32 = js_typed_feedback_packed_u32_array_loop_guard;
+    #[used] static K16: extern "C" fn(u64, f64, f64) -> f64 = js_typed_feedback_array_index_get_fallback_boxed;
+    #[used] static K17: extern "C" fn(u64, *mut ArrayHeader, u32, f64) = js_typed_feedback_array_set_f64;
+    #[used] static K18: extern "C" fn(u64, *mut ArrayHeader, u32, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_f64_extend;
+    #[used] static K19: extern "C" fn(u64, f64, i32, f64, i32) -> i32 = js_typed_feedback_plain_array_index_set_guard;
+    #[used] static K20: extern "C" fn(u64, f64, i32, f64, i32) -> i32 = js_typed_feedback_numeric_array_index_set_guard;
+    #[used] static K21: extern "C" fn(u64, f64, f64) -> i32 = js_typed_feedback_numeric_array_push_guard;
+    #[used] static K22: extern "C" fn(u64, f64, f64, f64) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
+    #[used] static K23: extern "C" fn(u64, *const ArrayHeader, u32) = js_typed_feedback_observe_array_element;
+    #[used] static K24: extern "C" fn(u64, *mut ArrayHeader, *const crate::StringHeader, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_string_key;
+    #[used] static K25: extern "C" fn(u64, *mut ArrayHeader, f64, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_index_or_string;
+    #[used] static K26: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
+    #[used] static K27: extern "C" fn(u64, *mut ObjectHeader, u32, *const crate::StringHeader, f64) = js_typed_feedback_object_set_unboxed_f64_field;
+    #[used] static K28: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
+    #[used] static K29: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
+    #[used] static K30: unsafe extern "C" fn(u64, f64, i64, *const f64, usize) -> f64 = js_typed_feedback_native_call_method_by_id;
+    #[used] static K31: unsafe extern "C" fn(u64, f64, i64, i64) -> f64 = js_typed_feedback_native_call_method_apply_by_id;
 }

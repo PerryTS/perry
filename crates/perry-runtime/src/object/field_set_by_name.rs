@@ -27,12 +27,19 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 == 0x7FFD || top16 >= 0x7FF8 {
-            if top16 == 0x7FFC {
+        if top16 >= 0x7FF8 {
+            if top16 != 0x7FFD {
+                // Not a POINTER-tagged heap receiver (SSO string payload,
+                // UNDEFINED/NULL remnant, INT32, BIGINT…). The old catch-all
+                // masked these to 48 bits — a 2–5-char SSO payload lands in
+                // the 2–5.5TB range, passes the macOS heap floor, and the
+                // GcHeader read below deref'd unmapped memory (write-side
+                // #5429 twin, 2026-07-02 audit). Return 0 = defer to the
+                // full dynamic path, which triages by tag.
                 return 0;
             }
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-            if raw.is_null() || (raw as usize) < 0x10000 {
+            if raw.is_null() || crate::value::addr_class::is_small_handle(raw as usize) {
                 return 0;
             }
             raw
@@ -57,11 +64,13 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
 
-        if !is_valid_obj_ptr(obj as *const u8) {
-            return 0;
-        }
-        let gc_header =
-            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        // Validated header probe (rejects the handle band, implausible
+        // addresses, and slab allocations without touching memory) instead
+        // of the bare floor + raw deref.
+        let gc_header = match crate::value::addr_class::try_read_gc_header(obj as usize) {
+            Some(h) => h as *const crate::gc::GcHeader,
+            None => return 0,
+        };
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
@@ -170,6 +179,66 @@ unsafe fn string_key_eq(key: *const crate::StringHeader, expected: &[u8]) -> boo
     std::slice::from_raw_parts(data, len) == expected
 }
 
+/// Shared closure-receiver named-property WRITE path — used by both ways a
+/// closure is recognized in `js_object_set_field_by_name` (a `GC_TYPE_CLOSURE`
+/// GcHeader-typed pointer, and the raw `CLOSURE_MAGIC`-tagged fallback for a
+/// pointer reached without a full GC header). #3143: honors a non-writable
+/// registered descriptor (a built-in method's `.name`/`.length` are spec'd
+/// `writable: false`); `Object.defineProperty(Function.prototype, k, {...})`
+/// round-trips via `closure_set_via_function_prototype_descriptor` before
+/// falling back to a plain own-property write.
+unsafe fn closure_set_field_by_name(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    if key.is_null() {
+        return;
+    }
+    let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key).byte_len as usize;
+    let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+    let Ok(name_str) = std::str::from_utf8(name_bytes) else {
+        return;
+    };
+    // ECMAScript "poison pill" — assigning `caller`/`arguments` on any
+    // strict-mode function (Perry compiles everything strict: declarations,
+    // expressions, bound and built-in closures, arrows) throws via the
+    // %ThrowTypeError% accessor's missing setter. A genuine own data prop of
+    // that name (defineProperty round-trip) still wins.
+    // Refs test262 13.2-*-s / StrictFunction_restricted-*.
+    if matches!(name_str, "caller" | "arguments")
+        && !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)
+    {
+        crate::fs::validate::throw_type_error_with_code(
+            "Restricted function property assignment",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
+        if !attrs.writable() {
+            return;
+        }
+    } else if matches!(name_str, "name" | "length") {
+        return;
+    } else if !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)
+        && crate::closure::closure_set_via_function_prototype_descriptor(
+            obj as usize,
+            name_str,
+            value,
+            crate::value::js_nanbox_pointer(obj as i64),
+        )
+    {
+        // Handled by an inherited %Function.prototype% descriptor
+        // (`Object.defineProperty(Function.prototype, k, {...})`) — an
+        // accessor's setter ran (or threw for a getter-only accessor), or a
+        // non-writable data property blocked the write; no own property is
+        // created.
+        return;
+    }
+    crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
+}
+
 /// Set a field value by its string key name (dynamic property access)
 /// This searches the keys array for a match and sets the corresponding value.
 /// If the key doesn't exist, it adds it to the object.
@@ -199,6 +268,38 @@ pub extern "C" fn js_object_set_field_by_name(
                 crate::proxy::js_proxy_set(boxed, key_f64, value);
                 return;
             }
+        }
+    }
+    // #5437: a live Web Stream handle arrives here as its raw id in the
+    // stream band (the `stream.prop = v` codegen path). React's
+    // `renderToReadableStream` attaches its shell-ready promise as an
+    // expando (`stream.allReady = ...`); without a store the write was
+    // dropped, which stalled the Next.js dynamic-SSR render. Route to the
+    // stdlib per-stream expando table (GC-traced there).
+    {
+        let addr = obj as usize;
+        if crate::value::addr_class::is_stream_id_band(addr) {
+            if !key.is_null() {
+                if let (Some(probe), Some(setter)) = (
+                    crate::object::stream_handle_probe(),
+                    crate::object::stream_expando_set(),
+                ) {
+                    if unsafe { probe(addr) } {
+                        if let Some(name) =
+                            unsafe { super::has_own_helpers::str_from_string_header(key) }
+                        {
+                            unsafe { setter(addr, name.as_ptr(), name.len(), value) };
+                        }
+                    }
+                }
+            }
+            // A stream-band address is a reserved handle id, never a real
+            // `ObjectHeader`. Stop unconditionally — even when the expando
+            // write was a no-op (dead/unregistered handle, hooks absent, or a
+            // non-UTF-8 key). Falling through would reach the ObjectHeader
+            // path below and deref `addr - GC_HEADER_SIZE` (unmapped) → crash.
+            // Mirrors the reserved small-handle early-return further down.
+            return;
         }
     }
     // `Object.prototype["2"] = v` (stringified-index write) makes the index
@@ -403,8 +504,13 @@ pub extern "C" fn js_object_set_field_by_name(
             if raw.is_null() || top16 == 0x7FFC {
                 return;
             }
-            if (raw as usize) < 0x10000 {
-                // Small handle — dispatch to handle property set if registered
+            if crate::value::addr_class::is_small_handle(raw as usize) {
+                // Handle-band id (2026-07-02 audit P1: the old `< 0x10000`
+                // guard was one zero short of HANDLE_BAND_MAX, so a
+                // POINTER-tagged fetch (0x40000+) or zlib id skipped handle
+                // dispatch and reached the raw GcHeader deref below —
+                // `response.myProp = v` deref'd the id as memory). Dispatch
+                // to the registered handle property setter.
                 if let Some(dispatch) = handle_property_set_dispatch() {
                     if !key.is_null() {
                         unsafe {
@@ -422,8 +528,9 @@ pub extern "C" fn js_object_set_field_by_name(
             obj
         }
     };
-    if obj.is_null() || (obj as usize) < 0x10000 {
-        // Small non-null value — could be a stripped handle (after ensure_i64 stripped NaN-box tag)
+    if obj.is_null() || crate::value::addr_class::is_small_handle(obj as usize) {
+        // Handle-band value (full band, not the old `< 0x10000` — see above)
+        // or a stripped handle after ensure_i64 removed the NaN-box tag.
         if !obj.is_null() && (obj as usize) > 0 {
             if let Some(dispatch) = handle_property_set_dispatch() {
                 if !key.is_null() {
@@ -570,10 +677,20 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
         if gc_type != crate::gc::GC_TYPE_OBJECT && gc_type != crate::gc::GC_TYPE_CLOSURE {
+            // A RECOGNIZED non-object heap type (Map/Set/Buffer/TypedArray/…)
+            // must never fall through to the plain-object write below: their
+            // layouts alias ObjectHeader fields. A Map with EXACTLY one entry
+            // had MapHeader.size aliasing object_type == OBJECT_TYPE_REGULAR,
+            // so `m.customProp = 5` walked the Map's bytes as object fields —
+            // deterministic heap corruption (2026-07-02 audit P1). The
+            // object_type fallback exists ONLY for static/const objects whose
+            // preceding bytes decode to no known GC type.
+            if crate::gc::gc_type_info(gc_type).is_some() {
+                return;
+            }
             if !is_valid_obj_ptr(obj as *const u8) {
                 return;
             }
-            // Not a heap object/closure — only accept object_type == 1 (OBJECT_TYPE_REGULAR)
             let object_type = (*obj).object_type;
             if object_type != crate::error::OBJECT_TYPE_REGULAR {
                 return;
@@ -581,36 +698,7 @@ pub extern "C" fn js_object_set_field_by_name(
         }
 
         if gc_type == crate::gc::GC_TYPE_CLOSURE {
-            if !key.is_null() {
-                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let name_len = (*key).byte_len as usize;
-                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-                if let Ok(name_str) = std::str::from_utf8(name_bytes) {
-                    // ECMAScript "poison pill" — assigning `caller`/`arguments`
-                    // on any strict-mode function (Perry compiles everything
-                    // strict: declarations, expressions, bound and built-in
-                    // closures, arrows) throws via the %ThrowTypeError%
-                    // accessor's missing setter. A genuine own data prop of
-                    // that name (defineProperty round-trip) still wins.
-                    // Refs test262 13.2-*-s / StrictFunction_restricted-*.
-                    if matches!(name_str, "caller" | "arguments")
-                        && !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)
-                    {
-                        crate::fs::validate::throw_type_error_with_code(
-                            "Restricted function property assignment",
-                            "ERR_INVALID_ARG_TYPE",
-                        );
-                    }
-                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
-                        if !attrs.writable() {
-                            return;
-                        }
-                    } else if matches!(name_str, "name" | "length") {
-                        return;
-                    }
-                    crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
-                }
-            }
+            closure_set_field_by_name(obj, key, value);
             return;
         }
 
@@ -620,44 +708,7 @@ pub extern "C" fn js_object_set_field_by_name(
         let type_tag_at_12 =
             *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
-            if !key.is_null() {
-                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let name_len = (*key).byte_len as usize;
-                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-                if let Ok(name_str) = std::str::from_utf8(name_bytes) {
-                    // ECMAScript "poison pill" — assigning `caller`/`arguments`
-                    // on any strict-mode function (Perry compiles everything
-                    // strict: declarations, expressions, bound and built-in
-                    // closures, arrows) throws via the %ThrowTypeError%
-                    // accessor's missing setter. A genuine own data prop of
-                    // that name (defineProperty round-trip) still wins.
-                    // Refs test262 13.2-*-s / StrictFunction_restricted-*.
-                    if matches!(name_str, "caller" | "arguments")
-                        && !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)
-                    {
-                        crate::fs::validate::throw_type_error_with_code(
-                            "Restricted function property assignment",
-                            "ERR_INVALID_ARG_TYPE",
-                        );
-                    }
-                    // #3143: honor a non-writable registered descriptor — a
-                    // built-in method's `.name`/`.length` are spec'd
-                    // `writable: false`, so a sloppy-mode write must be a silent
-                    // no-op (this is what Test262's `verifyProperty` checks).
-                    // Only fires when a descriptor was actually recorded for
-                    // this closure+key (built-in proto methods, or a user
-                    // `Object.defineProperty`); plain `fn.x = 1` finds none and
-                    // proceeds. Closure writes are not the object hot path.
-                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
-                        if !attrs.writable() {
-                            return;
-                        }
-                    } else if matches!(name_str, "name" | "length") {
-                        return;
-                    }
-                    crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
-                }
-            }
+            closure_set_field_by_name(obj, key, value);
             return;
         }
 
@@ -1345,6 +1396,47 @@ pub extern "C" fn js_object_set_field_by_name_nonenum(
                 obj as usize,
                 name.to_string(),
                 crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
+    }
+}
+
+/// Set `obj[key] = value` as a non-configurable (but writable + enumerable)
+/// own data property. Used for `globalThis`'s reflection of a Script's
+/// top-level `function`/`var` declarations: GlobalDeclarationInstantiation's
+/// `CreateGlobalFunctionBinding`/`CreateGlobalVarBinding` call with `D = false`
+/// (unlike sloppy-eval's Annex B.3.3.3 path, which uses `D = true` and already
+/// has its own `Object.defineProperty` HIR synthesis in
+/// `global_eval_hoist.rs`) — an ordinary assignment would instead create a
+/// configurable property. Called once at program start before any user
+/// statement runs, so there's no pre-existing descriptor to preserve or
+/// `CanDeclareGlobalFunction`/`CanDeclareGlobalVar` extensibility check to
+/// replicate here (test262 `language/global-code/decl-func.js`).
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_name_nonconfigurable(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    js_object_set_field_by_name(obj, key, value);
+    let bits = obj as u64;
+    if (bits >> 48) == 0x7FFE
+        || crate::value::addr_class::is_handle_band(obj as usize)
+        || key.is_null()
+    {
+        return;
+    }
+    unsafe {
+        if !crate::object::is_valid_obj_ptr(obj as *const u8) {
+            return;
+        }
+        let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key).byte_len as usize;
+        if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            crate::object::set_property_attrs(
+                obj as usize,
+                name.to_string(),
+                crate::object::PropertyAttrs::new(true, true, false),
             );
         }
     }

@@ -100,6 +100,10 @@ pub(crate) struct AppEntry {
     /// Issue #1280 — initial window state requested by App({ windowState }).
     /// Applied at app_run time; None / "normal" => SW_SHOW.
     window_state: Option<WindowState>,
+    /// Activation policy ("regular" | "accessory" | "background"). For
+    /// accessory/background apps the launch window is suppressed (the tray
+    /// owns presentation), mirroring the macOS/GTK4 backends.
+    activation_policy: Option<String>,
 }
 
 /// Issue #1280 — initial window state for the main app window.
@@ -130,6 +134,10 @@ struct TimerEntry {
 
 thread_local! {
     pub(crate) static APPS: RefCell<Vec<AppEntry>> = RefCell::new(Vec::new());
+    /// Activation policy set (via `appSetActivationPolicy`) before `App()`
+    /// builds the AppEntry. Handle-agnostic, mirroring the macOS backend, so
+    /// the synthetic 0 app-handle from the 1-arg TS form still works.
+    static PENDING_ACTIVATION_POLICY: RefCell<Option<String>> = const { RefCell::new(None) };
     static PENDING_SHORTCUTS: RefCell<Vec<PendingShortcut>> = RefCell::new(Vec::new());
     static SHORTCUTS: RefCell<Vec<ShortcutEntry>> = RefCell::new(Vec::new());
     static TIMERS: RefCell<Vec<TimerEntry>> = RefCell::new(Vec::new());
@@ -240,6 +248,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                     min_size: None,
                     max_size: None,
                     window_state: None,
+                    activation_policy: PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone()),
                 });
                 apps.len() as i64
             })
@@ -257,6 +266,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 min_size: None,
                 max_size: None,
                 window_state: None,
+                activation_policy: PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone()),
             });
             apps.len() as i64
         })
@@ -316,44 +326,62 @@ pub fn app_run(app_handle: i64) {
             if idx < apps.len() {
                 let hwnd = apps[idx].hwnd;
                 let state = apps[idx].window_state;
-                unsafe {
-                    // Issue #1280 — apply requested initial window state.
-                    // Fullscreen on Win32 = drop WS_OVERLAPPEDWINDOW frame and
-                    // resize to the monitor's full rect (not just the work
-                    // area, which excludes the taskbar). Maximized = standard
-                    // SW_SHOWMAXIMIZED which respects the taskbar.
-                    match state {
-                        Some(WindowState::Fullscreen) => {
-                            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-                            let new_style = style & !WS_OVERLAPPEDWINDOW.0;
-                            SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
-                            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-                            let mut mi = MONITORINFO {
-                                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                                ..Default::default()
-                            };
-                            if GetMonitorInfoW(monitor, &mut mi).as_bool() {
-                                let r = mi.rcMonitor;
-                                let _ = SetWindowPos(
-                                    hwnd,
-                                    Some(HWND_TOP),
-                                    r.left,
-                                    r.top,
-                                    r.right - r.left,
-                                    r.bottom - r.top,
-                                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
-                                );
-                            }
-                            let _ = ShowWindow(hwnd, SW_SHOW);
-                        }
-                        Some(WindowState::Maximized) => {
-                            let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
-                        }
-                        None => {
-                            let _ = ShowWindow(hwnd, SW_SHOW);
-                        }
+                // Accessory/background apps stay window-less at launch (the
+                // tray owns presentation); open windows on demand instead.
+                // Mirrors the macOS/GTK4 backends.
+                let suppress_window = matches!(
+                    apps[idx].activation_policy.as_deref(),
+                    Some("accessory") | Some("background")
+                );
+                // Pre-App() `appSetActivationPolicy` couldn't apply the
+                // taskbar style (the hwnd didn't exist yet); do it here.
+                if suppress_window {
+                    unsafe {
+                        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                        let new_style = (ex_style & !WS_EX_APPWINDOW.0) | WS_EX_TOOLWINDOW.0;
+                        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style as i32);
                     }
-                    let _ = UpdateWindow(hwnd);
+                }
+                if !suppress_window {
+                    unsafe {
+                        // Issue #1280 — apply requested initial window state.
+                        // Fullscreen on Win32 = drop WS_OVERLAPPEDWINDOW frame and
+                        // resize to the monitor's full rect (not just the work
+                        // area, which excludes the taskbar). Maximized = standard
+                        // SW_SHOWMAXIMIZED which respects the taskbar.
+                        match state {
+                            Some(WindowState::Fullscreen) => {
+                                let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+                                let new_style = style & !WS_OVERLAPPEDWINDOW.0;
+                                SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
+                                let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                                let mut mi = MONITORINFO {
+                                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                                    ..Default::default()
+                                };
+                                if GetMonitorInfoW(monitor, &mut mi).as_bool() {
+                                    let r = mi.rcMonitor;
+                                    let _ = SetWindowPos(
+                                        hwnd,
+                                        Some(HWND_TOP),
+                                        r.left,
+                                        r.top,
+                                        r.right - r.left,
+                                        r.bottom - r.top,
+                                        SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                                    );
+                                }
+                                let _ = ShowWindow(hwnd, SW_SHOW);
+                            }
+                            Some(WindowState::Maximized) => {
+                                let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                            }
+                            None => {
+                                let _ = ShowWindow(hwnd, SW_SHOW);
+                            }
+                        }
+                        let _ = UpdateWindow(hwnd);
+                    }
                 }
             }
         });
@@ -859,6 +887,12 @@ pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
     if policy_str.is_empty() {
         return;
     }
+    // Stash handle-agnostically (mirrors macOS): `App()` reads this when it
+    // builds the AppEntry, and `app_run` applies the taskbar style + window
+    // suppression. This is the path our 1-arg TS form (synthetic 0 handle,
+    // called before App()) takes. The block below additionally handles a
+    // post-create call where the hwnd already exists.
+    PENDING_ACTIVATION_POLICY.with(|p| *p.borrow_mut() = Some(policy_str.to_string()));
     #[cfg(target_os = "windows")]
     {
         if policy_str == "accessory" || policy_str == "background" {

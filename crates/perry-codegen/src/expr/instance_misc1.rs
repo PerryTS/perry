@@ -114,30 +114,28 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
         let idx_str = capture_idx.to_string();
         if ctx.boxed_vars.contains(&id) {
             let blk = ctx.block();
-            let cap_dbl = blk.call(
-                DOUBLE,
-                "js_closure_get_capture_f64",
+            let box_ptr = blk.call(
+                I64,
+                "js_closure_get_capture_bits",
                 &[(I64, &closure_ptr), (I32, &idx_str)],
             );
-            let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
-            blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
-            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            let value_bits = blk.bitcast_double_to_i64(value);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
             emit_write_barrier(ctx, &box_ptr, &value_bits);
         } else {
-            ctx.block().call_void(
-                "js_closure_set_capture_f64",
-                &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, value)],
-            );
             let value_bits = ctx.block().bitcast_double_to_i64(value);
+            ctx.block().call_void(
+                "js_closure_set_capture_bits",
+                &[(I64, &closure_ptr), (I32, &idx_str), (I64, &value_bits)],
+            );
             emit_write_barrier(ctx, &closure_ptr, &value_bits);
         }
     } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
         if let Some(slot) = ctx.locals.get(&id).cloned() {
             let blk = ctx.block();
-            let box_dbl = blk.load(DOUBLE, &slot);
-            let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
-            blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
-            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            let box_ptr = blk.load(I64, &slot);
+            let value_bits = blk.bitcast_double_to_i64(value);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
             emit_write_barrier(ctx, &box_ptr, &value_bits);
         }
     } else if let Some(slot) = ctx.locals.get(&id).cloned() {
@@ -331,6 +329,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
             }
+            // A known non-constructor built-in namespace RHS (`Math`, `JSON`,
+            // `Reflect`, `Atomics`) has no [[Call]]/[[Construct]], so
+            // `x instanceof Math` throws a TypeError rather than folding to
+            // `false`. These never map to a real class id, so without this they
+            // would take the `cid == 0` → `js_instanceof(_, 0)` → `false` path.
+            // The LHS `v` was already lowered above (its side effects run), so
+            // just emit the throwing helper. Only fires for a bare identifier
+            // RHS (no member/dynamic `ty_expr`) that isn't shadowed by a user
+            // binding — a user `const Math = class {}` lands in `class_ids`.
+            if matches!(ty.as_str(), "Math" | "JSON" | "Reflect" | "Atomics")
+                && !ctx.class_ids.contains_key(ty)
+            {
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_instanceof_noncallable_rhs", &[]));
+            }
             // Built-in Error subclasses have reserved CLASS_ID_* constants
             // in the runtime (see crates/perry-runtime/src/error.rs). Map
             // them by name here so `e instanceof TypeError` works even
@@ -392,11 +406,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,
-                // WeakMap / WeakSet / DataView — no runtime probe for real
-                // instances yet (those return false independently), but the
-                // reserved ids let a `class S extends WeakMap {}` subclass
-                // instance match via the class-chain walk in
-                // perry-runtime/src/object/instanceof.rs. Refs
+                // WeakMap / WeakSet: real instances match via a runtime probe
+                // (CLASS_ID_WEAKMAP/CLASS_ID_WEAKSET in weakref.rs, #5834) —
+                // see the matching arm in perry-runtime/src/object/instanceof.rs.
+                // DataView has no such probe yet (returns false independently),
+                // but this reserved id still lets a `class S extends DataView {}`
+                // subclass instance match via the class-chain walk. Refs
                 // class/subclass-builtins/subclass-{WeakMap,WeakSet,DataView}.
                 "DataView" => 0xFFFF002Bu32,
                 "WeakMap" => 0xFFFF002Cu32,

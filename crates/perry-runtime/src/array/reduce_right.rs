@@ -40,7 +40,15 @@ pub extern "C" fn js_array_reduce_right(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = array_elements_ptr(arr);
+        // Root the receiver: the callback (and an exotic user getter) can
+        // trigger a moving GC, invalidating a hoisted elements pointer
+        // (2026-07-02 audit — mirrors iter_methods' RootedIterArray).
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = scope.root_nanbox_f64(f64::from_bits(
+            crate::value::JSValue::pointer(arr as *const u8).bits(),
+        ));
+        let live_arr =
+            || (rooted.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ArrayHeader;
 
         if length == 0 {
             if has_initial != 0 {
@@ -54,14 +62,14 @@ pub extern "C" fn js_array_reduce_right(
         let exotic = crate::array::array_iteration_is_exotic(arr);
         let present = |i: usize| -> Option<f64> {
             if exotic {
-                crate::array::array_spec_has_index(arr, i as u32)
-                    .then(|| crate::array::array_spec_get(arr, i as u32))
+                crate::array::array_spec_has_index(live_arr(), i as u32)
+                    .then(|| crate::array::array_spec_get(live_arr(), i as u32))
             } else {
-                present_array_element(elements_ptr, i)
+                present_array_element(array_elements_ptr(live_arr()), i)
             }
         };
 
-        let (mut accumulator, start_idx) = if has_initial != 0 {
+        let (accumulator, start_idx) = if has_initial != 0 {
             (initial, length)
         } else {
             let mut seed = None;
@@ -77,17 +85,26 @@ pub extern "C" fn js_array_reduce_right(
             }
         };
 
-        let arr_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
+        // Root the accumulator too: it can hold a heap value while a GC runs
+        // between iterations.
+        let acc_rooted = scope.root_nanbox_f64(accumulator);
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
                 let Some(element) = present(i) else {
                     continue;
                 };
                 // Spec callback `(accumulator, currentValue, currentIndex, array)`.
-                accumulator = js_closure_call4(callback, accumulator, element, i as f64, arr_value);
+                let next = js_closure_call4(
+                    callback,
+                    acc_rooted.get_nanbox_f64(),
+                    element,
+                    i as f64,
+                    rooted.get_nanbox_f64(),
+                );
+                acc_rooted.set_nanbox_f64(next);
             }
         }
 
-        accumulator
+        acc_rooted.get_nanbox_f64()
     }
 }

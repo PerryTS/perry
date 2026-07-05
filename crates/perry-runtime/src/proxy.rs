@@ -20,9 +20,13 @@ use std::collections::HashMap;
 
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
+mod has_delete;
+pub(crate) use has_delete::reflect_ordinary_delete_property_key;
+pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 mod put_value;
-pub use put_value::js_put_value_set;
+pub(crate) use put_value::proxy_set_with_receiver;
+pub use put_value::{js_proxy_set, js_put_value_set};
 mod json;
 mod metadata;
 mod own_keys;
@@ -558,6 +562,28 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
+    // `[[Get]] ( P, Receiver )` receives an already-computed property key P, but
+    // codegen calls this helper with the raw index value for a computed read on
+    // a statically-known proxy (`proxy[10]` lowers to
+    // `js_proxy_get(proxy, 10.0)`). Apply `ToPropertyKey` so a numeric index is
+    // seen by the trap as the canonical string key (`10` -> `"10"`) and the
+    // forward-to-target path below stringifies consistently. Symbols and
+    // strings pass through unchanged. Without this the get trap received a raw
+    // number and key-equality checks (`key === "10"`) silently failed (test262
+    // Proxy/get/trap-is-{null,undefined}-target-is-proxy `proxy[10]`). A key
+    // that is already a string (the overwhelmingly common `proxy.foo` case) or
+    // a symbol is left untouched, so this only pays `ToPropertyKey` for the
+    // numeric / object-index forms.
+    let key = {
+        let tag = key.to_bits() & 0xFFFF_0000_0000_0000;
+        let is_string_key =
+            tag == crate::value::STRING_TAG || tag == crate::value::SHORT_STRING_TAG;
+        if is_string_key || unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            key
+        } else {
+            unsafe { crate::object::js_to_property_key(key) }
+        }
+    };
     let (target, handler, revoked) = PROXIES.with(|p| {
         p.borrow()
             .get(id as usize)
@@ -705,84 +731,6 @@ fn target_get(target: f64, key: f64) -> f64 {
     )
 }
 
-/// `proxy[key] = value` — if handler.set exists, call it with
-/// (target, key, value) and return TAG_TRUE (the trap's return value is
-/// ignored by the default test semantics since we echo `value`). Otherwise
-/// forward to the target directly.
-#[no_mangle]
-pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
-    let id = match lookup(proxy_boxed) {
-        Some(id) => id,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
-    if revoked {
-        return revoked_return();
-    }
-    let trap = handler_trap(handler, "set");
-    if is_callable(trap) {
-        // #2756: the `set` trap's boolean result is observable through
-        // `Reflect.set(proxy, …)` (and strict-mode assignment). Coerce and
-        // return it rather than discarding it. The trap receives the spec
-        // argument list `(target, key, value, receiver)` with `this` bound to
-        // the handler.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let value_h = scope.root_nanbox_f64(value);
-        let trap_result = call_trap(
-            handler,
-            trap,
-            &[
-                target_h.get_nanbox_f64(),
-                key_h.get_nanbox_f64(),
-                value_h.get_nanbox_f64(),
-                proxy_boxed,
-            ],
-        );
-        // A falsy trap result means the assignment failed; no invariant check.
-        if crate::value::js_is_truthy(trap_result) == 0 {
-            return nanbox_bool(false);
-        }
-        invariants::enforce_set_invariant(
-            target_h.get_nanbox_f64(),
-            key_h.get_nanbox_f64(),
-            value_h.get_nanbox_f64(),
-        );
-        return nanbox_bool(true);
-    }
-    // No set trap — forward to the target's `[[Set]]`. When the target is
-    // itself a Proxy, recurse through the proxy dispatch (its own trap or
-    // target) rather than `ordinary_set`, which would deref the fake pointer.
-    if lookup(target).is_some() {
-        return js_proxy_set(target, key, value);
-    }
-    reflect_ordinary_set(target, key, value)
-}
-
-/// Perform an ordinary (non-proxy) `[[Set]]` and report success as a NaN-boxed
-/// boolean, without throwing on a non-writable / non-extensible target the way
-/// strict-mode assignment does (#2756 / #615). Returns `false` when the write
-/// cannot be applied.
-fn reflect_ordinary_set_property_key(target: f64, property_key: f64, value: f64) -> f64 {
-    nanbox_bool(ordinary_set_with_receiver(
-        target,
-        property_key,
-        value,
-        target,
-    ))
-}
-
 /// `Reflect.set` with an explicit receiver: OrdinarySet(target, P, V,
 /// receiver), boolean result NaN-boxed.
 pub(crate) fn reflect_ordinary_set_with_receiver(
@@ -797,20 +745,6 @@ pub(crate) fn reflect_ordinary_set_with_receiver(
         value,
         receiver,
     ))
-}
-
-fn reflect_ordinary_set(target: f64, key: f64, value: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let value_handle = scope.root_nanbox_f64(value);
-    let property_key_handle = scope
-        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
-    reflect_ordinary_set_property_key(
-        target_handle.get_nanbox_f64(),
-        property_key_handle.get_nanbox_f64(),
-        value_handle.get_nanbox_f64(),
-    )
 }
 
 fn target_set(target: f64, key: f64, value: f64) {
@@ -884,15 +818,44 @@ fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     }
 }
 
-fn key_is_length(key: f64) -> bool {
+fn key_equals(key: f64, name: &[u8]) -> bool {
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some((ptr, len)) = crate::string::str_bytes_from_jsvalue(key, &mut scratch) else {
         return false;
     };
-    if ptr.is_null() || len != 6 {
+    if ptr.is_null() || len as usize != name.len() {
         return false;
     }
-    unsafe { std::slice::from_raw_parts(ptr, len as usize) == b"length" }
+    unsafe { std::slice::from_raw_parts(ptr, len as usize) == name }
+}
+
+fn key_is_length(key: f64) -> bool {
+    key_equals(key, b"length")
+}
+
+/// Does deleting `key` off `target` hit a non-configurable exotic own property
+/// that lives outside the ordinary descriptor table? Covers an Array's `length`
+/// and a plain (non-arrow, non-bound) function's `prototype` — both are
+/// non-configurable, so `Reflect.deleteProperty` / `delete` must report failure.
+fn is_non_configurable_exotic_own(target: f64, key: f64) -> bool {
+    if array_ptr_from_value(target).is_some() && key_is_length(key) {
+        return true;
+    }
+    if key_equals(key, b"prototype") {
+        let raw = extract_pointer(target.to_bits()) as usize;
+        if raw != 0 && crate::closure::is_closure_ptr(raw) {
+            let closure = raw as *const crate::closure::ClosureHeader;
+            // Arrow and bound functions have no own `prototype` slot at all, so
+            // deleting it succeeds vacuously; only a plain function's `prototype`
+            // is a non-configurable own property.
+            if !crate::closure::closure_is_arrow(closure)
+                && !crate::closure::closure_is_bound_method(closure)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn parse_canonical_nonnegative_i32(bytes: &[u8]) -> Option<i32> {
@@ -991,8 +954,16 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
 
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
         let value = unsafe { crate::symbol::js_object_get_symbol_property(target, key) };
-        return (value.to_bits() != TAG_UNDEFINED)
-            .then_some(OwnSetDescriptor::Data { writable: true });
+        if value.to_bits() == TAG_UNDEFINED {
+            return None;
+        }
+        // An existing symbol-keyed own data property is non-writable when the
+        // receiver is frozen or its per-symbol attrs say so — so a strict
+        // `obj[sym] = v` is rejected (throws) rather than silently no-op'd
+        // (test262 Object/freeze/frozen-object-contains-symbol-properties-strict).
+        // Mirrors the string-keyed / `set_symbol_property` guards.
+        let writable = !crate::symbol::symbol_property_is_non_writable(target, key);
+        return Some(OwnSetDescriptor::Data { writable });
     }
 
     let obj_ptr = extract_pointer(target.to_bits()) as usize;
@@ -1331,6 +1302,15 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
 
     let mut current = target;
     for _ in 0..64 {
+        // A Proxy hop in the prototype chain: `OrdinarySetWithOwnDescriptor`
+        // step 2.a-b dispatches the full `[[Set]]` on the parent with the
+        // ORIGINAL `receiver`, not the raw own-descriptor walk below (which
+        // would misread the small proxy id as a heap pointer).
+        if lookup(current).is_some() {
+            return crate::value::js_is_truthy(proxy_set_with_receiver(
+                current, key, value, receiver,
+            )) != 0;
+        }
         // Integer-Indexed exotic [[Set]] (§10.4.5.5): a typed array in the
         // chain intercepts a canonical numeric index key — the prototype
         // chain is NEVER consulted for it. `SameValue(O, Receiver)` writes
@@ -1409,6 +1389,37 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     && !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name)
                 {
                     throw_type_error("Restricted function property assignment");
+                }
+                // Every function's [[Prototype]] is %Function.prototype% — a
+                // descriptor installed there via `Object.defineProperty(
+                // Function.prototype, k, {...})` must intercept a plain
+                // `boundFn.k = v` write (invoke an accessor's setter, throw
+                // for a getter-only accessor, or block a non-writable data
+                // property) instead of silently shadowing it with a new own
+                // data property on the receiver.
+                if crate::closure::closure_set_via_function_prototype_descriptor(
+                    cur_ptr, &name, value, receiver,
+                ) {
+                    return true;
+                }
+                // `Object.preventExtensions(fn)` / `Object.seal(fn)` set
+                // NO_EXTEND / SEALED in the closure's GcHeader (functions are
+                // GcHeader-backed closures). A [[Set]] that would ADD a new own
+                // property must fail (OrdinaryDefineOwnProperty returns false,
+                // silent in non-strict, TypeError in strict); an existing own
+                // key can still be updated. (test262
+                // Object/preventExtensions/15.2.3.10-3-{3,13}.)
+                if !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name) {
+                    let non_extensible = unsafe {
+                        let gc = (cur_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                            as *const crate::gc::GcHeader;
+                        (*gc)._reserved
+                            & (crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED)
+                            != 0
+                    };
+                    if non_extensible {
+                        return false;
+                    }
                 }
             }
             return create_or_update_receiver_property(receiver, key, value);
@@ -1534,143 +1545,6 @@ pub extern "C" fn js_super_put_value_set(
 
 /// `key in proxy` — if handler.has exists, call it; otherwise delegate to
 /// `js_object_has_property` on the target.
-#[no_mangle]
-pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
-    let id = match lookup(proxy_boxed) {
-        Some(id) => id,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
-    if revoked {
-        return revoked_return();
-    }
-    let trap = handler_trap(handler, "has");
-    if is_callable(trap) {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let trap_result = call_trap(
-            handler,
-            trap,
-            &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
-        );
-        // [[HasProperty]] invariant: a `false` trap result is rejected when the
-        // target owns the key non-configurably, or the target is non-extensible
-        // and owns the key.
-        if crate::value::js_is_truthy(trap_result) == 0 {
-            invariants::enforce_has_false_invariant(
-                target_h.get_nanbox_f64(),
-                key_h.get_nanbox_f64(),
-            );
-            return nanbox_bool(false);
-        }
-        return nanbox_bool(true);
-    }
-    // No has trap — forward to the target's `[[HasProperty]]`, recursing through
-    // a proxy target.
-    if lookup(target).is_some() {
-        return js_proxy_has(target, key);
-    }
-    crate::object::js_object_has_property(target, key)
-}
-
-/// `delete proxy[key]` — if handler.deleteProperty exists, call it; else
-/// delegate to `js_object_delete_field` on the target.
-#[no_mangle]
-pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
-    let id = match lookup(proxy_boxed) {
-        Some(id) => id,
-        None => return f64::from_bits(TAG_FALSE),
-    };
-    let (target, handler, revoked) = PROXIES.with(|p| {
-        p.borrow()
-            .get(id as usize)
-            .and_then(|o| o.as_ref())
-            .map(|e| (e.target, e.handler, e.revoked))
-            .unwrap_or((
-                f64::from_bits(TAG_UNDEFINED),
-                f64::from_bits(TAG_UNDEFINED),
-                false,
-            ))
-    });
-    if revoked {
-        return revoked_return();
-    }
-    let trap = handler_trap(handler, "deleteProperty");
-    if is_callable(trap) {
-        // #2760: the `deleteProperty` trap's boolean result is observable
-        // through `Reflect.deleteProperty(proxy, …)`.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let target_h = scope.root_nanbox_f64(target);
-        let key_h = scope.root_nanbox_f64(key);
-        let trap_result = call_trap(
-            handler,
-            trap,
-            &[target_h.get_nanbox_f64(), key_h.get_nanbox_f64()],
-        );
-        if crate::value::js_is_truthy(trap_result) == 0 {
-            return nanbox_bool(false);
-        }
-        // [[Delete]] invariant: a `true` result is rejected when the target owns
-        // the key non-configurably, or owns it and is non-extensible.
-        invariants::enforce_delete_invariant(target_h.get_nanbox_f64(), key_h.get_nanbox_f64());
-        return nanbox_bool(true);
-    }
-    // No trap — forward to the target's `[[Delete]]`, recursing through a proxy
-    // target.
-    if lookup(target).is_some() {
-        return js_proxy_delete(target, key);
-    }
-    reflect_ordinary_delete(target, key)
-}
-
-/// Perform an ordinary (non-proxy) `[[Delete]]` and report the result as a
-/// NaN-boxed boolean. Returns `false` for a non-configurable property (#2760),
-/// matching `Reflect.deleteProperty` rather than the silent-success behavior of
-/// the `delete` operator.
-fn reflect_ordinary_delete_property_key(target: f64, property_key: f64) -> f64 {
-    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
-        let deleted =
-            unsafe { crate::symbol::js_object_delete_symbol_property(target, property_key) };
-        return nanbox_bool(deleted != 0);
-    }
-    if let Some((_writable, configurable)) = crate::object::obj_value_attrs(target, property_key) {
-        if !configurable {
-            return nanbox_bool(false);
-        }
-    }
-    let obj_ptr = extract_pointer(target.to_bits()) as *mut crate::ObjectHeader;
-    let key_ptr =
-        crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
-    if !obj_ptr.is_null() && !key_ptr.is_null() {
-        let deleted = crate::object::js_object_delete_field(obj_ptr, key_ptr);
-        return nanbox_bool(deleted != 0);
-    }
-    nanbox_bool(true)
-}
-
-fn reflect_ordinary_delete(target: f64, key: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let property_key_handle = scope
-        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
-    reflect_ordinary_delete_property_key(
-        target_handle.get_nanbox_f64(),
-        property_key_handle.get_nanbox_f64(),
-    )
-}
-
 /// Is `value` a callable function value: a closure, a class-ref constructor, or
 /// a (possibly callable) proxy? Distinct from `is_callable`, which treats *any*
 /// pointer-tagged value as callable — that's too loose for trap validation,
@@ -1977,3 +1851,58 @@ static KEEP_REFLECT_HAS: extern "C" fn(f64, f64) -> f64 = js_reflect_has;
 static KEEP_REFLECT_OWN_KEYS: extern "C" fn(f64) -> f64 = js_reflect_own_keys;
 #[used]
 static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_apply;
+
+/// Rewrite a `REFLECT_METADATA` key's POINTER-tagged target bits during the
+/// GC metadata-rewrite phase; non-pointer targets (class refs, primitives)
+/// pass through untouched.
+fn rewrite_metadata_target_bits(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    target_bits: u64,
+) -> u64 {
+    if !visitor.is_metadata_rewrite_phase() {
+        return target_bits;
+    }
+    if (target_bits & !POINTER_MASK) != POINTER_TAG {
+        return target_bits;
+    }
+    let mut addr = (target_bits & POINTER_MASK) as usize;
+    if visitor.visit_metadata_usize_slot(&mut addr) {
+        POINTER_TAG | (addr as u64 & POINTER_MASK)
+    } else {
+        target_bits
+    }
+}
+
+/// GC scanner for the proxy registry + reflect-metadata store (2026-07-02
+/// audit P0; ported from the stranded be73b4f8d). A proxy's target/handler
+/// are commonly reachable ONLY through `PROXIES` — without visiting them a
+/// minor GC collects (or moves) them and every subsequent trap derefs freed
+/// or stale memory. `REFLECT_METADATA`'s own doc admits its keys go stale on
+/// a target move; rekey them during the metadata-rewrite phase.
+pub(crate) fn scan_proxy_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    PROXIES.with(|proxies| {
+        for entry in proxies.borrow_mut().iter_mut().flatten() {
+            visitor.visit_nanbox_f64_slot(&mut entry.target);
+            visitor.visit_nanbox_f64_slot(&mut entry.handler);
+        }
+    });
+
+    REFLECT_METADATA.with(|store| {
+        let mut store = store.borrow_mut();
+        let needs_rebuild = store
+            .keys()
+            .any(|key| rewrite_metadata_target_bits(visitor, key.target_bits) != key.target_bits);
+        if needs_rebuild {
+            let old = std::mem::take(&mut *store);
+            for (mut key, mut value) in old {
+                visitor.visit_nanbox_f64_slot(&mut value);
+                key.target_bits = rewrite_metadata_target_bits(visitor, key.target_bits);
+                store.insert(key, value);
+            }
+        } else {
+            for value in store.values_mut() {
+                visitor.visit_nanbox_f64_slot(value);
+            }
+        }
+    });
+}

@@ -1,7 +1,7 @@
 use super::{
     closure_from, coerce_trap_bool, extract_pointer, handler_trap, is_callable_function,
-    js_closure_call0, js_closure_call2, js_proxy_delete, js_proxy_get, js_proxy_has, js_proxy_set,
-    lookup, nanbox_bool, reflect_non_object_typeerror, reflect_ordinary_delete_property_key,
+    js_closure_call0, js_closure_call2, js_proxy_delete, js_proxy_get, js_proxy_has, lookup,
+    nanbox_bool, reflect_non_object_typeerror, reflect_ordinary_delete_property_key,
     reflect_ordinary_set_with_receiver, reflect_value_is_object, revoked_return,
     target_get_property_key, throw_type_error, PROXIES, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
@@ -107,7 +107,7 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f6
         }
     };
     if lookup(target).is_some() {
-        return js_proxy_set(target, property_key, value);
+        return super::proxy_set_with_receiver(target, property_key, value, receiver);
     }
     reflect_ordinary_set_with_receiver(target, property_key, value, receiver)
 }
@@ -348,6 +348,12 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
     let trap = handler_trap(handler, "getOwnPropertyDescriptor");
     let trap_bits = trap.to_bits();
     if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
+        // No trap — forward to the target's [[GetOwnProperty]]. When the target
+        // is itself a Proxy, recurse through the Reflect entry point rather than
+        // the ordinary object path, which would deref the fake proxy pointer.
+        if lookup(inner).is_some() {
+            return js_reflect_get_own_property_descriptor(inner, property_key);
+        }
         return crate::object::js_object_get_own_property_descriptor(inner, property_key);
     }
     if !is_callable_function(trap) {

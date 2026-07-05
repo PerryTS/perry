@@ -452,9 +452,9 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::None,
             large_object_policy: GcLargeObjectPolicy::OldArenaWhenOverThreshold,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::None,
+            move_hook_kind: GcMoveHookKind::ErrorSideTables,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::None,
+            finalize_hook_kind: GcFinalizeHookKind::ErrorSideTables,
         },
         GcTypeInfo {
             type_id: GC_TYPE_MAP,

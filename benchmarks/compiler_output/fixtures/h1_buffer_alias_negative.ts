@@ -40,10 +40,10 @@ function unknownCallEscape(): number {
 function closureCapture(): number {
   const owned = Buffer.alloc(SIZE);
   const read = (i: number) => owned[i];
-  let total = 0;
+  let total = read(0) | 0;
   closure_capture:
   for (let i = 0; i < owned.length; i++) {
-    total = (total + read(i)) | 0;
+    total = (total + owned[i]) | 0;
   }
   return total;
 }

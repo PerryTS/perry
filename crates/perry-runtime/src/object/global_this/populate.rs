@@ -110,6 +110,7 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             "WeakMap" => weak_map_constructor_call_thunk as *const u8,
             "WeakSet" => weak_set_constructor_call_thunk as *const u8,
             "WeakRef" => weak_ref_constructor_call_thunk as *const u8,
+            "Promise" => promise_constructor_call_thunk as *const u8,
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -467,6 +468,15 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             crate::builtins::js_register_function_name(func_ptr, name.as_ptr(), name.len() as u32);
         }
         super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
+        // Every global helper installed here (parseInt/parseFloat/isNaN/
+        // isFinite/{en,de}codeURI{,Component}/escape/unescape/setTimeout/…) is a
+        // built-in *non-constructor* function: per spec it has no `.prototype`
+        // (reads back `undefined`) and `new fn()` throws a TypeError. Mark the
+        // closure so the `new`/`.prototype` paths honor that — otherwise these
+        // functions defaulted to an ordinary `.prototype` object and silently
+        // accepted `new` (test262 built-ins/{decodeURI,isNaN,parseFloat,…}
+        // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
+        super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
@@ -627,6 +637,51 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
             super::super::PropertyAttrs::new(false, false, false),
         );
     }
+    // ECMA-262 §23.2.3.33: `%TypedArray%.prototype.toString` must be the
+    // same function object as `Array.prototype.toString`. Alias it now that
+    // both the Array constructor and the TypedArray intrinsic are set up.
+    alias_typed_array_proto_to_string(singleton);
+}
+
+/// Install `%TypedArray%.prototype.toString` as the same closure object as
+/// `Array.prototype.toString` (ECMA-262 §23.2.3.33).
+fn alias_typed_array_proto_to_string(singleton: *mut ObjectHeader) {
+    let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if ta_proto_addr == 0 {
+        return;
+    }
+    let ta_proto = ta_proto_addr as *mut ObjectHeader;
+    // Read Array constructor from globalThis, then Array.prototype.toString.
+    let arr_key = crate::string::js_string_from_bytes(b"Array".as_ptr(), 5);
+    let arr_ctor = js_object_get_field_by_name(singleton, arr_key);
+    if (arr_ctor.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let arr_ctor_ptr = (arr_ctor.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if arr_ctor_ptr.is_null() {
+        return;
+    }
+    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let arr_proto = js_object_get_field_by_name(arr_ctor_ptr, proto_key);
+    if (arr_proto.bits() >> 48) != 0x7FFD {
+        return;
+    }
+    let arr_proto_ptr = (arr_proto.bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    if arr_proto_ptr.is_null() {
+        return;
+    }
+    let ts_key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let to_string_fn = js_object_get_field_by_name(arr_proto_ptr, ts_key);
+    if to_string_fn.bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let ts_key2 = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    js_object_set_field_by_name(ta_proto, ts_key2, f64::from_bits(to_string_fn.bits()));
+    super::super::set_builtin_property_attrs(
+        ta_proto as usize,
+        "toString".to_string(),
+        super::super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Re-point a `Number.<name>` static at the global function of the same name so

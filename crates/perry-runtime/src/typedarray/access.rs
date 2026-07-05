@@ -64,7 +64,8 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
 ///     the same `js_object_get_field_by_name_f64` the dotted `ta.copyWithin`
 ///     PropertyGet path uses (resolves the reified method once #2059 lands;
 ///     undefined until then — never a stray element value),
-///   * a numeric (non-string) key → integer-indexed element read.
+///   * a numeric (non-string) key → integer-indexed element read only when it
+///     is a valid integer index; fractional numeric keys read `undefined`.
 #[no_mangle]
 pub extern "C" fn js_typed_array_index_get_dynamic(ta: *const TypedArrayHeader, key: f64) -> f64 {
     unsafe { crate::typedarray_props::typed_array_index_get_dynamic(ta as usize, key) }

@@ -36,7 +36,7 @@ use super::{
     emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
     emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix_ns,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
@@ -209,8 +209,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
                 }
-                if let Some(source_prefix) = ctx.import_function_prefixes.get(method_name).cloned()
-                {
+                // Issue #5922 (companion to #680): prefer the per-namespace
+                // map so `Context.a` and `Option.a` resolve to their own
+                // sources even when both namespaces export a member with
+                // the same bare name. Falls back to the flat
+                // `import_function_prefixes` for namespaces with no
+                // overlapping conflicts (e.g. plain `import * as X`, which
+                // this branch also serves).
+                let source_prefix_opt = ctx
+                    .namespace_member_prefixes
+                    .get(&(class_name.to_string(), method_name.to_string()))
+                    .cloned()
+                    .or_else(|| ctx.import_function_prefixes.get(method_name).cloned());
+                if let Some(source_prefix) = source_prefix_opt {
                     // Issue #678 followup: V8-fallback namespace member route —
                     // the origin module emits no native symbol, so dispatch
                     // through the runtime bridge.
@@ -223,10 +234,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
                         return Ok(emit_v8_export_call(ctx, &specifier, method_name, &lowered));
                     }
-                    // Issue #678: namespace member resolved through a re-export
-                    // rename uses the origin name as the symbol suffix.
-                    let origin_suffix =
-                        import_origin_suffix(ctx.import_function_origin_names, method_name);
+                    // Issue #678/#5924: namespace member resolved through a
+                    // re-export rename uses the origin name as the symbol
+                    // suffix. Namespace-scoped lookup first so a rename in a
+                    // different namespace imported into this file can't
+                    // clobber this namespace's unrenamed member of the same
+                    // name.
+                    let origin_suffix = import_origin_suffix_ns(
+                        ctx.import_function_origin_names,
+                        ctx.namespace_member_origin_names,
+                        class_name,
+                        method_name,
+                    );
                     let fn_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     // Issue #321: var-shaped exports (e.g. `export const succeed
                     // = (v) => new EffectInst(v)`) emit a ZERO-ARG getter

@@ -41,6 +41,20 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     // heap StringHeader so the byte read below is valid for inline-stored names.
     let name_hdr = crate::builtins::js_string_coerce(name_val);
     let name = super::has_own_helpers::str_from_string_header(name_hdr)?;
+    // #5588: Function-family constructors (Function, GeneratorFunction,
+    // AsyncGeneratorFunction) share the noop thunk and have builtin_closure_length
+    // set, so this dispatch fires when any of them is reached via js_native_call_value
+    // inside js_new_function_construct — treating the newly-allocated receiver as
+    // the dispatch target. Exclude them: the noop thunk's undefined return lets
+    // `new` fall back to the allocated object, which is what Object.seal tests
+    // expect (they don't care whether the result is callable, only that sealing
+    // doesn't throw).
+    if matches!(
+        name,
+        "Function" | "GeneratorFunction" | "AsyncGeneratorFunction"
+    ) {
+        return None;
+    }
     let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     Some(js_native_call_method(
         receiver,

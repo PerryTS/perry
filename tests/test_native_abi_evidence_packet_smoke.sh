@@ -34,7 +34,7 @@ fi
 
 set +e
 PYTHON="$PYTHON_BIN" "$ROOT/scripts/native_abi_evidence_packet.sh" \
-  --runs 1 \
+  --runs 5 \
   --out "$OUT" \
   --gate
 STATUS=$?
@@ -55,7 +55,7 @@ if status == 0:
     assert packet["status"] == "pass", packet["errors"]
 else:
     assert packet["status"] == "fail", packet
-for section in ("correctness", "native_call_lowering", "gc_root_safety", "benchmark_deltas"):
+for section in ("gate_matrix", "correctness", "native_call_lowering", "gc_root_safety", "release_symbol_guard", "benchmark_deltas"):
     assert section in packet, packet.keys()
 PY
 

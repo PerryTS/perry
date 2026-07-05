@@ -88,6 +88,11 @@ pub unsafe fn closure_capture_slots_mut(closure: *mut ClosureHeader) -> *mut u64
 }
 
 #[inline]
+unsafe fn closure_capture_slots(closure: *const ClosureHeader) -> *const u64 {
+    (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const u64
+}
+
+#[inline]
 pub unsafe fn note_closure_capture_slot(
     closure: *mut ClosureHeader,
     index: usize,
@@ -432,61 +437,62 @@ pub extern "C" fn js_closure_get_func(closure: *const ClosureHeader) -> *const u
 /// Get a captured value (as f64) by index
 #[no_mangle]
 pub extern "C" fn js_closure_get_capture_f64(closure: *const ClosureHeader, index: u32) -> f64 {
-    if closure.is_null() {
-        return 0.0;
-    }
-    unsafe {
-        let captures_ptr =
-            (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
-        *captures_ptr.add(index as usize)
-    }
+    f64::from_bits(js_closure_get_capture_bits(closure, index))
 }
 
 /// Set a captured value (as f64) by index
 #[no_mangle]
 pub extern "C" fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index: u32, value: f64) {
+    js_closure_set_capture_bits(closure, index, value.to_bits());
+}
+
+/// Get a captured value's raw JSValueBits by index.
+#[no_mangle]
+pub extern "C" fn js_closure_get_capture_bits(closure: *const ClosureHeader, index: u32) -> u64 {
+    if closure.is_null() {
+        return 0;
+    }
+    unsafe {
+        if index as usize >= real_capture_count((*closure).capture_count) as usize {
+            return 0;
+        }
+        *closure_capture_slots(closure).add(index as usize)
+    }
+}
+
+/// Set a captured value's raw JSValueBits by index.
+#[no_mangle]
+pub extern "C" fn js_closure_set_capture_bits(
+    closure: *mut ClosureHeader,
+    index: u32,
+    value_bits: u64,
+) {
     if closure.is_null() {
         return;
     }
     unsafe {
-        let captures_ptr = closure_capture_slots_mut(closure) as *mut f64;
-        // GC_STORE_AUDIT(BARRIERED): closure f64 capture write is immediately recorded via note_closure_capture_slot.
-        *captures_ptr.add(index as usize) = value;
-        note_closure_capture_slot(closure, index as usize, value.to_bits());
+        let captures_ptr = closure_capture_slots_mut(closure);
+        // GC_STORE_AUDIT(BARRIERED): closure bits capture write is immediately recorded via note_closure_capture_slot.
+        *captures_ptr.add(index as usize) = value_bits;
+        note_closure_capture_slot(closure, index as usize, value_bits);
     }
 }
 
 /// Get a captured value (as i64 pointer) by index
 #[no_mangle]
 pub extern "C" fn js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64 {
-    if closure.is_null() {
-        return 0;
-    }
-    unsafe {
-        // Bounds-guard reads past the declared capture count: returning 0 for an
-        // out-of-range slot lets callers probe optional captures (e.g. a Promise
-        // resolving function's shared [[AlreadyResolved]] guard in slot 1) on
-        // closures that were allocated with fewer slots, without reading uninit
-        // memory. Codegen-emitted reads always stay in range.
-        if index as usize >= real_capture_count((*closure).capture_count) as usize {
-            return 0;
-        }
-        let captures_ptr =
-            (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const i64;
-        *captures_ptr.add(index as usize)
-    }
+    js_closure_get_capture_bits(closure, index) as i64
 }
 
 /// Set a captured value (as i64 pointer) by index
 #[no_mangle]
 pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index: u32, value: i64) {
-    if closure.is_null() {
-        return;
-    }
-    unsafe {
-        let captures_ptr = closure_capture_slots_mut(closure) as *mut i64;
-        // GC_STORE_AUDIT(BARRIERED): closure pointer capture write is immediately recorded via note_closure_capture_slot.
-        *captures_ptr.add(index as usize) = value;
-        note_closure_capture_slot(closure, index as usize, value as u64);
-    }
+    js_closure_set_capture_bits(closure, index, value as u64);
 }
+
+#[used]
+static KEEP_JS_CLOSURE_GET_CAPTURE_BITS: extern "C" fn(*const ClosureHeader, u32) -> u64 =
+    js_closure_get_capture_bits;
+#[used]
+static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern "C" fn(*mut ClosureHeader, u32, u64) =
+    js_closure_set_capture_bits;

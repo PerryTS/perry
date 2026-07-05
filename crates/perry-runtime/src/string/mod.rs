@@ -138,6 +138,71 @@ pub fn is_valid_string_ptr(p: *const StringHeader) -> bool {
     !p.is_null() && (p as usize) >= 0x1000
 }
 
+/// Borrowed byte view for a Perry string-like dispatch key.
+///
+/// Static dispatch IDs currently use the raw interned `StringHeader*` pointer
+/// payload. Newer lowering paths may naturally carry a full NaN-boxed string
+/// value, including `SHORT_STRING_TAG`. This view lets by-ID wrappers accept
+/// both forms without open-coding heap-only string reads at each callsite.
+#[derive(Clone, Copy)]
+pub struct PerryStringRef {
+    pub ptr: *const u8,
+    pub len: usize,
+    pub heap: *const StringHeader,
+}
+
+/// Resolve a static property/method id into a byte view.
+///
+/// Accepted forms:
+/// - raw interned `StringHeader*` pointer payload (today's StringPool id);
+/// - boxed heap `STRING_TAG` bits;
+/// - boxed inline `SHORT_STRING_TAG` bits, copied into `scratch`.
+#[inline]
+pub fn perry_string_ref_from_dispatch_id(
+    id: i64,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<PerryStringRef> {
+    if id == 0 {
+        return None;
+    }
+
+    let bits = id as u64;
+    let tag = bits & crate::value::TAG_MASK;
+    if tag == crate::value::STRING_TAG || tag == crate::value::SHORT_STRING_TAG {
+        return str_bytes_from_jsvalue(f64::from_bits(bits), scratch).map(|(ptr, len)| {
+            let jsval = crate::value::JSValue::from_bits(bits);
+            PerryStringRef {
+                ptr,
+                len: len as usize,
+                heap: if jsval.is_string() {
+                    jsval.as_string_ptr()
+                } else {
+                    std::ptr::null()
+                },
+            }
+        });
+    }
+
+    let addr = id as usize;
+    let hdr = addr as *const StringHeader;
+    if !is_valid_string_ptr(hdr) || (addr & 0x7) != 0 {
+        return None;
+    }
+    if matches!(
+        crate::arena::classify_heap_space(addr),
+        crate::arena::HeapSpace::Unknown
+    ) {
+        return None;
+    }
+    unsafe {
+        Some(PerryStringRef {
+            ptr: (hdr as *const u8).add(std::mem::size_of::<StringHeader>()),
+            len: (*hdr).byte_len as usize,
+            heap: hdr,
+        })
+    }
+}
+
 /// Header for heap-allocated strings
 ///
 /// `utf16_len` is at offset 0 so codegen can inline `.length` as a single i32 load.

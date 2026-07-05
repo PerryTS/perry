@@ -17,6 +17,13 @@ import WatchKit
 @_silgen_name("perry_watchos_dispatch_background_task")
 func perry_watchos_dispatch_background_task(_ id: UnsafePointer<CChar>)
 
+// Timer ticks — drive setTimeout/setInterval from the JS runtime. Without
+// these the TS event loop never advances on watchOS (there is no
+// CADisplayLink here; the render Timer below is the only recurring host
+// callback).
+@_silgen_name("js_callback_timer_tick") func js_callback_timer_tick() -> Int32
+@_silgen_name("js_interval_timer_tick") func js_interval_timer_tick() -> Int32
+
 // Tree query
 @_silgen_name("perry_watchos_root_node") func perry_watchos_root_node() -> Int64
 @_silgen_name("perry_watchos_tree_version") func perry_watchos_tree_version() -> UInt64
@@ -104,6 +111,9 @@ class PerryBridge: ObservableObject {
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
+            // Drive JS runtime timers (setInterval, setTimeout) each frame.
+            _ = js_callback_timer_tick()
+            _ = js_interval_timer_tick()
             let v = perry_watchos_tree_version()
             if v != self.version {
                 self.version = v

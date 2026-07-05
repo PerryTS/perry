@@ -50,6 +50,26 @@ fn short_boxed_strings_use_sso_without_malloc_tracking() {
 }
 
 #[test]
+fn dispatch_id_resolver_accepts_raw_heap_and_sso_string_forms() {
+    fn bytes_from(id: i64) -> Vec<u8> {
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let resolved = perry_string_ref_from_dispatch_id(id, &mut scratch).unwrap();
+        unsafe { std::slice::from_raw_parts(resolved.ptr, resolved.len).to_vec() }
+    }
+
+    let raw = js_string_from_bytes(b"score".as_ptr(), 5);
+    assert_eq!(bytes_from(raw as i64), b"score");
+
+    let boxed_heap = crate::value::JSValue::string_ptr(raw).bits() as i64;
+    assert_eq!(bytes_from(boxed_heap), b"score");
+
+    let boxed_sso = crate::value::JSValue::try_short_string(b"id")
+        .unwrap()
+        .bits() as i64;
+    assert_eq!(bytes_from(boxed_sso), b"id");
+}
+
+#[test]
 fn small_and_medium_heap_strings_use_nursery_gc_pages() {
     let data = vec![b'x'; 1024];
     let before = malloc_object_count_for_test();

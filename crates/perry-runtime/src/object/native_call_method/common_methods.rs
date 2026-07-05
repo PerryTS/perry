@@ -452,7 +452,15 @@ pub(super) unsafe fn dispatch_common(
         // `toString`. If no custom method is present, fall back to the
         // default `[object Tag]` string. Primitive receivers delegate to
         // their existing `toString` behavior.
-        "toLocaleString" => {
+        //
+        // #5845: a `BigInt` receiver has its own more-specific
+        // `BigInt.prototype.toLocaleString` (ECMA-402), which must win over
+        // this generic `Object.prototype` fallback. Returning `None` here
+        // lets dispatch fall through to the primitive-builtin-prototype
+        // lookup further down `js_native_call_method`, which resolves the
+        // real installed method (and honors a user override, same as every
+        // other primitive-wrapper method).
+        "toLocaleString" if !jsval.is_bigint() => {
             return Some(js_object_default_to_locale_string(object));
         }
 
@@ -601,11 +609,26 @@ pub(super) unsafe fn dispatch_common(
                     ) {
                         values
                     } else {
-                        let arr_ptr = arr_raw as *const crate::array::ArrayHeader;
-                        let n = crate::array::js_array_length(arr_ptr) as usize;
-                        (0..n)
-                            .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
-                            .collect()
+                        let is_array = JSValue::from_bits(
+                            crate::array::js_array_is_array(args_arr_val).to_bits(),
+                        );
+                        if is_array.is_bool() && is_array.as_bool() {
+                            let arr_ptr = arr_raw as *const crate::array::ArrayHeader;
+                            let n = crate::array::js_array_length(arr_ptr) as usize;
+                            (0..n)
+                                .map(|i| crate::array::js_array_get_f64(arr_ptr, i as u32))
+                                .collect()
+                        } else {
+                            // #5846: a plain array-like object or Proxy (not a
+                            // real Array, not an arguments object) —
+                            // `arr_raw` is NOT a genuine `ArrayHeader*` here,
+                            // so reading it as one is a type-confusion bug.
+                            // Fall through to the generic `Get("length")` +
+                            // indexed-`Get` walk, which also correctly
+                            // propagates a throwing `length`/indexed trap
+                            // (test262 apply/get-index-abrupt).
+                            generic_array_like_to_vec(args_arr_val)
+                        }
                     }
                 } else {
                     Vec::new()

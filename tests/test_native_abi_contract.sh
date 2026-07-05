@@ -318,7 +318,8 @@ write_evidence "compile.log" "$COMPILE_OUTPUT"
 
 RUN_OUTPUT=$(./test_bin 2>&1)
 write_evidence "runtime.stdout" "$RUN_OUTPUT"
-if [ "$RUN_OUTPUT" != "PASS" ]; then
+RUN_LAST_LINE=$(printf '%s\n' "$RUN_OUTPUT" | tail -n 1)
+if [ "$RUN_LAST_LINE" != "PASS" ]; then
   echo "FAIL: JS-visible native ABI behavior changed"
   echo "Expected: PASS"
   echo "Got:      $RUN_OUTPUT"

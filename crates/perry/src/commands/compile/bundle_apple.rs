@@ -256,6 +256,53 @@ pub(super) fn bundle_for_watchos(
 </dict>
 </plist>"#
     );
+
+    // Append custom Info.plist entries from [watchos.info_plist] in
+    // perry.toml (same walk as the iOS bundler) — required for usage
+    // descriptions like NSMicrophoneUsageDescription, without which
+    // watchOS denies the permission request outright.
+    let custom_plist_entries = (|| -> Option<String> {
+        let mut dir = input.canonicalize().ok()?;
+        for _ in 0..5 {
+            dir = dir.parent()?.to_path_buf();
+            let toml_path = dir.join("perry.toml");
+            if toml_path.exists() {
+                let data = fs::read_to_string(&toml_path).ok()?;
+                let doc: toml::Table = data.parse().ok()?;
+                let watchos = doc.get("watchos")?.as_table()?;
+                let info_plist_table = watchos.get("info_plist")?.as_table()?;
+                let mut entries = String::new();
+                for (key, value) in info_plist_table {
+                    if let Some(s) = value.as_str() {
+                        entries.push_str(&format!(
+                            "    <key>{}</key>\n    <string>{}</string>\n",
+                            xml_escape(key),
+                            xml_escape(s)
+                        ));
+                    } else if let Some(b) = value.as_bool() {
+                        entries.push_str(&format!(
+                            "    <key>{}</key>\n    <{}/>\n",
+                            xml_escape(key),
+                            if b { "true" } else { "false" }
+                        ));
+                    }
+                }
+                if !entries.is_empty() {
+                    return Some(entries);
+                }
+            }
+        }
+        None
+    })()
+    .unwrap_or_default();
+    let info_plist = if !custom_plist_entries.is_empty() {
+        info_plist.replace(
+            "</dict>\n</plist>",
+            &format!("{}</dict>\n</plist>", custom_plist_entries),
+        )
+    } else {
+        info_plist
+    };
     fs::write(app_dir.join("Info.plist"), info_plist)?;
 
     // Copy project resource directories into the bundle so

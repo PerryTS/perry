@@ -1024,6 +1024,30 @@ pub extern "C" fn js_class_method_bind(
     build_bound_method_closure(instance, method_name_ptr, method_name_len)
 }
 
+/// By-ID sibling of `js_class_method_bind` for static-name lowering.
+///
+/// The current ID is the interned StringPool `StringHeader*` payload, but this
+/// also accepts boxed heap/short-string ids so future lowering paths do not
+/// reintroduce heap-only string assumptions.
+#[no_mangle]
+pub extern "C" fn js_class_method_bind_by_id(instance: f64, method_id: i64) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    if name_ref.heap.is_null() {
+        let heap = crate::string::js_string_from_bytes(name_ref.ptr, name_ref.len as u32);
+        let ptr = unsafe { (heap as *const u8).add(std::mem::size_of::<crate::StringHeader>()) };
+        js_class_method_bind(instance, ptr, name_ref.len)
+    } else {
+        js_class_method_bind(instance, name_ref.ptr, name_ref.len)
+    }
+}
+
+#[used]
+static KEEP_CLASS_METHOD_BIND_BY_ID: extern "C" fn(f64, i64) -> f64 = js_class_method_bind_by_id;
+
 /// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
 /// named method, stamping its `.name`/`.length`. This is the raw builder used
 /// by both `js_class_method_bind` (after its canonical-identity short-circuit)

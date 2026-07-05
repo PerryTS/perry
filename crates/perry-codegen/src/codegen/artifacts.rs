@@ -17,12 +17,20 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I64, VOID};
 
-use super::closure::compile_closure;
+use super::closure::{
+    compile_closure, compile_typed_f64_closure, compile_typed_i1_closure,
+    compile_typed_i32_closure, compile_typed_string_closure,
+};
 use super::entry::compile_module_entry;
 use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
-use super::method::{compile_method, compile_static_method};
+use super::method::{
+    compile_method, compile_static_method, compile_typed_f64_method,
+    compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
+    compile_typed_string_method,
+};
 use super::opts::CrossModuleCtx;
 use super::spec_function_length;
+use super::typed_abi::TypedFunctionTrampolineKind;
 
 /// Read-only view of the `CompileOptions` fields that the artifact
 /// emission step references via `opts.X`. Bundled into a struct so the
@@ -212,6 +220,46 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     };
 
     for (func_id, closure_expr) in closures {
+        if cross_module.typed_f64_closures.contains(func_id) {
+            compile_typed_f64_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                module_prefix,
+                module_local_types,
+            )
+            .with_context(|| format!("lowering typed-f64 closure clone func_id={}", func_id))?;
+        }
+        if cross_module.typed_i1_closures.contains(func_id) {
+            compile_typed_i1_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                module_prefix,
+                module_local_types,
+            )
+            .with_context(|| format!("lowering typed-i1 closure clone func_id={}", func_id))?;
+        }
+        if cross_module.typed_i32_closures.contains(func_id) {
+            compile_typed_i32_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                module_prefix,
+                module_local_types,
+            )
+            .with_context(|| format!("lowering typed-i32 closure clone func_id={}", func_id))?;
+        }
+        if cross_module.typed_string_closures.contains(func_id) {
+            compile_typed_string_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                module_prefix,
+                module_local_types,
+            )
+            .with_context(|| format!("lowering typed-string closure clone func_id={}", func_id))?;
+        }
         compile_closure(
             llmod,
             *func_id,
@@ -242,6 +290,91 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // them directly.
     for class in &hir.classes {
         for method in &class.methods {
+            let typed_public_trampoline = if cross_module
+                .typed_f64_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                Some(TypedFunctionTrampolineKind::F64)
+            } else if cross_module
+                .typed_i32_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                Some(TypedFunctionTrampolineKind::I32)
+            } else if cross_module
+                .typed_i1_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                Some(TypedFunctionTrampolineKind::I1)
+            } else if cross_module
+                .typed_string_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                Some(TypedFunctionTrampolineKind::StringRef)
+            } else {
+                None
+            };
+            if cross_module
+                .typed_f64_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_f64_method(llmod, class, method, method_names).with_context(
+                    || {
+                        format!(
+                            "lowering typed-f64 method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    },
+                )?;
+            }
+            if let Some(receiver) = cross_module
+                .typed_f64_receiver_methods
+                .get(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_f64_receiver_method(llmod, class, method, method_names, receiver)
+                    .with_context(|| {
+                        format!(
+                            "lowering typed-f64 receiver method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    })?;
+            }
+            if cross_module
+                .typed_i32_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_i32_method(llmod, class, method, method_names).with_context(
+                    || {
+                        format!(
+                            "lowering typed-i32 method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    },
+                )?;
+            }
+            if cross_module
+                .typed_i1_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_i1_method(llmod, class, method, method_names).with_context(|| {
+                    format!(
+                        "lowering typed-i1 method clone '{}::{}'",
+                        class.name, method.name
+                    )
+                })?;
+            }
+            if cross_module
+                .typed_string_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_string_method(llmod, class, method, method_names).with_context(
+                    || {
+                        format!(
+                            "lowering typed-string method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    },
+                )?;
+            }
             compile_method(
                 llmod,
                 class,
@@ -261,6 +394,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                typed_public_trampoline,
+                cross_module
+                    .typed_f64_receiver_methods
+                    .contains_key(&(class.name.clone(), method.name.clone())),
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
         }
@@ -288,6 +425,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                None,
+                false,
             )
             .with_context(|| {
                 format!(
@@ -349,6 +488,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                None,
+                false,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -398,6 +539,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                None,
+                false,
             )
             .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
         }
@@ -481,6 +624,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 closure_rest_params,
                 cross_module,
+                None,
+                false,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;
         }

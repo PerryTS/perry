@@ -503,3 +503,13 @@ pub(crate) extern "C" fn global_this_error_prepare_stack_trace_thunk(
     let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     crate::value::js_nanbox_string(empty as i64)
 }
+
+/// `Proxy.revocable(target, handler)` static method thunk. Delegates to the
+/// existing `js_proxy_revocable` implementation in `crate::proxy`.
+pub(crate) extern "C" fn proxy_revocable_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    handler: f64,
+) -> f64 {
+    crate::proxy::js_proxy_revocable(target, handler)
+}

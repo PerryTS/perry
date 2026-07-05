@@ -151,13 +151,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         );
                     }
                     perry_hir::CallArg::Spread(e) => {
-                        // `js_array_push_spread_any` also handles the
-                        // arguments OBJECT (array-like, not ArrayHeader) —
-                        // the `super(...arguments)` source.
+                        // Route every spread operand through the full iterator
+                        // protocol (`js_array_spread_append` -> `array_from_
+                        // spread_value`): it drives a custom `[Symbol.iterator]`
+                        // (`super(...iter)`), spreads the arguments OBJECT
+                        // (`super(...arguments)`), arrays, sets/maps, typed
+                        // arrays, and strings, AND propagates an abrupt
+                        // completion from a throwing iterator step/value — the
+                        // `call-spread-*-iter` / `call-spread-err-*` cases. The
+                        // old `js_array_push_spread_any` only handled arrays and
+                        // array-like (`.length`) objects, so a plain iterable
+                        // (no `.length`) contributed zero args.
                         let v = lower_expr(ctx, e)?;
                         arr = ctx.block().call(
                             I64,
-                            "js_array_push_spread_any",
+                            "js_array_spread_append",
                             &[(I64, &arr), (DOUBLE, &v)],
                         );
                     }
@@ -654,6 +662,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I32, &argc),
                                 (I32, &is_custom),
                             ],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    }
+                    // `class X extends Promise` — `super(executor)` runs the
+                    // ECMA-262 27.2.3.1 Promise constructor against a hidden
+                    // backing `Promise` cell stashed on `this`. Inherited
+                    // `then`/`catch`/`finally` unwrap that cell (see
+                    // `promise::subclass::subclass_backing_promise`), so a
+                    // subclass instance behaves as a promise while keeping its
+                    // own `constructor`/`instanceof` identity.
+                    if parent_name.as_str() == "Promise" {
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
+                        for a in super_args {
+                            lowered.push(lower_expr(ctx, a)?);
+                        }
+                        let executor = lowered.first().cloned().unwrap_or_else(|| undef.clone());
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => undef.clone(),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_promise_subclass_init",
+                            &[(DOUBLE, &this_box), (DOUBLE, &executor)],
                         );
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();

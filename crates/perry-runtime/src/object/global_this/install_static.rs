@@ -641,6 +641,15 @@ pub(crate) fn install_builtin_constructor_statics(
                 super::super::PropertyAttrs::new(true, true, true),
             );
         }
+        "Proxy" => {
+            install_constructor_static(
+                ctor,
+                "revocable",
+                proxy_revocable_thunk as *const u8,
+                2,
+                false,
+            );
+        }
         _ => {}
     }
 }
@@ -804,7 +813,10 @@ pub(crate) fn install_reflect_namespace_members(ns_obj: *mut ObjectHeader) {
         ("defineProperty", noop, 3),
         ("deleteProperty", noop, 2),
         ("apply", reflect_apply_thunk as *const u8, 3),
-        ("construct", noop, 2),
+        // #5989: `construct` must be REAL as a value — Next.js's Date
+        // extension calls it through a captured binding (see
+        // `reflect_construct_thunk`).
+        ("construct", reflect_construct_thunk as *const u8, 2),
         ("get", noop, 2),
         ("getOwnPropertyDescriptor", noop, 2),
         ("getPrototypeOf", noop, 1),

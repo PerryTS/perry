@@ -316,7 +316,45 @@ pub(crate) fn build_and_run_link(
         well_known_libs
             .iter()
             .map(|wk| {
-                strip_duplicate_objects_from_well_known_lib(wk).unwrap_or_else(|_| wk.clone())
+                // Wrappers precede stdlib here, so a wrapper's bundled
+                // perry-runtime copy would win first-definition over stdlib's
+                // and split the runtime's mutable globals in two (stdlib code
+                // keeps its own copy via LTO-internal refs) — spawned async
+                // tasks then starve because the event pump's wait-driver slot
+                // is registered in one copy and read from the other. Drop the
+                // bundled runtime members so stdlib's copy is the single
+                // provider; the standalone runtime archive linked after
+                // stdlib still fills any DCE gaps.
+                let wk = match stdlib_lib {
+                    Some(stdlib) => strip_bundled_runtime_from_well_known_lib(wk, stdlib)
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "[strip-dedup] bundled-runtime drop skipped for {} (non-fatal): {e}",
+                                wk.display()
+                            );
+                            wk.clone()
+                        }),
+                    None => wk.clone(),
+                };
+                // Issue #5928: the runtime-specific drop above only targets
+                // `perry_runtime-*` codegen units. Programs linking multiple
+                // well-known libraries that each bundle a full "shared
+                // tokio" HTTP stack (e.g. both `http` and `fastify`) still
+                // collide on every OTHER shared transitive dependency
+                // (tokio, hyper_util, h2, rustls, reqwest, ring, std, core,
+                // …) — apply the general, fixed-point-safe dedup for those.
+                let wk = match stdlib_lib {
+                    Some(stdlib) => strip_bundled_shared_deps_from_well_known_lib(&wk, stdlib)
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "[strip-dedup] shared-deps drop skipped for {} (non-fatal): {e}",
+                                wk.display()
+                            );
+                            wk.clone()
+                        }),
+                    None => wk.clone(),
+                };
+                strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or(wk)
             })
             .collect()
     } else {
@@ -1697,6 +1735,18 @@ pub(crate) fn build_and_run_link(
                             }
                         }
                     }
+                }
+            }
+
+            // Issue #5812 item 2 — auto-append the Windows system libs that
+            // wgpu's graphics backends reference but cargo's `#[link]` attrs
+            // on the wgpu crate don't cover (d3dcompiler / opengl32). Without
+            // them a Windows app linking a wgpu-backed native ext failed with
+            // LNK2019 unresolved externals (the reporter patched the link
+            // line by hand). See `windows_wgpu_backend_syslibs`.
+            if is_windows {
+                for syslib in super::windows_wgpu_backend_syslibs(target_config) {
+                    cmd.arg(syslib);
                 }
             }
 

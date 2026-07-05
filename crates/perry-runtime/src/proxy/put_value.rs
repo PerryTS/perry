@@ -5,6 +5,97 @@
 
 use super::*;
 
+/// `proxy[key] = value` — if handler.set exists, call it with
+/// (target, key, value) and return TAG_TRUE (the trap's return value is
+/// ignored by the default test semantics since we echo `value`). Otherwise
+/// forward to the target directly.
+#[no_mangle]
+pub extern "C" fn js_proxy_set(proxy_boxed: f64, key: f64, value: f64) -> f64 {
+    proxy_set_with_receiver(proxy_boxed, key, value, proxy_boxed)
+}
+
+/// Proxy `[[Set]]` (ECMA-262 §10.5.9) with an explicit `Receiver`, distinct
+/// from `proxy_boxed` itself — reached when a Proxy sits partway up another
+/// object's `[[Prototype]]` chain (`OrdinarySetWithOwnDescriptor` forwards to
+/// `parent.[[Set]](P, V, Receiver)` with the ORIGINAL receiver, not `parent`).
+pub(crate) fn proxy_set_with_receiver(
+    proxy_boxed: f64,
+    key: f64,
+    value: f64,
+    receiver: f64,
+) -> f64 {
+    let id = match lookup(proxy_boxed) {
+        Some(id) => id,
+        None => return f64::from_bits(TAG_FALSE),
+    };
+    let (target, handler, revoked) = PROXIES.with(|p| {
+        p.borrow()
+            .get(id as usize)
+            .and_then(|o| o.as_ref())
+            .map(|e| (e.target, e.handler, e.revoked))
+            .unwrap_or((
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+                false,
+            ))
+    });
+    if revoked {
+        return revoked_return();
+    }
+    let trap = handler_trap(handler, "set");
+    if is_callable(trap) {
+        // #2756: the `set` trap's boolean result is observable through
+        // `Reflect.set(proxy, …)` (and strict-mode assignment). Coerce and
+        // return it rather than discarding it. The trap receives the spec
+        // argument list `(target, key, value, receiver)` with `this` bound to
+        // the handler.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target_h = scope.root_nanbox_f64(target);
+        let key_h = scope.root_nanbox_f64(key);
+        let value_h = scope.root_nanbox_f64(value);
+        let receiver_h = scope.root_nanbox_f64(receiver);
+        let trap_result = call_trap(
+            handler,
+            trap,
+            &[
+                target_h.get_nanbox_f64(),
+                key_h.get_nanbox_f64(),
+                value_h.get_nanbox_f64(),
+                receiver_h.get_nanbox_f64(),
+            ],
+        );
+        // A falsy trap result means the assignment failed; no invariant check.
+        if crate::value::js_is_truthy(trap_result) == 0 {
+            return nanbox_bool(false);
+        }
+        invariants::enforce_set_invariant(
+            target_h.get_nanbox_f64(),
+            key_h.get_nanbox_f64(),
+            value_h.get_nanbox_f64(),
+        );
+        return nanbox_bool(true);
+    }
+    // No set trap — forward to the target's `[[Set]]`. When the target is
+    // itself a Proxy, recurse through the proxy dispatch (its own trap or
+    // target) rather than `ordinary_set`, which would deref the fake pointer.
+    if lookup(target).is_some() {
+        return proxy_set_with_receiver(target, key, value, receiver);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let property_key_handle = scope
+        .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
+    reflect_ordinary_set_with_receiver(
+        target_handle.get_nanbox_f64(),
+        property_key_handle.get_nanbox_f64(),
+        value_handle.get_nanbox_f64(),
+        receiver_handle.get_nanbox_f64(),
+    )
+}
+
 /// Assignment PutValue for a property reference. Returns the assigned RHS value
 /// on success or sloppy failure, and throws TypeError when strict code attempts
 /// a failed [[Set]].
@@ -67,6 +158,33 @@ pub extern "C" fn js_put_value_set(
             strict,
         ) {
             return v;
+        }
+        // #5437: a live Web Stream handle (raw finite f64 id in the stream
+        // band). React's `renderToReadableStream` attaches its shell-ready
+        // promise as an expando (`stream.allReady = ...`); without a store the
+        // write was dropped (sloppy) or threw read-only (strict), which killed
+        // the Next.js dynamic-SSR render. Route the write to the stdlib
+        // per-stream expando table (GC-traced there).
+        if target.is_finite() && target > 0.0 && target.fract() == 0.0 {
+            let id = target as usize;
+            if crate::value::addr_class::is_stream_id_band(id) {
+                if let (Some(probe), Some(setter)) = (
+                    crate::object::stream_handle_probe(),
+                    crate::object::stream_expando_set(),
+                ) {
+                    if unsafe { probe(id) } {
+                        if let Some(name) = key_to_rust_string(property_key) {
+                            unsafe { setter(id, name.as_ptr(), name.len(), value) };
+                        }
+                    }
+                }
+                // A stream-band id is a reserved handle, never a settable
+                // object — stop here rather than falling through to the
+                // ordinary `[[Set]]` walk, even when the expando write was a
+                // no-op (dead handle / hooks absent / non-UTF-8 key). Mirrors
+                // the `js_object_set_field_by_name` stream guard.
+                return value;
+            }
         }
         if target.to_bits() == receiver.to_bits() && key_is_length(property_key) {
             if let Some(arr) = array_ptr_from_value(target) {

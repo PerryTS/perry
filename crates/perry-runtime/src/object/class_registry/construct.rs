@@ -216,12 +216,35 @@ pub unsafe extern "C" fn js_new_function_construct(
             );
         }
     }
+    // `new boundFn(...)` — delegate entirely to the newTarget-aware path,
+    // which unwinds the bind chain to the real target before re-dispatching
+    // (see `unwrap_bound_construct_chain`). `new`'s implicit newTarget is
+    // `func_value` itself, matching spec step "If NewTarget is not present,
+    // set newTarget to F" for a plain `new`. Bypasses everything below —
+    // primitive/proxy/non-constructable/native-module checks all re-run on
+    // the UNWRAPPED target, which is what they need to see (a bound wrapper
+    // around `Date`, a bound wrapper around a non-constructor, etc.).
+    if is_bound_function_closure_value(func_value) {
+        return js_new_function_construct_with_new_target(
+            func_value, args_ptr, args_len, func_value,
+        );
+    }
     // `new (new String(""))` / `new (new Number(1))` — a boxed primitive WRAPPER
     // object is an ordinary object, never a constructor, so `new` on it throws
     // `TypeError` (Test262 `S15.5.5_A2`). Without this it fell through to the
     // empty-object construction fallback and silently produced `{}`.
     if crate::builtins::boxed_primitive_payload(func_value).is_some() {
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
+    }
+    // `new (new RegExp())` — a RegExp instance has no [[Construct]] internal
+    // method (Test262 `S15.10.7_A2_T2`). Without this it fell through to the
+    // empty-object construction fallback and silently produced `{}` instead
+    // of throwing.
+    {
+        let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+        if jv.is_pointer() && crate::regex::is_registered_regex(jv.as_pointer::<u8>() as usize) {
+            super::super::object_ops::throw_object_type_error(b"is not a constructor");
+        }
     }
     // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
     // trap (or forwards to the target). Reached when the compiler can't prove
@@ -1013,6 +1036,12 @@ fn constructor_class_ref_id(value: f64) -> Option<u32> {
 /// (non-arrow, non-builtin-method) function closures; false for primitives,
 /// arrow functions, and non-constructable builtin functions (e.g. `eval`).
 pub(crate) fn js_value_is_constructor(value: f64) -> bool {
+    // A bound function is a constructor iff its ultimate target is (10.4.1.3
+    // BoundFunctionExoticObjects don't have their own [[Construct]] slot
+    // independent of the target's constructibility) — resolve through any
+    // number of `.bind()` layers first so the checks below (class ref,
+    // proxy, arrow, non-constructable builtin) see the real callee.
+    let value = resolve_bound_target(value);
     if constructor_class_ref_id(value).is_some() {
         return true;
     }
@@ -1023,6 +1052,18 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
         return false;
     }
     if is_arrow_function_value(value) {
+        return false;
+    }
+    // %Function.prototype% itself is callable but has no [[Construct]] slot
+    // (ECMA-262 20.2.3) — `is_non_constructable_builtin_function_value` only
+    // covers the separate "reified builtin closure" registry (`eval`, a
+    // reified `.apply`/`.call`/`.bind` value, …), not this singleton, so it
+    // needs its own check here too (mirrors `js_new_function_construct`'s
+    // dedicated `is_function_prototype_object_value` guard). Without this, a
+    // bound wrapper around it — `Function.prototype.bind()` — would resolve
+    // through `resolve_bound_target` to Function.prototype and read back as
+    // constructible.
+    if super::super::global_this::is_function_prototype_object_value(value) {
         return false;
     }
     if is_non_constructable_builtin_function_value(value) {
@@ -1093,6 +1134,103 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
     false
 }
 
+/// Whether `value` is itself a `Function.prototype.bind` result (not
+/// recursive — a single-layer tag check).
+///
+/// `get_valid_func_ptr` re-validates the address range and `CLOSURE_MAGIC`
+/// tag itself before touching `func_ptr`, so it's safe to call on ANY
+/// pointer-shaped `JSValue` — including a small-handle-band id (Fetch/ws/
+/// proxy registry ids) or an otherwise-invalid heap address — without a
+/// separate `is_closure_ptr` pre-check. A prior version of this helper
+/// dereferenced `(*ptr).type_tag` directly first, which is exactly the
+/// unguarded-pointer-shaped-value read this codebase has been bitten by
+/// before (#4740-class SIGSEGV on a mis-boxed/handle-band value).
+fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureHeader> {
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if crate::closure::get_valid_func_ptr(ptr) == crate::closure::BOUND_FUNCTION_FUNC_PTR {
+        Some(ptr as *mut crate::closure::ClosureHeader)
+    } else {
+        None
+    }
+}
+
+fn is_bound_function_closure_value(value: f64) -> bool {
+    bound_function_target_ptr(value).is_some()
+}
+
+/// Walk through any number of `Function.prototype.bind` wrapper layers to the
+/// ultimate non-bound target. Returns `value` unchanged when it isn't a bound
+/// closure (including when it isn't a closure at all) — cheap no-op on the
+/// overwhelmingly common non-bound path.
+fn resolve_bound_target(value: f64) -> f64 {
+    let mut cur = value;
+    loop {
+        let Some(ptr) = bound_function_target_ptr(cur) else {
+            return cur;
+        };
+        cur = crate::closure::js_closure_get_capture_f64(ptr, 0);
+    }
+}
+
+/// Unwind a `Function.prototype.bind` construct chain of any depth per
+/// `BoundFunctionExoticObjects.[[Construct]]` (10.4.1.2): each layer
+/// prepends its own bound args to the call-time args before delegating to
+/// its target, and resets `newTarget` to the unwrapped target whenever it
+/// `SameValue`s the layer being unwound (so a plain `new boundFn()` — where
+/// `newTarget` starts out equal to `boundFn` itself — cascades all the way
+/// down to the ultimate target, while a `Reflect.construct(boundFn, args,
+/// OtherCtor)` leaves `OtherCtor` untouched).
+///
+/// Returns `None` (no-op, no allocation) when `func_value` isn't a bound
+/// closure. Otherwise returns `(target, combined_args, resolved_new_target)`
+/// — the caller should re-dispatch construction on `target` with these.
+unsafe fn unwrap_bound_construct_chain(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    new_target: f64,
+) -> Option<(f64, Vec<f64>, f64)> {
+    let mut cur = func_value;
+    let mut nt = new_target;
+    let mut unwrapped = false;
+    let mut args: Vec<f64> = if args_ptr.is_null() {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len).to_vec()
+    };
+    loop {
+        let Some(ptr) = bound_function_target_ptr(cur) else {
+            break;
+        };
+        unwrapped = true;
+        let target = crate::closure::js_closure_get_capture_f64(ptr, 0);
+        if nt.to_bits() == cur.to_bits() {
+            nt = target;
+        }
+        let bound_args_ptr =
+            crate::closure::js_closure_get_capture_ptr(ptr, 2) as *const crate::array::ArrayHeader;
+        if !bound_args_ptr.is_null() {
+            let n = crate::array::js_array_length(bound_args_ptr) as usize;
+            let mut prefix: Vec<f64> = Vec::with_capacity(n + args.len());
+            for i in 0..n {
+                prefix.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
+            }
+            prefix.extend(args);
+            args = prefix;
+        }
+        cur = target;
+    }
+    if unwrapped {
+        Some((cur, args, nt))
+    } else {
+        None
+    }
+}
+
 fn class_object_class_id(value: f64) -> Option<u32> {
     if !is_class_object_value(value) {
         return None;
@@ -1108,6 +1246,34 @@ fn class_object_class_id(value: f64) -> Option<u32> {
 
 fn new_target_class_id(new_target: f64) -> Option<u32> {
     constructor_class_ref_id(new_target).or_else(|| class_object_class_id(new_target))
+}
+
+/// True when class `cid` (or an ancestor) `extends Promise` — its registered
+/// dynamic-parent value resolves to the intrinsic `Promise` constructor. Used to
+/// run `js_promise_subclass_init` on the dynamic (runtime) `new Subclass(exec)`
+/// path, where codegen's `super()` Promise branch never emitted the init (e.g.
+/// `NewPromiseCapability(Subclass)` inside a combinator, which calls the runtime
+/// `js_new_function_construct` directly rather than a compiled `new`).
+pub(crate) fn promise_parent_in_chain(class_id: u32) -> bool {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while depth < 32 && cid != 0 {
+        let parent_val = js_get_dynamic_parent_value(cid);
+        if matches!(
+            identify_global_builtin_constructor(parent_val),
+            Some("Promise")
+        ) {
+            return true;
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
 }
 
 unsafe fn construct_registered_class_ref(
@@ -1153,6 +1319,20 @@ unsafe fn construct_registered_class_ref(
     if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
         if super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
             super::super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
+        }
+    }
+    // ClassRef `new` of a Promise subclass — run the Promise constructor against
+    // a hidden backing cell (only when the compiled ctor's `super()` didn't
+    // already attach one). `NewPromiseCapability(Subclass)` reaches here.
+    if promise_parent_in_chain(target_cid) {
+        let inst_val = crate::value::js_nanbox_pointer(inst as i64);
+        if crate::promise::subclass_backing_promise(inst_val).is_none() {
+            let executor = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            crate::promise::js_promise_subclass_init(inst_val, executor);
         }
     }
     crate::value::js_nanbox_pointer(inst as i64)
@@ -1214,6 +1394,24 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     } else {
         new_target
     };
+    // Unwind any `Function.prototype.bind` wrapper chain BEFORE the
+    // `nt == func_value` shortcut below — a plain `new boundFn()` arrives
+    // here with `nt == func_value == boundFn`, and re-dispatching that
+    // through `js_new_function_construct(boundFn, ...)` would just loop back
+    // into this same bound closure. Unwrapping first replaces `func_value`
+    // with the real (non-bound) target and resolves `nt` per
+    // `BoundFunctionExoticObjects.[[Construct]]`, so the shortcut below (and
+    // everything after it) sees the real target either way.
+    if let Some((target, combined_args, resolved_nt)) =
+        unwrap_bound_construct_chain(func_value, args_ptr, args_len, nt)
+    {
+        let (ptr, len) = if combined_args.is_empty() {
+            (std::ptr::null::<f64>(), 0usize)
+        } else {
+            (combined_args.as_ptr(), combined_args.len())
+        };
+        return js_new_function_construct_with_new_target(target, ptr, len, resolved_nt);
+    }
     if nt.to_bits() == func_value.to_bits() {
         return js_new_function_construct(func_value, args_ptr, args_len);
     }
@@ -1240,6 +1438,27 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     // `Object.getPrototypeOf` and `.constructor` resolve through it (test262
     // `ctors*/use-custom-proto-if-object` / `use-default-proto-if-…`).
     if let Some(ta_name) = identify_global_builtin_constructor(func_value) {
+        // `Reflect.construct(Date, args, newTarget)` (#5989) — Next.js 16's
+        // cacheComponents Date extension constructs through exactly this
+        // shape: its installed wrapper runs
+        // `Reflect.construct(OriginalDate, arguments, new.target)`. The
+        // generic tail below allocates a PLAIN object and invokes the Date
+        // thunk against it, yielding an unbranded date (`getTime()` broken /
+        // "Invalid Date"). Build the real branded Date, then honor
+        // `GetPrototypeFromConstructor(newTarget)` like the typed-array arm
+        // below so `instanceof newTarget` and subclass prototypes hold.
+        if ta_name == "Date" {
+            let proto_bits = new_target_custom_object_prototype(nt);
+            let result = js_new_function_construct(func_value, args_ptr, args_len);
+            if let Some(proto_bits) = proto_bits {
+                let jv = crate::value::JSValue::from_bits(result.to_bits());
+                if jv.is_pointer() {
+                    let addr = (jv.bits() & crate::value::POINTER_MASK) as usize;
+                    super::super::prototype_chain::object_set_static_prototype(addr, proto_bits);
+                }
+            }
+            return result;
+        }
         if matches!(
             ta_name,
             "Int8Array"
@@ -1272,6 +1491,17 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     }
     if !is_callable_function_value(func_value) {
         return js_new_function_construct(func_value, args_ptr, args_len);
+    }
+    // %Function.prototype% has no [[Construct]] slot (ECMA-262 20.2.3) but
+    // isn't covered by `is_non_constructable_builtin_function_value` (a
+    // separate "reified builtin closure" registry) — reachable here directly
+    // via `Reflect.construct(Function.prototype, …, distinctNewTarget)`, or
+    // after `unwrap_bound_construct_chain` resolves a bound wrapper down to
+    // it with a non-cascading newTarget.
+    if super::super::global_this::is_function_prototype_object_value(func_value)
+        || super::super::global_this::is_function_prototype_object_value(nt)
+    {
+        throw_non_constructable_builtin_function();
     }
     if is_non_constructable_builtin_function_value(func_value)
         || is_non_constructable_builtin_function_value(nt)

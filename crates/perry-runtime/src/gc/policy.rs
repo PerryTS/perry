@@ -1064,6 +1064,38 @@ pub fn gc_check_trigger() {
         return;
     }
 
+    // The NURSERY-churn triggers (ArenaBytes / MallocCount) have the same
+    // hole #5476 patched for OldReclaim: whenever synchronous-only root
+    // scanners are registered — every compiled program, since codegen
+    // registers sync scanners at startup — `gc_budgeted_start_blocked()`
+    // holds for the life of the process, the mutator-assist step below can
+    // never START a cycle, and allocation pressure accumulates without
+    // bound (probe: 4M small allocations → 1.9 GB RSS with ZERO collection
+    // cycles; the 64 MB arena trigger was due after the first ~64 blocks
+    // and simply never fired). When the budgeted machinery is structurally
+    // unavailable, run the direct synchronous minor the pre-budgeted
+    // block-alloc trigger used to run. `gc_collect_minor_with_trigger`
+    // re-baselines `GC_NEXT_TRIGGER_BYTES` (and, when it sweeps malloc,
+    // the malloc trigger) on completion, and carries its own re-entrancy
+    // guard (GC_FLAG_IN_ALLOC). `force_full_scan` mirrors the OldReclaim
+    // arm: at an arbitrary allocation point a value mid-construction may
+    // live only in registers, so the conservative native scan retains it —
+    // which also makes copied-minor ineligible for THIS cycle, so the
+    // non-moving minor runs (no relocation hazards at alloc points).
+    if !gc_budgeted_cycle_active() && super::roots::registered_root_scanners_block_budgeted_gc() {
+        let direct_kind = match gc_budgeted_due_trigger() {
+            Some(BudgetedGcTrigger::ArenaBytes) => Some(GcTriggerKind::ArenaBytes),
+            Some(BudgetedGcTrigger::MallocCount) => Some(GcTriggerKind::MallocCount),
+            _ => None,
+        };
+        if let Some(kind) = direct_kind {
+            let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+            super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind))
+                .emit_after_current();
+            return;
+        }
+    }
+
     if !gc_budgeted_cycle_active() && gc_budgeted_due_trigger().is_none() {
         return;
     }

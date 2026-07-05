@@ -186,7 +186,15 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         }
         "toJSON" => string(&dt.to_string()),
         "toLocaleString" => {
-            super::options::assert_locale_string_calendar(dt.calendar().identifier());
+            super::options::assert_locale_string_calendar(
+                dt.calendar().identifier(),
+                raw_arg(args, 1),
+            );
+            // `components_to_timestamp` resolves only to whole seconds, so add
+            // the millisecond-of-second back in — otherwise `toLocaleString`
+            // with `fractionalSecondDigits` always renders `.000`
+            // (test262 PlainDateTime `toLocaleString/lone-options-accepted`,
+            // `{ fractionalSecondDigits: 3 }` expects `.321`).
             let epoch_ms = crate::date::components_to_timestamp(
                 dt.year(),
                 dt.month() as u32,
@@ -195,7 +203,8 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
                 dt.minute() as u32,
                 dt.second() as u32,
             ) as f64
-                * 1000.0;
+                * 1000.0
+                + dt.millisecond() as f64;
             crate::intl::temporal_locale_string(
                 epoch_ms,
                 raw_arg(args, 0),

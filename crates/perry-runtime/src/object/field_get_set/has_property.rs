@@ -295,6 +295,18 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 // / `arr.hasOwnProperty(i)` stay correct after `arr.length = N`.
                 let arr = crate::array::clean_arr_ptr(obj_ptr as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
+                // A Proxy installed as the array's `[[Prototype]]`
+                // (`Object.setPrototypeOf(arr, proxy)`) — `array_spec_has_index`
+                // only recognizes a *real array* custom prototype, so a Proxy
+                // hop is silently treated as absent. Recover it here so the
+                // idx/string-key misses below can fall back to the proxy's
+                // `[[HasProperty]]` instead of a bare `false` (ECMA-262 10.1.7.1
+                // step 5).
+                let proxy_proto =
+                    super::super::prototype_chain::object_static_prototype(obj_ptr as usize)
+                        .filter(|&b| (b >> 48) == 0x7FFD)
+                        .map(f64::from_bits)
+                        .filter(|&v| crate::proxy::js_proxy_is_proxy(v) != 0);
                 // Numeric key: extract the index. Accept both NaN-boxed i32
                 // and plain f64 (e.g. literal `1`) provided it's a
                 // non-negative integer in range.
@@ -329,6 +341,24 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     if crate::array::object_prototype_has_index_prop(idx) {
                         return nanbox_true;
                     }
+                    if let Some(proxy) = proxy_proto {
+                        let idx_str = idx.to_string();
+                        let key_ptr = crate::string::js_string_from_bytes(
+                            idx_str.as_ptr(),
+                            idx_str.len() as u32,
+                        );
+                        let key_val = f64::from_bits(
+                            crate::value::js_nanbox_string(key_ptr as i64).to_bits(),
+                        );
+                        return if crate::value::js_is_truthy(crate::proxy::js_proxy_has(
+                            proxy, key_val,
+                        )) != 0
+                        {
+                            nanbox_true
+                        } else {
+                            nanbox_false
+                        };
+                    }
                     return nanbox_false;
                 }
                 if key_val.is_any_string() {
@@ -353,11 +383,20 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                                 {
                                     return nanbox_true;
                                 }
-                                return nanbox_false;
-                            }
-                            if array_prototype_property_value(key_name, obj_ptr as usize).is_some()
+                            } else if array_prototype_property_value(key_name, obj_ptr as usize)
+                                .is_some()
                             {
                                 return nanbox_true;
+                            }
+                            if let Some(proxy) = proxy_proto {
+                                return if crate::value::js_is_truthy(crate::proxy::js_proxy_has(
+                                    proxy, key,
+                                )) != 0
+                                {
+                                    nanbox_true
+                                } else {
+                                    nanbox_false
+                                };
                             }
                         }
                     }
@@ -462,10 +501,26 @@ unsafe fn ordinary_has_property(
             break;
         }
         last_valid = cur;
-        // Own data / overflow key present (value-agnostic: `delete` removes the
-        // key, so a present key — even one holding `undefined` — is an own
-        // property).
-        if super::super::own_key_present(cur as *mut ObjectHeader, key) {
+        // A prototype hop can land on a real Array (`Foo.prototype = [1,2,3]`,
+        // test262 reduce/reduceRight `subclassed array` cases): its layout is
+        // `ArrayHeader { length, capacity }` + inline elements, NOT the
+        // `ObjectHeader.keys_array` shape `own_key_present` expects, so reading
+        // `(*cur).keys_array` off an array node finds garbage (or nothing) and
+        // every indexed/`"length"` lookup wrongly reports absent. Detect the
+        // GC type and route to the array-aware own-key check instead.
+        let cur_is_array = crate::value::addr_class::try_read_gc_header(cur as usize)
+            .is_some_and(|hdr| hdr.obj_type == crate::gc::GC_TYPE_ARRAY);
+        if cur_is_array {
+            if super::super::has_own_helpers::array_own_key_present(
+                cur as *const crate::array::ArrayHeader,
+                key,
+            ) {
+                return true;
+            }
+        } else if super::super::own_key_present(cur as *mut ObjectHeader, key) {
+            // Own data / overflow key present (value-agnostic: `delete`
+            // removes the key, so a present key — even one holding
+            // `undefined` — is an own property).
             return true;
         }
         // Own accessor property (also mirrored into `keys_array`, but check the
@@ -481,6 +536,23 @@ unsafe fn ordinary_has_property(
             Some(b) if b == TAG_NULL => return false,
             Some(b) => {
                 let top16 = b >> 48;
+                // A Proxy prototype hop (ECMA-262 10.1.7.1 step 5: `Return ?
+                // parent.[[HasProperty]](P)`) — the small registered proxy id is
+                // NOT a real heap pointer, so continuing the raw-pointer walk
+                // below would misread garbage (or crash). Dispatch through the
+                // proxy's own `[[HasProperty]]` (trap, or its trap-less forward
+                // through further proxy targets / the eventual real target) and
+                // use its boolean result directly — that call already resolves
+                // the rest of the chain.
+                if top16 == 0x7FFD {
+                    let proto_val = f64::from_bits(b);
+                    if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+                        let key_val =
+                            f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                        let result = crate::proxy::js_proxy_has(proto_val, key_val);
+                        return crate::value::js_is_truthy(result) != 0;
+                    }
+                }
                 let p = if top16 == 0x7FFD {
                     (b & crate::value::POINTER_MASK) as usize
                 } else if top16 == 0 && b > 0x10000 {

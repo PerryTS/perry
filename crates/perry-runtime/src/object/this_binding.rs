@@ -137,7 +137,7 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
         return crate::builtins::js_boxed_boolean_new(value);
     }
     if jv.is_any_string() {
-        return crate::builtins::js_boxed_string_new(value);
+        return crate::builtins::js_boxed_string_new(value, 1);
     }
     // #5515: a class reference is an INT32-tagged class id, but it is
     // conceptually the class constructor OBJECT, not a primitive number.

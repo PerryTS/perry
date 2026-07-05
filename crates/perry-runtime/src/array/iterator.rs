@@ -368,6 +368,10 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         // to method dispatch (string/typed-array iterators tower their `next`
         // through the class-id method table).
         false
+    } else if crate::JSValue::from_bits(method_value.to_bits()).is_null() {
+        // ECMA-262 §27.1.4.2.2: GetMethod treats null the same as undefined —
+        // a null `return`/`throw` method means the method is absent → Ok(None).
+        return Ok(None);
     } else if !is_callable_value(method_value) {
         return Err(async_from_sync_type_error(
             b"Async-from-sync iterator method is not callable",

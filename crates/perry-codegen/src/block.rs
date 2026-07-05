@@ -490,9 +490,15 @@ impl LlBlock {
         r
     }
 
-    /// ECMAScript ToInt32: `fptosi` with a NaN/Infinity guard.
-    /// JS ToInt32: NaN and ±Infinity produce 0 (per spec), normal values
-    /// go through `fptosi(f64→i64) + trunc(i64→i32)`.
+    /// Lean ToInt32 for compiler-internal coercions (array/element INDEXES,
+    /// POD field narrowing): `fptosi` with a NaN/Infinity guard. NaN and
+    /// ±Infinity produce 0 (per spec); normal values go through
+    /// `fptosi(f64→i64) + trunc(i64→i32)`. Exact for every `|v| < 2^63`;
+    /// finite values beyond that are poison — acceptable ONLY because index
+    /// paths reject huge keys before element access (they route to the
+    /// by-name/dynamic fallbacks) and these sites sit in structurally-gated
+    /// hot loops that must stay lean. User-visible ToInt32 (`x | 0`,
+    /// bitwise operands) must use [`Self::toint32_wrap`] instead.
     pub fn toint32(&mut self, val: &str) -> String {
         use crate::types::{DOUBLE, I1, I32, I64};
         let is_nan = self.fcmp("uno", val, "0.0");
@@ -502,6 +508,55 @@ impl LlBlock {
         let safe = self.select(I1, &is_bad, DOUBLE, "0.0", val);
         let as_i64 = self.fptosi(DOUBLE, &safe, I64);
         self.trunc(I64, &as_i64, I32)
+    }
+
+    /// ECMAScript ToInt32, exact for ALL inputs. NaN and ±Infinity produce 0
+    /// (per spec); every finite value truncates toward zero and reduces
+    /// modulo 2^32 before the two's-complement reinterpretation. The modular
+    /// step matters: a bare `fptosi` is LLVM poison for finite `|v| >= 2^63`,
+    /// so `(1e20) | 0` printed NaN instead of 1661992960 (CodeRabbit review
+    /// on #5466; the hole predates the branch).
+    ///
+    /// Implemented as branchless integer exponent/mantissa manipulation on
+    /// the f64 bits (the classic softfloat ToInt32): `value = ±mant ×
+    /// 2^(bexp−1075)`, so shifting the 53-bit mantissa by the unbiased
+    /// exponent yields the integer part mod 2^64, and the final `trunc`
+    /// takes it mod 2^32. No `frem`/`fptosi` and no calls — an earlier
+    /// `frem`-based reduction tripped the native-abi-proof structural gate
+    /// on Linux (`unsupported_instruction` vectorization diagnostics) even
+    /// though it was semantically right. Over-wide shifts are clamped
+    /// (poison otherwise); every clamped case is mathematically 0 anyway.
+    pub fn toint32_wrap(&mut self, val: &str) -> String {
+        use crate::types::{I1, I32, I64};
+        let bits = self.bitcast_double_to_i64(val);
+        let exp_shifted = self.lshr(I64, &bits, "52");
+        let bexp = self.and(I64, &exp_shifted, "2047");
+        // NaN / ±Infinity (biased exponent 0x7FF) → 0.
+        let is_bad = self.icmp_eq(I64, &bexp, "2047");
+        // |v| < 1 (biased exponent < 1023: ±0, denormals, fractions) → 0.
+        let too_small = self.icmp_ult(I64, &bexp, "1023");
+        // 53-bit significand: fraction bits | implicit leading bit (2^52).
+        let frac = self.and(I64, &bits, "4503599627370495");
+        let mant = self.or(I64, &frac, "4503599627370496");
+        let epos = self.sub(I64, &bexp, "1075");
+        let eneg = self.sub(I64, "1075", &bexp);
+        let shift_right = self.icmp_sgt(I64, &eneg, "0");
+        let rsh_over = self.icmp_sgt(I64, &eneg, "63");
+        let rsh_clamped = self.select(I1, &rsh_over, I64, "63", &eneg);
+        let rsh_amt = self.select(I1, &shift_right, I64, &rsh_clamped, "0");
+        // mant × 2^epos with epos ≥ 64 is ≡ 0 (mod 2^64); zeroed below.
+        let lsh_huge = self.icmp_sgt(I64, &epos, "63");
+        let lsh_clamped = self.select(I1, &lsh_huge, I64, "0", &epos);
+        let lsh_amt = self.select(I1, &shift_right, I64, "0", &lsh_clamped);
+        let rshifted = self.lshr(I64, &mant, &rsh_amt);
+        let magnitude = self.shl(I64, &rshifted, &lsh_amt);
+        let negative = self.icmp_slt(I64, &bits, "0");
+        let negated = self.sub(I64, "0", &magnitude);
+        let signed = self.select(I1, &negative, I64, &negated, &magnitude);
+        let zero_bad = self.or(I1, &is_bad, &too_small);
+        let zero_all = self.or(I1, &zero_bad, &lsh_huge);
+        let wrapped = self.select(I1, &zero_all, I64, "0", &signed);
+        self.trunc(I64, &wrapped, I32)
     }
 
     /// Fast ToInt32 — skip NaN/Infinity guards. Use ONLY when the input

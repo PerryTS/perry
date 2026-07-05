@@ -39,7 +39,7 @@ use super::{
     emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
     emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix, int_range_expr,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_buffer_load, lower_buffer_store, lower_channel_reduction,
     lower_expr, lower_expr_as_i32, lower_index_set_fast, lower_js_args_array, lower_object_literal,
@@ -66,6 +66,41 @@ fn lower_index_i32(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
     } else {
         let i = lower_expr(ctx, index)?;
         Ok(ctx.block().fptosi(DOUBLE, &i, I32))
+    }
+}
+
+fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+    fn range_is_nonnegative_i32(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+        int_range_expr(ctx, index)
+            .is_some_and(|range| range.min >= 0 && range.max <= i32::MAX as i64)
+    }
+
+    match index {
+        Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
+        Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::BitAnd) => {
+            fn mask(expr: &Expr) -> Option<i64> {
+                match expr {
+                    Expr::Integer(i) => Some(*i),
+                    Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(*n as i64),
+                    _ => None,
+                }
+            }
+            mask(left)
+                .or_else(|| mask(right))
+                .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
+        }
+        Expr::LocalGet(id) => {
+            ctx.integer_locals.contains(id)
+                && ctx.i32_counter_slots.contains_key(id)
+                && (ctx.nonnegative_integer_locals.contains(id)
+                    || ctx
+                        .int_range_facts
+                        .iter()
+                        .any(|fact| fact.local_id == *id && fact.range.min >= 0))
+                || range_is_nonnegative_i32(ctx, index)
+        }
+        _ => range_is_nonnegative_i32(ctx, index),
     }
 }
 
@@ -214,14 +249,38 @@ pub(crate) fn lower_buffer_index_get_i32(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::BoxedPrimitiveNew { kind, arg } => {
+        Expr::BoxedPrimitiveNew {
+            kind,
+            arg,
+            arg_present,
+        } => {
             let v = lower_expr(ctx, arg)?;
-            let runtime = match kind {
-                perry_hir::BoxedPrimitiveKind::Number => "js_boxed_number_new",
-                perry_hir::BoxedPrimitiveKind::String => "js_boxed_string_new",
-                perry_hir::BoxedPrimitiveKind::Boolean => "js_boxed_boolean_new",
-            };
-            Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &v)]))
+            match kind {
+                perry_hir::BoxedPrimitiveKind::Number => {
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_boxed_number_new", &[(DOUBLE, &v)]))
+                }
+                perry_hir::BoxedPrimitiveKind::Boolean => {
+                    Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_boxed_boolean_new", &[(DOUBLE, &v)]))
+                }
+                // `has_arg` is an explicit compile-time flag, not an
+                // `undefined`-value sentinel: a present argument that
+                // evaluates to `undefined` at runtime (`new String(x)` where
+                // `x` holds `undefined`) must still box to `"undefined"`, not
+                // the no-arg `""` default — see the `arg_present` doc comment
+                // on `Expr::BoxedPrimitiveNew`.
+                perry_hir::BoxedPrimitiveKind::String => {
+                    let has_arg = if *arg_present { "1" } else { "0" };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_boxed_string_new",
+                        &[(DOUBLE, &v), (I32, has_arg)],
+                    ))
+                }
+            }
         }
         Expr::DateNew(args) => match args.len() {
             0 => Ok(ctx.block().call(DOUBLE, "js_date_new", &[])),
@@ -695,7 +754,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(DOUBLE, &a), (DOUBLE, &key)],
                 ));
             }
-            if !is_numeric_expr(ctx, index) {
+            if let Some(value) =
+                lower_buffer_load(ctx, array, index, BufferAccessSpec::uint8array_get())?
+            {
+                let reason = buffer_access_materialization_reason(ctx, array);
+                return Ok(materialize_js_value(ctx, value, reason));
+            }
+            if !numeric_index_has_integer_array_index_proof(ctx, index) {
                 let a = lower_expr(ctx, array)?;
                 let key = lower_expr(ctx, index)?;
                 let blk = ctx.block();
@@ -720,7 +785,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             index,
             value,
         } => {
-            if !is_numeric_expr(ctx, index) {
+            if let Some(store) =
+                lower_buffer_store(ctx, array, index, value, BufferAccessSpec::uint8array_set())?
+            {
+                if ctx.discard_expr_value {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(materialize_js_value(
+                    ctx,
+                    store.result,
+                    MaterializationReason::FunctionAbi,
+                ));
+            }
+            if !numeric_index_has_integer_array_index_proof(ctx, index) {
                 let a = lower_expr(ctx, array)?;
                 let key = lower_expr(ctx, index)?;
                 let val = lower_expr(ctx, value)?;
@@ -735,18 +812,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
                 return Ok(result);
-            }
-            if let Some(store) =
-                lower_buffer_store(ctx, array, index, value, BufferAccessSpec::uint8array_set())?
-            {
-                if ctx.discard_expr_value {
-                    return Ok(double_literal(0.0));
-                }
-                return Ok(materialize_js_value(
-                    ctx,
-                    store.result,
-                    MaterializationReason::FunctionAbi,
-                ));
             }
 
             let idx_is_i32 = can_lower_expr_as_i32(
@@ -1047,9 +1112,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .clone()
                     .ok_or_else(|| anyhow!("ArrayUnshift captured but no current_closure_ptr"))?;
                 let idx_str = capture_idx.to_string();
+                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
                 ctx.block().call_void(
-                    "js_closure_set_capture_f64",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, &new_box)],
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
             } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                 ctx.block().store(DOUBLE, &new_box, &slot);

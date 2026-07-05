@@ -9,23 +9,37 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static BOX_GET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static I32_BOX_GET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static I32_BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static BOOL_BOX_GET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static BOOL_BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// A box is simply a heap-allocated f64
+/// A box is simply a heap-allocated JSValue bit slot.
 #[repr(C)]
 pub struct Box {
-    pub value: f64,
+    pub value: u64,
+}
+
+#[repr(C, align(8))]
+pub struct I32Box {
+    pub value: i32,
+}
+
+#[repr(C, align(8))]
+pub struct BoolBox {
+    pub value: bool,
 }
 
 thread_local! {
     /// Registry of every active box pointer. GC traces the contained
-    /// f64 value so that NaN-boxed heap pointers stored in boxes (e.g.
+    /// JSValue bits so that NaN-boxed heap pointers stored in boxes (e.g.
     /// the generator state machine's iter object held in `__iter`'s
     /// mutable-capture box) keep the referenced heap object alive
     /// across collections. Without this, captures stored as raw box
     /// pointers in closure capture slots fail the `valid_ptrs.contains`
     /// check during `trace_closure` (boxes come from `std::alloc::alloc`
     /// directly, not the GC arena), so the box pointer is never marked
-    /// AND the f64 value inside is never scanned — heap objects
+    /// AND the JSValue bits inside are never scanned — heap objects
     /// referenced only through box-captures can be swept mid-await.
     pub(crate) static BOX_REGISTRY: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
         // Pre-size for promise-heavy workloads: `promise_all_chains`
@@ -38,11 +52,21 @@ thread_local! {
             128 * 1024,
             crate::fast_hash::PtrHasher,
         ));
+    pub(crate) static I32_BOX_REGISTRY: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::with_capacity_and_hasher(
+            16 * 1024,
+            crate::fast_hash::PtrHasher,
+        ));
+    pub(crate) static BOOL_BOX_REGISTRY: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::with_capacity_and_hasher(
+            16 * 1024,
+            crate::fast_hash::PtrHasher,
+        ));
 }
 
-/// Allocate a new box with an initial value
+/// Allocate a new box with an initial JSValue bit pattern.
 #[no_mangle]
-pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
+pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
     unsafe {
         let layout = Layout::new::<Box>();
         let ptr = alloc(layout) as *mut Box;
@@ -55,7 +79,7 @@ pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
             }
             return std::ptr::null_mut();
         }
-        (*ptr).value = initial_value;
+        (*ptr).value = initial_bits as u64;
         BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
@@ -63,14 +87,58 @@ pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
     }
 }
 
-/// GC root scanner: walk every registered box and `mark` the f64
+/// Compatibility wrapper for legacy f64-lowered boxed locals.
+#[no_mangle]
+pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
+    js_box_alloc_bits(initial_value.to_bits() as i64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
+    unsafe {
+        let layout = Layout::new::<I32Box>();
+        let ptr = alloc(layout) as *mut I32Box;
+        if ptr.is_null() {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!("[PERRY WARN] js_i32_box_alloc: allocation failed — returning null");
+            }
+            return std::ptr::null_mut();
+        }
+        (*ptr).value = initial_value;
+        I32_BOX_REGISTRY.with(|r| {
+            r.borrow_mut().insert(ptr as usize);
+        });
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
+    unsafe {
+        let layout = Layout::new::<BoolBox>();
+        let ptr = alloc(layout) as *mut BoolBox;
+        if ptr.is_null() {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!("[PERRY WARN] js_bool_box_alloc: allocation failed — returning null");
+            }
+            return std::ptr::null_mut();
+        }
+        (*ptr).value = initial_value != 0;
+        BOOL_BOX_REGISTRY.with(|r| {
+            r.borrow_mut().insert(ptr as usize);
+        });
+        ptr
+    }
+}
+
+/// GC root scanner: walk every registered box and `mark` the JSValue bit
 /// value inside. Heap pointers stored inside boxes (e.g. the generator
 /// state machine's iter object held in a mutable-capture box) must be
 /// kept alive across collections. The box pointer itself is _not_ a
 /// heap value the runtime tracks — `BOX_REGISTRY` is the source of
 /// truth for "every live box right now" — so we use the standard root
-/// scanner protocol: dispatch every stored f64 to `mark` and let the
-/// GC trace into it.
+/// scanner protocol: dispatch every stored JSValue bit pattern to `mark`
+/// and let the GC trace into it.
 pub fn scan_box_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
     scan_box_roots_mut(&mut visitor);
@@ -89,19 +157,19 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             // any pathological entry.
             if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
                 unsafe {
-                    visitor.visit_nanbox_f64_raw_slot(&raw mut (*ptr).value);
+                    visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
                 }
             }
         }
     });
 }
 
-/// Get the value from a box
+/// Get the raw JSValue bit pattern from a box.
 ///
 /// Same robustness as `js_box_set`: invalid pointers return `undefined`
 /// rather than dereferencing. See perry#393 for the failure mode.
 #[no_mangle]
-pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
+pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
     unsafe {
         if !is_registered_box_ptr(ptr) {
             // perry#924: production services see these in tight bursts of
@@ -126,13 +194,57 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
             // itself a quiet-NaN bit pattern, so numeric consumers behave
             // exactly as before; JS-level checks (`typeof`, `== null`)
             // now see `undefined`.
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+            return crate::value::TAG_UNDEFINED as i64;
+        }
+        (*ptr).value as i64
+    }
+}
+
+/// Compatibility wrapper for legacy f64-lowered boxed locals.
+#[no_mangle]
+pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
+    f64::from_bits(js_box_get_bits(ptr) as u64)
+}
+
+#[no_mangle]
+pub extern "C" fn js_i32_box_get(ptr: *mut I32Box) -> i32 {
+    unsafe {
+        if !is_registered_i32_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = I32_BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_i32_box_get: invalid box pointer {:p} #{}",
+                        ptr, count
+                    );
+                }
+            }
+            return 0;
         }
         (*ptr).value
     }
 }
 
-/// Set the value in a box
+#[no_mangle]
+pub extern "C" fn js_bool_box_get(ptr: *mut BoolBox) -> i32 {
+    unsafe {
+        if !is_registered_bool_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = BOOL_BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_bool_box_get: invalid box pointer {:p} #{}",
+                        ptr, count
+                    );
+                }
+            }
+            return 0;
+        }
+        i32::from((*ptr).value)
+    }
+}
+
+/// Set the raw JSValue bit pattern in a box.
 ///
 /// Robust against bogus pointers: in addition to the null check, we
 /// reject obviously-invalid pointers (below the first user page or
@@ -140,11 +252,11 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
 /// 8-byte aligned. This avoids SIGSEGV on `(*ptr).value = value` when
 /// upstream codegen hands us a stale/uninitialized slot — a known
 /// failure mode for closure prologues at hub-scale (perry#393).
-/// Boxes are heap-allocated 8-byte f64s; a non-aligned or low/high
+/// Boxes are heap-allocated 8-byte JSValue bit slots; a non-aligned or low/high
 /// pointer is definitely wrong, so a silent skip + telemetry warning
 /// is strictly safer than dereferencing it.
 #[no_mangle]
-pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
+pub extern "C" fn js_box_set_bits(ptr: *mut Box, value_bits: i64) {
     unsafe {
         if !is_registered_box_ptr(ptr) {
             // perry#924: silent-skip is correctness-safe (caller's box
@@ -158,14 +270,59 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
                         "[PERRY WARN] js_box_set: invalid box pointer {:p} #{} (value bits: 0x{:016x})",
                         ptr,
                         count,
-                        value.to_bits()
+                        value_bits as u64
+                    );
+                }
+            }
+            return;
+        }
+        let bits = value_bits as u64;
+        (*ptr).value = bits;
+        crate::gc::runtime_write_barrier_root_nanbox(bits);
+    }
+}
+
+/// Compatibility wrapper for legacy f64-lowered boxed locals.
+#[no_mangle]
+pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
+    js_box_set_bits(ptr, value.to_bits() as i64);
+}
+
+#[no_mangle]
+pub extern "C" fn js_i32_box_set(ptr: *mut I32Box, value: i32) {
+    unsafe {
+        if !is_registered_i32_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = I32_BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_i32_box_set: invalid box pointer {:p} #{} (value: {})",
+                        ptr, count, value
                     );
                 }
             }
             return;
         }
         (*ptr).value = value;
-        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_bool_box_set(ptr: *mut BoolBox, value: i32) {
+    unsafe {
+        if !is_registered_bool_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = BOOL_BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_bool_box_set: invalid box pointer {:p} #{} (value: {})",
+                        ptr, count, value
+                    );
+                }
+            }
+            return;
+        }
+        (*ptr).value = value != 0;
     }
 }
 
@@ -224,9 +381,52 @@ fn is_registered_box_ptr(ptr: *mut Box) -> bool {
     BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
 }
 
+#[inline]
+fn is_registered_i32_box_ptr(ptr: *mut I32Box) -> bool {
+    if !is_plausible_box_ptr(ptr.cast::<Box>()) {
+        return false;
+    }
+    I32_BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+}
+
+#[inline]
+fn is_registered_bool_box_ptr(ptr: *mut BoolBox) -> bool {
+    if !is_plausible_box_ptr(ptr.cast::<Box>()) {
+        return false;
+    }
+    BOOL_BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+}
+
+#[used]
+static KEEP_JS_BOX_ALLOC_BITS: extern "C" fn(i64) -> *mut Box = js_box_alloc_bits;
+#[used]
+static KEEP_JS_BOX_GET_BITS: extern "C" fn(*mut Box) -> i64 = js_box_get_bits;
+#[used]
+static KEEP_JS_BOX_SET_BITS: extern "C" fn(*mut Box, i64) = js_box_set_bits;
+#[used]
+static KEEP_JS_BOX_ALLOC: extern "C" fn(f64) -> *mut Box = js_box_alloc;
+#[used]
+static KEEP_JS_BOX_GET: extern "C" fn(*mut Box) -> f64 = js_box_get;
+#[used]
+static KEEP_JS_BOX_SET: extern "C" fn(*mut Box, f64) = js_box_set;
+#[used]
+static KEEP_JS_I32_BOX_ALLOC: extern "C" fn(i32) -> *mut I32Box = js_i32_box_alloc;
+#[used]
+static KEEP_JS_I32_BOX_GET: extern "C" fn(*mut I32Box) -> i32 = js_i32_box_get;
+#[used]
+static KEEP_JS_I32_BOX_SET: extern "C" fn(*mut I32Box, i32) = js_i32_box_set;
+#[used]
+static KEEP_JS_BOOL_BOX_ALLOC: extern "C" fn(i32) -> *mut BoolBox = js_bool_box_alloc;
+#[used]
+static KEEP_JS_BOOL_BOX_GET: extern "C" fn(*mut BoolBox) -> i32 = js_bool_box_get;
+#[used]
+static KEEP_JS_BOOL_BOX_SET: extern "C" fn(*mut BoolBox, i32) = js_bool_box_set;
+
 #[cfg(test)]
 pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+    I32_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+    BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -248,11 +448,22 @@ mod tests {
         assert!(!is_registered_box_ptr(fake), "fake must not be registered");
         // Must be a silent no-op, not a write/crash.
         js_box_set(fake, 1.0);
+        js_box_set_bits(
+            fake,
+            crate::value::JSValue::try_short_string(b"bad")
+                .unwrap()
+                .bits() as i64,
+        );
         assert_eq!(RODATA[0], 0xDEAD_BEEF, "rodata must be untouched");
         // Reads from an unregistered pointer return `undefined` (perry#4926:
         // the read-before-initialization value of a boxed variable), never
         // deref. TAG_UNDEFINED is a NaN bit pattern, so this also preserves
         // the older "returns NaN" numeric behavior.
+        assert_eq!(
+            js_box_get_bits(fake) as u64,
+            crate::value::TAG_UNDEFINED,
+            "unregistered bits box read must yield undefined"
+        );
         assert_eq!(
             js_box_get(fake).to_bits(),
             crate::value::TAG_UNDEFINED,
@@ -270,5 +481,55 @@ mod tests {
         assert_eq!(js_box_get(b), 3.5);
         js_box_set(b, 42.0);
         assert_eq!(js_box_get(b), 42.0);
+    }
+
+    /// The bits ABI is the canonical boxed-local storage path for dynamic
+    /// JSValues. It must not turn Perry's NaN-boxed non-number values into a
+    /// numeric NaN payload.
+    #[test]
+    fn box_bits_roundtrips_non_number_tags_exactly() {
+        test_clear_box_registry();
+        let cases = [
+            crate::value::JSValue::int32(-17).bits(),
+            crate::value::JSValue::try_short_string(b"ok")
+                .unwrap()
+                .bits(),
+            crate::value::TAG_UNDEFINED,
+        ];
+
+        for bits in cases {
+            let b = js_box_alloc_bits(bits as i64);
+            assert!(is_registered_box_ptr(b));
+            assert_eq!(js_box_get_bits(b) as u64, bits);
+            assert_eq!(js_box_get(b).to_bits(), bits);
+
+            let replacement = crate::value::JSValue::try_short_string(b"next")
+                .unwrap()
+                .bits();
+            js_box_set_bits(b, replacement as i64);
+            assert_eq!(js_box_get_bits(b) as u64, replacement);
+            assert_eq!(js_box_get(b).to_bits(), replacement);
+        }
+    }
+
+    #[test]
+    fn primitive_control_boxes_round_trip_and_reject_foreign_pointers() {
+        test_clear_box_registry();
+        let i32_box = js_i32_box_alloc(7);
+        assert!(is_registered_i32_box_ptr(i32_box));
+        assert_eq!(js_i32_box_get(i32_box), 7);
+        js_i32_box_set(i32_box, -3);
+        assert_eq!(js_i32_box_get(i32_box), -3);
+
+        let bool_box = js_bool_box_alloc(0);
+        assert!(is_registered_bool_box_ptr(bool_box));
+        assert_eq!(js_bool_box_get(bool_box), 0);
+        js_bool_box_set(bool_box, 1);
+        assert_eq!(js_bool_box_get(bool_box), 1);
+
+        let ordinary_box = js_box_alloc(1.0);
+        assert_eq!(js_i32_box_get(ordinary_box.cast::<I32Box>()), 0);
+        js_i32_box_set(ordinary_box.cast::<I32Box>(), 99);
+        assert_eq!(js_box_get(ordinary_box), 1.0);
     }
 }

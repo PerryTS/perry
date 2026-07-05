@@ -256,6 +256,14 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     js_array_push_f64(arr, value)
 }
 
+// This raw numeric-array helper is called from generated code, so release/LTO
+// builds may otherwise internalize and strip the `#[no_mangle]` export.
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern "C" fn(
+    *mut ArrayHeader,
+    f64,
+) -> *mut ArrayHeader = js_array_numeric_push_f64_unboxed;
+
 #[cold]
 unsafe fn js_array_push_f64_grow(
     arr: *mut ArrayHeader,

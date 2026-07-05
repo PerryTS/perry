@@ -31,5 +31,173 @@
     "added": "2026-05-18",
     "category": "ci-env",
     "reason": "Tracked in #1634 (parity CI environment fixtures). Ramda npm-package fixture failure on Linux CI; observed on #1038's CI run pre-merge. Companion to the existing test_ramda_user_import skip in the compile-smoke list \u2014 the parity harness can't npm-install ramda. File a CI-side fixture issue if/when this matters for sweep coverage."
+  },
+  "test_gap_2159_defineproperty_class_prototype": {
+    "issue": "2159",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "defineProperty on class prototypes \u2014 standing gap (issue encoded in name); confirmed standing (pre-dates v0.5.1205) in the #5917 parity diff."
+  },
+  "test_gap_2514_settracesigint": {
+    "issue": "2514",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "process SIGINT trace hook gap; standing per #5917 diff."
+  },
+  "test_gap_2754_2907_2908_bigint_semantics": {
+    "issue": "2754",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "BigInt semantics cluster (#2754/#2907/#2908); standing per #5917 diff."
+  },
+  "test_gap_3828_function_method_values": {
+    "issue": "3828",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "Function method value forms (#3828); standing per #5917 diff."
+  },
+  "test_gap_class_expr_extends_static_call_this": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "gap-bisect",
+    "reason": "class-expression extends + static call `this` \u2014 no dedicated issue; tracked via the #5917 standing-tail worklist (watch for newness: flagged there as one of two to eyeball)."
+  },
+  "test_gap_class_expr_static_this": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "gap-bisect",
+    "reason": "class-expression static `this` \u2014 tracked via #5917 standing-tail worklist (eyeball-for-newness pair)."
+  },
+  "test_gap_console_bare_global": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "gap-categorical",
+    "reason": "console formatting/global surface \u2014 CLAUDE.md categorical gap (console.dir/group formatting); standing per #5917."
+  },
+  "test_gap_console_validate_write": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "gap-categorical",
+    "reason": "console write validation \u2014 categorical console gap; standing per #5917."
+  },
+  "test_gap_diagchannel_3082_3084_3085_3086": {
+    "issue": "3082",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "diagnostics_channel cluster (#3082/#3084/#3085/#3086); standing per #5917."
+  },
+  "test_gap_dyn_index_get_denormal_safe": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "dynamic index-get denormal safety; standing per #5917 diff."
+  },
+  "test_gap_fetch_instanceof_5433": {
+    "issue": "5433",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "fetch Response/Request instanceof (#5433); standing per #5917."
+  },
+  "test_gap_fetch_response_json_init": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "Response.json()/init surface; standing per #5917 diff."
+  },
+  "test_gap_global_apis": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "module-inventory",
+    "reason": "global API surface inventory; standing per #5917."
+  },
+  "test_gap_iterator_helpers_2874": {
+    "issue": "2874",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "iterator helpers (#2874); standing per #5917."
+  },
+  "test_gap_module_const_local_shadow": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "module-const local shadowing; standing per #5917 diff."
+  },
+  "test_gap_node_v8_3137plus": {
+    "issue": "3137",
+    "added": "2026-07-04",
+    "category": "module-inventory",
+    "reason": "node:v8 surface (#3137+); standing per #5917."
+  },
+  "test_gap_object_methods": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "Object static-method tail; standing per #5917 (cf. #5588 lineage)."
+  },
+  "test_gap_perfhooks_3088_3008_3010_3011": {
+    "issue": "3088",
+    "added": "2026-07-04",
+    "category": "module-inventory",
+    "reason": "perf_hooks cluster (#3088/#3008/#3010/#3011); standing per #5917."
+  },
+  "test_gap_sqlite_3183plus": {
+    "issue": "3183",
+    "added": "2026-07-04",
+    "category": "module-inventory",
+    "reason": "node:sqlite surface (#3183+); standing per #5917."
+  },
+  "test_gap_static_member_call": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "static member call form; standing per #5917 diff."
+  },
+  "test_gap_string_coercion_tostring": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "string coercion/toString edge; standing per #5917 diff."
+  },
+  "test_gap_string_locale_2781_2845_2897": {
+    "issue": "2781",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "locale string cluster (#2781/#2845/#2897); standing per #5917."
+  },
+  "test_gap_symbols": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "gap-categorical",
+    "reason": "Symbol surface tail; standing per #5917."
+  },
+  "test_gap_v8_2_3680plus": {
+    "issue": "3680",
+    "added": "2026-07-04",
+    "category": "module-inventory",
+    "reason": "node:v8 second cluster (#3680+); standing per #5917."
+  },
+  "test_gap_v8_heap_snapshot_4916": {
+    "issue": "4916",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "v8 heap snapshot (#4916); standing per #5917."
+  },
+  "test_gap_yieldstar_inherited_iterator_this": {
+    "issue": "5917",
+    "added": "2026-07-04",
+    "category": "gap-bisect",
+    "reason": "yield* inherited-iterator `this` \u2014 tracked via #5917 standing-tail worklist (eyeball-for-newness pair)."
+  },
+  "test_gap_zlib_3285_params": {
+    "issue": "3285",
+    "added": "2026-07-04",
+    "category": "bug-open",
+    "reason": "zlib params (#3285); standing per #5917."
+  },
+  "test_gap_readline_3698plus": {
+    "issue": "3698",
+    "added": "2026-07-04",
+    "category": "module-inventory",
+    "reason": "node:readline surface (#3698+) \u2014 compile_fail in the 2026-07-03 baseline (tls/zlib/readline compile cluster, possibly runner env); standing per #5917."
   }
 }

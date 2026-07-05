@@ -8,12 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1208
+**Current Version:** 0.5.1239
 
 
 ## TypeScript Parity Status
 
-Tracked via the gap test suite (`test-files/test_gap_*.ts`, 235 tests). Compared byte-for-byte against `node --experimental-strip-types`. Run via `./scripts/run_gap_tests.sh` (a thin wrapper over `run_parity_tests.sh --filter test_gap_` that builds the compiler itself and gates on no new untriaged failures).
+Tracked via the gap test suite (`test-files/test_gap_*.ts`, 258 tests). Compared byte-for-byte against `node --experimental-strip-types`. Run via `./scripts/run_gap_tests.sh` (a thin wrapper over `run_parity_tests.sh --filter test_gap_` that builds the compiler itself and gates on no new untriaged failures).
 
 **Last full sweep:** run `./run_parity_tests.sh` for the current snapshot. The umbrella tracker is #793 (Node.js + TypeScript compatibility roadmap); the previously-cited #447–#452 batch closed on 2026-05-04. Currently-open trackers worth knowing about:
 
@@ -23,7 +23,7 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 235 tests). Compared
 - **Test/CI mechanics** — `#794` (per-category parity thresholds), `#796` (gap-suite output truncation + O(n²) `normalize_output`), `#812` (42-module behavioral matrix), `#806/#807/#808` (test harnesses for mixins / async context / ≥300-init scale).
 - **Skip-list audit** — `#797` covers `test-parity/known_failures.json` provenance (issue # + date per entry).
 
-**Known categorical gaps**: lookbehind regex (Rust `regex` crate), `console.dir`/`console.group*` formatting, lone surrogate handling (WTF-8).
+**Known categorical gaps**: `console.dir`/`console.group*` formatting, lone surrogate handling (WTF-8). (Lookbehind regex is NOT a gap anymore: `perry-runtime/src/regex.rs` falls back from the `regex` crate to `fancy-regex` for lookbehind/backreferences, with capture-group translation and replacement expansion.)
 
 ## Workflow Requirements
 
@@ -46,6 +46,12 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 235 tests). Compared
 PRs from outside contributors should **not** touch `[workspace.package] version` in `Cargo.toml`, the `**Current Version:**` line in `CLAUDE.md`, or `CHANGELOG.md`. The maintainer bumps the version and writes the changelog entry at merge time — usually by rebasing the PR branch and amending. This avoids the patch-version collisions that happen when Perry's `main` ships several commits while a PR is in review (each on-main commit bumps the version; a PR that bumped to the same patch on day 1 is already behind by merge day). Contributors just write code; let the maintainer fold in the metadata last.
 
 ## Build Commands
+
+### Which profile to use
+
+- **Local dev / testing (default choice)**: `cargo check -p perry` for fastest feedback, then `cargo build --profile perry-dev -p perry` (opt-level=1, codegen-units=16, incremental, no LTO — minutes instead of ~30). Use this for iterating on the compiler, running gap/parity tests, and reproducing bugs. Only fall back to `--release` if a bug is optimization-sensitive.
+- **Shipping / official artifacts**: `--profile dist` (mirrors `release`: thin LTO, codegen-units=1, opt-level=3, strip). Slow by design — LLVM codegen runs single-threaded per crate at codegen-units=1, and the giant crates (perry-runtime ~340k lines, perry-codegen, perry-hir) serialize the build regardless of core count. Don't use it for iteration.
+- **Local release-ish build when you need release perf**: override the compile-time killer, keep the optimization: `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release` (2–4× faster, ~1–3% runtime cost).
 
 ```bash
 cargo build --release                          # Build all crates
@@ -95,11 +101,11 @@ TAG_TRUE      = 0x7FFC_0000_0000_0004    STRING_TAG  = 0x7FFF (lower 48 = ptr)
 
 Key functions: `js_nanbox_string/pointer/bigint`, `js_nanbox_get_pointer`, `js_get_string_pointer_unified`, `js_jsvalue_to_string`, `js_is_truthy`
 
-**Module-level variables**: Strings stored as F64 (NaN-boxed), Arrays/Objects as I64 (raw pointers). Access via `module_var_data_ids`.
+**Module-level variables**: uniform NaN-boxed doubles in `@perry_global_<mod>__<id>` LLVM globals, all registered as GC roots before module init (marked AND rewritten on evacuation). The old F64-strings/raw-I64-arrays split and `module_var_data_ids` no longer exist (a stale comment survives in `perry-transform/src/inline/mod.rs`).
 
 ## Garbage Collection
 
-Generational mark-sweep GC in `crates/perry-runtime/src/gc.rs` (default since v0.5.237 / Phase D). Two regions in the per-thread arena: nursery (`ARENA`, fills with new allocations, swept on minor GC) and old-gen (`OLD_ARENA`, holds tenured/evacuated objects). Conservative stack scan + precise shadow-stack roots + 9 registered scanners. Write barriers populate a remembered set so minor GC can avoid retracing the old-gen. Two-bit aging (`HAS_SURVIVED` / `TENURED`) promotes nursery survivors after 2 minor cycles; the C4b evacuation policy moves non-pinned tenured objects into old-gen with full reference rewriting only when generated write barriers are active and nursery/RSS pressure plus measured movable candidates justify the work. Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the OS (C4b-δ, v0.5.235), and the next-trigger calc is hard-capped at the initial threshold (64 MB) so >90%-freed step-doubling can't blow up peak occupancy (C4b-δ-tune, v0.5.236). Triggers on arena block allocation (1 MB blocks since v0.5.196), malloc count threshold, or explicit `gc()` call. 8-byte GcHeader per allocation.
+Generational mark-sweep GC in `crates/perry-runtime/src/gc.rs` (default since v0.5.237 / Phase D). Two regions in the per-thread arena: nursery (`ARENA`, fills with new allocations, swept on minor GC) and old-gen (`OLD_ARENA`, holds tenured/evacuated objects). Precise shadow-stack roots + ~55 registered side-table scanners (`gc/mod.rs:298+`); a conservative stack scan exists but production mode resolves to SkipDisabled, so liveness rests on codegen shadow-stack spilling plus `RuntimeHandleScope` in runtime helpers. Write barriers populate a remembered set so minor GC can avoid retracing the old-gen. Two-bit aging (`HAS_SURVIVED` / `TENURED`) promotes nursery survivors after 2 minor cycles; the C4b evacuation policy moves non-pinned tenured objects into old-gen with full reference rewriting only when generated write barriers are active and nursery/RSS pressure plus measured movable candidates justify the work. Idle nursery blocks observed empty for 2 GC cycles are `dealloc`'d back to the OS (C4b-δ, v0.5.235), and the next-trigger calc is hard-capped at the initial threshold (64 MB) so >90%-freed step-doubling can't blow up peak occupancy (C4b-δ-tune, v0.5.236). Triggers on arena block allocation (1 MB blocks since v0.5.196), malloc count threshold, or explicit `gc()` call. 8-byte GcHeader per allocation.
 
 **Escape hatches**: `PERRY_GEN_GC=0`/`off`/`false` reverts to full mark-sweep (bisection only). `PERRY_GEN_GC_EVACUATE=0`/`off`/`false` disables policy evacuation; `=1`/`on`/`true` is accepted as auto-policy allowed, not unconditional evacuation. `PERRY_GC_FORCE_EVACUATE=1` stress-copies every marked non-pinned nursery object only when generated write barriers are active and policy evacuation is allowed. `PERRY_GC_VERIFY_EVACUATION=1` panics if any mutable live slot still points at a forwarded nursery object after an evacuation/rewrite cycle. `PERRY_WRITE_BARRIERS=0`/`off`/`false` disables codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection; unset, `=1`/`on`/`true` keep barriers enabled. `PERRY_GC_DIAG=1` prints per-cycle diagnostics, including evacuation-policy decisions for considered cycles and `barriers_inactive` skips.
 

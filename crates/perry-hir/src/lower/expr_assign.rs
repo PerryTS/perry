@@ -14,7 +14,10 @@ use crate::destructuring::lower_destructuring_assignment;
 use crate::ir::{BinaryOp, Expr, LogicalOp};
 use crate::lower_patterns::lower_assign_target_to_expr;
 
-use super::{lower_expr, lower_expr_assignment, with_set_fallback_for_ident, LoweringContext};
+use super::{
+    lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
+    with_set_fallback_for_ident, LoweringContext,
+};
 
 fn assignment_target_inferred_name(target: &ast::AssignTarget) -> Option<String> {
     match target {
@@ -448,10 +451,12 @@ fn lower_assignment_target(
                 Ok(*value)
             } else {
                 if ctx.current_strict {
-                    return Ok(Expr::Sequence(vec![
-                        *value,
-                        throw_reference_error_unresolvable_assignment(&name),
-                    ]));
+                    // #5989: strict-mode assignment to an existing global
+                    // builtin is a property write, not a ReferenceError. See
+                    // `strict_global_assign_existing_or_throw` for the full
+                    // rationale (shared with the sibling arm in
+                    // lower_expr/assignment.rs).
+                    return Ok(strict_global_assign_existing_or_throw(name, value));
                 }
                 eprintln!(
                     "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
@@ -518,12 +523,16 @@ fn lower_assignment_target(
                         }
                     }
                 }
-                if ctx.lookup_class(&obj_name).is_some() {
+                // #5938 follow-up: resolve scope-local class renames so a
+                // colliding body-local `class X`'s static write targets the
+                // renamed registrant, not the first same-named one.
+                let resolved_class = ctx.resolve_class_name(&obj_name);
+                if ctx.lookup_class(&resolved_class).is_some() {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
-                        if ctx.has_static_field(&obj_name, &field_name) {
+                        if ctx.has_static_field(&resolved_class, &field_name) {
                             return Ok(Expr::StaticFieldSet {
-                                class_name: obj_name,
+                                class_name: resolved_class,
                                 field_name,
                                 value,
                             });
@@ -929,7 +938,28 @@ fn lower_assignment_target(
             }
 
             let object_expr = lower_expr(ctx, &member.obj)?;
-            let object = Box::new(object_expr.clone());
+            // #5437: `PutValueSet` / `PropertySet` carry the object expression
+            // in BOTH `target` and `receiver`, and codegen evaluates both. When
+            // the object is itself an assignment to a local — Next.js' React
+            // renderer does `(r = n2(t = new nX(t, ...), ...)).parentFlushed =
+            // !0` — duplicating it re-runs the assignment (and the nested `new
+            // nX`), so the Request was constructed twice with the already-
+            // reassigned `t` and its `resumableState` became another Request
+            // (dynamic-SSR 500). Evaluate the assignment ONCE as a prelude and
+            // read the just-assigned local back from both slots. Reusing the
+            // assignment's own already-slotted local avoids a fresh temp (which
+            // gets no codegen stack slot in expression position). Pure / non-
+            // assignment objects keep the long-standing duplicate-in-place
+            // shape so codegen fast paths and IR are unchanged.
+            let reuse_id = if let Expr::LocalSet(set_id, _) = &object_expr {
+                Some(*set_id)
+            } else {
+                None
+            };
+            let (mut prelude, object): (Option<Expr>, Box<Expr>) = match reuse_id {
+                Some(id) => (Some(object_expr), Box::new(Expr::LocalGet(id))),
+                None => (None, Box::new(object_expr.clone())),
+            };
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -945,10 +975,13 @@ fn lower_assignment_target(
                     // writes — those are rare and meaningless on
                     // non-functions in practice).
                     if property == "prototype" {
-                        return Ok(Expr::SetFunctionPrototype {
-                            func: object,
-                            proto: value,
-                        });
+                        return Ok(wrap_assign_object_prelude(
+                            prelude.take(),
+                            Expr::SetFunctionPrototype {
+                                func: object,
+                                proto: value,
+                            },
+                        ));
                     }
                     // #1401: process.title = X — route through a runtime
                     // cell so subsequent reads see the new value. Without
@@ -962,13 +995,16 @@ fn lower_assignment_target(
                             }
                         }
                     }
-                    Ok(Expr::PutValueSet {
-                        target: object.clone(),
-                        key: Box::new(Expr::String(property)),
-                        value,
-                        receiver: object,
-                        strict: ctx.current_strict,
-                    })
+                    Ok(wrap_assign_object_prelude(
+                        prelude.take(),
+                        Expr::PutValueSet {
+                            target: object.clone(),
+                            key: Box::new(Expr::String(property)),
+                            value,
+                            receiver: object,
+                            strict: ctx.current_strict,
+                        },
+                    ))
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
@@ -978,11 +1014,14 @@ fn lower_assignment_target(
                     if let Expr::LocalGet(id) = &*object {
                         if let Some((_, _, ty)) = ctx.locals.iter().find(|(_, lid, _)| lid == id) {
                             if matches!(ty, Type::Named(n) if n == "Uint8Array" || n == "Buffer") {
-                                return Ok(Expr::Uint8ArraySet {
-                                    array: object,
-                                    index,
-                                    value,
-                                });
+                                return Ok(wrap_assign_object_prelude(
+                                    prelude.take(),
+                                    Expr::Uint8ArraySet {
+                                        array: object,
+                                        index,
+                                        value,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -996,22 +1035,28 @@ fn lower_assignment_target(
                             && key.chars().all(|c| c.is_ascii_digit())
                             && !(key.len() > 1 && key.starts_with('0'));
                         if !is_numeric_string {
-                            return Ok(Expr::PutValueSet {
-                                target: object.clone(),
-                                key: Box::new(Expr::String(key.clone())),
-                                value,
-                                receiver: object,
-                                strict: ctx.current_strict,
-                            });
+                            return Ok(wrap_assign_object_prelude(
+                                prelude.take(),
+                                Expr::PutValueSet {
+                                    target: object.clone(),
+                                    key: Box::new(Expr::String(key.clone())),
+                                    value,
+                                    receiver: object,
+                                    strict: ctx.current_strict,
+                                },
+                            ));
                         }
                     }
-                    Ok(Expr::PutValueSet {
-                        target: object.clone(),
-                        key: index,
-                        value,
-                        receiver: object,
-                        strict: ctx.current_strict,
-                    })
+                    Ok(wrap_assign_object_prelude(
+                        prelude.take(),
+                        Expr::PutValueSet {
+                            target: object.clone(),
+                            key: index,
+                            value,
+                            receiver: object,
+                            strict: ctx.current_strict,
+                        },
+                    ))
                 }
                 ast::MemberProp::PrivateName(private) => {
                     // Private field assignment: this.#field = value. Guard the
@@ -1024,11 +1069,14 @@ fn lower_assignment_target(
                         &property,
                         super::expr_member::PRIV_OP_WRITE,
                     );
-                    Ok(Expr::PropertySet {
-                        object,
-                        property,
-                        value,
-                    })
+                    Ok(wrap_assign_object_prelude(
+                        prelude.take(),
+                        Expr::PropertySet {
+                            object,
+                            property,
+                            value,
+                        },
+                    ))
                 }
             }
         }
@@ -1089,5 +1137,15 @@ fn lower_assignment_target(
             lower_expr_assignment(ctx, &ts_sat.expr, value)
         }
         other => Err(anyhow!("Unsupported assignment target: {:?}", other)),
+    }
+}
+
+/// #5437: prepend a once-evaluated object prelude (`LocalSet(tmp, object)`)
+/// in front of an assignment expression that references the temp from both
+/// `target` and `receiver`. `None` ⇒ the object was pure and used in place.
+fn wrap_assign_object_prelude(prelude: Option<Expr>, e: Expr) -> Expr {
+    match prelude {
+        Some(p) => Expr::Sequence(vec![p, e]),
+        None => e,
     }
 }

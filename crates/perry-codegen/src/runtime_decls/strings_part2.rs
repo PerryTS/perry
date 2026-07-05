@@ -677,6 +677,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // branch so `await thenable` enters the polling path.
     module.declare_function("js_assimilate_thenable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_run_microtasks", I32, &[]);
+    module.declare_function("js_promise_run_microtasks_await_loop", I32, &[]);
+    module.declare_function("js_await_loop_tick_timers", I32, &[]);
     // ESM entry marker: first microtask drain finishes promise jobs before
     // the nextTick queue (Node module-evaluation checkpoint ordering, #788).
     module.declare_function("js_mark_entry_module_esm", VOID, &[]);
@@ -698,6 +700,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // after enqueueing onto a queue the pump drains; otherwise sleeps until
     // the next timer deadline (or 1s safety cap).
     module.declare_function("js_wait_for_event", VOID, &[]);
+    // Host-driven event loop flag (watchOS SwiftUI tree shell): the entry's
+    // drain loop exits when perry_ui_app_run marked the loop host-driven.
+    module.declare_function("js_event_loop_host_driven", I32, &[]);
     module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
 
@@ -827,6 +832,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, PTR, I64, PTR, I64],
     );
+    module.declare_function(
+        "js_native_call_method_by_id",
+        DOUBLE,
+        &[DOUBLE, I64, PTR, I64],
+    );
     // Apply form: takes the args as a JS array handle (i64). The runtime
     // materialises the array elements into a temp f64 buffer and forwards to
     // js_native_call_method. Used by `Expr::CallSpread` for the
@@ -835,6 +845,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_native_call_method_apply",
         DOUBLE,
         &[DOUBLE, PTR, I64, I64],
+    );
+    module.declare_function(
+        "js_native_call_method_apply_by_id",
+        DOUBLE,
+        &[DOUBLE, I64, I64],
     );
     // v0.5.754: dispatch obj[strKey](args) — computed-key method call.
     // Takes a StringHeader pointer (already-unboxed) for the method name.
@@ -874,6 +889,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
     module.declare_function("js_promise_resolved_then", I64, &[DOUBLE, I64, I64]);
     module.declare_function("js_promise_finally", I64, &[I64, I64]);
+    // #5849: own-property-aware `.then`/`.catch`/`.finally` entries for a
+    // statically-known-Promise receiver — boxed f64 in, boxed f64 out (see
+    // `lower_call/property_get/promise_chain.rs`).
+    module.declare_function("js_promise_then_checked", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_promise_catch_checked", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_promise_finally_checked", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_promise_closure_arg", I64, &[DOUBLE]);
     module.declare_function("js_promise_all", I64, &[I64]);
     module.declare_function("js_promise_race", I64, &[I64]);
     module.declare_function("js_promise_any", I64, &[I64]);

@@ -5,6 +5,7 @@ mod contract;
 mod copying;
 mod cycle_state;
 mod debt_pacer;
+mod error_side_tables;
 mod evacuation;
 mod helper_stores;
 mod host_safepoints;

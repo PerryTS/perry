@@ -36,6 +36,7 @@ use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
 pub(crate) mod diagnostics;
+pub(crate) mod diagnostics_gc;
 pub use diagnostics::*;
 pub(crate) mod diagnostics_tail;
 pub(crate) use diagnostics_tail::*;

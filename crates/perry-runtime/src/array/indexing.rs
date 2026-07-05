@@ -770,6 +770,15 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
     0
 }
 
+// These raw numeric-array helpers are called from generated code, so release/LTO
+// builds may otherwise internalize and strip the `#[no_mangle]` exports.
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32) -> f64 =
+    js_array_numeric_get_f64_unboxed;
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32, f64) -> i32 =
+    js_array_numeric_set_f64_unboxed;
+
 /// Set an element in an array by index
 /// Note: This does NOT extend the array if index >= length
 #[no_mangle]
@@ -1289,6 +1298,18 @@ pub extern "C" fn js_array_set_string_key(
             Err(_) => return arr,
         }
     };
+    // `length` is a real own property of every array — a polymorphic /
+    // computed string-key write (`arr["length"] = n`, or an `Object.assign`
+    // copying a source's own `length` onto an array target) must resize the
+    // array (truncate / extend + holes), NOT land as an inert expando. The
+    // dedicated `arr.length = n` codegen path already routes to
+    // `js_array_set_length`; this covers the by-string-key entry points.
+    // (test262 Object/assign/target-Array: `Object.assign([7,8,9], {1:2,
+    // length:2})` truncates the target to `[1,2]`.)
+    if key_str == "length" {
+        js_array_set_length(arr, value);
+        return arr;
+    }
     // Try parse as a non-negative integer in array-index range.
     if let Ok(idx) = key_str.parse::<u32>() {
         // Reject leading zeros / signs that would round-trip differently

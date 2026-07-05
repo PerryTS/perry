@@ -112,8 +112,6 @@ pub fn start() -> i64 {
         ENGINE.with(|e| {
             *e.borrow_mut() = Some(engine);
         });
-        // DEBUG: write a test value so we can tell if engine started vs tap not firing
-        CURRENT_DB.store(42.0_f64.to_bits(), Ordering::Relaxed);
         1
     }
 }
@@ -134,14 +132,50 @@ pub fn stop() {
 }
 
 pub fn get_level() -> f64 {
-    // DEBUG: always return 55 to verify this function is called
-    return 55.0;
-    #[allow(unreachable_code)]
     f64::from_bits(CURRENT_DB.load(Ordering::Relaxed))
 }
 
 pub fn get_peak() -> f64 {
     f64::from_bits(CURRENT_PEAK.load(Ordering::Relaxed))
+}
+
+/// Device identifier (e.g. "Watch7,5") as a JS string handle, from
+/// sysctl hw.machine — same source as the iOS/tvOS implementations.
+pub fn get_device_model() -> i64 {
+    extern "C" {
+        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
+    }
+    let model = get_sysctl_model();
+    unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }
+}
+
+fn get_sysctl_model() -> String {
+    use std::ffi::CStr;
+    let mut size: libc::size_t = 0;
+    let name = c"hw.machine";
+    unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        );
+        if size == 0 {
+            return "Unknown".to_string();
+        }
+        let mut buf = vec![0u8; size];
+        libc::sysctlbyname(
+            name.as_ptr(),
+            buf.as_mut_ptr() as *mut _,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        );
+        CStr::from_ptr(buf.as_ptr() as *const i8)
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {

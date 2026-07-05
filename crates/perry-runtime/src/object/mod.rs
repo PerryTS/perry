@@ -87,7 +87,7 @@ mod with_env;
 // Issue #1103 follow-up: behavior-preserving split of the residual top-level
 // helpers that lived directly in `object/mod.rs`.
 mod class_meta_registry;
-mod descriptor_state;
+pub(crate) mod descriptor_state;
 mod this_binding;
 mod to_string_tag;
 pub use alloc::*;
@@ -767,6 +767,42 @@ fn transition_cache_slot(prev_keys: usize, key_ptr: usize) -> usize {
     (mixed as usize) & (TRANSITION_CACHE_SIZE - 1)
 }
 
+/// #6006: verify the cached transition edge really adds `key` at `slot_idx`,
+/// i.e. `next_keys[slot_idx]` string-matches `key`. Guards against a stale
+/// pointer-keyed cache entry (freed keys_array address recycled by GC) that
+/// pointer-matches but describes a different shape. Returns false on any
+/// structural mismatch so the caller falls back to the (correct) slow path.
+#[inline]
+fn transition_edge_places_key(
+    next_keys: usize,
+    slot_idx: u32,
+    key: *const crate::StringHeader,
+) -> bool {
+    if next_keys < crate::gc::GC_HEADER_SIZE || key.is_null() {
+        return false;
+    }
+    unsafe {
+        let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
+            as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+            return false;
+        }
+        let keys = next_keys as *const ArrayHeader;
+        // A single-key transition edge (prev + key) always produces a target
+        // shape of exactly `slot_idx + 1` keys, with `key` at the last slot.
+        // Requiring the EXACT length (not just `slot_idx < length`) also
+        // rejects the "shared target grew in place after caching" case — where
+        // the cached `target_len` still matches but the actual array is now
+        // longer, so adopting it would give the object a keys_array with more
+        // keys than field_count tracks (keys present, values undefined).
+        if (*keys).length != slot_idx.wrapping_add(1) {
+            return false;
+        }
+        let stored = crate::array::js_array_get(keys, slot_idx);
+        crate::string::js_string_key_matches(stored, key)
+    }
+}
+
 /// Transition cache lookup using interned string pointer identity.
 ///
 /// On HIT we ensure the returned keys_array has
@@ -785,6 +821,19 @@ fn transition_cache_lookup(
     let slot = transition_cache_slot(prev_keys, kp);
     let entry = with_transition_cache(|t| unsafe { (*t)[slot] });
     if entry.next_keys != 0 && entry.prev_keys == prev_keys && entry.key_ptr == kp {
+        // #6006: `prev_keys` / `key_ptr` are raw addresses, NOT GC roots (only
+        // `next_keys` is scanned/relocated). After GC frees a keys_array and
+        // recycles its address into an unrelated array, a stale entry here can
+        // pointer-match falsely — the object would then adopt `next_keys` and
+        // store the value at `slot_idx`, which belongs to a *different* shape.
+        // At bundle scale (frequent GC address reuse) this silently mis-places
+        // property values (keys_array looks right, but reads return undefined
+        // for the mis-slotted keys). Content-validate that the cached
+        // transition actually places THIS key at `slot_idx` before trusting it;
+        // a genuine edge always does, a recycled-address false match never will.
+        if !transition_edge_places_key(entry.next_keys, entry.slot_idx, interned_key) {
+            return None;
+        }
         let expected_len = entry.slot_idx.checked_add(1)?;
         if entry.target_len == expected_len {
             return Some((entry.next_keys, entry.slot_idx));

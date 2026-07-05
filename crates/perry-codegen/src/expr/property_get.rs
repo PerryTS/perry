@@ -47,8 +47,8 @@ pub(crate) use globalget::lower_globalget_property;
 pub(crate) use helpers::{
     builtin_prototype_method_read, class_has_computed_runtime_members,
     is_global_builtin_value_expr, is_primitive_builtin_proto_method, lower_class_method_bind,
-    lower_global_builtin_static_value, lower_runtime_property_get_by_name,
-    promise_static_function_length_expr,
+    lower_global_builtin_static_value, lower_raw_f64_class_field_get_for_number_context,
+    lower_runtime_property_get_by_name, promise_static_function_length_expr,
 };
 
 #[allow(unused_imports)]
@@ -58,8 +58,8 @@ use super::{
     emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
     emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
-    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    import_origin_suffix_ns, is_global_this_builtin_function_name, is_global_this_builtin_name,
+    is_known_finite, lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
@@ -138,20 +138,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(double_literal(len as f64))
         }
 
-        // TypedArray `.length` can be shadowed by an own property, so use
-        // the runtime length helper before the Buffer/Uint8Array inline path.
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && receiver_class_name(ctx, object)
-                    .as_deref()
-                    .is_some_and(is_numeric_typed_array_class) =>
-        {
-            let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
-        }
-
         Expr::PropertyGet { object, property }
             if property == "length"
                 && matches!(object.as_ref(), Expr::LocalGet(id)
@@ -204,6 +190,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered,
                 MaterializationReason::FunctionAbi,
             ))
+        }
+
+        // TypedArray `.length` can be shadowed by an own property, so use
+        // the runtime length helper only when lowering has not already
+        // registered the receiver as a native Buffer/TypedArray view above.
+        Expr::PropertyGet { object, property }
+            if property == "length"
+                && receiver_class_name(ctx, object)
+                    .as_deref()
+                    .is_some_and(is_numeric_typed_array_class) =>
+        {
+            let recv_box = lower_expr(ctx, object)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
@@ -911,10 +912,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // body. The body only runs later when the consumer
                         // actually calls `HashMap.keySet(self)`, by which time
                         // both modules have finished `__init`.
-                        // Issue #678: re-export renames mean the suffix in the
-                        // origin module differs from the consumer-visible name.
-                        let origin_suffix =
-                            import_origin_suffix(ctx.import_function_origin_names, property);
+                        // Issue #678/#5924: re-export renames mean the suffix
+                        // in the origin module differs from the
+                        // consumer-visible name. Namespace-scoped lookup
+                        // first so a rename in a different namespace
+                        // imported into this file can't clobber this
+                        // namespace's unrenamed member of the same name.
+                        let origin_suffix = import_origin_suffix_ns(
+                            ctx.import_function_origin_names,
+                            ctx.namespace_member_origin_names,
+                            _ns_lookup_name.as_deref().unwrap_or(""),
+                            property,
+                        );
                         if ctx.imported_vars.contains(property) {
                             let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
@@ -1041,18 +1050,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 if class_name == "ClientRequest" && is_http_client_request_method_name(property) {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_class_method_bind",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
+                    return lower_class_method_bind(ctx, object, property);
                 }
                 if class_name == "Agent" && is_http_agent_method_name(property) {
                     return lower_class_method_bind(ctx, object, property);
@@ -1120,18 +1118,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 if is_web_stream_method {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_class_method_bind",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
+                    return lower_class_method_bind(ctx, object, property);
                 }
                 // Fast path: known class instance + plain instance field
                 // (no getter/setter shadowing). Inline a direct GEP+load
@@ -1306,8 +1293,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 vec![
                                     format!("class={}", class_name),
+                                    format!("class_id={}", expected_class_id_str),
                                     format!("field={}", property),
                                     format!("field_index={}", field_idx_str),
+                                    "receiver_proof=declared_named_receiver_guarded_exact_class"
+                                        .to_string(),
+                                    "field_layout=raw_f64_slot_array".to_string(),
+                                    "pointer_bitmap=non_pointer".to_string(),
                                 ],
                             );
                         }
@@ -1394,18 +1386,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `undefined`.
                 let method_key = (class_name.clone(), property.clone());
                 if ctx.methods.contains_key(&method_key) {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let entry = ctx.strings.entry(key_idx);
-                    let bytes_global = format!("@{}", entry.bytes_global);
-                    let len_str = entry.byte_len.to_string();
-                    let blk = ctx.block();
-                    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_class_method_bind",
-                        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
-                    ));
+                    return lower_class_method_bind(ctx, object, property);
                 }
             }
             lower_generic_property_get(ctx, object, property)

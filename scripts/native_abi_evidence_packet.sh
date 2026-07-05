@@ -38,11 +38,39 @@ if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 1 ]]; then
   exit 2
 fi
 
+if [[ "$GATE" -eq 1 && "$RUNS" -lt 5 ]]; then
+  echo "--gate requires --runs >= 5 so p95 packet timing evidence is meaningful" >&2
+  exit 2
+fi
+
 if [[ -z "$OUT" ]]; then
   OUT="tmp/native-abi-evidence-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
 cd "$ROOT"
+
+ORIGINAL_RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+ORIGINAL_RUSTFLAGS="${RUSTFLAGS:-}"
+CARGO_CONFIG_RUSTC_WRAPPER=""
+for cargo_config in "${CARGO_HOME:-$HOME/.cargo}/config.toml" "$ROOT/.cargo/config.toml"; do
+  if [[ -f "$cargo_config" ]]; then
+    cargo_config_text="$(tr -d '[:space:]' < "$cargo_config")"
+    if [[ "$cargo_config_text" == *"rustc-wrapper="* ]]; then
+      CARGO_CONFIG_RUSTC_WRAPPER="configured"
+      break
+    fi
+  fi
+done
+SCRUBBED_RUSTC_WRAPPER=0
+if [[ "${PERRY_EVIDENCE_KEEP_RUSTC_WRAPPER:-0}" != "1" && ( -n "$ORIGINAL_RUSTC_WRAPPER" || -n "$CARGO_CONFIG_RUSTC_WRAPPER" ) ]]; then
+  export RUSTC_WRAPPER=""
+  SCRUBBED_RUSTC_WRAPPER=1
+fi
+if [[ -n "${PERRY_EVIDENCE_RUSTFLAGS:-}" ]]; then
+  export RUSTFLAGS="$PERRY_EVIDENCE_RUSTFLAGS"
+elif [[ -z "$ORIGINAL_RUSTFLAGS" ]]; then
+  export RUSTFLAGS="-Awarnings"
+fi
 
 PYTHON_BIN="${PYTHON:-}"
 if [[ -z "$PYTHON_BIN" ]]; then
@@ -90,8 +118,9 @@ mkdir -p "$OUT_ABS/logs"
 METADATA="$OUT_ABS/metadata.json"
 
 write_metadata() {
-  "$PYTHON_BIN" - "$METADATA" "$RUNS" "$GATE" "$PYTHON_BIN" <<'PY'
+  "$PYTHON_BIN" - "$METADATA" "$RUNS" "$GATE" "$PYTHON_BIN" "$ORIGINAL_RUSTC_WRAPPER" "$CARGO_CONFIG_RUSTC_WRAPPER" "$SCRUBBED_RUSTC_WRAPPER" "${RUSTC_WRAPPER:-}" "$ORIGINAL_RUSTFLAGS" "${RUSTFLAGS:-}" <<'PY'
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,6 +136,17 @@ existing.update({
     "gate": sys.argv[3] == "1",
     "python": sys.argv[4],
     "commands": existing.get("commands", {}),
+    "environment": {
+        **existing.get("environment", {}),
+        "rustc_wrapper_original": sys.argv[5],
+        "rustc_wrapper_config": sys.argv[6],
+        "rustc_wrapper_scrubbed": sys.argv[7] == "1",
+        "rustc_wrapper_effective": sys.argv[8],
+        "rustflags_original": sys.argv[9],
+        "rustflags_effective": sys.argv[10],
+        "keep_rustc_wrapper": os.environ.get("PERRY_EVIDENCE_KEEP_RUSTC_WRAPPER") == "1",
+        "rustflags_override": os.environ.get("PERRY_EVIDENCE_RUSTFLAGS", ""),
+    },
     "tool_versions": existing.get("tool_versions", {}),
 })
 path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -223,6 +263,39 @@ resolve_perry() {
   printf '%s\n' "$ROOT/target/debug/perry"
 }
 
+resolve_runtime_archive() {
+  local perry_bin="$1"
+  local dir
+  dir="$(dirname "$perry_bin")"
+  for candidate in "$dir/libperry_runtime.a" "$dir/perry_runtime.lib"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  printf '%s\n' "$dir/libperry_runtime.a"
+}
+
+snapshot_tool_artifacts() {
+  local perry_bin="$1"
+  local runtime_archive="$2"
+  local tools_dir="$OUT_ABS/tools"
+  mkdir -p "$tools_dir"
+
+  if [[ -x "$perry_bin" ]]; then
+    cp "$perry_bin" "$tools_dir/perry"
+    chmod +x "$tools_dir/perry"
+    PERRY_BIN_RESOLVED="$tools_dir/perry"
+  fi
+
+  if [[ -f "$runtime_archive" ]]; then
+    local runtime_name
+    runtime_name="$(basename "$runtime_archive")"
+    cp "$runtime_archive" "$tools_dir/$runtime_name"
+    RUNTIME_ARCHIVE_RESOLVED="$tools_dir/$runtime_name"
+  fi
+}
+
 write_metadata
 capture_tool_versions
 
@@ -232,10 +305,17 @@ echo "runs:   $RUNS"
 echo "python: $PYTHON_BIN"
 
 PERRY_BIN_RESOLVED="$(resolve_perry)"
-if [[ ! -x "$PERRY_BIN_RESOLVED" ]]; then
+if [[ -z "$PERRY_ARG" ]]; then
+  packet_build=(cargo build -p perry -p perry-runtime)
+  case "$PERRY_BIN_RESOLVED" in
+    "$ROOT/target/release/"*) packet_build=(cargo build --release -p perry -p perry-runtime) ;;
+  esac
+  run_logged "packet" "build" "$OUT_ABS/logs/build.log" "${packet_build[@]}"
+  PERRY_BIN_RESOLVED="$(resolve_perry)"
+elif [[ ! -x "$PERRY_BIN_RESOLVED" ]]; then
   run_logged "packet" "build" "$OUT_ABS/logs/build.log" cargo build -p perry
 else
-  record_command "packet" "build" "skipped" 0 "" "using existing Perry binary"
+  record_command "packet" "build" "skipped" 0 "" "using explicit Perry binary"
 fi
 
 if [[ ! -x "$PERRY_BIN_RESOLVED" ]]; then
@@ -244,16 +324,62 @@ else
   record_command "packet" "resolve_perry" "pass" 0 "" "$PERRY_BIN_RESOLVED"
 fi
 
-"$PYTHON_BIN" - "$METADATA" "$PERRY_BIN_RESOLVED" <<'PY'
+RUNTIME_ARCHIVE_RESOLVED="$(resolve_runtime_archive "$PERRY_BIN_RESOLVED")"
+if [[ -z "$PERRY_ARG" && -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
+  record_command "packet" "build_runtime_archive" "skipped" 0 "" "built by packet build"
+elif [[ ! -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
+  runtime_build=(cargo build -p perry-runtime)
+  case "$PERRY_BIN_RESOLVED" in
+    "$ROOT/target/release/"*) runtime_build=(cargo build --release -p perry-runtime) ;;
+  esac
+  run_logged "packet" "build_runtime_archive" "$OUT_ABS/logs/build-runtime-archive.log" \
+    "${runtime_build[@]}"
+  RUNTIME_ARCHIVE_RESOLVED="$(resolve_runtime_archive "$PERRY_BIN_RESOLVED")"
+else
+  record_command "packet" "build_runtime_archive" "skipped" 0 "" "using existing runtime archive"
+fi
+
+snapshot_tool_artifacts "$PERRY_BIN_RESOLVED" "$RUNTIME_ARCHIVE_RESOLVED"
+
+"$PYTHON_BIN" - "$METADATA" "$PERRY_BIN_RESOLVED" "$RUNTIME_ARCHIVE_RESOLVED" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+repo = Path.cwd()
 data = json.loads(path.read_text(encoding="utf-8"))
 data["perry"] = sys.argv[2]
+data["runtime_archive"] = sys.argv[3]
+archive = Path(sys.argv[3])
+if archive.exists():
+    data["runtime_archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+runtime_inputs = []
+for base in (repo / "crates" / "perry-runtime" / "src",):
+    runtime_inputs.extend(sorted(p for p in base.rglob("*") if p.is_file()))
+for extra in (
+    repo / "crates" / "perry-runtime" / "Cargo.toml",
+    repo / "crates" / "perry-runtime" / "build.rs",
+    repo / "scripts" / "check_runtime_symbols.sh",
+):
+    if extra.exists():
+        runtime_inputs.append(extra)
+digest = hashlib.sha256()
+for source in sorted(set(runtime_inputs)):
+    rel = source.relative_to(repo).as_posix()
+    digest.update(rel.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(hashlib.sha256(source.read_bytes()).digest())
+    digest.update(b"\0")
+data["runtime_source_digest"] = digest.hexdigest()
+data["runtime_source_digest_inputs"] = len(set(runtime_inputs))
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+
+run_logged "release" "runtime_symbols" "$OUT_ABS/logs/runtime-symbols.log" \
+  bash scripts/check_runtime_symbols.sh "$RUNTIME_ARCHIVE_RESOLVED"
 
 run_logged "correctness" "native_abi_contract" "$OUT_ABS/correctness/native-abi-contract/command.log" \
   env "PERRY=$PERRY_BIN_RESOLVED" "PERRY_NATIVE_ABI_EVIDENCE_DIR=$OUT_ABS/correctness/native-abi-contract" \
