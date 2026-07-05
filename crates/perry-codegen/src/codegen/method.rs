@@ -235,31 +235,6 @@ fn node_stream_parent_kind(
     None
 }
 
-fn map_set_default_super_kind<'a>(
-    classes: &HashMap<String, &'a perry_hir::Class>,
-    mut parent: Option<&'a str>,
-) -> Option<i32> {
-    let mut depth = 0usize;
-    while let Some(name) = parent {
-        match name {
-            "Map" => return Some(0),
-            "Set" => return Some(1),
-            _ => {}
-        }
-        let class = classes.get(name).copied()?;
-        if class.constructor.is_some() {
-            return None;
-        }
-        parent = class.extends_name.as_deref();
-        depth += 1;
-        // Keep this bound in sync with the twin in lower_call/new_helpers.rs.
-        if depth > 64 {
-            break;
-        }
-    }
-    None
-}
-
 /// Compile a class instance method as a top-level LLVM function with the
 /// signature `perry_method_<class>_<name>(this_box: double, args: double…)
 /// -> double`. The first parameter (`this`) is stored in a slot whose
@@ -425,9 +400,6 @@ pub(super) fn compile_method(
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
-        namespace_member_vars: &cross_module.namespace_member_vars,
-        namespace_member_namespace_prefixes: &cross_module.namespace_member_namespace_prefixes,
-        namespace_import_prefixes: &cross_module.namespace_import_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
@@ -744,31 +716,6 @@ pub(super) fn compile_method(
                     .unwrap_or_else(|| undef_lit.clone());
                 ctx.block()
                     .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
-            }
-            if let Some(kind) = map_set_default_super_kind(classes, class.extends_name.as_deref()) {
-                let undef_lit =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                let iterable = method
-                    .params
-                    .first()
-                    .and_then(|param| ctx.locals.get(&param.id).cloned())
-                    .map(|slot| ctx.block().load(DOUBLE, &slot))
-                    .unwrap_or_else(|| undef_lit.clone());
-                let this_box = ctx
-                    .this_stack
-                    .last()
-                    .cloned()
-                    .map(|slot| ctx.block().load(DOUBLE, &slot))
-                    .unwrap_or_else(|| undef_lit.clone());
-                ctx.block().call(
-                    DOUBLE,
-                    "js_map_set_subclass_init",
-                    &[
-                        (DOUBLE, &this_box),
-                        (I32, &kind.to_string()),
-                        (DOUBLE, &iterable),
-                    ],
-                );
             }
 
             // Wall 51: a no-own-ctor class with a DYNAMIC / cross-module parent
@@ -1326,9 +1273,6 @@ pub(super) fn compile_static_method(
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
-        namespace_member_vars: &cross_module.namespace_member_vars,
-        namespace_member_namespace_prefixes: &cross_module.namespace_member_namespace_prefixes,
-        namespace_import_prefixes: &cross_module.namespace_import_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,

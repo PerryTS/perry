@@ -37,31 +37,6 @@ pub fn lower_enum_decl(
     })
 }
 
-pub(crate) fn enum_runtime_let(ctx: &mut LoweringContext, en: &Enum) -> Stmt {
-    let id = ctx
-        .lookup_local(&en.name)
-        .unwrap_or_else(|| ctx.define_local(en.name.clone(), perry_types::Type::Any));
-    let mut properties = Vec::new();
-    for member in &en.members {
-        match &member.value {
-            EnumValue::Number(value) => {
-                properties.push((member.name.clone(), Expr::Number(*value as f64)));
-                properties.push((value.to_string(), Expr::String(member.name.clone())));
-            }
-            EnumValue::String(value) => {
-                properties.push((member.name.clone(), Expr::String(value.clone())));
-            }
-        }
-    }
-    Stmt::Let {
-        id,
-        name: en.name.clone(),
-        ty: perry_types::Type::Any,
-        mutable: true,
-        init: Some(Expr::Object(properties)),
-    }
-}
-
 /// Compute an enum's members (names + values) without touching the lowering
 /// context. Pure so it can run in the forward-reference pre-scan
 /// (`pre_register_module_enums`) and again at the real declaration site and

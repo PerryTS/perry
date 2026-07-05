@@ -199,23 +199,5 @@
     "added": "2026-07-04",
     "category": "module-inventory",
     "reason": "node:readline surface (#3698+) \u2014 compile_fail in the 2026-07-03 baseline (tls/zlib/readline compile cluster, possibly runner env); standing per #5917."
-  },
-  "test_gap_class_advanced": {
-    "issue": "5952",
-    "added": "2026-07-04",
-    "category": "bug-open",
-    "reason": "Regression tracked in #5952: a mixin factory that DIRECTLY returns `class extends <param> {}` (dynamic parent) loses its binding - `const M = make(Base); typeof M` is undefined. Workaround: assign to a local first (`const C = ...; return C`). Passes at merge-base bfa0f258d; introduced by the class-expression/factory work in #5874. Fix belongs in the HIR factory-class-inlining pass (skip dynamic-parent mixins)."
-  },
-  "test_gap_dynamic_import_node_builtin": {
-    "issue": null,
-    "added": "2026-07-04",
-    "category": "gap-categorical",
-    "reason": "Categorical AOT gap: `import(\"node:crypto\")` and other dynamic import() of a node builtin cannot be resolved in an ahead-of-time compiled binary (compiles to a deferred runtime rejection). Standing (compile-failed at merge-base bfa0f258d, now a graceful deferred error); NOT a regression of #5874. Main's #5947 triage missed it because it was compile-failing at the time."
-  },
-  "test_gap_disposablestack_2875": {
-    "issue": "2875",
-    "added": "2026-07-04",
-    "category": "gap-categorical",
-    "reason": "Categorical feature gap: DisposableStack / using-declaration (TC39) not implemented \u2014 methods return undefined. Standing, unrelated to #5874's Zod/namespace/class work; fails on main too (missed by the #5947 standing triage)."
   }
 }

@@ -11,27 +11,6 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let nanbox_false = f64::from_bits(0x7FFC_0000_0000_0003u64); // TAG_FALSE
     let nanbox_true = f64::from_bits(0x7FFC_0000_0000_0004u64); // TAG_TRUE
 
-    // The [[Prototype]] walk at the tail recurses through this entry point (a
-    // loop bounded at 1024 in earlier PRs became a recursion). `setPrototypeOf`
-    // rejects cycles, but a pathologically deep chain — or a cycle that slips
-    // past cycle-detection (see #b201538f3) — would otherwise overflow the
-    // stack. Bound total recursion depth to the same 1024 the manual walk below
-    // already caps at, so this introduces no new false-negative under that limit.
-    thread_local! {
-        static HP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    }
-    struct DepthGuard;
-    impl Drop for DepthGuard {
-        fn drop(&mut self) {
-            HP_DEPTH.with(|d| d.set(d.get() - 1));
-        }
-    }
-    if HP_DEPTH.with(|d| d.get()) > 1024 {
-        return nanbox_false;
-    }
-    HP_DEPTH.with(|d| d.set(d.get() + 1));
-    let _depth_guard = DepthGuard;
-
     let obj_val = JSValue::from_bits(obj.to_bits());
     let key_val = JSValue::from_bits(key.to_bits());
 
@@ -62,22 +41,6 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
             && crate::value::addr_class::is_handle_band(addr)
         {
-            if key_val.is_any_string() {
-                unsafe {
-                    if let Some(dispatch) = super::super::class_registry::handle_property_dispatch()
-                    {
-                        let key_ptr = crate::value::js_get_string_pointer_unified(key)
-                            as *const crate::StringHeader;
-                        let name_ptr =
-                            (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                        let name_len = (*key_ptr).byte_len as usize;
-                        let result = dispatch(addr as i64, name_ptr, name_len);
-                        if result.to_bits() != crate::value::TAG_UNDEFINED {
-                            return nanbox_true;
-                        }
-                    }
-                }
-            }
             return nanbox_false;
         }
     }
@@ -622,19 +585,6 @@ unsafe fn ordinary_has_property(
             }
         }
     }
-    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
-    let proto = super::super::js_object_get_prototype_of(receiver);
-    let proto_bits = proto.to_bits();
-    if proto_bits != crate::value::TAG_NULL
-        && proto_bits != crate::value::TAG_UNDEFINED
-        && proto_bits != receiver.to_bits()
-    {
-        let key_value = crate::value::js_nanbox_string(key as i64);
-        if crate::value::js_is_truthy(super::super::js_object_has_property(proto, key_value)) != 0 {
-            return true;
-        }
-    }
-
     // Inherited `Object.prototype` properties (`toString`, `hasOwnProperty`, …,
     // plus any user-assigned `Object.prototype` members).
     ordinary_object_prototype_property_value(last_valid, key).is_some()

@@ -8,22 +8,11 @@ use std::sync::RwLock;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
-    const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
     }
-    let map = registry.as_mut().unwrap();
-    if parent_class_id == CLASS_ID_OBJECT
-        && map
-            .get(&class_id)
-            .is_some_and(|existing| *existing != 0 && *existing != CLASS_ID_OBJECT)
-    {
-        return;
-    }
-    map.insert(class_id, parent_class_id);
-    drop(registry);
-    refresh_class_decl_prototype_parent(class_id);
+    registry.as_mut().unwrap().insert(class_id, parent_class_id);
 }
 
 /// Public registration entry point used by codegen module init.

@@ -846,7 +846,6 @@ pub unsafe extern "C" fn js_new_function_construct(
         let class_cid = js_object_get_class_id(obj);
         if class_cid != 0 {
             let inst = js_object_alloc(class_cid, 0);
-            let dynamic_parent = class_object_parent_value(obj, class_cid);
             // Replay the class's registered constructor (instance-field
             // initializers + body) on the fresh instance, filling the
             // capture params from the snapshotted `__perry_ctor_caps`. The
@@ -855,35 +854,6 @@ pub unsafe extern "C" fn js_new_function_construct(
             super::super::class_constructors::replay_class_object_constructor(
                 func_value, class_cid, inst, args_ptr, args_len,
             );
-            let proto =
-                ensure_class_object_prototype(obj as *mut ObjectHeader, dynamic_parent, func_value);
-            if !proto.is_null() {
-                super::super::prototype_chain::object_set_static_prototype(
-                    inst as usize,
-                    crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-                );
-            }
-            let dynamic_parent_is_error = matches!(
-                identify_global_builtin_constructor(dynamic_parent),
-                Some(
-                    "Error"
-                        | "TypeError"
-                        | "RangeError"
-                        | "ReferenceError"
-                        | "SyntaxError"
-                        | "EvalError"
-                        | "URIError"
-                )
-            );
-            if crate::object::class_meta_registry::extends_builtin_error(class_cid)
-                || dynamic_parent_is_error
-            {
-                let key = crate::string::js_string_from_bytes(
-                    b"constructor".as_ptr(),
-                    b"constructor".len() as u32,
-                );
-                super::super::js_object_set_field_by_name_nonenum(inst, key, func_value);
-            }
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
             // can't statically route an aliased parent, so attach the native
@@ -934,38 +904,35 @@ pub unsafe extern "C" fn js_new_function_construct(
         if fp != 0 && crate::closure::is_closure_ptr(fp) {
             let dyn_proto = crate::closure::closure_get_dynamic_prop(fp, "prototype");
             let dp = JSValue::from_bits(dyn_proto.to_bits());
-            let has_user_proto = super::super::class_ref_id(dyn_proto).is_some()
-                || if dp.is_pointer() {
-                    let raw = dp.as_pointer::<u8>() as usize;
-                    // Function objects (closures) are identified by CLOSURE_MAGIC,
-                    // not a GC type tag — check them first.
-                    let is_fn = crate::closure::is_closure_ptr(raw);
-                    is_fn
-                        || (raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
-                            let hdr = unsafe {
-                                &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
-                            };
-                            // Arrays: test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*.
-                            // Objects: Intl/Temporal constructors install .prototype via
-                            // closure_set_dynamic_prop (bypassing js_set_function_prototype),
-                            // so CLASS_PROTOTYPE_OBJECTS has no entry; ensure_function_prototype_object
-                            // would otherwise create a fresh empty proto and overwrite .prototype.
-                            matches!(
-                                hdr.obj_type,
-                                crate::gc::GC_TYPE_ARRAY
-                                    | crate::gc::GC_TYPE_LAZY_ARRAY
-                                    | crate::gc::GC_TYPE_OBJECT
-                            )
-                        })
-                } else {
-                    false
-                };
-            if has_user_proto {
-                super::super::prototype_chain::object_set_static_prototype(
-                    obj_ptr as usize,
-                    dyn_proto.to_bits(),
-                );
-                linked_user_proto = true;
+            if dp.is_pointer() {
+                let raw = dp.as_pointer::<u8>() as usize;
+                // Function objects (closures) are identified by CLOSURE_MAGIC,
+                // not a GC type tag — check them first.
+                let is_fn = crate::closure::is_closure_ptr(raw);
+                let has_user_proto = is_fn
+                    || (raw >= crate::gc::GC_HEADER_SIZE + 0x1000 && {
+                        let hdr = unsafe {
+                            &*((raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+                        };
+                        // Arrays: test262 filter/15.4.4.20-6-*, some/15.4.4.17-8-*.
+                        // Objects: Intl/Temporal constructors install .prototype via
+                        // closure_set_dynamic_prop (bypassing js_set_function_prototype),
+                        // so CLASS_PROTOTYPE_OBJECTS has no entry; ensure_function_prototype_object
+                        // would otherwise create a fresh empty proto and overwrite .prototype.
+                        matches!(
+                            hdr.obj_type,
+                            crate::gc::GC_TYPE_ARRAY
+                                | crate::gc::GC_TYPE_LAZY_ARRAY
+                                | crate::gc::GC_TYPE_OBJECT
+                        )
+                    });
+                if has_user_proto {
+                    super::super::prototype_chain::object_set_static_prototype(
+                        obj_ptr as usize,
+                        dyn_proto.to_bits(),
+                    );
+                    linked_user_proto = true;
+                }
             }
         }
     }
@@ -1024,99 +991,6 @@ pub unsafe extern "C" fn js_new_function_construct(
         }
     }
     nan_boxed
-}
-
-unsafe fn ensure_class_object_prototype(
-    class_obj: *mut ObjectHeader,
-    parent_value: f64,
-    constructor_value: f64,
-) -> *mut ObjectHeader {
-    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
-    let existing = js_object_get_field_by_name_f64(class_obj as *const ObjectHeader, key);
-    if super::super::value_is_object_like(existing) {
-        return crate::value::JSValue::from_bits(existing.to_bits()).as_pointer::<ObjectHeader>()
-            as *mut ObjectHeader;
-    }
-
-    let proto = js_object_alloc(0, 0);
-    if proto.is_null() {
-        return proto;
-    }
-
-    let constructor_key =
-        crate::string::js_string_from_bytes(b"constructor".as_ptr(), b"constructor".len() as u32);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    set_builtin_property_attrs(
-        proto as usize,
-        "constructor".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
-
-    if let Some(parent_proto_bits) = class_constructor_prototype_bits(parent_value) {
-        super::super::prototype_chain::object_set_static_prototype(
-            proto as usize,
-            parent_proto_bits,
-        );
-    } else if let Some(object_proto_bits) = global_object_prototype_bits() {
-        super::super::prototype_chain::object_set_static_prototype(
-            proto as usize,
-            object_proto_bits,
-        );
-    }
-
-    js_object_set_field_by_name(
-        class_obj,
-        key,
-        crate::value::js_nanbox_pointer(proto as i64),
-    );
-    set_builtin_property_attrs(
-        class_obj as usize,
-        "prototype".to_string(),
-        PropertyAttrs::new(false, false, false),
-    );
-    proto
-}
-
-unsafe fn class_object_parent_value(class_obj: *const ObjectHeader, class_id: u32) -> f64 {
-    let key = crate::string::js_string_from_bytes(
-        b"__perry_parent_value".as_ptr(),
-        b"__perry_parent_value".len() as u32,
-    );
-    let parent = js_object_get_field_by_name_f64(class_obj, key);
-    if parent.to_bits() != crate::value::TAG_UNDEFINED {
-        parent
-    } else {
-        js_get_dynamic_parent_value(class_id)
-    }
-}
-
-unsafe fn class_constructor_prototype_bits(constructor_value: f64) -> Option<u64> {
-    if let Some(parent_cid) = super::super::class_ref_id(constructor_value) {
-        if let Some(proto) = class_decl_prototype_value_for_instance_class(parent_cid) {
-            return Some(proto.to_bits());
-        }
-        let proto = class_prototype_object(parent_cid);
-        if !proto.is_null() {
-            return Some(crate::value::js_nanbox_pointer(proto as i64).to_bits());
-        }
-        return None;
-    }
-
-    let value = crate::value::JSValue::from_bits(constructor_value.to_bits());
-    if !value.is_pointer() {
-        return None;
-    }
-    let raw = value.as_pointer::<ObjectHeader>();
-    if raw.is_null() {
-        return None;
-    }
-    let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
-    let proto = js_object_get_field_by_name_f64(raw, key);
-    if super::super::value_is_object_like(proto) {
-        Some(proto.to_bits())
-    } else {
-        None
-    }
 }
 
 /// `new <callee>(...spread)` — spread-bearing construction. Codegen builds a

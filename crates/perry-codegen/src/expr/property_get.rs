@@ -111,17 +111,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let arr_handle = blk.call(I64, "js_error_get_errors", &[(I64, &recv_handle)]);
-            let is_missing = blk.icmp_eq(I64, &arr_handle, "0");
-            let tagged = nanbox_pointer_inline(blk, &arr_handle);
-            let tagged_bits = blk.bitcast_double_to_i64(&tagged);
-            let selected = blk.select(
-                I1,
-                &is_missing,
-                I64,
-                crate::nanbox::TAG_UNDEFINED_I64,
-                &tagged_bits,
-            );
-            Ok(blk.bitcast_i64_to_double(&selected))
+            Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
         Expr::PropertyGet { object, property }
@@ -576,8 +566,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // discards the INT32 tag during the unbox and ends up returning
             // undefined.
             let is_class_ref_object = matches!(object.as_ref(), Expr::ClassRef(_))
-                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name)
-                    && !ctx.namespace_imports.contains(name));
+                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
             if is_class_ref_object {
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(property);
@@ -847,14 +836,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // misses the class ref and falls back to the global
                     // `Number`, dropping all inherited statics (effect's
                     // `S.Number.ast`).
-                    if let Some(nested_prefix) = ctx
-                        .namespace_member_namespace_prefixes
-                        .get(&(name.clone(), property.clone()))
-                    {
-                        return Ok(ctx
-                            .block()
-                            .load(DOUBLE, &format!("@__perry_ns_{}", nested_prefix)));
-                    }
                     let class_cid = ctx.class_ids.get(property).copied().or_else(|| {
                         ctx.import_function_origin_names
                             .get(property)
@@ -867,19 +848,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Issue #680: prefer the per-namespace map so
                     // `random.make` and `tracer.make` resolve to their
                     // own sources even when both modules export `make`.
-                    // Do not fall back to flat import maps here: another
-                    // module can export a homonymous class/function with the
-                    // same local name as this namespace.
-                    let ns_lookup_name = if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                    // Falls back to the flat `import_function_prefixes`
+                    // for namespaces with no overlapping conflicts.
+                    let _ns_lookup_name = if let Expr::ExternFuncRef { name, .. } = object.as_ref()
+                    {
                         Some(name.clone())
                     } else {
                         None
                     };
-                    let source_prefix_opt = ns_lookup_name.as_ref().and_then(|ns| {
-                        ctx.namespace_member_prefixes
-                            .get(&(ns.clone(), property.clone()))
-                            .cloned()
-                    });
+                    let source_prefix_opt = _ns_lookup_name
+                        .as_ref()
+                        .and_then(|ns| {
+                            ctx.namespace_member_prefixes
+                                .get(&(ns.clone(), property.clone()))
+                                .cloned()
+                        })
+                        .or_else(|| ctx.import_function_prefixes.get(property).cloned());
                     if let Some(source_prefix) = source_prefix_opt {
                         // Issue #678 followup: V8-fallback namespace member
                         // read as a value (e.g. `let r = ns.render`) — there
@@ -928,50 +912,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // body. The body only runs later when the consumer
                         // actually calls `HashMap.keySet(self)`, by which time
                         // both modules have finished `__init`.
-                        // Issue #678 / #5924: re-export renames mean the suffix
-                        // in the origin module differs from the consumer-visible
-                        // name. Consult the per-namespace map first (so a rename
-                        // in a different namespace imported into this file can't
-                        // clobber this namespace's unrenamed member of the same
-                        // name), then the flat `import_function_origin_names`.
+                        // Issue #678/#5924: re-export renames mean the suffix
+                        // in the origin module differs from the
+                        // consumer-visible name. Namespace-scoped lookup
+                        // first so a rename in a different namespace
+                        // imported into this file can't clobber this
+                        // namespace's unrenamed member of the same name.
                         let origin_suffix = import_origin_suffix_ns(
                             ctx.import_function_origin_names,
                             ctx.namespace_member_origin_names,
-                            ns_lookup_name.as_deref().unwrap_or(""),
+                            _ns_lookup_name.as_deref().unwrap_or(""),
                             property,
                         );
-                        // Issue #680: a per-namespace exported VAR member is a
-                        // getter returning a closure — read it off the actual
-                        // namespace object rather than emitting a direct call to
-                        // the zero-arg getter symbol.
-                        let is_namespace_var = ns_lookup_name.as_ref().is_some_and(|ns| {
-                            ctx.namespace_member_vars
-                                .contains(&(ns.clone(), property.clone()))
-                        });
-                        if is_namespace_var {
-                            if let Some(namespace_prefix) = ns_lookup_name
-                                .as_ref()
-                                .and_then(|ns| ctx.namespace_import_prefixes.get(ns))
-                            {
-                                let ns_value = ctx
-                                    .block()
-                                    .load(DOUBLE, &format!("@__perry_ns_{}", namespace_prefix));
-                                let key_idx = ctx.strings.intern(property);
-                                let key_handle_global =
-                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                                let blk = ctx.block();
-                                let ns_bits = blk.bitcast_double_to_i64(&ns_value);
-                                let ns_handle = blk.and(I64, &ns_bits, POINTER_MASK_I64);
-                                let key_box = blk.load(DOUBLE, &key_handle_global);
-                                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                return Ok(blk.call(
-                                    DOUBLE,
-                                    "js_object_get_field_by_name_f64",
-                                    &[(I64, &ns_handle), (I64, &key_handle)],
-                                ));
-                            }
-                        }
                         if ctx.imported_vars.contains(property) {
                             let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));

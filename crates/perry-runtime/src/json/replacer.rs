@@ -307,16 +307,8 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
 
-    let alloc_limit = std::cmp::max(num_fields, 8);
-    let read_field_bits = |f: u32| -> u64 {
-        if f < alloc_limit {
-            (*fields_ptr.add(f as usize)).to_bits()
-        } else {
-            crate::object::js_object_get_field(obj, f).bits()
-        }
-    };
-    let actual_fields = keys_len;
-    let key_order = crate::object::ecma_own_key_order(keys_arr);
+    // Use keys_len as the iteration count since field_count may include pre-allocated slots.
+    let actual_fields = std::cmp::min(num_fields, keys_len);
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
     // A function replacer only sees own ENUMERABLE keys (EnumerableOwnProperty
@@ -324,14 +316,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let filter_non_enum = crate::object::descriptors_in_use();
     buf.push('{');
     let mut first = true;
-    let pos = |j: u32| -> u32 {
-        match &key_order {
-            Some(ord) => ord[j as usize],
-            None => j,
-        }
-    };
-    for j in 0..actual_fields {
-        let f = pos(j);
+    for f in 0..actual_fields {
         // Skip non-enumerable own keys before invoking the replacer.
         if filter_non_enum
             && f < keys_len
@@ -365,7 +350,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
 
         // Get the field value (invoking an own getter, as spec [[Get]] does),
         // resolve toJSON, then apply the replacer.
-        let mut field_val = f64::from_bits(read_field_bits(f));
+        let mut field_val = *fields_ptr.add(f as usize);
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
                 crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))

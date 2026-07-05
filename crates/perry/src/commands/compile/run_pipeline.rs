@@ -17,162 +17,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
-fn expr_uses_new_target(expr: &perry_hir::Expr) -> bool {
-    match expr {
-        perry_hir::Expr::NewTarget => true,
-        perry_hir::Expr::Closure {
-            captures_new_target,
-            ..
-        } => *captures_new_target,
-        _ => {
-            let mut found = false;
-            perry_hir::walker::walk_expr_children(expr, &mut |child| {
-                if !found && expr_uses_new_target(child) {
-                    found = true;
-                }
-            });
-            found
-        }
-    }
-}
-
-fn stmt_uses_new_target(stmt: &perry_hir::Stmt) -> bool {
-    use perry_hir::Stmt;
-    match stmt {
-        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_uses_new_target),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-            expr_uses_new_target(expr)
-        }
-        Stmt::Return(None) => false,
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_uses_new_target(condition)
-                || then_branch.iter().any(stmt_uses_new_target)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|branch| branch.iter().any(stmt_uses_new_target))
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_uses_new_target(condition) || body.iter().any(stmt_uses_new_target)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_deref().is_some_and(stmt_uses_new_target)
-                || condition.as_ref().is_some_and(expr_uses_new_target)
-                || update.as_ref().is_some_and(expr_uses_new_target)
-                || body.iter().any(stmt_uses_new_target)
-        }
-        Stmt::Labeled { body, .. } => stmt_uses_new_target(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body.iter().any(stmt_uses_new_target)
-                || catch
-                    .as_ref()
-                    .is_some_and(|catch| catch.body.iter().any(stmt_uses_new_target))
-                || finally
-                    .as_ref()
-                    .is_some_and(|body| body.iter().any(stmt_uses_new_target))
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_uses_new_target(discriminant)
-                || cases.iter().any(|case| {
-                    case.test.as_ref().is_some_and(expr_uses_new_target)
-                        || case.body.iter().any(stmt_uses_new_target)
-                })
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
-    }
-}
-
-fn ctor_uses_new_target(class: &perry_hir::Class) -> bool {
-    class
-        .constructor
-        .as_ref()
-        .is_some_and(|ctor| ctor.body.iter().any(stmt_uses_new_target))
-}
-
-fn exported_class_by_name<'a>(
-    exported_classes: &'a BTreeMap<(String, String), &'a perry_hir::Class>,
-    class_canonical_path: &std::collections::HashMap<perry_hir::ClassId, String>,
-    preferred_path: &str,
-    name: &str,
-) -> Option<(String, &'a perry_hir::Class)> {
-    let same_path_key = (preferred_path.to_string(), name.to_string());
-    if let Some(class) = exported_classes.get(&same_path_key) {
-        return Some((preferred_path.to_string(), *class));
-    }
-    let mut candidates = exported_classes
-        .iter()
-        .filter(|((_, class_name), _)| class_name == name);
-    let first = candidates.next()?;
-    if candidates.next().is_none() {
-        return Some((first.0 .0.clone(), *first.1));
-    }
-    exported_classes
-        .iter()
-        .find(|((_, class_name), class)| {
-            class_name == name
-                && class_canonical_path
-                    .get(&class.id)
-                    .is_some_and(|path| path == preferred_path)
-        })
-        .map(|((path, _), class)| (path.clone(), *class))
-}
-
-fn class_chain_uses_new_target(
-    exported_classes: &BTreeMap<(String, String), &perry_hir::Class>,
-    class_canonical_path: &std::collections::HashMap<perry_hir::ClassId, String>,
-    class_path: &str,
-    class: &perry_hir::Class,
-) -> bool {
-    if ctor_uses_new_target(class) {
-        return true;
-    }
-    let mut current_path = class_canonical_path
-        .get(&class.id)
-        .cloned()
-        .unwrap_or_else(|| class_path.to_string());
-    let mut parent = class.extends_name.as_deref();
-    let mut depth = 0usize;
-    while let Some(parent_name) = parent {
-        depth += 1;
-        if depth > 64 {
-            break;
-        }
-        let Some((path, parent_class)) = exported_class_by_name(
-            exported_classes,
-            class_canonical_path,
-            &current_path,
-            parent_name,
-        ) else {
-            break;
-        };
-        if ctor_uses_new_target(parent_class) {
-            return true;
-        }
-        current_path = path;
-        parent = parent_class.extends_name.as_deref();
-    }
-    false
-}
-
 /// Same as [`run`] but accepts an optional in-memory [`ParseCache`] that
 /// `perry dev` uses to reuse parsed ASTs across rebuilds in a single session.
 /// Pass `None` for the batch-compile path.
@@ -1761,46 +1605,12 @@ pub fn run_with_parse_cache(
         }
         out
     };
-    let sanitize_member_name = |s: &str| -> String {
-        if s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return sanitize_module_name(s);
-        }
-        let mut out = String::from("u_");
-        for c in s.chars() {
-            if c.is_ascii_alphanumeric() {
-                out.push(c);
-            } else {
-                out.push('_');
-                out.push_str(&format!("{:x}", c as u32));
-                out.push('_');
-            }
-        }
-        out
-    };
     let mut path_to_module_name: HashMap<PathBuf, String> = HashMap::new();
     let mut module_name_to_path: HashMap<String, PathBuf> = HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         path_to_module_name.insert(path.clone(), hir_module.name.clone());
-        if let Ok(canonical) = std::fs::canonicalize(path) {
-            path_to_module_name.insert(canonical.clone(), hir_module.name.clone());
-            module_name_to_path.insert(hir_module.name.clone(), canonical);
-        } else {
-            module_name_to_path.insert(hir_module.name.clone(), path.clone());
-        }
+        module_name_to_path.insert(hir_module.name.clone(), path.clone());
     }
-    let namespace_path_cache: std::sync::Mutex<HashMap<PathBuf, PathBuf>> =
-        std::sync::Mutex::new(HashMap::new());
-    let normalize_namespace_path = |path: PathBuf| {
-        if let Some(cached) = namespace_path_cache.lock().unwrap().get(&path).cloned() {
-            return cached;
-        }
-        let normalized = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        namespace_path_cache
-            .lock()
-            .unwrap()
-            .insert(path, normalized.clone());
-        normalized
-    };
     // Build a normalized HIR-by-name map for `flatten_exports`. Each
     // module's `Export::ReExport::source`, `Export::ExportAll::source`,
     // and `Export::NamespaceReExport::source` strings hold the raw
@@ -1824,7 +1634,6 @@ pub fn run_with_parse_cache(
                         &ctx.compile_packages,
                         &ctx.compile_package_dirs,
                     ) {
-                        let resolved_path = normalize_namespace_path(resolved_path);
                         if let Some(name) = path_to_module_name.get(&resolved_path) {
                             *source = name.clone();
                         }
@@ -1835,8 +1644,8 @@ pub fn run_with_parse_cache(
         }
         module_name_to_module.insert(hir_module.name.clone(), rewritten);
     }
-    // Set of native-module paths that are dynamic-import targets. Those
-    // drive dynamic-import dispatch maps below.
+    // Set of native-module paths that are dynamic-import targets. We
+    // also build a parallel set keyed by Module::name for flatten_exports.
     let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for hir_module in ctx.native_modules.values() {
         for import in &hir_module.imports {
@@ -1848,73 +1657,14 @@ pub fn run_with_parse_cache(
                 continue;
             }
             if let Some(rp) = &import.resolved_path {
-                dyn_target_paths.insert(normalize_namespace_path(PathBuf::from(rp)));
-            }
-        }
-    }
-
-    // Namespace objects are needed for more than dynamic import:
-    // `import * as ns` values and `export * as ns from "./mod"` both need the
-    // producer module to emit/populate `@__perry_ns_<prefix>`. Dynamic imports
-    // are still a subset because `await import()` resolves to that same object.
-    let mut namespace_target_paths = dyn_target_paths.clone();
-    for (path, hir_module) in &ctx.native_modules {
-        for import in &hir_module.imports {
-            if import.type_only {
-                continue;
-            }
-            let has_namespace_import = import
-                .specifiers
-                .iter()
-                .any(|spec| matches!(spec, perry_hir::ImportSpecifier::Namespace { .. }));
-            if has_namespace_import {
-                if let Some(rp) = &import.resolved_path {
-                    namespace_target_paths.insert(normalize_namespace_path(PathBuf::from(rp)));
-                }
-            }
-        }
-        for export in &hir_module.exports {
-            if let perry_hir::Export::NamespaceReExport { source, .. } = export {
-                if let Some((resolved_path, _)) = resolve_import(
-                    source,
-                    path,
-                    &ctx.project_root,
-                    &ctx.compile_packages,
-                    &ctx.compile_package_dirs,
-                ) {
-                    namespace_target_paths.insert(normalize_namespace_path(resolved_path));
-                }
-            }
-        }
-    }
-
-    // A namespace target can itself expose nested namespace re-exports. Include
-    // those nested sources too so `export * as coerce from "./coerce.js"` can
-    // load a real `@__perry_ns_<coerce>` when building its parent namespace.
-    let mut changed = true;
-    while changed {
-        changed = false;
-        let targets: Vec<PathBuf> = namespace_target_paths.iter().cloned().collect();
-        for target_path in targets {
-            let Some(target_hir) = ctx.native_modules.get(&target_path) else {
-                continue;
-            };
-            let lookup = |s: &str| module_name_to_module.get(s);
-            for fe in perry_hir::flatten_exports(&target_hir.name, &lookup) {
-                if let Some(nested) = &fe.nested_namespace_of {
-                    if let Some(nested_path) = module_name_to_path.get(nested) {
-                        if namespace_target_paths.insert(nested_path.clone()) {
-                            changed = true;
-                        }
-                    }
-                }
+                dyn_target_paths.insert(PathBuf::from(rp));
             }
         }
     }
     // Per-module precomputed namespace_entries (keyed by path).
     let mut per_module_namespace_entries: HashMap<PathBuf, Vec<perry_codegen::NamespaceEntry>> =
         HashMap::new();
-    for target_path in &namespace_target_paths {
+    for target_path in &dyn_target_paths {
         let target_hir = match ctx.native_modules.get(target_path) {
             Some(m) => m,
             None => continue, // native/JS module — handled elsewhere
@@ -1947,7 +1697,7 @@ pub fn run_with_parse_cache(
                     let scoped = format!(
                         "perry_fn_{}__{}",
                         sanitize_module_name(&target_hir.name),
-                        sanitize_member_name(&func.name)
+                        sanitize_module_name(&func.name)
                     );
                     perry_codegen::NamespaceEntryKind::LocalFunction {
                         wrap_symbol: format!("__perry_wrap_{}", scoped),
@@ -1970,13 +1720,13 @@ pub fn run_with_parse_cache(
                     );
                     perry_codegen::NamespaceEntryKind::LocalVar { global_name: gname }
                 } else {
-                    // Best-effort: treat unknown locals as getter-backed vars.
-                    // For renamed exports (`export { _null as null }`) the
-                    // producer emits the public getter name, so prefer the
-                    // namespace key over the private local spelling here.
+                    // Best-effort: treat unknown locals as Var sourced
+                    // by getter. This covers re-export shapes that the
+                    // local-detection misses; the cross-module getter
+                    // for the same module returns the value too.
                     perry_codegen::NamespaceEntryKind::ForeignVar {
                         source_prefix: sanitize_module_name(&target_hir.name),
-                        source_local: fe.name.clone(),
+                        source_local: fe.source_local.clone(),
                     }
                 }
             } else {
@@ -2234,7 +1984,7 @@ pub fn run_with_parse_cache(
                         continue;
                     }
                     if let Some(resolved) = &import.resolved_path {
-                        let resolved_path = normalize_namespace_path(PathBuf::from(resolved));
+                        let resolved_path = PathBuf::from(resolved);
                         if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
                             push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
                         }
@@ -2257,7 +2007,6 @@ pub fn run_with_parse_cache(
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
                         ) {
-                            let resolved_path = normalize_namespace_path(resolved_path);
                             if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
                                 push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
                             }
@@ -2337,19 +2086,16 @@ pub fn run_with_parse_cache(
             // member_name)` → `source_prefix`.
             let mut namespace_member_prefixes: std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
-            // Issue #680 / #5924: per-namespace origin-name resolution
-            // (mirroring `namespace_member_prefixes`). Being per-namespace
-            // instead of the flat `import_function_origin_names` avoids the
-            // #5924 clobber where two namespaces sharing a member name (only one
-            // a re-export rename) overwrite each other (`Effect`'s re-exported
-            // `Service` broke `Context.Service`).
-            let mut namespace_member_origin_names: std::collections::HashMap<(String, String), String> =
-                std::collections::HashMap::new();
-            let mut namespace_member_vars: std::collections::HashSet<(String, String)> =
-                std::collections::HashSet::new();
-            let mut namespace_member_namespace_prefixes: std::collections::HashMap<(String, String), String> =
-                std::collections::HashMap::new();
-            let mut namespace_import_prefixes: std::collections::HashMap<String, String> =
+            // Issue #5924 (companion to #680/#678): per-namespace origin-name
+            // resolution. `import_function_origin_names` is flat (keyed by
+            // bare member name), so when two namespaces imported into the
+            // same file both have a member with the same name and only ONE
+            // of them is a re-export rename, the rename's origin-name
+            // override clobbers the other namespace's (correct, unrenamed)
+            // suffix. Keyed by `(namespace_local, member_name)` →
+            // `origin_name`, mirroring `namespace_member_prefixes`.
+            let mut namespace_member_origin_names:
+                std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
             // Issue #321: subset of `namespace_imports` populated only by the
@@ -2514,25 +2260,6 @@ pub fn run_with_parse_cache(
                     };
                     if let Some(local) = namespace_like_local {
                         namespace_imports.push(local.clone());
-                        let resolved_key =
-                            normalize_namespace_path(PathBuf::from(&resolved_path_str));
-                        if let Some(target_mod) = ctx.native_modules.get(&resolved_key) {
-                            let prefix = sanitize_name(&target_mod.name);
-                            namespace_import_prefixes.insert(local.clone(), prefix);
-                            let lookup = |s: &str| module_name_to_module.get(s);
-                            for entry in perry_hir::flatten_exports(&target_mod.name, &lookup) {
-                                if let Some(nested_module_name) = entry.nested_namespace_of {
-                                    let nested_prefix = module_name_to_module
-                                        .get(&nested_module_name)
-                                        .map(|m| sanitize_module_name(&m.name))
-                                        .unwrap_or_else(|| sanitize_module_name(&nested_module_name));
-                                    namespace_member_namespace_prefixes.insert(
-                                        (local.clone(), entry.name),
-                                        nested_prefix,
-                                    );
-                                }
-                            }
-                        }
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
                             for (export_name, origin_path) in exports {
@@ -2615,14 +2342,6 @@ pub fn run_with_parse_cache(
                                     (local.clone(), export_name.clone()),
                                     origin_prefix.clone(),
                                 );
-                                if let Some(ref origin_name) = resolved_origin_name {
-                                    if origin_name != export_name {
-                                        namespace_member_origin_names.insert(
-                                            (local.clone(), export_name.clone()),
-                                            origin_name.clone(),
-                                        );
-                                    }
-                                }
 
                                 let key = (origin_path.clone(), export_name.clone());
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
@@ -2671,7 +2390,6 @@ pub fn run_with_parse_cache(
                                         .unwrap_or(false)
                                 {
                                     imported_vars.insert(export_name.clone());
-                                    namespace_member_vars.insert((local.clone(), export_name.clone()));
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
                                     let class_prefix = canonical_class_source_prefix(
@@ -2690,12 +2408,6 @@ pub fn run_with_parse_cache(
                                             .map(|c| c.params.len())
                                             .unwrap_or(0),
                                         has_own_constructor: class.constructor.is_some(),
-                                        constructor_uses_new_target: class_chain_uses_new_target(
-                                            &exported_classes,
-                                            &class_canonical_path,
-                                            &key.0,
-                                            class,
-                                        ),
                                         constructor_has_rest: class
                                             .constructor
                                             .as_ref()
@@ -2838,26 +2550,39 @@ pub fn run_with_parse_cache(
                     // name, then route the local through `namespace_imports`
                     // + register the namespace target's full export surface.
                     let mut handled_as_namespace_reexport = false;
-                    macro_rules! register_namespace_export_surface {
-                        ($namespace_local:expr, $target_path:expr) => {{
-                            let target_path_str = $target_path;
-                            let target_key = normalize_namespace_path(PathBuf::from(target_path_str));
-                            if let Some(target_hir_for_ns) = ctx.native_modules.get(&target_key) {
-                                let lookup = |s: &str| module_name_to_module.get(s);
-                                for entry in perry_hir::flatten_exports(&target_hir_for_ns.name, &lookup) {
-                                    if let Some(nested_module_name) = entry.nested_namespace_of {
-                                        let nested_prefix = module_name_to_module
-                                            .get(&nested_module_name)
-                                            .map(|m| sanitize_module_name(&m.name))
-                                            .unwrap_or_else(|| sanitize_module_name(&nested_module_name));
-                                        namespace_member_namespace_prefixes.insert(
-                                            ($namespace_local.clone(), entry.name),
-                                            nested_prefix,
-                                        );
-                                    }
+                    if let Some(src_hir) = source_module {
+                        for export in &src_hir.exports {
+                            if let perry_hir::Export::NamespaceReExport {
+                                source: ns_src,
+                                name,
+                            } = export
+                            {
+                                if name != &exported_name {
+                                    continue;
                                 }
-                            }
-                            if let Some(target_exports) = all_module_exports.get(target_path_str) {
+                                let importer = std::path::Path::new(&resolved_path_str);
+                                let Some((ns_target, _)) = resolve_import(
+                                    ns_src,
+                                    importer,
+                                    &ctx.project_root,
+                                    &ctx.compile_packages,
+                                    &ctx.compile_package_dirs,
+                                ) else {
+                                    break;
+                                };
+                                let ns_target_str = ns_target.to_string_lossy().to_string();
+                                let Some(target_exports) = all_module_exports.get(&ns_target_str)
+                                else {
+                                    break;
+                                };
+                                namespace_imports.push(local_name.clone());
+                                // Issue #321: tag this local as a "named-import-
+                                // of-namespace-reexport" so codegen's
+                                // StaticMethodCall arm knows to route var-shape
+                                // members through `js_closure_callN`. See the
+                                // expr.rs StaticMethodCall comment for why this
+                                // is scoped narrowly.
+                                namespace_reexport_named_imports.insert(local_name.clone());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
@@ -2887,13 +2612,13 @@ pub fn run_with_parse_cache(
                                     // `import_function_prefixes`, which the
                                     // last-registered namespace silently wins.
                                     namespace_member_prefixes.insert(
-                                        ($namespace_local.clone(), export_name.clone()),
+                                        (local_name.clone(), export_name.clone()),
                                         origin_prefix.clone(),
                                     );
                                     // Issue #678: surface origin-name overrides
                                     // for the NamespaceReExport branch too.
                                     let resolved_origin_name = all_module_export_origin_names
-                                        .get(target_path_str)
+                                        .get(&ns_target_str)
                                         .and_then(|m| m.get(export_name))
                                         .cloned();
                                     if let Some(ref origin_name) = resolved_origin_name {
@@ -2936,10 +2661,8 @@ pub fn run_with_parse_cache(
                                     // resolved origin name when renamed,
                                     // else the export name itself.
                                     namespace_member_origin_names.insert(
-                                        ($namespace_local.clone(), export_name.clone()),
-                                        resolved_origin_name
-                                            .clone()
-                                            .unwrap_or_else(|| export_name.clone()),
+                                        (local_name.clone(), export_name.clone()),
+                                        resolved_origin_name.unwrap_or_else(|| export_name.clone()),
                                     );
 
                                     let key = (origin_path.clone(), export_name.clone());
@@ -2954,18 +2677,27 @@ pub fn run_with_parse_cache(
                                     if exported_func_synthetic_arguments.contains(&key) {
                                         imported_synthetic_arguments.insert(export_name.clone());
                                     }
-                                    let origin_key_under_origin_name = resolved_origin_name
-                                        .as_ref()
-                                        .map(|n| (origin_path.clone(), n.clone()));
-                                    if exported_var_names.contains(&key)
-                                        || origin_key_under_origin_name
-                                            .as_ref()
-                                            .map(|k| exported_var_names.contains(k))
-                                            .unwrap_or(false)
-                                    {
+                                    // Issue #321: NamespaceReExport members
+                                    // that are var-shaped exports (the
+                                    // canonical `export const succeed = (v) =>
+                                    // ...` shape in effect/Effect.ts and
+                                    // co-equivalent re-export hubs) must land
+                                    // in `imported_vars` so the codegen's
+                                    // StaticMethodCall and namespace-member
+                                    // call sites route through the zero-arg
+                                    // getter + `js_closure_callN`. Without
+                                    // this, `import { Effect } from "effect";
+                                    // Effect.succeed(42)` emitted a 1-arg
+                                    // direct call against the 0-arg getter
+                                    // — the source returned the closure
+                                    // pointer unchanged and `typeof
+                                    // Effect.succeed(42)` was `"function"`,
+                                    // and `runSync(program)` then threw
+                                    // `Cannot read properties of undefined`
+                                    // on `program._tag`. Mirrors the
+                                    // `Namespace { local }` branch above.
+                                    if exported_var_names.contains(&key) {
                                         imported_vars.insert(export_name.clone());
-                                        namespace_member_vars
-                                            .insert(($namespace_local.clone(), export_name.clone()));
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
                                         let class_prefix = canonical_class_source_prefix(
@@ -2984,13 +2716,6 @@ pub fn run_with_parse_cache(
                                                 .map(|c| c.params.len())
                                                 .unwrap_or(0),
                                             has_own_constructor: class.constructor.is_some(),
-                                            constructor_uses_new_target:
-                                                class_chain_uses_new_target(
-                                                    &exported_classes,
-                                                    &class_canonical_path,
-                                                    &key.0,
-                                                    class,
-                                                ),
                                             constructor_has_rest: class
                                                 .constructor
                                                 .as_ref()
@@ -3052,124 +2777,6 @@ pub fn run_with_parse_cache(
                                         imported_enums.push((export_name.clone(), members.clone()));
                                     }
                                 }
-                            }
-                        }};
-                    }
-                    if let Some(src_hir) = source_module {
-                        let direct_namespace_source = src_hir.imports.iter().find_map(|import| {
-                            import.specifiers.iter().find_map(|spec| match spec {
-                                perry_hir::ImportSpecifier::Namespace { local: ns_local }
-                                    if ns_local == &exported_name =>
-                                {
-                                    import.resolved_path.as_ref()
-                                }
-                                _ => None,
-                            })
-                        });
-                        if let Some(namespace_source) = direct_namespace_source {
-                            let resolved_key =
-                                normalize_namespace_path(PathBuf::from(namespace_source));
-                            if let Some(target_mod) = ctx.native_modules.get(&resolved_key) {
-                                namespace_imports.push(local_name.clone());
-                                namespace_import_prefixes
-                                    .insert(local_name.clone(), sanitize_name(&target_mod.name));
-                                register_namespace_export_surface!(local_name, namespace_source);
-                                continue;
-                            }
-                        }
-
-                        let lookup = |name: &str| module_name_to_module.get(name);
-                        let transitive_namespace_source =
-                            perry_hir::flatten_exports(&src_hir.name, &lookup)
-                                .into_iter()
-                                .find(|entry| {
-                                    entry.name == exported_name
-                                        && entry.nested_namespace_of.is_some()
-                                })
-                                .and_then(|entry| entry.nested_namespace_of);
-                        if let Some(namespace_module_name) = transitive_namespace_source {
-                            if let Some(namespace_path) = module_name_to_path.get(&namespace_module_name)
-                            {
-                                if let Some(target_mod) = ctx.native_modules.get(namespace_path) {
-                                    namespace_imports.push(local_name.clone());
-                                    namespace_import_prefixes.insert(
-                                        local_name.clone(),
-                                        sanitize_name(&target_mod.name),
-                                    );
-                                    let namespace_path_str = namespace_path.to_string_lossy();
-                                    register_namespace_export_surface!(
-                                        local_name,
-                                        namespace_path_str.as_ref()
-                                    );
-                                    continue;
-                                }
-                            }
-                        }
-
-                        for export in &src_hir.exports {
-                            let perry_hir::Export::Named { local, exported } = export else {
-                                continue;
-                            };
-                            if exported != &exported_name {
-                                continue;
-                            }
-                            let namespace_source = src_hir.imports.iter().find_map(|import| {
-                                import.specifiers.iter().find_map(|spec| match spec {
-                                    perry_hir::ImportSpecifier::Namespace { local: ns_local }
-                                        if ns_local == local =>
-                                    {
-                                        import.resolved_path.as_ref()
-                                    }
-                                    _ => None,
-                                })
-                            });
-                            let Some(namespace_source) = namespace_source else {
-                                continue;
-                            };
-                            let resolved_key =
-                                normalize_namespace_path(PathBuf::from(namespace_source));
-                            let Some(target_mod) = ctx.native_modules.get(&resolved_key) else {
-                                continue;
-                            };
-                            namespace_imports.push(local_name.clone());
-                            namespace_import_prefixes
-                                .insert(local_name.clone(), sanitize_name(&target_mod.name));
-                            register_namespace_export_surface!(local_name, namespace_source);
-                            handled_as_namespace_reexport = true;
-                            break;
-                        }
-                        if handled_as_namespace_reexport {
-                            continue;
-                        }
-                        for export in &src_hir.exports {
-                            if let perry_hir::Export::NamespaceReExport {
-                                source: ns_src,
-                                name,
-                            } = export
-                            {
-                                if name != &exported_name {
-                                    continue;
-                                }
-                                let importer = std::path::Path::new(&resolved_path_str);
-                                let Some((ns_target, _)) = resolve_import(
-                                    ns_src,
-                                    importer,
-                                    &ctx.project_root,
-                                    &ctx.compile_packages,
-                                    &ctx.compile_package_dirs,
-                                ) else {
-                                    break;
-                                };
-                                let ns_target_str = ns_target.to_string_lossy().to_string();
-                                namespace_imports.push(local_name.clone());
-                                // Issue #321: tag this local as a "named-import-
-                                // of-namespace-reexport" so codegen's
-                                // StaticMethodCall arm knows to route var-shape
-                                // members through `js_closure_callN`. See the
-                                // expr.rs StaticMethodCall comment for why this
-                                // is scoped narrowly.
-                                namespace_reexport_named_imports.insert(local_name.clone());
-                                register_namespace_export_surface!(local_name, ns_target_str.as_str());
                                 handled_as_namespace_reexport = true;
                                 break;
                             }
@@ -3383,12 +2990,6 @@ pub fn run_with_parse_cache(
                                     .map(|c| c.params.len())
                                     .unwrap_or(0),
                                 has_own_constructor: class.constructor.is_some(),
-                                constructor_uses_new_target: class_chain_uses_new_target(
-                                    &exported_classes,
-                                    &class_canonical_path,
-                                    &key.0,
-                                    class,
-                                ),
                                 constructor_has_rest: class
                                     .constructor
                                     .as_ref()
@@ -3460,12 +3061,6 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
-                            constructor_uses_new_target: class_chain_uses_new_target(
-                                &exported_classes,
-                                &class_canonical_path,
-                                &key.0,
-                                class,
-                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -3624,12 +3219,6 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
-                            constructor_uses_new_target: class_chain_uses_new_target(
-                                &exported_classes,
-                                &class_canonical_path,
-                                &src_path,
-                                class,
-                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -4103,12 +3692,6 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
-                            constructor_uses_new_target: class_chain_uses_new_target(
-                                &exported_classes,
-                                &class_canonical_path,
-                                &src_path,
-                                class,
-                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -4308,12 +3891,6 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
-                            constructor_uses_new_target: class_chain_uses_new_target(
-                                &exported_classes,
-                                &class_canonical_path,
-                                &src_path,
-                                class,
-                            ),
                             constructor_has_rest: class
                                 .constructor
                                 .as_ref()
@@ -4417,9 +3994,6 @@ pub fn run_with_parse_cache(
                 namespace_v8_specifiers,
                 namespace_member_prefixes,
                 namespace_member_origin_names,
-                namespace_member_vars,
-                namespace_member_namespace_prefixes,
-                namespace_import_prefixes,
                 emit_ir_only: bitcode_link,
                 verify_native_regions,
                 disable_buffer_fast_path,
@@ -4450,10 +4024,10 @@ pub fn run_with_parse_cache(
                 fast_math: ctx.fast_math,
                 fp_contract_mode: ctx.fp_contract_mode,
                 app_metadata: ctx.app_metadata.clone(),
-                // Namespace entries are emitted for modules whose namespace is
-                // observable: dynamic import targets, `import * as` targets,
-                // and `export * as` nested targets. The dynamic dispatch map is
-                // still limited to modules that actually perform dynamic imports.
+                // Issue #100: namespace_entries empty unless this
+                // module is a dynamic-import target; the consumer-side
+                // dispatch map is empty unless this module performs
+                // dynamic imports.
                 namespace_entries: per_module_namespace_entries
                     .get(path)
                     .cloned()
@@ -4465,11 +4039,14 @@ pub fn run_with_parse_cache(
                 nextjs_path_init_modules,
                 deferred_module_prefixes,
                 module_init_deps,
-                // Issue #842 plus static namespace imports/re-exports: signal
-                // namespace-producing modules even when the entry list is empty.
-                // The field name is historical from dynamic import support, but
-                // the codegen behavior is "emit namespace global + populator".
-                is_dynamic_import_target: namespace_target_paths.contains(path),
+                // Issue #842: signal side-effect-only dynamic-import
+                // targets to codegen so it still emits
+                // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`
+                // is the authoritative set built from every consumer's
+                // `import.is_dynamic` resolved paths; `namespace_entries`
+                // alone is insufficient because it's empty when the
+                // target has no `export` statements.
+                is_dynamic_import_target: dyn_target_paths.contains(path),
                 // #5247: source-location tracking for the dynamic call-dispatch
                 // throw path. Gated by `--debug-symbols` so the default build is
                 // unchanged (no source read, no per-call emission). When on, read

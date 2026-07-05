@@ -568,11 +568,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `Object.prototype.hasOwnProperty.call(ImportedClass, sym)`
             // always returned false because the receiver was a closure-pointer
             // NaN-box (POINTER_TAG) rather than a class-ref (INT32_TAG).
-            if !ctx.namespace_imports.contains(name) {
-                if let Some(&cid) = ctx.class_ids.get(name) {
-                    let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
-                    return Ok(double_literal(f64::from_bits(bits)));
-                }
+            if let Some(&cid) = ctx.class_ids.get(name) {
+                let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
+                return Ok(double_literal(f64::from_bits(bits)));
             }
             // Issue #841: named imports from Node submodules Perry recognizes
             // as runtime-backed values must win over the generic native-module
@@ -601,69 +599,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (I32, &name_len.to_string()),
                     ],
                 ));
-            }
-            if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
-                let submod_label = emit_string_literal_global(ctx, submod_key);
-                let submod_len = submod_key.len();
-                let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
-                let blk = ctx.block();
-                if let Some(s) = install_sym {
-                    blk.call_void(s, &[]);
-                }
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_node_submodule_namespace",
-                    &[(PTR, &submod_label), (I32, &submod_len.to_string())],
-                ));
-            }
-            if ctx.namespace_imports.contains(name) {
-                if let Some(prefix) = ctx.namespace_import_prefixes.get(name) {
-                    return Ok(ctx.block().load(DOUBLE, &format!("@__perry_ns_{}", prefix)));
-                }
-                let mut members: Vec<String> = ctx
-                    .namespace_member_prefixes
-                    .keys()
-                    .filter(|(ns, _)| ns == name)
-                    .map(|(_, m)| m.clone())
-                    .collect();
-                if !members.is_empty() {
-                    members.sort();
-                    members.dedup();
-                    let n_str = (members.len() as u32).to_string();
-                    let zero_str = "0".to_string();
-                    let handle = ctx.block().call(
-                        I64,
-                        "js_object_alloc",
-                        &[(I32, &zero_str), (I32, &n_str)],
-                    );
-                    for member in &members {
-                        let member_get = Expr::PropertyGet {
-                            object: Box::new(Expr::ExternFuncRef {
-                                name: name.clone(),
-                                param_types: Vec::new(),
-                                return_type: HirType::Any,
-                            }),
-                            property: member.clone(),
-                        };
-                        let v_box = lower_expr(ctx, &member_get)?;
-                        let key_idx = ctx.strings.intern(member);
-                        let key_handle_global =
-                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                        let blk = ctx.block();
-                        let key_box = blk.load(DOUBLE, &key_handle_global);
-                        let key_bits = blk.bitcast_double_to_i64(&key_box);
-                        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                        blk.call_void(
-                            "js_object_set_field_by_name",
-                            &[(I64, &handle), (I64, &key_raw), (DOUBLE, &v_box)],
-                        );
-                    }
-                    let blk = ctx.block();
-                    return Ok(nanbox_pointer_inline(blk, &handle));
-                }
-                return Ok(ctx
-                    .block()
-                    .call(DOUBLE, "js_unresolved_namespace_stub", &[]));
             }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
                 // Next.js lazy-require: a `_lazyreq_N` binding is the CJS require
@@ -758,6 +693,96 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let closure_handle =
                     blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
                 return Ok(nanbox_pointer_inline(blk, &closure_handle));
+            }
+            // Issue #841 companion: namespace imports for the same five
+            // submodules. The `collect_modules.rs` rejection skips
+            // these so the namespace binding flows through HIR and
+            // lands here. Emit a call to `js_node_submodule_namespace`
+            // which returns a per-submodule stub object whose properties
+            // are the function singletons named imports produce.
+            if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let submod_len = submod_key.len();
+                let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
+                let blk = ctx.block();
+                if let Some(s) = install_sym {
+                    blk.call_void(s, &[]);
+                }
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_namespace",
+                    &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+                ));
+            }
+            // Issue #629: namespace imports for unresolved modules
+            // (`import * as fsp from "node:fs/promises"`) — when the
+            // module isn't backed by perry-stdlib bindings or compiled
+            // sources, the binding lands here. Pre-fix the catch-all
+            // returned TAG_TRUE so `typeof fsp === "boolean"` and every
+            // property access produced the confusing "(boolean).X is
+            // not a function" error. Route to the runtime stub which
+            // returns an empty-object pointer (typeof "object", every
+            // property reads undefined). Namespace bindings registered
+            // in `ctx.namespace_imports` already short-circuit via
+            // dedicated arms above; this catch-all only fires for
+            // names with no resolution at all.
+            if ctx.namespace_imports.contains(name) {
+                // A namespace import used as a whole VALUE (passed to a
+                // function, iterated by `Object.keys`/`for…in`/`Object.entries`,
+                // spread, …) must be a real object whose OWN ENUMERABLE
+                // properties are the source module's exports — not the empty
+                // `js_unresolved_namespace_stub`. Drizzle's
+                // `drizzle(pool, { schema })` (with `import * as schema`) and
+                // Stripe's `_prepResources` (`for (const name in resources)`
+                // over `import * as resources`) both enumerate the namespace and
+                // silently saw zero members otherwise. Materialize the object by
+                // resolving each exported member through the SAME per-member
+                // `ns.member` PropertyGet lowering (functions → closure
+                // singletons, consts → getters, classes → class refs).
+                let mut members: Vec<String> = ctx
+                    .namespace_member_prefixes
+                    .keys()
+                    .filter(|(ns, _)| ns == name)
+                    .map(|(_, m)| m.clone())
+                    .collect();
+                if !members.is_empty() {
+                    members.sort();
+                    members.dedup();
+                    let n_str = (members.len() as u32).to_string();
+                    let zero_str = "0".to_string();
+                    let handle = ctx.block().call(
+                        I64,
+                        "js_object_alloc",
+                        &[(I32, &zero_str), (I32, &n_str)],
+                    );
+                    for member in &members {
+                        let member_get = Expr::PropertyGet {
+                            object: Box::new(Expr::ExternFuncRef {
+                                name: name.clone(),
+                                param_types: Vec::new(),
+                                return_type: HirType::Any,
+                            }),
+                            property: member.clone(),
+                        };
+                        let v_box = lower_expr(ctx, &member_get)?;
+                        let key_idx = ctx.strings.intern(member);
+                        let key_handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let blk = ctx.block();
+                        let key_box = blk.load(DOUBLE, &key_handle_global);
+                        let key_bits = blk.bitcast_double_to_i64(&key_box);
+                        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                        blk.call_void(
+                            "js_object_set_field_by_name",
+                            &[(I64, &handle), (I64, &key_raw), (DOUBLE, &v_box)],
+                        );
+                    }
+                    let blk = ctx.block();
+                    return Ok(nanbox_pointer_inline(blk, &handle));
+                }
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_unresolved_namespace_stub", &[]));
             }
             // #4950: built-in globals that HIR lowers to `ExternFuncRef` even
             // in VALUE position (the `is_builtin_function` timer set —

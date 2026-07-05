@@ -14,11 +14,10 @@ use crate::type_analysis::{
     is_array_expr, is_global_constructor_expr, is_map_expr, is_native_module_dynamic_index,
     is_promise_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
-use crate::type_analysis::{is_bigint_expr, is_numeric_expr};
 use crate::types::{DOUBLE, I32, I64};
 
 /// Number `.toFixed` / `.toPrecision` / `.toExponential`, Buffer/Number
-/// `.toString(encoding|radix)`, and numeric `.toString()` arms. Returns
+/// `.toString(encoding|radix)`, and the universal `.toString()` arms. Returns
 /// `Ok(Some(_))` when one of these claims the call, otherwise `Ok(None)` so the
 /// caller continues down the dispatch tower.
 pub(crate) fn try_lower_number_string_methods(
@@ -153,7 +152,6 @@ pub(crate) fn try_lower_number_string_methods(
     // "ff" instead of "255".
     if property == "toString"
         && args.len() == 1
-        && (is_numeric_expr(ctx, object) || is_bigint_expr(ctx, object))
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_date_receiver(ctx, object)
@@ -190,12 +188,15 @@ pub(crate) fn try_lower_number_string_methods(
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
     }
-    // Numeric `.toString()` without a radix. Do not claim arbitrary Any
-    // receivers here: plain objects may define an own `toString` method that
-    // must be called with the source arguments.
+    // Universal `.toString()` — works for any JS value via the
+    // runtime's js_jsvalue_to_string dispatch (numbers print as
+    // their decimal form, strings as themselves, objects as
+    // [object Object], etc.). Only intercepts if NO class
+    // method dispatch can win (i.e. the receiver isn't a known
+    // class with its own toString) — otherwise the user's
+    // override wouldn't run.
     if property == "toString"
         && args.len() <= 1
-        && (is_numeric_expr(ctx, object) || is_bigint_expr(ctx, object))
         && !is_string_expr(ctx, object)
         && !is_array_expr(ctx, object)
         && !is_date_receiver(ctx, object)

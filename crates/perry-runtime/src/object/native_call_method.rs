@@ -30,27 +30,6 @@ pub(crate) use proto_dispatch::{
 };
 pub(super) use typed_array::dispatch_typed_array_method;
 
-fn interned_default_method_key(method_name: &str) -> *mut crate::string::StringHeader {
-    use std::sync::OnceLock;
-
-    static TO_STRING: OnceLock<usize> = OnceLock::new();
-    static TO_LOCALE_STRING: OnceLock<usize> = OnceLock::new();
-    static VALUE_OF: OnceLock<usize> = OnceLock::new();
-
-    let slot = match method_name {
-        "toString" => &TO_STRING,
-        "toLocaleString" => &TO_LOCALE_STRING,
-        "valueOf" => &VALUE_OF,
-        _ => return std::ptr::null_mut(),
-    };
-    *slot.get_or_init(|| {
-        crate::string::js_string_from_bytes_longlived(
-            method_name.as_ptr(),
-            method_name.len() as u32,
-        ) as usize
-    }) as *mut crate::string::StringHeader
-}
-
 unsafe fn call_primitive_closure_value(
     receiver: f64,
     value: JSValue,
@@ -1304,27 +1283,6 @@ pub unsafe extern "C" fn js_native_call_method(
                             );
                         }
                     }
-                }
-            }
-        }
-
-        if matches!(method_name, "toString" | "toLocaleString" | "valueOf") {
-            let method_key = interned_default_method_key(method_name);
-            if !method_key.is_null() {
-                let method = super::js_object_get_field_by_name(obj, method_key);
-                if !method.is_undefined() && !method.is_null() {
-                    let bound = crate::closure::clone_closure_rebind_this(
-                        method.bits(),
-                        f64::from_bits(jsval.bits()),
-                    );
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
-                    let result = crate::closure::js_native_call_value(
-                        f64::from_bits(bound),
-                        args_ptr,
-                        args_len,
-                    );
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
-                    return result;
                 }
             }
         }

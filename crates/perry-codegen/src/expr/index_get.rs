@@ -1407,7 +1407,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let s_box = lower_expr(ctx, object)?;
                 let idx_d = lower_expr(ctx, index)?;
                 let blk = ctx.block();
-                let s_handle = unbox_str_handle(blk, &s_box);
+                let s_handle = unbox_to_i64(blk, &s_box);
                 // #3987: route through the canonical-index runtime helper (it
                 // takes the raw NaN-boxed key, not an `fptosi`'d i32) so a valid
                 // array index returns its char and every non-canonical key

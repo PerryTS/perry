@@ -48,7 +48,7 @@ pub(crate) use class_members::{
 pub(crate) use class_validation::{
     validate_class_element_early_errors, validate_legacy_decorator_surface,
 };
-pub(crate) use enum_decl::{compute_enum_members, enum_runtime_let, lower_enum_decl};
+pub(crate) use enum_decl::{compute_enum_members, lower_enum_decl};
 pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,
@@ -61,8 +61,5 @@ pub(crate) use private_members::{
     build_private_scope, lower_private_getter, lower_private_method, lower_private_prop,
     lower_private_setter,
 };
-pub(crate) use static_init::{
-    build_fresh_class_static_init, build_interleaved_static_init_exprs,
-    build_interleaved_static_init_stmts,
-};
+pub(crate) use static_init::build_interleaved_static_init_stmts;
 pub(crate) use type_alias::lower_type_alias_decl;

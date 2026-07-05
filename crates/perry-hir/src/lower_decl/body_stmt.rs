@@ -282,26 +282,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
                 let class = lower_class_decl(ctx, class_decl, false)?;
-                let parent_value_local = if class.extends_expr.is_some() {
-                    let id = ctx.fresh_local();
-                    let name = format!("__perry_parent_value_{}", class.name);
-                    ctx.locals.push((name.clone(), id, Type::Any));
-                    Some((id, name))
-                } else {
-                    None
-                };
                 if let Some(extends_expr) = &class.extends_expr {
-                    let (parent_id, parent_name) = parent_value_local.as_ref().unwrap();
-                    result.push(Stmt::Let {
-                        id: *parent_id,
-                        name: parent_name.clone(),
-                        ty: Type::Any,
-                        mutable: false,
-                        init: Some(extends_expr.as_ref().clone()),
-                    });
                     result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
                         class_name: class.name.clone(),
-                        parent_expr: Box::new(Expr::LocalGet(*parent_id)),
+                        parent_expr: extends_expr.clone(),
                     }));
                 }
                 for member in &class.computed_members {
@@ -327,43 +311,6 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         }));
                     }
                 }
-                let bind_fresh_class_value = class.extends_expr.is_some();
-                if bind_fresh_class_value {
-                    let captured_args: Vec<Expr> = ctx
-                        .lookup_class_captures(&class.name)
-                        .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
-                        .unwrap_or_default();
-                    let class_local = ctx
-                        .lookup_local_in_current_scope(&class_name)
-                        .unwrap_or_else(|| ctx.define_local(class_name.clone(), Type::Any));
-                    let (mut named_statics, symbol_statics, fresh_static_init_stmts) =
-                        crate::lower_decl::build_fresh_class_static_init(
-                            &class_decl.class.body,
-                            &class.name,
-                            &class.static_fields,
-                            &class.static_methods,
-                            class_local,
-                        );
-                    if let Some((parent_id, _)) = parent_value_local {
-                        named_statics.push((
-                            "__perry_parent_value".to_string(),
-                            Expr::LocalGet(parent_id),
-                        ));
-                    }
-                    result.push(Stmt::Let {
-                        id: class_local,
-                        name: class_name.clone(),
-                        ty: Type::Any,
-                        init: Some(Expr::ClassExprFresh {
-                            template: class.name.clone(),
-                            named_statics,
-                            symbol_statics,
-                            captured_args,
-                        }),
-                        mutable: false,
-                    });
-                    result.extend(fresh_static_init_stmts);
-                }
                 // Static field initializers + static blocks for a
                 // function-nested class. The module-level path
                 // (`lower/stmt.rs`) emits these into `module.init`; here they
@@ -374,14 +321,12 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // classes initialized. Interleaved in source order (see
                 // `build_interleaved_static_init_stmts`), with lexical `this`
                 // in field initializers bound to the class ref.
-                if !bind_fresh_class_value {
-                    result.extend(crate::lower_decl::build_interleaved_static_init_stmts(
-                        &class_decl.class.body,
-                        &class.name,
-                        &class.static_fields,
-                        &class.static_methods,
-                    ));
-                }
+                result.extend(crate::lower_decl::build_interleaved_static_init_stmts(
+                    &class_decl.class.body,
+                    &class.name,
+                    &class.static_fields,
+                    &class.static_methods,
+                ));
                 ctx.pending_classes.push(class);
                 // #5251 follow-up — a function-nested `class X { … }` whose
                 // name collides with an OUTER same-named local must SHADOW
@@ -401,7 +346,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // `local_class_aliases`) so the in-scope read resolves to the
                 // class. Gated on a pre-existing outer binding so working
                 // packages (no collision) are byte-for-byte unaffected.
-                if !bind_fresh_class_value && ctx.lookup_local(&class_name).is_some() {
+                if ctx.lookup_local(&class_name).is_some() {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
                     result.push(Stmt::Let {
                         id: class_local,

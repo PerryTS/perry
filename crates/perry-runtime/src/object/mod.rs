@@ -171,9 +171,7 @@ pub(crate) use this_binding::{
     IMPLICIT_THIS, NEW_TARGET,
 };
 pub use to_string_tag::js_object_to_string;
-pub(crate) use to_string_tag::{
-    fetch_handle_to_string_tag, typed_array_to_string_tag_name, web_stream_to_string_tag,
-};
+pub(crate) use to_string_tag::{typed_array_to_string_tag_name, web_stream_to_string_tag};
 
 static HTTP_METHODS_CACHE: AtomicU64 = AtomicU64::new(0);
 static FS_CONSTANTS_CACHE: AtomicU64 = AtomicU64::new(0);

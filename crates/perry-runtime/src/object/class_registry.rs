@@ -58,8 +58,7 @@ pub(crate) use state::{
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
     class_prototype_object_root_store, global_object_prototype_bits,
     is_bound_native_method_closure_value, is_non_constructable_builtin_function_value,
-    parent_closure_in_chain, refresh_class_decl_prototype_parent,
-    throw_non_constructable_builtin_function,
+    parent_closure_in_chain, throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,

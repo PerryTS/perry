@@ -72,7 +72,6 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "DataView" => 0xFFFF002B,
         "WeakMap" => 0xFFFF002C,
         "WeakSet" => 0xFFFF002D,
-        "URL" => 0xFFFF002F,
         "Promise" => 0xFFFF0027,
         "Number" => 0xFFFF00D0,
         "String" => 0xFFFF00D1,
@@ -420,10 +419,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
-                // `File` — Blob-registry handles with File metadata. The
-                // runtime also treats File handles as Blob instances.
-                "File" => 0xFFFF002Eu32,
-                "URL" => 0xFFFF002Fu32,
                 // `Promise` — runtime detects via GC_TYPE_PROMISE because
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.

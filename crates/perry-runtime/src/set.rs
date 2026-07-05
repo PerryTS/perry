@@ -62,19 +62,6 @@ impl Hash for JSValueKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let bits = self.0.to_bits();
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        let value = crate::JSValue::from_bits(bits);
-        if value.is_bigint() {
-            0xFFFF_FFFEu32.hash(state);
-            let ptr = crate::bigint::clean_bigint_ptr(value.as_bigint_ptr());
-            if ptr.is_null() {
-                0u8.hash(state);
-            } else {
-                unsafe {
-                    (*ptr).limbs.hash(state);
-                }
-            }
-            return;
-        }
         if is_string_like(bits) {
             if let Some((data, len)) = string_view_from_bits(bits, &mut scratch) {
                 // String value: hash by content so identical strings with
@@ -517,12 +504,6 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
     // collide inside Set/Map. (#4570)
     if unsafe { crate::symbol::js_is_symbol(a) != 0 || crate::symbol::js_is_symbol(b) != 0 } {
         return false;
-    }
-
-    let a_val = crate::JSValue::from_bits(a_bits);
-    let b_val = crate::JSValue::from_bits(b_bits);
-    if a_val.is_bigint() && b_val.is_bigint() {
-        return crate::bigint::js_bigint_eq(a_val.as_bigint_ptr(), b_val.as_bigint_ptr()) != 0;
     }
 
     if is_string_like(a_bits) && is_string_like(b_bits) {

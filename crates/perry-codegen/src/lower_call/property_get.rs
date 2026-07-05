@@ -95,8 +95,10 @@ pub fn try_lower_property_get_method_call(
         // array. startsWith/endsWith are string-only in JS so the
         // 2-arg form (searchString, position) is also unambiguous.
         let is_string_only_method = match property.as_str() {
-            "split" | "charCodeAt" | "charAt" | "substring" | "substr" | "replaceAll"
-            | "padStart" | "padEnd" | "repeat" | "codePointAt" | "localeCompare" => true,
+            "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
+            | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
+            | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
+            | "codePointAt" | "localeCompare" => true,
             // Annex B §B.2.2 HTML wrappers (`bold`, `link`, `anchor`, …) are
             // string-only in the spec but collide with common user method
             // names — chalk's `chalk.bold(s)` is a styled-string builder
@@ -117,13 +119,6 @@ pub fn try_lower_property_get_method_call(
             // js_native_call_method fallback handles it correctly via
             // js_string_replace_string.
             "replace" if args.len() == 2 && matches!(&args[1], Expr::Closure { .. }) => true,
-            // trim / case-conversion names are also commonly defined as their
-            // own methods on Any-typed library/builder objects. Let runtime
-            // dispatch choose by receiver shape so those objects keep their own
-            // methods while real strings still use String.prototype methods
-            // (same treatment as `slice`/`indexOf`/`normalize` above).
-            "trim" | "trimStart" | "trimEnd" | "toLowerCase" | "toUpperCase"
-            | "toLocaleLowerCase" | "toLocaleUpperCase" => false,
             // `slice` exists on strings, arrays, buffers, and Blob-like
             // objects. Let the runtime dispatcher choose by receiver shape;
             // forcing the string path here turns Blob slices into string

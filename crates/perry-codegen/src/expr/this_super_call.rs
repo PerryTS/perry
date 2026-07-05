@@ -810,13 +810,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 );
                             }
                         }
-                        let current_class_name =
-                            ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
                     }
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }

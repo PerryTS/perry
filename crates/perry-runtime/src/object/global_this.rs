@@ -121,7 +121,6 @@ pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
 pub(crate) use populate::{
     default_prepare_stack_trace_func_ptr, populate_global_this_builtins, ERROR_CONSTRUCTOR_PTR,
 };
-pub(crate) use proto_methods::is_inherited_object_proto_shim_on_builtin_prototype;
 pub(crate) use proto_methods::{
     install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };

@@ -303,30 +303,6 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = web_stream_symbol_property(obj_f64, sym_f64) {
         return v;
     }
-    if let Some(tag) = crate::object::fetch_handle_to_string_tag(obj_f64) {
-        let tag_wk = well_known_symbol("toStringTag");
-        if !tag_wk.is_null() {
-            let tag_f64 =
-                f64::from_bits(crate::value::JSValue::pointer(tag_wk as *const u8).bits());
-            if sym_key_from_f64(sym_f64) == sym_key_from_f64(tag_f64) {
-                let s = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
-                return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-            }
-        }
-    }
-    if let Some(obj) = crate::url::object_from_f64(obj_f64) {
-        if crate::url::url_class::is_url_object_shape(obj) {
-            let tag_wk = well_known_symbol("toStringTag");
-            if !tag_wk.is_null() {
-                let tag_f64 =
-                    f64::from_bits(crate::value::JSValue::pointer(tag_wk as *const u8).bits());
-                if sym_key_from_f64(sym_f64) == sym_key_from_f64(tag_f64) {
-                    let s = crate::string::js_string_from_bytes(b"URL".as_ptr(), 3);
-                    return f64::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                }
-            }
-        }
-    }
     // #1213: Timeout/Immediate handles expose `Symbol.dispose` so
     // `using t = setTimeout(...)` and `t[Symbol.dispose]()` clear the timer.
     // The handle is a small id NaN-boxed as POINTER; the symbol-keyed read
