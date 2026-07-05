@@ -134,10 +134,14 @@ pub(crate) fn lower_member_tail(
                     // would drop the receiver, and codegen lowers
                     // `globalThis.__proto__` through the no-name path → literal
                     // `0.0` (a number), which is the symptom reported in #2145.
+                    // Accept BOTH `Ctor.prototype` and `Ctor[\"prototype\"]`
+                    // (string-literal computed key) — the reified constructor
+                    // receiver must survive for either form, else the read
+                    // collapses to `globalThis.prototype` (undefined). Test262
+                    // property-accessors `Ctor[\"prototype\"]`.
                     let outer_is_prototype_or_proto = matches!(
-                        &member.prop,
-                        ast::MemberProp::Ident(p) if p.sym.as_ref() == "prototype"
-                            || p.sym.as_ref() == "__proto__"
+                        static_member_prop_name(&member.prop).as_deref(),
+                        Some("prototype") | Some("__proto__")
                     );
                     let receiver_is_namespace_value = matches!(
                         property.as_str(),
