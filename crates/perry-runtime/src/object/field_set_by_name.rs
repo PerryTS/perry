@@ -431,6 +431,23 @@ pub extern "C" fn js_object_set_field_by_name(
                     {
                         return;
                     }
+                    // Writing `.caller` / `.arguments` on a class constructor
+                    // hits the poison-pill %ThrowTypeError% accessor (which has
+                    // no [[Set]]) on `Function.prototype`, so a strict-mode
+                    // assignment throws. Mirrors the read side in
+                    // get_field_by_name and the ordinary-closure setter path.
+                    // A `defineProperty`-installed own data prop was handled by
+                    // `has_own_data` above; prototype-refs (`C.prototype`) are
+                    // plain objects with no such restriction.
+                    if !has_own_data
+                        && matches!(name.as_str(), "caller" | "arguments")
+                        && super::class_prototype_ref_id(f64::from_bits(bits)).is_none()
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                     class_dynamic_prop_root_store(class_id, name, value);
                 }
             }

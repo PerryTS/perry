@@ -832,6 +832,20 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                         }
                     }
+                    // No own static / inherited entry resolved the name. A class
+                    // constructor is a function, so a bare read of `.caller` or
+                    // `.arguments` hits the poison-pill %ThrowTypeError% accessor
+                    // on `Function.prototype` — strict-mode throws (Perry only
+                    // compiles strict code). Placed last so any own static field,
+                    // accessor, or `defineProperty`-installed data prop of that
+                    // name takes precedence. Prototype-refs (`C.prototype`) are
+                    // plain objects and are excluded.
+                    if !is_prototype_ref && matches!(name, "caller" | "arguments") {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                 }
             }
             return JSValue::undefined();
