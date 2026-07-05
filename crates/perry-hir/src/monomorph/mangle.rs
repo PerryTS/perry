@@ -11,7 +11,7 @@ pub(crate) fn mangle_type_args(type_args: &[Type]) -> String {
 
 /// Generate a mangled name for a specialized function/class
 /// e.g., "identity" with [Type::Number] becomes "identity$number"
-pub(crate) fn generate_specialized_name(base_name: &str, type_args: &[Type]) -> String {
+pub fn generate_specialized_name(base_name: &str, type_args: &[Type]) -> String {
     if type_args.is_empty() {
         return base_name.to_string();
     }
@@ -22,7 +22,7 @@ pub(crate) fn generate_specialized_name(base_name: &str, type_args: &[Type]) -> 
 }
 
 /// Mangle a type into a string suitable for use in identifiers
-pub(crate) fn mangle_type(ty: &Type) -> String {
+pub fn mangle_type(ty: &Type) -> String {
     match ty {
         Type::Void => "void".to_string(),
         Type::Null => "null".to_string(),

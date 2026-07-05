@@ -207,6 +207,20 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
             // type parameters anyway, so the dispatch is identical
             // to the non-generic Named form.
             HirType::Generic { base, .. } if ctx.classes.contains_key(base) => Some(base.clone()),
+            // #5982-adjacent / #5917 `generic_class`: when the class was
+            // MONOMORPHIZED (the `new` site was rewritten to
+            // `SimpleContainer$num` but the local's declared type kept the
+            // un-mangled `Generic { base, type_args }` spelling), the base
+            // name isn't in `ctx.classes` — only the specialized name is.
+            // Resolve to the specialized name so method dispatch finds the
+            // real class instead of falling through to the number/native
+            // fast path (`(number).get is not a function`).
+            HirType::Generic { base, type_args } => {
+                let specialized = perry_hir::monomorph::generate_specialized_name(base, type_args);
+                ctx.classes
+                    .contains_key(&specialized)
+                    .then_some(specialized)
+            }
             _ => None,
         },
         // `new ClassName(...)` — the receiver class is the constructed class.
