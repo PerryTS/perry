@@ -414,63 +414,42 @@ pub fn synthesize_class_captures(
     let mut ctor = match constructor.take() {
         Some(c) => c,
         None => {
-            // The spec default ctor FORWARDS its args:
-            // `constructor(...args) { super(...args) }`. A bare
-            // `SuperCall([])` dropped the construction-site user args, so
-            // `new Derived({def})` left the parent ctor's params undefined
-            // (vendored zod: ZodString.create → new ZodString({...}) →
-            // ZodType ctor never saw `def`, `this._def` stayed undefined).
-            // Synthesize explicit forwarding params matching the closest
-            // pending-ancestor ctor's USER arity (its `__perry_cap_*`
-            // params excluded). Ancestors outside `pending_classes`
-            // (module-level / native parents) keep the no-arg baseline.
-            let parent_user_arity = if has_heritage {
-                let mut arity = 0usize;
-                let mut walker: Option<String> = extends_name.map(|s| s.to_string());
-                while let Some(pname) = walker.take() {
-                    let Some(pc) = ctx.pending_classes.iter().find(|c| c.name == pname) else {
-                        break;
-                    };
-                    if let Some(pctor) = pc.constructor.as_ref() {
-                        arity = pctor
-                            .params
-                            .iter()
-                            .filter(|p| !p.name.starts_with("__perry_cap_"))
-                            .count();
-                        break;
-                    }
-                    walker = pc.extends_name.clone();
-                }
-                arity
-            } else {
-                0
-            };
-            let mut params: Vec<Param> = Vec::with_capacity(parent_user_arity);
-            let mut super_args: Vec<Expr> = Vec::with_capacity(parent_user_arity);
-            for i in 0..parent_user_arity {
+            // #5957: synthesize the REAL spec default ctor,
+            // `constructor(...args) { super(...args) }`. The previous
+            // fixed-arity approximation walked the nearest pending-ancestor
+            // ctor's USER arity and minted that many positional params — a
+            // REST-param ancestor counted as arity 1 (`new Drain("a","b","c")`
+            // forwarded only "a"), and an extends-EXPR / non-pending parent
+            // walked to arity 0 (ALL user args dropped: the #806 mixin's
+            // `seed` was undefined). One rest param + `SuperCallSpread`
+            // forwards everything for every parent shape; the spread-super
+            // dispatchers split user/cap slots by the registered signature cap
+            // count and pack ancestor rest params via the closure-rest table.
+            let (params, body) = if has_heritage {
                 let pid = ctx.fresh_local();
-                params.push(Param {
+                let params = vec![Param {
                     id: pid,
-                    name: format!("__perry_dflt_arg_{}", i),
+                    name: "__perry_dflt_args".to_string(),
                     ty: Type::Any,
                     default: None,
                     decorators: Vec::new(),
-                    is_rest: false,
+                    is_rest: true,
                     arguments_object: None,
-                });
-                super_args.push(Expr::LocalGet(pid));
-            }
+                }];
+                let body = vec![Stmt::Expr(Expr::SuperCallSpread(vec![CallArg::Spread(
+                    Expr::LocalGet(pid),
+                )]))];
+                (params, body)
+            } else {
+                (Vec::new(), Vec::new())
+            };
             Function {
                 id: ctx.fresh_func(),
                 name: format!("{}::constructor", name),
                 type_params: Vec::new(),
                 params,
                 return_type: Type::Void,
-                body: if has_heritage {
-                    vec![Stmt::Expr(Expr::SuperCall(super_args))]
-                } else {
-                    Vec::new()
-                },
+                body,
                 is_async: false,
                 is_generator: false,
                 is_strict: true,

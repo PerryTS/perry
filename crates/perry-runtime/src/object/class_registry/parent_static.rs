@@ -210,14 +210,33 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
 #[no_mangle]
 pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
-    match guard.as_ref().and_then(|m| m.get(&class_id)) {
-        Some(&bits) => f64::from_bits(bits),
-        None => f64::from_bits(TAG_UNDEFINED),
+    {
+        let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
+        if let Some(&bits) = guard.as_ref().and_then(|m| m.get(&class_id)) {
+            return f64::from_bits(bits);
+        }
     }
+    // #5957/#806: no dynamic VALUE stashed — fall back to the STATIC
+    // parent-id edge as a ClassRef. An `extends <call>(...)` mixin
+    // materialized by the HIR inline-init can resolve the chain statically
+    // (module init registers `js_register_class_parent(child, parent)`)
+    // while the per-value `js_register_class_parent_dynamic` side effect
+    // lived in a body that never runs; before this fallback the
+    // dynamic-parent super leg dispatched `undefined` and silently no-op'd
+    // — the ancestor ctor never saw the forwarded args (the #806 mixin's
+    // `seed` stayed undefined). A ClassRef routes the caller into the
+    // registered-constructor flat dispatch, which fills user args and
+    // snapshot caps by the signature split.
+    if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
+        if parent_cid != 0 {
+            return f64::from_bits(INT32_TAG | parent_cid as u64);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// #1789: stamp a freshly-allocated object as a heap "class object" (the
