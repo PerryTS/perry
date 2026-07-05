@@ -1040,6 +1040,16 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SweepCycleSubphase {
+    /// #6010: budget-chunked finalization of dead registered Maps/Sets whose
+    /// external side buffers no ordinary sweep path frees (dead in the ACTIVE
+    /// nursery allocation block, or reclaimed by bulk block resets that skip
+    /// per-object hooks). The dead lists are collected once at sweep entry
+    /// (marks fresh — a cheap flag-check walk of the registries), and each
+    /// buffer free consumes one work unit here so budgeted cycles keep their
+    /// pause bound. Deadness is stable across the incremental steps: an
+    /// unreachable header can't be revived, and interior block space is never
+    /// re-allocated before this sweep's own BlockCleanup subphase runs.
+    CollectionSideBuffers,
     Malloc,
     ArenaObjects,
     BlockCleanup,
@@ -1048,6 +1058,8 @@ enum SweepCycleSubphase {
 
 pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
+    dead_maps: Vec<usize>,
+    dead_sets: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
     cleanup: Option<ArenaSweepCleanupState>,
@@ -1065,6 +1077,8 @@ impl IncrementalSweepState {
     ) -> Self {
         Self {
             subphase: SweepCycleSubphase::Malloc,
+            dead_maps: Vec::new(),
+            dead_sets: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(do_age_bump, reclaim_dead_old_blocks),
             cleanup: None,
@@ -1074,8 +1088,38 @@ impl IncrementalSweepState {
         }
     }
 
+    /// #6010: collect the dead registered Maps/Sets NOW (marks are fresh at
+    /// sweep entry) and finalize their external buffers budget-chunked as the
+    /// first sweep subphase. See `SweepCycleSubphase::CollectionSideBuffers`.
+    pub(super) fn with_dead_collection_finalize(mut self, full_trace: bool) -> Self {
+        self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
+        self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
+        if !self.dead_maps.is_empty() || !self.dead_sets.is_empty() {
+            self.subphase = SweepCycleSubphase::CollectionSideBuffers;
+        }
+        self
+    }
+
     pub(super) fn step(&mut self, budget: usize) -> bool {
         match self.subphase {
+            SweepCycleSubphase::CollectionSideBuffers => {
+                let mut spent = 0usize;
+                while spent < budget {
+                    if let Some(addr) = self.dead_maps.pop() {
+                        crate::map::finalize_collected_dead_map(addr);
+                    } else if let Some(addr) = self.dead_sets.pop() {
+                        crate::set::finalize_collected_dead_set(addr);
+                    } else {
+                        self.subphase = SweepCycleSubphase::Malloc;
+                        break;
+                    }
+                    spent += 1;
+                }
+                if self.dead_maps.is_empty() && self.dead_sets.is_empty() {
+                    self.subphase = SweepCycleSubphase::Malloc;
+                }
+                false
+            }
             SweepCycleSubphase::Malloc => {
                 if self.malloc.step(budget) {
                     self.subphase = SweepCycleSubphase::ArenaObjects;

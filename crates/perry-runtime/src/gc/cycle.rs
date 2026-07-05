@@ -1384,18 +1384,7 @@ impl GcCycleState {
     fn step_sweep(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
         if self.sweep_state.is_none() {
-            // #6010: free dead Maps'/Sets' external side buffers by registry
-            // walk while this cycle's marks are still fresh (nothing cleared
-            // yet). The object sweep below never reaches collections that die
-            // inside the ACTIVE nursery allocation block, and bulk block
-            // resets skip per-object finalizers — either way the multi-MB
-            // buffers leaked. A minor trace never marks the old generation,
-            // so the registry pass only trusts unmarked-means-dead for
-            // nursery-resident, untenured headers there; a full trace frees
-            // dead collections anywhere.
             let full_trace = self.minor.is_none();
-            crate::map::finalize_dead_registered_maps_post_trace(full_trace);
-            crate::set::finalize_dead_registered_sets_post_trace(full_trace);
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
                 if let Some(minor) = self.minor.as_ref() {
                     let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)
@@ -1404,12 +1393,22 @@ impl GcCycleState {
                 } else {
                     (false, true, None, true)
                 };
-            self.sweep_state = Some(IncrementalSweepState::new(
-                do_age_bump,
-                reclaim_dead_old_blocks,
-                targeted_old_blocks,
-                sweep_malloc,
-            ));
+            self.sweep_state = Some(
+                IncrementalSweepState::new(
+                    do_age_bump,
+                    reclaim_dead_old_blocks,
+                    targeted_old_blocks,
+                    sweep_malloc,
+                )
+                // #6010: dead Maps'/Sets' external side buffers are freed as
+                // the first sweep subphase, budget-chunked — no ordinary
+                // sweep path reaches collections that die inside the ACTIVE
+                // nursery allocation block, and bulk block resets skip
+                // per-object finalizers. Minor traces never mark the old
+                // generation, so deadness there is only trusted for
+                // untenured nursery headers.
+                .with_dead_collection_finalize(full_trace),
+            );
         }
         let done = self
             .sweep_state

@@ -358,21 +358,21 @@ fn is_dead_copied_minor_from_space_map(addr: usize) -> bool {
 /// physically in the nursery (the same "unmarked nursery object is garbage"
 /// invariant the ordinary sweeper relies on, backed by the write-barrier
 /// remembered set for old→young edges).
-pub(crate) fn finalize_dead_registered_maps_post_trace(full_trace: bool) -> usize {
-    let dead: Vec<usize> = MAP_REGISTRY.with(|r| {
+pub(crate) fn collect_dead_registered_maps_post_trace(full_trace: bool) -> Vec<usize> {
+    MAP_REGISTRY.with(|r| {
         r.borrow()
             .iter()
             .copied()
             .filter(|&addr| unsafe { registered_map_is_dead_post_trace(addr, full_trace) })
             .collect()
-    });
-    let count = dead.len();
-    for addr in dead {
-        unsafe {
-            finalize_map_side_allocation_for_gc(addr as *mut MapHeader);
-        }
+    })
+}
+
+/// Finalize one collected-dead Map (budget-chunked by the sweep state).
+pub(crate) fn finalize_collected_dead_map(addr: usize) {
+    unsafe {
+        finalize_map_side_allocation_for_gc(addr as *mut MapHeader);
     }
-    count
 }
 
 unsafe fn registered_map_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {

@@ -277,21 +277,21 @@ fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
 /// analog of `finalize_dead_registered_maps_post_trace` (see map.rs for the
 /// full rationale: dead collections in the ACTIVE nursery block are never
 /// object-walked by any sweeper, leaking their external elements buffers).
-pub(crate) fn finalize_dead_registered_sets_post_trace(full_trace: bool) -> usize {
-    let dead: Vec<usize> = SET_REGISTRY.with(|r| {
+pub(crate) fn collect_dead_registered_sets_post_trace(full_trace: bool) -> Vec<usize> {
+    SET_REGISTRY.with(|r| {
         r.borrow()
             .iter()
             .copied()
             .filter(|&addr| unsafe { registered_set_is_dead_post_trace(addr, full_trace) })
             .collect()
-    });
-    let count = dead.len();
-    for addr in dead {
-        unsafe {
-            finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
-        }
+    })
+}
+
+/// Finalize one collected-dead Set (budget-chunked by the sweep state).
+pub(crate) fn finalize_collected_dead_set(addr: usize) {
+    unsafe {
+        finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
     }
-    count
 }
 
 unsafe fn registered_set_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
