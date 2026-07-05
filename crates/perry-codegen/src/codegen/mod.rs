@@ -1760,6 +1760,19 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // disqualifies every type-directed unboxed access on a boxed slot in
     // one place; consumers fall back to the generic (box-aware) paths.
     module_local_types.retain(|id, _| !module_boxed_vars.contains(id));
+    // #5982 (#5466 regression): a MODULE-GLOBAL captured local is read by a
+    // closure through `@perry_global_*`, NOT the closure's capture array —
+    // `closure.rs` filters module globals OUT of `closure_captures`, so the
+    // closure is `alloc_singleton` with no capture slots. But advertising the
+    // local's type here made the typed-ABI specialization
+    // (`__typed_f64`/i32/…) read `js_closure_get_capture_bits(this, 0)` — an
+    // UNSET slot (0) — while the generic variant correctly loads the global;
+    // the dispatcher picked the typed body, so every closure returned 0.
+    // Repro (bisected to #5466 representation lowering):
+    //   for (let i=0;i<5;i++){ const c=i; fns.push(()=>c); }  // → 0,0,0,0,0
+    // A module-global capture has no capture-slot representation, so — like a
+    // boxed slot — it must not feed the type-directed unboxed capture path.
+    module_local_types.retain(|id, _| !module_globals.contains_key(id));
 
     // Cross-module function declares are emitted lazily by `lower_call`
     // via `FnCtx.pending_declares` (drained back into `llmod` at the
