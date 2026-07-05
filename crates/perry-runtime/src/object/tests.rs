@@ -644,6 +644,54 @@ fn transition_cache_lookup_rejects_mutated_edge_target() {
 }
 
 #[test]
+fn transition_cache_lookup_rejects_slot_key_mismatch() {
+    // #6006: `prev_keys` / `key_ptr` are raw addresses that GC does not
+    // relocate. When GC frees a keys_array and recycles its address into an
+    // unrelated array, a stale entry can pointer-match a *different* shape —
+    // one where `next_keys[slot_idx]` is a DIFFERENT key. Adopting that edge
+    // would store the value at the wrong slot (keys_array looks right but the
+    // read returns undefined). The content check must reject such an edge so
+    // the caller falls back to the correct slow path.
+    let want = crate::string::js_string_from_bytes(b"alpha".as_ptr(), 5);
+    let other = crate::string::js_string_from_bytes(b"beta".as_ptr(), 4);
+
+    // A target shape whose slot 0 holds `beta`, not `alpha`.
+    let keys = crate::array::js_array_alloc(4);
+    let keys = crate::array::js_array_push(keys, JSValue::string_ptr(other));
+
+    // Insert an edge keyed on (prev=0, `alpha`) but targeting the `beta` shape,
+    // mirroring a recycled-address false match (target_len is set because the
+    // length matches slot_idx+1, so only the content check can catch it).
+    transition_cache_insert(0, want, keys as usize, 0);
+
+    assert!(
+        transition_cache_lookup(0, want).is_none(),
+        "a cache edge whose target slot holds a different key must be rejected (#6006)"
+    );
+
+    // Sanity: an edge whose target slot DOES hold the key still hits.
+    let good_keys = crate::array::js_array_alloc(4);
+    let good_keys = crate::array::js_array_push(good_keys, JSValue::string_ptr(want));
+    transition_cache_insert(0, want, good_keys as usize, 0);
+    assert!(
+        transition_cache_lookup(0, want).is_some(),
+        "a genuine edge (target slot holds the key) must still hit (#6006)"
+    );
+
+    let slot = transition_cache_slot(0, want as usize);
+    with_transition_cache(|t| unsafe {
+        // GC_STORE_AUDIT(ROOT): test cleanup writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
+        (*t)[slot] = TransitionEntry {
+            prev_keys: 0,
+            key_ptr: 0,
+            next_keys: 0,
+            slot_idx: 0,
+            target_len: 0,
+        };
+    });
+}
+
+#[test]
 fn entries_and_values_skip_non_enumerable_descriptor_slots() {
     // #5046: Object.defineProperty(o, 'hidden', { value: 1 }) defaults to
     // enumerable: false. Object.keys filtered it; entries/values did not.
