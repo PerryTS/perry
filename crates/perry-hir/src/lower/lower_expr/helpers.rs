@@ -47,6 +47,35 @@ pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     }
 }
 
+/// #5989: lower a strict-mode assignment to an identifier with no lexical
+/// binding. Per spec (PutValue on a reference that resolves to the global
+/// environment), an EXISTING global property is a normal property write —
+/// Next.js 16's `cacheComponents` node-environment extensions reassign
+/// `Date` exactly this way in strict CJS (`Date = createDate(Date)`), and
+/// the old unconditional throw made the install fail at boot, disarming
+/// dynamic-IO clock detection. Only a genuinely absent binding throws; the
+/// runtime helper does the presence probe + write-back (mirroring the
+/// `js_global_update` shape for `++x` on globals). Argument order preserves
+/// spec evaluation order: the RHS evaluates before the reference check can
+/// throw. Sloppy mode never reaches here (it lowers to a globalThis property
+/// set that may CREATE the binding).
+///
+/// Shared by both assignment-lowering arms (`expr_assign.rs`'s
+/// `lower_assignment_target` and `lower_expr/assignment.rs`) so they can't
+/// drift.
+pub(crate) fn strict_global_assign_existing_or_throw(name: String, value: Box<Expr>) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_global_assign_existing_or_throw".to_string(),
+            param_types: vec![Type::Any, Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::String(name), *value],
+        type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
 pub(crate) fn is_known_global_identifier_name(name: &str) -> bool {
     matches!(
         name,

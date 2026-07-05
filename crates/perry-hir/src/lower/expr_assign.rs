@@ -14,7 +14,10 @@ use crate::destructuring::lower_destructuring_assignment;
 use crate::ir::{BinaryOp, Expr, LogicalOp};
 use crate::lower_patterns::lower_assign_target_to_expr;
 
-use super::{lower_expr, lower_expr_assignment, with_set_fallback_for_ident, LoweringContext};
+use super::{
+    lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
+    with_set_fallback_for_ident, LoweringContext,
+};
 
 fn assignment_target_inferred_name(target: &ast::AssignTarget) -> Option<String> {
     match target {
@@ -448,29 +451,12 @@ fn lower_assignment_target(
                 Ok(*value)
             } else {
                 if ctx.current_strict {
-                    // #5989: strict-mode assignment to an identifier with no
-                    // lexical binding must first resolve against the global
-                    // object (spec PutValue): an EXISTING global property is
-                    // a normal property write — Next.js 16's cacheComponents
-                    // node-environment extensions reassign `Date` exactly
-                    // this way in strict CJS (`Date = createDate(Date)`),
-                    // and the old unconditional throw made the install fail
-                    // at boot, disarming dynamic-IO clock detection. Only a
-                    // genuinely absent binding throws; the helper does the
-                    // presence probe + write-back at runtime (mirrors the
-                    // `js_global_update` shape for `++x` on globals).
-                    // Argument order preserves spec evaluation order: the
-                    // RHS evaluates before the reference check can throw.
-                    return Ok(Expr::Call {
-                        callee: Box::new(Expr::ExternFuncRef {
-                            name: "js_global_assign_existing_or_throw".to_string(),
-                            param_types: vec![Type::Any, Type::Any],
-                            return_type: Type::Any,
-                        }),
-                        args: vec![Expr::String(name), *value],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    });
+                    // #5989: strict-mode assignment to an existing global
+                    // builtin is a property write, not a ReferenceError. See
+                    // `strict_global_assign_existing_or_throw` for the full
+                    // rationale (shared with the sibling arm in
+                    // lower_expr/assignment.rs).
+                    return Ok(strict_global_assign_existing_or_throw(name, value));
                 }
                 eprintln!(
                     "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
