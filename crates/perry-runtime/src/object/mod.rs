@@ -769,16 +769,6 @@ fn transition_cache_slot(prev_keys: usize, key_ptr: usize) -> usize {
     (mixed as usize) & (TRANSITION_CACHE_SIZE - 1)
 }
 
-/// Transition cache lookup using interned string pointer identity.
-///
-/// On HIT we ensure the returned keys_array has
-/// `GC_FLAG_SHAPE_SHARED` because the caller is about to reuse it for
-/// a SECOND object — any future extension on either object must now
-/// clone-before-mutate. We eagerly stabilize small dynamic shapes on
-/// insert so repeated row-object builders get valid cache targets;
-/// larger shapes stay lazy to avoid O(N²) prefix cloning for one-off
-/// dictionaries and are validated on lookup.
-#[inline(always)]
 /// #6006: verify the cached transition edge really adds `key` at `slot_idx`,
 /// i.e. `next_keys[slot_idx]` string-matches `key`. Guards against a stale
 /// pointer-keyed cache entry (freed keys_array address recycled by GC) that
@@ -815,6 +805,16 @@ fn transition_edge_places_key(
     }
 }
 
+/// Transition cache lookup using interned string pointer identity.
+///
+/// On HIT we ensure the returned keys_array has
+/// `GC_FLAG_SHAPE_SHARED` because the caller is about to reuse it for
+/// a SECOND object — any future extension on either object must now
+/// clone-before-mutate. We eagerly stabilize small dynamic shapes on
+/// insert so repeated row-object builders get valid cache targets;
+/// larger shapes stay lazy to avoid O(N²) prefix cloning for one-off
+/// dictionaries and are validated on lookup.
+#[inline(always)]
 fn transition_cache_lookup(
     prev_keys: usize,
     interned_key: *const crate::StringHeader,
