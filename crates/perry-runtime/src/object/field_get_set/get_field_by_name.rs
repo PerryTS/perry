@@ -27,6 +27,18 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // #5972: a null key reaches here when the property-key expression didn't
+    // yield a usable string handle — e.g. `js_get_string_pointer_unified`
+    // returned 0 for a NaN/number key that fell through its coercion branches.
+    // Several arms below deref `(*key).byte_len` without a null check, so a
+    // null key would SIGSEGV at offset 4 (KERN_INVALID_ADDRESS at 0x4). Per JS
+    // semantics such a lookup simply misses → undefined. Same defensive shape
+    // as the #2128 invalid-key guard further down. Every in-runtime caller
+    // passes an interned non-null key, so this only affects the codegen
+    // computed-access path.
+    if key.is_null() {
+        return JSValue::undefined();
+    }
     // #2846: the receiver may be a Proxy value that arrived through a generic
     // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
     // Proxies are encoded as small fake pointers; deref-ing one as an
@@ -1015,4 +1027,33 @@ pub extern "C" fn js_object_get_field_by_name(
         }
     }
     get_field_by_name_object_tail(obj, key)
+}
+
+#[cfg(test)]
+mod null_key_guard_5972 {
+    use super::*;
+
+    /// #5972 part 2: a null key (produced when a NaN/number property-key
+    /// coerces to no usable string handle) must miss → `undefined`, never
+    /// SIGSEGV by dereferencing `(*key).byte_len` at offset 4.
+    #[test]
+    fn null_key_returns_undefined_not_segfault() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
+            crate::object::js_object_set_field_by_name(obj, key, 42.0);
+
+            // Sanity: the real key resolves.
+            let hit = js_object_get_field_by_name(obj, key);
+            assert_eq!(f64::from_bits(hit.bits()), 42.0);
+
+            // The regression: a null key must not crash and must read undefined.
+            let miss = js_object_get_field_by_name(obj, std::ptr::null());
+            assert_eq!(
+                miss.bits(),
+                crate::value::TAG_UNDEFINED,
+                "null key should miss → undefined"
+            );
+        }
+    }
 }
