@@ -250,9 +250,7 @@ fn node_env_proxy_enabled() -> bool {
 
 /// Apply the Node-conformant proxy policy to a reqwest client builder: honor
 /// the standard proxy env vars only when `NODE_USE_ENV_PROXY=1`, matching Node.
-pub(crate) fn apply_node_proxy_policy(
-    builder: reqwest::ClientBuilder,
-) -> reqwest::ClientBuilder {
+pub(crate) fn apply_node_proxy_policy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     if node_env_proxy_enabled() {
         builder
     } else {
