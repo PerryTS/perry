@@ -311,6 +311,69 @@ thread_local! {
         const { std::cell::Cell::new(GC_MALLOC_COUNT_STEP_INITIAL) };
 }
 
+/// #6010: external side-buffer GC pressure. Map entry arrays and Set element
+/// arrays are raw `std::alloc` allocations reachable only through a tiny
+/// arena header — invisible to every trigger input (arena bytes, malloc
+/// object count, old-gen bytes). A workload that churns large Maps/Sets
+/// without arena pressure therefore never collected, and once a dead
+/// header was conservatively pinned across two cycles it tenured into the
+/// old generation, whose reclaim pressure counted only its 16 header bytes
+/// — the multi-megabyte buffer leaked for the life of the process (issue
+/// #6010: 1.4 GB RSS across a benchmark suite whose live heap never left
+/// ~20 MB).
+///
+/// Two counters close the hole:
+/// - ALLOC CHURN (`GC_EXTERNAL_SIDE_ALLOC_PENDING`): every
+///   `GC_EXTERNAL_SIDE_ALLOC_STEP` bytes of fresh external allocation pokes
+///   `gc_check_trigger()`, so collections happen at all in arena-quiet
+///   Map/Set workloads.
+/// - LIVE BYTES (`GC_EXTERNAL_SIDE_LIVE_BYTES`): maintained by the
+///   alloc/realloc sites and the GC finalizers, and added to `old_in_use`
+///   wherever old-reclaim pressure is computed — so tenured-then-dead
+///   collections escalate to the full mark-sweep (whose old-gen sweep runs
+///   the Map/Set side-allocation finalizers) instead of leaking.
+const GC_EXTERNAL_SIDE_ALLOC_STEP: usize = 16 * 1024 * 1024;
+
+thread_local! {
+    static GC_EXTERNAL_SIDE_ALLOC_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GC_EXTERNAL_SIDE_LIVE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Live bytes currently held by external Map/Set side buffers on this thread.
+#[inline]
+pub(super) fn external_side_live_bytes() -> usize {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(Cell::get)
+}
+
+/// Record `bytes` of fresh external side-buffer allocation (Map entries /
+/// Set elements — creation or growth delta) and poke the trigger check when
+/// the accumulated churn window fills. Callers must invoke this only when
+/// the owning collection header is in a consistent state: a triggered cycle
+/// scans conservatively at this call point (`gc_check_trigger`'s direct
+/// arms use `force_full_scan`), which also keeps it non-moving, so raw
+/// header pointers held by the caller stay valid across the call.
+pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
+    let due = GC_EXTERNAL_SIDE_ALLOC_PENDING.with(|c| {
+        let now = c.get().saturating_add(bytes);
+        if now >= GC_EXTERNAL_SIDE_ALLOC_STEP {
+            c.set(0);
+            true
+        } else {
+            c.set(now);
+            false
+        }
+    });
+    if due {
+        gc_check_trigger();
+    }
+}
+
+/// Record that a Map/Set side buffer of `bytes` was freed (GC finalizer).
+pub(crate) fn gc_note_external_side_free(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
+}
+
 #[inline]
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
@@ -757,13 +820,19 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
         return false;
     }
     let promotable = copied_minor_promotable_active_survivor_bytes();
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     copied_minor_promotion_handoff_pressure_due(promotable, old_in_use, baseline)
 }
 
 pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    // #6010: external Map/Set side buffers count toward old-gen pressure —
+    // a tenured-then-dead Map holds its multi-MB buffer until a full
+    // reclaim's old-gen sweep finalizes it, so the buffer bytes must be
+    // able to escalate that reclaim.
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_reclaim_pressure_due(old_in_use, baseline) {
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
@@ -771,7 +840,10 @@ pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
 }
 
 pub(super) fn finish_full_old_reclaim_baseline() {
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    // Baseline includes external side-buffer bytes (#6010) so the growth
+    // delta in `old_reclaim_pressure_due` stays unit-consistent.
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
@@ -1139,7 +1211,7 @@ struct BudgetedGcCycle {
     rebaseline: BudgetedGcRebaseline,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum BudgetedGcTrigger {
     OldReclaim,
     ArenaBytes,
@@ -1181,7 +1253,9 @@ pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u
 
 fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
         return Some(BudgetedGcTrigger::OldReclaim);

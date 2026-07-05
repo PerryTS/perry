@@ -244,6 +244,7 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     let capacity = (*set).capacity as usize;
     if !elements.is_null() && capacity > 0 {
         dealloc(elements as *mut u8, elements_layout(capacity));
+        crate::gc::gc_note_external_side_free(elements_layout(capacity).size());
     }
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external elements side-allocation pointer after deregistration/deallocation.
     (*set).elements = std::ptr::null_mut();
@@ -270,6 +271,53 @@ fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
         flags & crate::gc::GC_FLAG_ARENA != 0
             && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
     }
+}
+
+/// #6010: registry-driven finalization of DEAD Sets at sweep entry — the Set
+/// analog of `finalize_dead_registered_maps_post_trace` (see map.rs for the
+/// full rationale: dead collections in the ACTIVE nursery block are never
+/// object-walked by any sweeper, leaking their external elements buffers).
+pub(crate) fn finalize_dead_registered_sets_post_trace(full_trace: bool) -> usize {
+    let dead: Vec<usize> = SET_REGISTRY.with(|r| {
+        r.borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| unsafe { registered_set_is_dead_post_trace(addr, full_trace) })
+            .collect()
+    });
+    let count = dead.len();
+    for addr in dead {
+        unsafe {
+            finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
+        }
+    }
+    count
+}
+
+unsafe fn registered_set_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_SET {
+        return false;
+    }
+    let flags = header.gc_flags;
+    if flags
+        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
+        != 0
+    {
+        return false;
+    }
+    if full_trace {
+        return true;
+    }
+    if flags & crate::gc::GC_FLAG_TENURED != 0 {
+        return false;
+    }
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
 }
 
 pub(crate) fn finalize_dead_copied_minor_from_space_sets() -> usize {
@@ -571,6 +619,10 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
     // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
     (*set).elements = new_elements;
     (*set).capacity = new_capacity;
+    // #6010: growth delta counts as external churn (see js_set_alloc). The
+    // header is consistent again, and a triggered cycle is conservative +
+    // non-moving, so the caller's raw `set`/elements pointers stay valid.
+    crate::gc::gc_note_external_side_alloc(new_layout.size() - old_layout.size());
     true
 }
 
@@ -605,6 +657,13 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
             idx.borrow_mut()
                 .insert(ptr as usize, crate::fast_hash::new_ptr_hash_map());
         });
+
+        // #6010: the elements buffer is invisible to the arena/malloc GC
+        // triggers; record its bytes as external churn so Set-heavy
+        // workloads still collect (and finalize dead siblings). Safe here:
+        // the header is fully initialized + registered, and the triggered
+        // cycle is conservative + non-moving, so `ptr` stays valid.
+        crate::gc::gc_note_external_side_alloc(elem_layout.size());
 
         ptr
     }

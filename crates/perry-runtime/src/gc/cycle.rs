@@ -1120,6 +1120,24 @@ impl GcCycleState {
     }
 
     fn step_block_persistence(&mut self, budget: GcWorkBudget) {
+        // #6010: block persistence exists to protect REGISTER-HELD recent
+        // objects that precise (shadow-stack) roots can't see (#43/#44). A
+        // cycle whose root scan ran the FULL conservative stack+register
+        // scan (`ManualGcScanGuard::force_full_scan` — every automatic
+        // direct-arm collection in a compiled program, and explicit `gc()`)
+        // has already pinned exactly those objects, so resurrecting every
+        // dead neighbor in the recent-block window is pure over-retention.
+        // Low-allocation workloads never rotate the active block out of the
+        // window, which made garbage there immortal — dead Maps/Sets kept
+        // multi-MB external buffers for the life of the process (#6010:
+        // 1.4 GB RSS on a Map-churn benchmark whose live heap was ~1 MB).
+        if matches!(
+            super::roots::conservative_stack_scan_decision(),
+            super::roots::ConservativeStackScanDecision::Scan
+        ) {
+            self.phase = GcCyclePhase::AtomicFinalize;
+            return;
+        }
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         let phase_start = trace_phase_start(&self.trace);
         let block_persist = if budget.work_units == usize::MAX && self.block_persist.is_none() {
@@ -1366,6 +1384,18 @@ impl GcCycleState {
     fn step_sweep(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
         if self.sweep_state.is_none() {
+            // #6010: free dead Maps'/Sets' external side buffers by registry
+            // walk while this cycle's marks are still fresh (nothing cleared
+            // yet). The object sweep below never reaches collections that die
+            // inside the ACTIVE nursery allocation block, and bulk block
+            // resets skip per-object finalizers — either way the multi-MB
+            // buffers leaked. A minor trace never marks the old generation,
+            // so the registry pass only trusts unmarked-means-dead for
+            // nursery-resident, untenured headers there; a full trace frees
+            // dead collections anywhere.
+            let full_trace = self.minor.is_none();
+            crate::map::finalize_dead_registered_maps_post_trace(full_trace);
+            crate::set::finalize_dead_registered_sets_post_trace(full_trace);
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
                 if let Some(minor) = self.minor.as_ref() {
                     let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)

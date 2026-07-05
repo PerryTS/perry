@@ -313,6 +313,7 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
     let capacity = (*map).capacity as usize;
     if !entries.is_null() && capacity > 0 {
         dealloc(entries as *mut u8, entries_layout(capacity));
+        crate::gc::gc_note_external_side_free(entries_layout(capacity).size());
     }
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external entries side-allocation pointer after deregistration/deallocation.
     (*map).entries = std::ptr::null_mut();
@@ -339,6 +340,65 @@ fn is_dead_copied_minor_from_space_map(addr: usize) -> bool {
         flags & crate::gc::GC_FLAG_ARENA != 0
             && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
     }
+}
+
+/// #6010: registry-driven finalization of DEAD Maps at sweep entry, for the
+/// non-copying cycle kinds (fallback minor / full mark-sweep). A dead Map
+/// sitting in the ACTIVE nursery allocation block is never processed by any
+/// sweeper — the block is still being bump-allocated into, so it is neither
+/// reset nor object-walked — and bulk block resets skip per-object finalize
+/// hooks anyway. Its multi-megabyte external entries buffer therefore leaked
+/// for the life of the process. Walk the registry right after trace (marks
+/// fresh, nothing cleared yet) and free the buffers of provably-dead maps;
+/// the 16-byte headers stay behind as ordinary dead bytes for whichever
+/// block operation eventually reclaims them.
+///
+/// Deadness: unmarked ∧ not pinned ∧ not forwarded, and — for a MINOR trace,
+/// which never traces the old generation — additionally not tenured and
+/// physically in the nursery (the same "unmarked nursery object is garbage"
+/// invariant the ordinary sweeper relies on, backed by the write-barrier
+/// remembered set for old→young edges).
+pub(crate) fn finalize_dead_registered_maps_post_trace(full_trace: bool) -> usize {
+    let dead: Vec<usize> = MAP_REGISTRY.with(|r| {
+        r.borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| unsafe { registered_map_is_dead_post_trace(addr, full_trace) })
+            .collect()
+    });
+    let count = dead.len();
+    for addr in dead {
+        unsafe {
+            finalize_map_side_allocation_for_gc(addr as *mut MapHeader);
+        }
+    }
+    count
+}
+
+unsafe fn registered_map_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_MAP {
+        return false;
+    }
+    let flags = header.gc_flags;
+    if flags
+        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
+        != 0
+    {
+        return false;
+    }
+    if full_trace {
+        return true;
+    }
+    if flags & crate::gc::GC_FLAG_TENURED != 0 {
+        return false;
+    }
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
 }
 
 pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
@@ -654,6 +714,13 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
                 .insert(ptr as usize, std::collections::HashMap::new());
         });
 
+        // #6010: the entries buffer is invisible to the arena/malloc GC
+        // triggers; record its bytes as external churn so Map-heavy
+        // workloads still collect (and finalize dead siblings). Safe here:
+        // the header is fully initialized + registered, and the triggered
+        // cycle is conservative + non-moving, so `ptr` stays valid.
+        crate::gc::gc_note_external_side_alloc(ent_layout.size());
+
         ptr
     }
 }
@@ -839,6 +906,10 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
     (*map).entries = new_entries;
     (*map).capacity = new_capacity;
+    // #6010: growth delta counts as external churn (see js_map_alloc). The
+    // header is consistent again, and a triggered cycle is conservative +
+    // non-moving, so the caller's raw `map`/entries pointers stay valid.
+    crate::gc::gc_note_external_side_alloc(new_layout.size() - old_layout.size());
     true
 }
 
