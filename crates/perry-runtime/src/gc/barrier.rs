@@ -984,15 +984,21 @@ pub(super) fn write_barrier_slot_inner(
     child: u64,
     external_slot: bool,
 ) {
-    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
-    incremental_mark_barrier_value(child);
-
-    // Decode child first: primitive stores are the most common skip.
+    // Decode child first: primitive stores are the overwhelmingly common
+    // case (every numeric array/field store) and need NEITHER the
+    // incremental-mark probe (nothing to mark) NOR the remembered set (no
+    // old→young edge) — so they must not pay the incremental barrier's
+    // unconditional thread-local access, which dominated tight numeric store
+    // loops (#6011: `ema[i] = <f64>` spent more time in this preamble than
+    // in the store itself).
     let child_addr = decode_heap_addr(child);
     if child_addr == 0 {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
         return;
     }
+    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
+    incremental_mark_barrier_value(child);
     // Decode the parent — must be a NaN-boxed heap pointer.
     let parent_addr = decode_heap_addr(parent);
     if parent_addr == 0 {
@@ -1065,10 +1071,17 @@ pub(super) fn decode_heap_addr(bits: u64) -> usize {
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
         (bits & POINTER_MASK) as usize
     } else if tag < 0x7FF8_0000_0000_0000 {
-        // Possible raw pointer. Accept only if the arena side metadata
-        // recognizes it as a heap address; ordinary f64 payload bits
-        // miss the metadata table and remain non-pointers.
+        // Possible raw pointer. Cheap shape pre-filter first (#6011): a real
+        // heap address is 48-bit, above the handle band, and 8-aligned — an
+        // ordinary f64 payload (e.g. 100.5 = 0x4059_4000_…) has non-zero
+        // high bits and is rejected here without paying the page-map
+        // classification, which dominated tight numeric store loops. Only
+        // the (rare) subnormal doubles whose bits look address-shaped fall
+        // through to the authoritative arena lookup.
         let addr = bits as usize;
+        if (bits >> 48) != 0 || addr < 0x10000 || addr & 0x7 != 0 {
+            return 0;
+        }
         if matches!(
             crate::arena::classify_heap_generation(addr),
             crate::arena::HeapGeneration::Unknown

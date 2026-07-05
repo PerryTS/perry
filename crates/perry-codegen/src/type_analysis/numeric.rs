@@ -221,6 +221,14 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 Some(HirType::Array(elem)) => {
                     matches!(**elem, HirType::Number | HirType::Int32)
                 }
+                // #6011: `new Array<number>(n)` locals carry the generic
+                // spelling `Generic { base: "Array", type_args: [Number] }`;
+                // element reads are numeric exactly like `Array(Number)`.
+                Some(HirType::Generic { base, type_args })
+                    if base == "Array" && type_args.len() == 1 =>
+                {
+                    matches!(type_args[0], HirType::Number | HirType::Int32)
+                }
                 Some(HirType::Named(name)) => is_numeric_typed_array_class(name),
                 _ => false,
             }

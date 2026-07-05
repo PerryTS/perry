@@ -584,6 +584,84 @@ fn test_numeric_array_layout_mark_rejects_holes_and_accepts_dense_numbers() {
     );
 }
 
+// #6011: the raw-f64-or-holes invariant flag set by `new Array(n)` — the
+// packed-f64 range-loop guard's walk-free fast path — must be maintained by
+// the canonicalizing store helpers and downgraded by any non-numeric store.
+#[test]
+fn test_new_array_holes_flag_walk_free_guard_and_sound_downgrade() {
+    unsafe {
+        // `new Array(4)`: every slot TAG_HOLE, invariant marked at allocation.
+        let arr = js_array_constructor_single(4.0);
+        assert_eq!(js_array_length(arr), 4);
+        assert!(
+            rebuild_array_numeric_raw_f64_allow_holes(arr),
+            "fresh `new Array(n)` passes the hole-tolerant verify"
+        );
+        assert_eq!(
+            js_array_is_numeric_f64_layout(arr),
+            0,
+            "holes invariant must NOT satisfy the strict dense probe"
+        );
+
+        // Numeric stores keep the invariant and are canonicalized to raw f64
+        // bits even though the dense RawF64 flag is not set: a verbatim
+        // INT32-boxed slot would read as NaN payload through the guarded
+        // loop's raw-f64 loads.
+        let int32_value = f64::from_bits(crate::value::INT32_TAG | 7u64);
+        js_array_set_f64(arr, 0, int32_value);
+        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+        assert_eq!(
+            *elements, // slot 0
+            7.0f64.to_bits(),
+            "numeric store canonicalizes to raw f64 bits under the holes flag"
+        );
+        assert!(rebuild_array_numeric_raw_f64_allow_holes(arr));
+
+        // A non-numeric store must drop the invariant so the guard re-walks
+        // (and fails) instead of treating string bits as raw f64.
+        let s = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+        let s_value =
+            f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK));
+        js_array_set_f64(arr, 1, s_value);
+        assert!(
+            !rebuild_array_numeric_raw_f64_allow_holes(arr),
+            "non-numeric store downgrades the holes invariant"
+        );
+    }
+}
+
+// #6011: an unmarked hole-carrying array (internal alloc path) is verified by
+// a walk; the walk records the invariant so re-entry is walk-free, and the
+// strict dense probe must not clear that recorded invariant when it declines
+// on a hole.
+#[test]
+fn test_holes_invariant_recorded_by_verify_walk_survives_strict_probe() {
+    unsafe {
+        let arr = js_array_alloc_with_length(3);
+        js_array_set_f64(arr, 0, 1.5);
+        assert!(
+            rebuild_array_numeric_raw_f64_allow_holes(arr),
+            "hole-tolerant verify accepts numeric + hole slots"
+        );
+        assert_eq!(
+            js_array_is_numeric_f64_layout(arr),
+            0,
+            "strict probe still declines on the remaining holes"
+        );
+        assert!(
+            rebuild_array_numeric_raw_f64_allow_holes(arr),
+            "strict-probe decline must not clear the recorded holes invariant"
+        );
+
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        js_array_set_f64(arr, 2, undefined);
+        assert!(
+            !rebuild_array_numeric_raw_f64_allow_holes(arr),
+            "undefined is not a hole: it must fail the hole-tolerant verify"
+        );
+    }
+}
+
 #[test]
 fn test_numeric_array_mark_canonicalizes_int32_and_nan_inline() {
     let arr = js_array_alloc_with_length(3);

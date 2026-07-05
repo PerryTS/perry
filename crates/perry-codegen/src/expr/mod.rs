@@ -1140,6 +1140,14 @@ pub(crate) struct PackedF64LoopFact {
     pub guard_id: String,
     pub store_side_exit_label: String,
     pub array_kind: PackedNumericLoopKind,
+    /// #6011: true when the guard that established this fact was the
+    /// hole-tolerant *range* guard (`js_typed_feedback_packed_f64_range_loop_
+    /// guard`): slots inside the guarded index window are raw-f64 numbers OR
+    /// `TAG_HOLE`. Inline loads must hole-check and side-exit to
+    /// `store_side_exit_label` on a hole; inline stores must runtime-check the
+    /// RHS is numeric bits (side-exiting otherwise) and skip the per-iteration
+    /// store guard — the range guard already proved bounds and mutability.
+    pub allow_holes: bool,
 }
 
 impl<'a> FnCtx<'a> {
@@ -1216,6 +1224,7 @@ mod dyn_extern_i18n;
 mod env_clones;
 mod fs_await;
 mod index_get;
+pub(crate) use index_get::packed_f64_loop_index_parts;
 mod index_set;
 mod instance_misc1;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;

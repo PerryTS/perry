@@ -329,6 +329,7 @@ pub(super) fn compile_method(
         cross_module.flat_const_arrays.keys().copied().collect();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &method.body,
+        &[],
         &flat_const_ids,
         &clamp_fn_ids,
         &cross_module.clamp3_functions,
@@ -1198,6 +1199,7 @@ pub(super) fn compile_static_method(
         cross_module.flat_const_arrays.keys().copied().collect();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
+        &[],
         &flat_const_ids,
         &clamp_fn_ids,
         &cross_module.clamp3_functions,

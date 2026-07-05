@@ -108,7 +108,17 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
 pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
     if let Some(number) = value_bits_to_number(value.to_bits()) {
         let length = array_length_from_number_or_throw(number);
-        return js_array_alloc_with_length(length);
+        let arr = js_array_alloc_with_length(length);
+        if length > 0 {
+            // #6011: user-facing `new Array(n)` — every slot is TAG_HOLE, so
+            // the raw-f64-or-holes invariant holds by construction and the
+            // packed-f64 range-loop guard can skip its verify walk. This is
+            // the ONLY `js_array_alloc_with_length` caller that may mark:
+            // internal callers (shape keys arrays, sort scratch, …)
+            // direct-write slots without the layout-noting store helpers.
+            unsafe { mark_array_raw_f64_holes_fresh(arr) };
+        }
+        return arr;
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();

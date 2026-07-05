@@ -138,6 +138,18 @@ impl TypeFacts {
             && !self.has_materialization_hazard(local_id)
     }
 
+    /// #6011: packed-f64 eligibility for arrays *written* by the range-guarded
+    /// versioned loop. Unlike [`Self::proves_packed_f64_array`] this does NOT
+    /// require length stability — an `arr[i] = …` in the loop body marks the
+    /// local as length-mutating even though the range guard proves every such
+    /// store is in-bounds (and therefore length-preserving) at loop entry.
+    /// Kind + noalias + no-hazard is what the guarded store path needs.
+    pub(crate) fn packed_f64_eligible_for_guarded_store(&self, local_id: u32) -> bool {
+        self.array_kind(local_id) == ArrayKindFact::PackedF64
+            && self.proves_noalias_array(local_id)
+            && !self.has_materialization_hazard(local_id)
+    }
+
     pub(crate) fn proves_packed_i32_array(&self, local_id: u32) -> bool {
         self.array_kind(local_id) == ArrayKindFact::PackedI32
             && self.proves_noalias_array(local_id)
@@ -276,6 +288,7 @@ impl TypeFacts {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_type_facts(
     stmts: &[Stmt],
+    params: &[perry_hir::Param],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
@@ -291,7 +304,7 @@ pub(crate) fn collect_type_facts(
         arg_dependent_clamp_fn_ids,
     );
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
-    let (array_facts, effect_facts, materialization_hazards) = collect_array_facts(stmts);
+    let (array_facts, effect_facts, materialization_hazards) = collect_array_facts(stmts, params);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
@@ -371,6 +384,7 @@ pub(crate) fn collect_type_facts(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_native_region_fact_graph(
     stmts: &[Stmt],
+    params: &[perry_hir::Param],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
@@ -381,6 +395,7 @@ pub(crate) fn collect_native_region_fact_graph(
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
+        params,
         flat_const_ids,
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
@@ -401,6 +416,7 @@ pub(crate) fn collect_hir_facts(
 ) -> TypeFacts {
     collect_type_facts(
         stmts,
+        &[],
         flat_const_ids,
         clamp_fn_ids,
         &HashSet::new(),
@@ -548,8 +564,12 @@ fn is_fresh_uint8array_length_literal(expr: &Expr) -> bool {
     }
 }
 
-fn collect_array_facts(stmts: &[Stmt]) -> (ArrayFacts, EffectFacts, MaterializationHazardFacts) {
+fn collect_array_facts(
+    stmts: &[Stmt],
+    params: &[perry_hir::Param],
+) -> (ArrayFacts, EffectFacts, MaterializationHazardFacts) {
     let mut collector = ArrayFactCollector::default();
+    collector.seed_params(params);
     collector.collect_stmts(stmts);
     collector.finish()
 }
@@ -561,11 +581,39 @@ struct ArrayFactCollector {
     aliased_locals: HashSet<u32>,
     length_mutation_locals: HashSet<u32>,
     materialization_hazard_locals: HashSet<u32>,
+    /// #6011: param ids seeded purely from a declared `Packed*` array type.
+    /// A param can receive ANY array at runtime, so these seeds are only
+    /// versioning hints for the runtime-guard-validated packed loop matcher;
+    /// body-observed mutations still downgrade them like any tracked local.
+    param_seeded_locals: HashSet<u32>,
     unknown_call_escape: bool,
     async_microtask_escape: bool,
 }
 
 impl ArrayFactCollector {
+    /// #6011: seed `local_kinds` for function params whose *declared* type is
+    /// a packed numeric array (e.g. `prices: number[]`). Only the numeric
+    /// `Packed*` kinds are seeded — a `PackedValue`/`HoleyValue` param fact
+    /// enables no consumer and would only widen the conservative-downgrade
+    /// surface. Seeding happens before the body walk so every mutation the
+    /// walk observes (push, aliasing, length writes, …) downgrades the param
+    /// exactly like a `Stmt::Let`-declared array.
+    fn seed_params(&mut self, params: &[perry_hir::Param]) {
+        for param in params {
+            if param.is_rest {
+                continue;
+            }
+            let kind = array_kind_from_declared_type(&param.ty);
+            if matches!(
+                kind,
+                ArrayKindFact::PackedI32 | ArrayKindFact::PackedU32 | ArrayKindFact::PackedF64
+            ) {
+                self.local_kinds.insert(param.id, kind);
+                self.param_seeded_locals.insert(param.id);
+            }
+        }
+    }
+
     fn collect_stmts(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             self.collect_stmt(stmt);
@@ -1095,7 +1143,17 @@ impl ArrayFactCollector {
         self.unknown_call_escape = true;
         let ids: Vec<u32> = self.local_kinds.keys().copied().collect();
         for id in ids {
-            self.mark_array_materialization_hazard(id);
+            // #6011: param-seeded facts still lose their packed kind on an
+            // unknown call (conservative for every fact consumer), but do NOT
+            // gain a materialization hazard — params were never hazard-tracked
+            // before seeding existed, and hazards feed non-fact consumers
+            // (`array_length_receiver_is_loop_local`'s length-hoist gate) that
+            // must not regress for `i < param.length` loops in call-bearing
+            // bodies. Explicit hazards (freeze/defineProperty/identity escape
+            // on the param itself) still mark normally.
+            if !self.param_seeded_locals.contains(&id) {
+                self.mark_array_materialization_hazard(id);
+            }
             self.update_array_kind_for_local(id, ArrayKindFact::Unknown);
         }
     }
@@ -1129,12 +1187,44 @@ fn array_kind_from_declared_type(ty: &perry_types::Type) -> ArrayKindFact {
             ArrayKindFact::PackedF64
         }
         perry_types::Type::Array(_) => ArrayKindFact::PackedValue,
+        // #6011: `new Array<number>(n)` declares/infers as
+        // `Generic { base: "Array", type_args: [Number] }` rather than
+        // `Array(Number)` — classify the generic spelling identically.
+        perry_types::Type::Generic { base, type_args }
+            if base == "Array" && type_args.len() == 1 =>
+        {
+            match &type_args[0] {
+                perry_types::Type::Int32 => ArrayKindFact::PackedI32,
+                perry_types::Type::Named(name) if name == "PerryU32" => ArrayKindFact::PackedU32,
+                perry_types::Type::Number => ArrayKindFact::PackedF64,
+                _ => ArrayKindFact::PackedValue,
+            }
+        }
+        perry_types::Type::Generic { base, .. } if base == "Array" => ArrayKindFact::PackedValue,
         _ => ArrayKindFact::Unknown,
     }
 }
 
 fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
     match expr {
+        // #6011: `new Array()` / `new Array(n)` allocations. Zero args is an
+        // empty array; one arg is (almost always) a length — all slots start
+        // as TAG_HOLE, which the hole-tolerant packed-f64 range guard accepts.
+        // A single NON-numeric arg (`new Array("x")`) actually stores the arg
+        // at element 0, making the array non-numeric — that is still fine to
+        // seed as PackedF64 because this fact is only a versioning hint: the
+        // runtime guard revalidates every slot at loop entry and falls back
+        // to the slow loop. Multiple args become elements, so they must all
+        // be literal numbers for the packed-f64 seed.
+        Expr::New {
+            class_name, args, ..
+        } if class_name == "Array" => {
+            if args.len() <= 1 || args.iter().all(expr_is_literal_number) {
+                ArrayKindFact::PackedF64
+            } else {
+                ArrayKindFact::PackedValue
+            }
+        }
         Expr::Array(elements) if elements.iter().all(expr_is_literal_i32) => {
             ArrayKindFact::PackedI32
         }
@@ -1530,6 +1620,7 @@ mod tests {
                 1,
                 Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))),
             )],
+            &[],
             &HashSet::new(),
             &pure_helpers,
             &HashSet::new(),
@@ -1618,6 +1709,7 @@ mod tests {
 
         let graph = collect_native_region_fact_graph(
             &stmts,
+            &[],
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),

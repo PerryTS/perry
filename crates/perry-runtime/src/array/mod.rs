@@ -57,7 +57,10 @@ pub(crate) use self::generic::{
 pub use self::generic_mutators::{
     js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
 };
-pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
+pub(crate) use self::header::{
+    array_has_arguments_object_flag, mark_array_as_arguments_object,
+    rebuild_array_numeric_raw_f64_allow_holes,
+};
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
     js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
@@ -143,8 +146,8 @@ pub(crate) use self::header::{
     array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
     array_ptr_as_proxy, canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
-    mark_array_layout_unknown, normalize_array_receiver, note_array_slot,
-    note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
+    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
+    note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
     refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
     store_array_slot, transfer_array_numeric_layout, value_bits_to_number, NumericArrayLayout,
     MIN_ARRAY_CAPACITY,

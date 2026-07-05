@@ -115,16 +115,84 @@ fn bitand_has_nonnegative_i32_mask(left: &Expr, right: &Expr) -> bool {
         .is_some_and(|mask| (0..=i32::MAX as i64).contains(&mask))
 }
 
+/// #6011: decompose a packed-loop index expression into `(counter_local_id,
+/// constant_offset)`. Matches `i`, `i + c`, `c + i`, and `i - c` with a small
+/// |c| — exactly the shapes the packed-f64 range loop matcher admits, so any
+/// offset seen here on a fact-carrying (array, counter) pair is inside the
+/// range guard's validated window.
+pub(crate) fn packed_f64_loop_index_parts(index: &Expr) -> Option<(u32, i32)> {
+    use perry_hir::BinaryOp;
+    match index {
+        Expr::LocalGet(id) => Some((*id, 0)),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            let (id, offset) = match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(c)) => {
+                    let offset = if matches!(op, BinaryOp::Sub) {
+                        c.checked_neg()?
+                    } else {
+                        *c
+                    };
+                    (*id, offset)
+                }
+                (Expr::Integer(c), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => (*id, *c),
+                _ => return None,
+            };
+            let offset = i32::try_from(offset).ok()?;
+            if offset.unsigned_abs() > 64 {
+                return None;
+            }
+            Some((id, offset))
+        }
+        _ => None,
+    }
+}
+
+/// Look up a packed-f64 loop fact for `(arr, index-expr)`. Zero-offset
+/// indices match any fact; non-zero offsets only match hole-tolerant facts
+/// (established by the range guard, which validated the whole offset window —
+/// the length-bound guard of the classic matcher only proves `i` itself).
+fn packed_f64_loop_fact_for_index(
+    ctx: &FnCtx<'_>,
+    arr_id: u32,
+    index: &Expr,
+) -> Option<(PackedF64LoopFact, u32, i32)> {
+    let (idx_id, offset) = packed_f64_loop_index_parts(index)?;
+    let fact = packed_f64_loop_fact(ctx, arr_id, idx_id)?;
+    if offset != 0 && !fact.allow_holes {
+        return None;
+    }
+    Some((fact, idx_id, offset))
+}
+
+/// Load the packed-loop counter's i32 shadow slot and apply the constant
+/// index offset.
+fn load_packed_loop_index_i32(ctx: &mut FnCtx<'_>, i32_slot: &str, offset: i32) -> String {
+    let idx_i32 = ctx.block().load(I32, i32_slot);
+    match offset.cmp(&0) {
+        std::cmp::Ordering::Equal => idx_i32,
+        std::cmp::Ordering::Greater => ctx.block().add(I32, &idx_i32, &offset.to_string()),
+        std::cmp::Ordering::Less => ctx.block().sub(I32, &idx_i32, &(-offset).to_string()),
+    }
+}
+
 fn numeric_index_has_loop_array_index_proof(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
-    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object, index) else {
+    let Expr::LocalGet(arr_id) = object else {
         return false;
     };
-    ctx.i32_counter_slots.contains_key(idx_id)
-        && (packed_f64_loop_fact(ctx, *arr_id, *idx_id).is_some()
-            || ctx
-                .bounded_index_pairs
-                .iter()
-                .any(|fact| fact.array_local_id == *arr_id && fact.index_local_id == *idx_id))
+    let Some((idx_id, offset)) = packed_f64_loop_index_parts(index) else {
+        return false;
+    };
+    if !ctx.i32_counter_slots.contains_key(&idx_id) {
+        return false;
+    }
+    if packed_f64_loop_fact_for_index(ctx, *arr_id, index).is_some() {
+        return true;
+    }
+    offset == 0
+        && ctx
+            .bounded_index_pairs
+            .iter()
+            .any(|fact| fact.array_local_id == *arr_id && fact.index_local_id == idx_id)
 }
 
 fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
@@ -471,9 +539,10 @@ fn lower_packed_f64_loop_index_get(
     arr_id: u32,
     arr_box: &str,
     idx_i32: &str,
-    guard_id: &str,
-    array_kind: PackedNumericLoopKind,
+    fact: &PackedF64LoopFact,
 ) -> String {
+    let guard_id = fact.guard_id.as_str();
+    let array_kind = fact.array_kind;
     let value = {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
@@ -485,6 +554,24 @@ fn lower_packed_f64_loop_index_get(
         let element_ptr = blk.inttoptr(I64, &element_addr);
         blk.load(DOUBLE, &element_ptr)
     };
+    if fact.allow_holes {
+        // #6011: hole-tolerant range-guarded loop — the guard proved every
+        // slot in the window is a raw-f64 number OR TAG_HOLE. Reading a hole
+        // must observe `undefined` (or a polluted prototype), so side-exit to
+        // the slow preheader, which re-executes the current iteration through
+        // the generic read path. The side exit fires before any effect of the
+        // iteration (matcher invariant), so the re-run cannot double-apply.
+        let is_hole = {
+            let blk = ctx.block();
+            let raw_bits = blk.bitcast_double_to_i64(&value);
+            blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64)
+        };
+        let cont_idx = ctx.new_block("packed_f64_range.load.cont");
+        let cont_label = ctx.block_label(cont_idx);
+        ctx.block()
+            .cond_br(&is_hole, &fact.store_side_exit_label, &cont_label);
+        ctx.current_block = cont_idx;
+    }
     let lowered = LoweredValue {
         semantic: SemanticKind::JsNumber,
         rep: NativeRep::F64,
@@ -898,21 +985,20 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         return Ok(None);
     }
 
-    if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) {
-        if let Some(fact) = packed_f64_loop_fact(ctx, *arr_id, *idx_id) {
-            if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+    if let Expr::LocalGet(arr_id) = object.as_ref() {
+        if let Some((fact, idx_id, offset)) =
+            packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
+        {
+            if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                 let arr_box = lower_expr(ctx, object)?;
-                let idx_i32 = ctx.block().load(I32, &i32_slot);
+                let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                 return Ok(Some(lower_packed_f64_loop_index_get(
-                    ctx,
-                    *arr_id,
-                    &arr_box,
-                    &idx_i32,
-                    &fact.guard_id,
-                    fact.array_kind,
+                    ctx, *arr_id, &arr_box, &idx_i32, &fact,
                 )));
             }
         }
+    }
+    if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) {
         if ctx
             .bounded_index_pairs
             .iter()
@@ -1515,23 +1601,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // we can skip the bound check + OOB phi entirely.
                 // The loop already proved `i < arr.length` and the
                 // body provably can't change `arr.length`.
-                if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                    (object.as_ref(), index.as_ref())
-                {
-                    if let Some(fact) = packed_f64_loop_fact(ctx, *arr_id, *idx_id) {
-                        if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+                if let Expr::LocalGet(arr_id) = object.as_ref() {
+                    if let Some((fact, idx_id, offset)) =
+                        packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
+                    {
+                        if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                             let arr_box = lower_expr(ctx, object)?;
-                            let idx_i32 = ctx.block().load(I32, &i32_slot);
+                            let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                             return Ok(lower_packed_f64_loop_index_get(
-                                ctx,
-                                *arr_id,
-                                &arr_box,
-                                &idx_i32,
-                                &fact.guard_id,
-                                fact.array_kind,
+                                ctx, *arr_id, &arr_box, &idx_i32, &fact,
                             ));
                         }
                     }
+                }
+                if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
+                    (object.as_ref(), index.as_ref())
+                {
                     if ctx.bounded_index_pairs.iter().any(|fact| {
                         fact.index_local_id == *idx_id && fact.array_local_id == *arr_id
                     }) {

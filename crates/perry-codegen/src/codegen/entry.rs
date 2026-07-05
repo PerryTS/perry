@@ -544,6 +544,7 @@ pub(super) fn compile_module_entry(
             .collect();
         let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &[],
             &flat_const_ids,
             &clamp_fn_ids,
             &cross_module.clamp3_functions,
@@ -1078,6 +1079,7 @@ pub(super) fn compile_module_entry(
             .collect();
         let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &[],
             &flat_const_ids,
             &clamp_fn_ids,
             &cross_module.clamp3_functions,

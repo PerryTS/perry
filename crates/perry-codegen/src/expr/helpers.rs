@@ -18,6 +18,14 @@ use crate::types::{DOUBLE, I32, I64};
 pub(crate) fn type_has_numeric_pointer_free_array_layout(ty: &HirType) -> bool {
     match ty {
         HirType::Array(elem) => matches!(elem.as_ref(), HirType::Number | HirType::Int32),
+        // #6011: `new Array<number>(n)` declarations carry the generic
+        // spelling; treat it exactly like `Array(Number)` so number-context
+        // element reads keep their coerced fallback (a raw arithmetic op on
+        // an uncoerced boxed `undefined` would propagate the NaN-box payload
+        // verbatim) and stores take the guarded numeric-layout path.
+        HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+            matches!(type_args[0], HirType::Number | HirType::Int32)
+        }
         HirType::Tuple(elems) => elems
             .iter()
             .all(|elem| matches!(elem, HirType::Number | HirType::Int32)),

@@ -448,6 +448,7 @@ pub(super) fn compile_function(
         cross_module.flat_const_arrays.keys().copied().collect();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
+        &f.params,
         &flat_const_ids,
         &clamp_fn_ids,
         &cross_module.clamp3_functions,
