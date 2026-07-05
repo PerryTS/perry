@@ -81,6 +81,27 @@ pub(crate) fn pre_register_forward_captured_lets(
                             ctx.lexical_forward_decls.insert(span_lo, id);
                         }
                     }
+                    // A closure in an EARLIER declarator of THIS same
+                    // `let`/`const` can forward-reference a name bound by a LATER
+                    // declarator in the SAME declaration:
+                    //   `let z = (w) => { … O … Y … A … },
+                    //        Y = () => z(false),
+                    //        A = () => clearTimeout(O),
+                    //        O = setTimeout(z, K);`
+                    // (the minified `new Promise` executor shape). Record this
+                    // declarator's closure refs NOW so the later declarators are
+                    // seen as forward-captured too — `seen_closure_refs` is
+                    // otherwise only updated by the trailing `cic_stmt` AFTER the
+                    // whole declaration, so intra-declaration forward-refs were
+                    // missed: the later names never got pre-registered, so the
+                    // ref fell through to `js_global_get_or_throw_unresolved` and
+                    // the closure captured a global instead of the local box —
+                    // e.g. a `new Promise` `resolve` that never fires, hanging
+                    // the awaiting caller. Cross-statement forward-refs were
+                    // already handled by the trailing `cic_stmt`.
+                    if let Some(init) = &decl.init {
+                        cic_expr(init, false, &mut seen_closure_refs);
+                    }
                 }
             } else {
                 // `var` bindings are already predefined + boxed by
