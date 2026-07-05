@@ -158,7 +158,7 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
         super::SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
         // Arbitrary user code ran since the last stringify, so the cached
         // `Object.prototype`-has-`toJSON` verdict must be recomputed (#6009).
-        super::stringify::invalidate_object_proto_tojson_state();
+        super::invalidate_object_proto_tojson_state();
         // A circular-ref `TypeError` longjmps past the `STRINGIFY_STACK`
         // pops (js_throw doesn't unwind Rust), so a caught throw can leave
         // stale ancestor pointers behind. Clear at the outermost entry so they

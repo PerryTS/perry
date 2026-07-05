@@ -68,12 +68,15 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
         }
     }
     let mut slot_addr = 0usize;
+    // Latch BEFORE the insert: a concurrent `object_static_prototype` that
+    // observed the latch after the insert-but-before-the-store window would
+    // skip the mutex and miss an already-recorded prototype.
+    OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
     if let Ok(mut map) = get_object_prototypes().lock() {
         let slot = map.entry(obj_ptr).or_insert(0);
         *slot = proto_bits;
         slot_addr = slot as *mut u64 as usize;
     }
-    OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
     if slot_addr != 0 {
         crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, proto_bits);
     }

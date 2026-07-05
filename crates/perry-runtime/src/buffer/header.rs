@@ -336,10 +336,13 @@ pub fn mark_as_uint8array(addr: usize) {
 #[no_mangle]
 pub extern "C" fn js_buffer_register_external(addr: usize) {
     register_buffer(addr as *const BufferHeader);
+    // Latch BEFORE the insert: a concurrent `is_registered_buffer` that
+    // observed the latch after the insert-but-before-the-store window would
+    // skip the mutex and miss an already-registered buffer.
+    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
-    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
 }
 
 #[no_mangle]
@@ -397,10 +400,11 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     register_buffer(addr as *const BufferHeader);
     mark_as_uint8array(addr);
     mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages);
+    // Latch BEFORE the insert — see js_buffer_register_external.
+    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
-    EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_uint8arrays().lock() {
         r.insert(addr);
     }

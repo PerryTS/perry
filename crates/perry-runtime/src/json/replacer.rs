@@ -37,7 +37,7 @@ pub(crate) unsafe fn call_replacer(
     crate::object::js_implicit_this_set(prev_this);
     // The user callback may have installed/removed `Object.prototype.toJSON`
     // (#6009 fast-probe cache).
-    super::stringify::invalidate_object_proto_tojson_state();
+    super::invalidate_object_proto_tojson_state();
     result
 }
 
@@ -540,7 +540,7 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
-        super::stringify::invalidate_object_proto_tojson_state();
+        super::invalidate_object_proto_tojson_state();
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
@@ -1380,7 +1380,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
-        super::stringify::invalidate_object_proto_tojson_state();
+        super::invalidate_object_proto_tojson_state();
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
