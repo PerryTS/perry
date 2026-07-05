@@ -218,6 +218,18 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Source-level inner name of the class currently being lowered — the
+    /// binding visible *inside* the class body (`class C {...}` -> `C`,
+    /// `const K = class Named {...}` -> `Named`). Unlike `current_class`
+    /// (which for a class expression may be a synthetic dedup key), this is
+    /// the identifier the user writes. Assigning to it inside the body is a
+    /// `const`-binding violation and must throw a TypeError.
+    pub(crate) current_class_inner_name: Option<String>,
+    /// Set by a class-EXPRESSION caller to the source ident of the class
+    /// about to be lowered, so `lower_class_from_ast` can record the inner
+    /// binding name (the synthetic dedup key it receives is not the
+    /// user-visible name). Consumed (taken) at the start of lowering.
+    pub(crate) pending_class_inner_name: Option<String>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
     /// Lexical stack of private-name scopes — one entry per enclosing class

@@ -439,6 +439,17 @@ fn lower_assignment_target(
                     ]));
                 }
                 Ok(Expr::LocalSet(id, value))
+            } else if ctx.current_class_inner_name.as_deref() == Some(name.as_str()) {
+                // Assigning to the class own-name binding from inside the class
+                // body targets the immutable inner `const` binding -> TypeError
+                // (test262 language/statements/class/name-binding/const). Evaluate
+                // the RHS for side effects first, then throw. A local/param that
+                // shadows the name was already handled by the `lookup_local` arm
+                // above, so this only fires for the genuine class binding.
+                Ok(Expr::Sequence(vec![
+                    *value,
+                    throw_type_error_const_assignment(&name),
+                ]))
             } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
                 // v0.5.757: don't shadow a class/function binding with an
                 // implicit local for `<Name> = X` patterns. Drizzle's

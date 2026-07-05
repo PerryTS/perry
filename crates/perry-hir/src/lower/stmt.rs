@@ -691,6 +691,15 @@ pub(crate) fn lower_stmt(
                                         ctx.class_expr_aliases
                                             .insert(inner_name.clone(), bind_name.clone());
                                     }
+                                    // The inner (const) binding visible inside the
+                                    // body is the class expression's own source ident
+                                    // (`var cls = class C {...}` -> `C`); feed it so the
+                                    // const-assignment guard uses the user-visible name,
+                                    // not the `bind_name` registration key.
+                                    ctx.pending_class_inner_name = class_expr
+                                        .ident
+                                        .as_ref()
+                                        .map(|i| i.sym.to_string());
                                     // Lower the class with the binding name so
                                     // `new BindName(...)` works unchanged.
                                     let mut lowered_class =

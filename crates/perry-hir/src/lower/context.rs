@@ -76,6 +76,8 @@ impl LoweringContext {
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
+            current_class_inner_name: None,
+            pending_class_inner_name: None,
             current_class_member_is_static: false,
             private_scopes: Vec::new(),
             object_super_home_stack: Vec::new(),

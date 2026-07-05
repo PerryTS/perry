@@ -84,6 +84,9 @@ pub(crate) fn lower_class_expr(
             }
         }
     };
+    // Record the source-level inner binding name for the const-assignment
+    // guard (assigning to it inside the body throws a TypeError).
+    ctx.pending_class_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
     let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
     if let Some(display) = display_override {
         ctx.class_display_names.insert(class.id, display);
