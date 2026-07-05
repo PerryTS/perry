@@ -715,7 +715,10 @@ fn transition_cache_lookup_rejects_grown_shared_target() {
     let keys2 = crate::array::js_array_push(keys, JSValue::string_ptr(extra));
     // `js_array_push` grows in place when capacity allows (cap was 4), so the
     // cached `next_keys` pointer still points at the now-length-2 array.
-    assert_eq!(keys2, keys, "test setup: push must grow in place, not realloc");
+    assert_eq!(
+        keys2, keys,
+        "test setup: push must grow in place, not realloc"
+    );
 
     assert!(
         transition_cache_lookup(0, key).is_none(),
