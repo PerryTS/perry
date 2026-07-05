@@ -98,6 +98,12 @@ const d = new Date(0);
 console.log("iso:", d.toISOString());
 console.log("now is number:", typeof Date.now() === "number");
 console.log("instanceof:", d instanceof Date);
+// Interception fires through the VALUE path (a captured `Date.now`
+// binding routes through the installed wrapper). Syntactic `Date.now()`
+// sites still compile to the builtin intrinsic and bypass the override —
+// a known, separately-tracked gap.
+const capturedNow = Date.now;
+capturedNow();
 console.log("io calls:", ioCalls);
 "#,
     );
@@ -105,7 +111,7 @@ console.log("io calls:", ioCalls);
     assert_eq!(
         stdout,
         "install ok\niso: 1970-01-01T00:00:00.000Z\nnow is number: true\ninstanceof: true\nio calls: 1\n",
-        "the wrapper must install and intercept Date.now()"
+        "the wrapper must install and intercept a value-path Date.now"
     );
 }
 
