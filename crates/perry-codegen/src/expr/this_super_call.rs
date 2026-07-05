@@ -151,13 +151,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         );
                     }
                     perry_hir::CallArg::Spread(e) => {
-                        // `js_array_push_spread_any` also handles the
-                        // arguments OBJECT (array-like, not ArrayHeader) —
-                        // the `super(...arguments)` source.
+                        // Route every spread operand through the full iterator
+                        // protocol (`js_array_spread_append` -> `array_from_
+                        // spread_value`): it drives a custom `[Symbol.iterator]`
+                        // (`super(...iter)`), spreads the arguments OBJECT
+                        // (`super(...arguments)`), arrays, sets/maps, typed
+                        // arrays, and strings, AND propagates an abrupt
+                        // completion from a throwing iterator step/value — the
+                        // `call-spread-*-iter` / `call-spread-err-*` cases. The
+                        // old `js_array_push_spread_any` only handled arrays and
+                        // array-like (`.length`) objects, so a plain iterable
+                        // (no `.length`) contributed zero args.
                         let v = lower_expr(ctx, e)?;
                         arr = ctx.block().call(
                             I64,
-                            "js_array_push_spread_any",
+                            "js_array_spread_append",
                             &[(I64, &arr), (DOUBLE, &v)],
                         );
                     }

@@ -538,6 +538,11 @@ pub(super) fn emit_string_pool(
     // crash (Next.js `new c.AppPageRouteModule({...})`). Mirrors the
     // closure-rest registration but keyed by the `_constructor` symbol.
     let mut ctor_rest_regs: Vec<(String, usize)> = Vec::new();
+    // Per-class-id ctor synth/rest flags (has_synthetic_arguments, has_rest) so
+    // the `super(...spread)` runtime apply path packs a pass-through parent
+    // ctor's `arguments` / rest slot correctly (a zero-declared-param parent
+    // that reads `arguments`, e.g. tsc's emitted pass-through ctor).
+    let mut ctor_flag_regs: Vec<(u32, bool, bool)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (class_table now contains both the
         // canonical name and self-binding aliases like `_X` from
@@ -662,6 +667,20 @@ pub(super) fn emit_string_pool(
         {
             ctor_rest_regs.push((ctor_symbol.clone(), rest_idx));
         }
+        // Record the ctor's trailing-param shape so the `super(...spread)`
+        // apply path forwards the flat spread args and packs the trailing slot:
+        // a synthesized `arguments` slot receives ALL args (from index 0), a
+        // user rest param only the args from the rest position onward.
+        {
+            let last = class.constructor.as_ref().and_then(|c| c.params.last());
+            let ctor_has_synth = last.map(|p| p.arguments_object.is_some()).unwrap_or(false);
+            let ctor_has_rest = last
+                .map(|p| p.is_rest && p.arguments_object.is_none())
+                .unwrap_or(false);
+            if ctor_has_synth || ctor_has_rest {
+                ctor_flag_regs.push((cid, ctor_has_synth, ctor_has_rest));
+            }
+        }
         ctor_triples.push((cid, ctor_symbol, ctor_params));
     }
     method_triples.sort_unstable();
@@ -783,6 +802,21 @@ pub(super) fn emit_string_pool(
         blk.call_void(
             "js_register_closure_rest",
             &[(PTR, &func_ref), (I32, &rest_idx.to_string())],
+        );
+    }
+    // Register ctor synth/rest flags so `super(...spread)` packs the parent
+    // ctor's trailing `arguments` / rest slot correctly.
+    ctor_flag_regs.sort_unstable();
+    for (cid, has_synth, has_rest) in ctor_flag_regs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        blk.call_void(
+            "js_register_class_constructor_flags",
+            &[
+                (I64, &cid.to_string()),
+                (I64, if has_synth { "1" } else { "0" }),
+                (I64, if has_rest { "1" } else { "0" }),
+            ],
         );
     }
 
