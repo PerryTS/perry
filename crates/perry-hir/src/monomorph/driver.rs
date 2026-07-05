@@ -201,7 +201,7 @@ fn collect_instantiations_in_stmt(
             }
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

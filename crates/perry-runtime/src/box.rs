@@ -196,7 +196,21 @@ pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
             // now see `undefined`.
             return crate::value::TAG_UNDEFINED as i64;
         }
-        (*ptr).value as i64
+        let bits = (*ptr).value;
+        // Temporal Dead Zone: a lexical `let`/`const`/`class` box seeded with
+        // the TAG_TDZ sentinel at scope entry throws a spec ReferenceError when
+        // read before its declaration runs (which overwrites the sentinel with
+        // a real value). TAG_TDZ is a reserved bit pattern no legitimate value
+        // ever holds, so this branch is only ever taken on a genuine
+        // read-before-initialization — making the check zero-regression for
+        // every already-initialized box. The name is passed as `undefined`
+        // because this choke point is name-agnostic (it serves direct,
+        // closure-captured, and compound reads alike); the resulting message is
+        // the spec-generic form.
+        if bits == crate::value::TAG_TDZ {
+            crate::error::js_throw_reference_error_tdz(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        bits as i64
     }
 }
 

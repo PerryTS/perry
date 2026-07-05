@@ -170,7 +170,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
                 }
             }
         }
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

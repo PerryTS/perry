@@ -893,6 +893,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                     // snapshot of the empty slot.
                                     ctx.var_hoisted_ids.insert(id);
                                     hoisted_id_set.insert(id);
+                                    // Lexical let/const forward-decl: TDZ-eligible.
+                                    // A read before the declaration runs throws.
+                                    ctx.tdz_forward_ids.insert(id);
                                     ctx.lexical_forward_decls.insert(ident.id.span.lo.0, id);
                                 }
                             }
@@ -1115,9 +1118,25 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     }
                 }
                 prealloc.sort();
-                if !prealloc.is_empty() {
-                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
-                    with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
+                // Split TDZ-seeded lexical `let`/`const` boxes from ordinary
+                // boxes (see block.rs Phase 5 for the rationale).
+                let mut tdz_prealloc: Vec<LocalId> = Vec::new();
+                let mut plain_prealloc: Vec<LocalId> = Vec::new();
+                for id in prealloc {
+                    if ctx.tdz_forward_ids.contains(&id) {
+                        tdz_prealloc.push(id);
+                    } else {
+                        plain_prealloc.push(id);
+                    }
+                }
+                if !plain_prealloc.is_empty() || !tdz_prealloc.is_empty() {
+                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 2);
+                    if !plain_prealloc.is_empty() {
+                        with_prealloc.push(Stmt::PreallocateBoxes(plain_prealloc));
+                    }
+                    if !tdz_prealloc.is_empty() {
+                        with_prealloc.push(Stmt::PreallocateTdzBoxes(tdz_prealloc));
+                    }
                     with_prealloc.extend(combined);
                     combined = with_prealloc;
                 }

@@ -400,6 +400,13 @@ pub(crate) struct FnCtx<'a> {
     /// pre-allocated box. The id is added to `boxed_vars` automatically
     /// so subsequent `LocalGet`/`LocalSet`/`Update` go through the box.
     pub prealloc_boxes: std::collections::HashSet<u32>,
+    /// LocalIds whose pre-allocated box was seeded with the TAG_TDZ sentinel
+    /// (Temporal Dead Zone) via `Stmt::PreallocateTdzBoxes` rather than
+    /// `undefined`. A read of one of these boxes before its `Stmt::Let` runs
+    /// throws a spec ReferenceError (enforced in the runtime `js_box_get_bits`
+    /// choke point). The `Stmt::Let` arm consults this set so a no-init
+    /// declaration (`let x;`) still clears the sentinel to `undefined`.
+    pub tdz_boxes: std::collections::HashSet<u32>,
     /// Compiler-private async/generator control locals whose closure-shared
     /// storage is a primitive heap cell instead of a generic JSValue box.
     /// These ids are emitted by Perry's generator transform, not user source:

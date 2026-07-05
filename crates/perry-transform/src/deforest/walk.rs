@@ -165,7 +165,7 @@ pub fn max_in_stmt(stmt: &Stmt, max_id: &mut LocalId) {
             }
         }
         Stmt::Labeled { body, .. } => max_in_stmt(body, max_id),
-        Stmt::PreallocateBoxes(ids) => {
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
             for id in ids {
                 *max_id = (*max_id).max(*id);
             }

@@ -386,6 +386,14 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// LocalIds of lexical let/const bindings that are forward-referenced
+    /// (read before their declaration, directly or via a closure) in the
+    /// current function/module body. These get a TDZ-seeded box via
+    /// Stmt::PreallocateTdzBoxes so a read-before-declaration throws a spec
+    /// ReferenceError. A subset of var_hoisted_ids restricted to lexical
+    /// (non-var) bindings. Populated by pre_register_forward_captured_lets
+    /// and drained when the body's prealloc set is assembled.
+    pub(crate) tdz_forward_ids: HashSet<LocalId>,
     /// Names bound by an enclosing `catch (e)` parameter that is currently in
     /// scope (a stack, innermost last). Annex B B.3.4: a `var e = init;` whose
     /// name collides with a live catch parameter assigns to that *catch

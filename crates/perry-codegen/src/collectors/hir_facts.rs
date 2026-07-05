@@ -522,7 +522,8 @@ fn collect_owned_buffer_lets(
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
             | Stmt::Throw(_)
-            | Stmt::PreallocateBoxes(_) => {}
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 }
@@ -704,7 +705,8 @@ impl ArrayFactCollector {
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
-            | Stmt::PreallocateBoxes(_) => {}
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 

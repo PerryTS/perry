@@ -601,6 +601,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            tdz_boxes: std::collections::HashSet::new(),
             compiler_private_async_i32_control_locals: &cross_module
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
@@ -1134,6 +1135,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            tdz_boxes: std::collections::HashSet::new(),
             compiler_private_async_i32_control_locals: &cross_module
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module

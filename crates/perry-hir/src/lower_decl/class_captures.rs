@@ -813,6 +813,7 @@ pub(crate) fn append_new_args_stmt(
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }

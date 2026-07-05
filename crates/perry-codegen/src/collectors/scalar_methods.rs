@@ -440,7 +440,8 @@ fn stmt_writes_this_property(stmt: &Stmt, property: &str) -> bool {
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => false,
     }
 }
 

@@ -77,6 +77,10 @@ pub(crate) fn pre_register_forward_captured_lets(
                         if !already_in_scope {
                             let id = ctx.define_local(name, Type::Any);
                             ctx.var_hoisted_ids.insert(id);
+                            // Lexical let/const forward-decl: mark TDZ-eligible
+                            // so its box is seeded with the TAG_TDZ sentinel and
+                            // a read before the declaration throws.
+                            ctx.tdz_forward_ids.insert(id);
                             forward_boxed_ids.push(id);
                             ctx.lexical_forward_decls.insert(span_lo, id);
                         }
@@ -1185,11 +1189,31 @@ pub fn lower_fn_body_block_stmt(
     }
     prealloc.sort();
 
-    // Phase 5: assemble the final body — PreallocateBoxes (if any),
-    // then the hoisted FnDecl Lets, then everything else.
+    // Split the prealloc set into TDZ-seeded lexical `let`/`const` boxes and
+    // ordinary (`var` / hoisted-closure / FnDecl-capture) boxes. Only genuine
+    // lexical bindings recorded in `tdz_forward_ids` get the TAG_TDZ sentinel;
+    // everything else keeps the historical `undefined`-seeded behavior so a
+    // forward-captured `var` or hoisted function still reads `undefined`, never
+    // throws. The dead zone ends when the binding's own `Stmt::Let` runs.
+    let mut tdz_prealloc: Vec<LocalId> = Vec::new();
+    let mut plain_prealloc: Vec<LocalId> = Vec::new();
+    for id in prealloc {
+        if ctx.tdz_forward_ids.contains(&id) {
+            tdz_prealloc.push(id);
+        } else {
+            plain_prealloc.push(id);
+        }
+    }
+
+    // Phase 5: assemble the final body — PreallocateBoxes /
+    // PreallocateTdzBoxes (if any), then the hoisted FnDecl Lets, then
+    // everything else.
     let mut result: Vec<Stmt> = Vec::new();
-    if !prealloc.is_empty() {
-        result.push(Stmt::PreallocateBoxes(prealloc));
+    if !plain_prealloc.is_empty() {
+        result.push(Stmt::PreallocateBoxes(plain_prealloc));
+    }
+    if !tdz_prealloc.is_empty() {
+        result.push(Stmt::PreallocateTdzBoxes(tdz_prealloc));
     }
     result.extend(var_slot_lets);
     result.extend(hoisted_lets);
@@ -1360,7 +1384,8 @@ pub fn collect_refs_in_closure_bodies_stmt(
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

@@ -707,7 +707,7 @@ pub fn fix_native_instance_stmt(
         }
         Stmt::Throw(e) => fix_native_instance_expr(e, native_instances, local_id_instances),
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

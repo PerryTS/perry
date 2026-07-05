@@ -545,7 +545,8 @@ fn collect_local_candidate_defs_from_frames<'a>(
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
                 | Stmt::LabeledContinue(_)
-                | Stmt::PreallocateBoxes(_) => {}
+                | Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_) => {}
             },
             LocalCandidateFrame::Expr(expr) => {
                 match expr {
@@ -748,7 +749,8 @@ fn collect_param_literal_sets_from_frames(
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
                 | Stmt::LabeledContinue(_)
-                | Stmt::PreallocateBoxes(_) => {}
+                | Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_) => {}
             },
             ParamFrame::Expr(expr) => {
                 if let Expr::Closure { params, body, .. } = expr {
@@ -891,7 +893,8 @@ fn collect_const_locals_from_frames<'a>(
                     | Stmt::Continue
                     | Stmt::LabeledBreak(_)
                     | Stmt::LabeledContinue(_)
-                    | Stmt::PreallocateBoxes(_) => {}
+                    | Stmt::PreallocateBoxes(_)
+                    | Stmt::PreallocateTdzBoxes(_) => {}
                 }
             }
             ConstFrame::Expr(expr) => {
@@ -1009,7 +1012,8 @@ fn scan_mutations_from_frames(
                     | Stmt::Continue
                     | Stmt::LabeledBreak(_)
                     | Stmt::LabeledContinue(_)
-                    | Stmt::PreallocateBoxes(_) => {}
+                    | Stmt::PreallocateBoxes(_)
+                    | Stmt::PreallocateTdzBoxes(_) => {}
                 }
             }
             MutationFrame::Expr(expr) => {
@@ -1755,7 +1759,8 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => false,
     }
 }
 
