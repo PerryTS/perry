@@ -79,8 +79,8 @@ pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,
     js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
-    js_array_set_f64_extend, js_array_set_f64_unchecked, js_array_set_index_or_string,
-    js_array_set_string_key,
+    js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
+    js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -119,7 +119,8 @@ pub(crate) use self::push_pop::guard_writable_length;
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_hole, js_array_push_spread_f64, js_array_set_length,
-    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_unshift_variadic,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{

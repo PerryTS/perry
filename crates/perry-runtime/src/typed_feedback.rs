@@ -1782,7 +1782,10 @@ pub extern "C" fn js_typed_feedback_array_set_f64_extend(
     if !pass {
         record_fallback_call(site_id);
     }
-    crate::array::js_array_set_f64_extend(arr, index, value)
+    // This wrapper is only emitted for the source-level `arr[i] = v` assignment,
+    // so it carries strict `Set`-with-`Throw` semantics: a frozen array's element
+    // is non-writable and a non-extensible array rejects a new index → TypeError.
+    crate::array::js_array_set_f64_extend_strict(arr, index, value)
 }
 
 #[no_mangle]
@@ -2029,7 +2032,9 @@ pub extern "C" fn js_typed_feedback_array_set_index_or_string(
     } else {
         record_guard_pass(site_id);
     }
-    crate::array::js_array_set_index_or_string(arr, idx, value)
+    // Assignment-site wrapper → strict `Set` with `Throw = true` (frozen /
+    // non-extensible array element write throws a TypeError).
+    crate::array::js_array_set_index_or_string_strict(arr, idx, value)
 }
 
 #[no_mangle]
