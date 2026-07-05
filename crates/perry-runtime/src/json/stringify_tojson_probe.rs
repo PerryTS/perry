@@ -34,11 +34,13 @@ pub(crate) fn invalidate_object_proto_tojson_state() {
 /// whenever the array doesn't look like a well-formed keys array.
 unsafe fn keys_array_may_carry_to_json(keys: *mut crate::ArrayHeader) -> bool {
     let keys_addr = keys as usize;
-    if (keys_addr as u64) >> 48 != 0 || keys_addr < 0x10000 || keys_addr & 0x7 != 0 {
+    if keys_addr & 0x7 != 0 {
         return true;
     }
-    let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
+    let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
+        return true;
+    };
+    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY {
         return true;
     }
     let key_count = (*keys).length as usize;
