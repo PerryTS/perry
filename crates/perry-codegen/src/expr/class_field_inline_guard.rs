@@ -36,6 +36,7 @@ const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const OBJECT_TYPE_REGULAR: &str = "1";
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
 const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
+const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
 /// Emit the inline class-field shape pre-check.
@@ -140,6 +141,17 @@ pub(crate) fn emit_class_field_inline_precheck(
         acc = blk.and(I1, &acc, &cid_ok);
         acc = blk.and(I1, &acc, &fc_ok);
         acc = blk.and(I1, &acc, &ka_ok);
+
+        // #5654: a receiver that has ever had a property / accessor descriptor
+        // installed on it (Object.defineProperty / freeze / seal) needs the
+        // guard's descriptor-aware dispatch — an accessor must fire, a
+        // non-writable slot must reject the store. The per-object flag lets the
+        // process-global gate above stay open for such installs (only
+        // prototype-level descriptors flip it), so unrelated instances keep the
+        // fast path.
+        let has_desc = blk.and(I16, &reserved, OBJ_FLAG_HAS_DESCRIPTORS_BIT);
+        let no_desc = blk.icmp_eq(I16, &has_desc, "0");
+        acc = blk.and(I1, &acc, &no_desc);
 
         if require_raw_f64 {
             // The slot is read/written as a raw double, so the per-object typed
