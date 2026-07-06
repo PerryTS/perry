@@ -725,9 +725,23 @@ pub unsafe extern "C" fn js_native_call_method(
     if matches!(
         method_name,
         "append" | "set" | "get" | "has" | "delete" | "toString"
-    ) {
+    ) && jsval.is_pointer()
+    {
         let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
+        // A native handle (Headers/fetch/timer/...) is nanbox-pointer-tagged but
+        // its "pointer" is a small integer id in the low handle band, NOT a heap
+        // ObjectHeader. `append`/`set`/`get`/`has`/`delete` are exactly the
+        // methods a `Headers` handle carries, and the WHATWG NullableHeaders
+        // builder calls `K.delete(name)` / `K.append(name, value)` on a
+        // destructured (type-erased) receiver, which fuses to a dynamic method
+        // call and lands here with a Headers handle. `shape_is_url_search_params`
+        // would deref that small id as an `ObjectHeader` and SIGSEGV (fault
+        // address in the low handle band). Skip small handles so they fall
+        // through to `handle_method_dispatch` below, which owns the fetch/Headers
+        // method surface.
+        if !crate::value::addr_class::is_small_handle(recv_ptr as usize)
+            && crate::url::search_params::shape_is_url_search_params(recv_ptr)
+        {
             if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
                 recv_ptr,
                 method_name,
