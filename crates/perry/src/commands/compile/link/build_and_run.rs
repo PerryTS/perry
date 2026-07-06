@@ -984,19 +984,44 @@ pub(crate) fn build_and_run_link(
                 // closures call perry-stdlib's js_stdlib_process_pending /
                 // js_promise_run_microtasks. When ctx.needs_stdlib is false
                 // (bare UI program), stdlib isn't linked via the earlier
-                // path. Force-link it here with --whole-archive so every
-                // object is pulled unconditionally. --allow-multiple-definition
-                // above lets it coexist with the runtime stub at
-                // perry-runtime/src/stdlib_stubs.rs. The async-runtime
-                // feature is force-enabled for UI builds (see
+                // path — add it here, AFTER the UI lib, so ld pulls the
+                // real pump implementations for exactly those references.
+                // --allow-multiple-definition above lets its bundled
+                // perry-runtime copy coexist with libperry_runtime.a. The
+                // async-runtime feature is force-enabled for UI builds (see
                 // build_optimized_libs), so the real js_stdlib_process_pending
-                // is guaranteed present in libperry_stdlib.a.
+                // is guaranteed present in libperry_stdlib.a. (When
+                // ctx.needs_stdlib is true, stdlib already sits BEFORE the
+                // UI lib on the link line; this second occurrence resolves
+                // the UI trampoline references that weren't yet undefined
+                // during the first left-to-right archive scan.)
+                //
+                // Demand-driven (plain archive) linking, NOT
+                // `--whole-archive` (#6029): the prebuilt full stdlib
+                // bundles its Rust deps' native C archives (aws-lc via
+                // reqwest/rustls, sqlite, brotli, …), and force-including
+                // every member also pulls objects nothing references.
+                // aws-lc's `hrss.o` calls `poly_Rq_mul`, whose defining
+                // assembly object (`hrss/asm/poly_rq_mul.S`) is missing
+                // from aws-lc-sys's cc-builder file list on linux x86_64,
+                // so `--whole-archive` turned that latent upstream gap into
+                // a hard `undefined reference to aws_lc_0_41_0_poly_Rq_mul`
+                // for every GUI app linked against the prebuilt stdlib —
+                // and, pre-#5983, likewise dragged in the stdlib's
+                // `js_ext_http_*` references with perry-ext-http nowhere on
+                // the link line. Demand-driven pulling never loads those
+                // members. It is sound for the pumps because the runtime
+                // archive linked earlier had its no-op stdlib stubs
+                // localized (see force_stdlib_for_linux_ui / #5000): the
+                // UI lib's pump references stay undefined until this
+                // archive is scanned, so ld takes them from perry-stdlib.
+                // (That localization was load-bearing under --whole-archive
+                // too — with first-definition-wins, a force-included copy
+                // never outranked an unlocalized runtime stub.)
                 let linux_stdlib_for_ui =
                     stdlib_lib.clone().or_else(|| find_stdlib_library(target));
                 if let Some(ref stdlib) = linux_stdlib_for_ui {
-                    cmd.arg("-Wl,--whole-archive")
-                        .arg(stdlib)
-                        .arg("-Wl,--no-whole-archive");
+                    cmd.arg(stdlib);
                 }
                 // GTK4 libraries via pkg-config. The fallback fires in two
                 // distinct cases: pkg-config not installed (spawn fails), OR
