@@ -36,7 +36,18 @@ function fill(target: Headers): string {
 }
 console.log("PARAM", fill(new Headers()));
 
+// Same shape through an ARROW function — the arrow-param registration path
+// (expr_function.rs) is separate from the fn-decl one exercised above.
+const fillArrow = (target: Headers): string => {
+  target.set({ arrow: "also-yes" });
+  return target.get("arrow");
+};
+console.log("ARROW", fillArrow(new Headers()));
+
 // Sibling reserved name: a user `class Response` collides identically.
+// `text` is a reserved NATIVE Response method name — calling it through a
+// let-bound instance checks that the construction-site native tagging (not
+// just inline chaining) backs off for the shadowed name.
 class Response {
   private code = 0;
   set(c: number): void {
@@ -45,7 +56,11 @@ class Response {
   get status(): number {
     return this.code;
   }
+  text(): string {
+    return `user-text:${this.code}`;
+  }
 }
 const r = new Response();
 r.set(204);
 console.log("RESPONSE", r.status, r instanceof Response);
+console.log("TEXT", r.text());

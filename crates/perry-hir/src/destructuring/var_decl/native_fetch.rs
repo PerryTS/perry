@@ -196,8 +196,7 @@ pub(crate) fn register_native_fetch_and_streams(
                 // below checks the RESOLVED name instead: the alias local
                 // (`const B = Blob`) is itself a binding, but the name that
                 // must be unshadowed is the underlying constructor.
-                let ctor_shadowed =
-                    ctx.shadows_unqualified_global(class_ident.sym.as_ref());
+                let ctor_shadowed = ctx.shadows_unqualified_global(class_ident.sym.as_ref());
                 match class_ident.sym.as_ref() {
                     "Response" if !ctor_shadowed => {
                         ctx.register_native_instance(
