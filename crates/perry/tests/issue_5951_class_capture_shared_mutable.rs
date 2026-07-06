@@ -6,17 +6,14 @@
 //! correct for IMMUTABLE / read-only captures — the four `*_value_capture_*`
 //! tests below lock those in and MUST stay green.
 //!
-//! It is WRONG when the captured local is a SHARED MUTABLE cell — mutated by a
+//! It was WRONG when the captured local is a SHARED MUTABLE cell — mutated by a
 //! field-init closure and/or by the declaring function after capture. The
-//! snapshot gives the closure its own copy, split from the declaring function's
-//! binding, so the two never observe each other's writes. The three
-//! `shared_mutable_*` tests below capture that bug (verified vs
-//! `node --experimental-strip-types`) and are `#[ignore]`d pending the
-//! boxed-capture-mode fix designed on the issue: the fix must box the local in
-//! the declaring function and thread a box POINTER (not a value snapshot)
-//! through `__perry_cap_*`, with the closure dereferencing it — bringing this
-//! into line with how a normal (non-class-lifted) closure already shares a
-//! mutable capture. Un-ignore each as it lands.
+//! snapshot gave the closure its own copy, split from the declaring function's
+//! binding, so the two never observed each other's writes. The `shared_mutable_*`
+//! tests below lock in the fix: `shared_mutable_capture.rs` desugars such a
+//! capture to a one-element array box, which the machinery already captures by
+//! POINTER — so the declaring function, every instance, and the closures share
+//! one `[0]` cell, matching a normal (non-class-lifted) closure.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -98,7 +95,6 @@ fn value_capture_in_method() {
 
 /// Field-init closure mutates the capture; the declaring function reads it.
 /// node: `2 3`; perry: `0 3` (closure mutates its own split copy).
-#[ignore = "#5951: shared-mutable class capture gets a split cell (needs boxed-capture mode)"]
 #[test]
 fn shared_mutable_closure_writes_fn_reads() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -111,7 +107,6 @@ fn shared_mutable_closure_writes_fn_reads() {
 
 /// Declaring function mutates the capture after construction; the closure
 /// (read-only) must observe it. node: `99 99`; perry: `1 99`.
-#[ignore = "#5951: shared-mutable class capture gets a split cell (needs boxed-capture mode)"]
 #[test]
 fn shared_mutable_fn_writes_closure_reads() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -124,7 +119,6 @@ fn shared_mutable_fn_writes_closure_reads() {
 
 /// Interleaved: closure increments, declaring function reads between calls.
 /// node: `1 1 2 2`; perry: `1 0 2 0`.
-#[ignore = "#5951: shared-mutable class capture gets a split cell (needs boxed-capture mode)"]
 #[test]
 fn shared_mutable_interleaved() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -133,4 +127,39 @@ fn shared_mutable_interleaved() {
         "function f(){let c=0;class T{inc=()=>{c++;return c;};}const t=new T();console.log(t.inc(),c,t.inc(),c);}f();",
     );
     assert_eq!(out, "1 1 2 2\n");
+}
+
+/// Sibling instances share the SAME captured cell (it is the declaring
+/// function's binding, captured by reference). node: `1 2 2`.
+#[test]
+fn shared_mutable_across_instances() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        "function f(){let c=0;class T{b=()=>{c+=1;return c;};}const t1=new T();const t2=new T();console.log(t1.b(),t2.b(),c);}f();",
+    );
+    assert_eq!(out, "1 2 2\n");
+}
+
+/// A non-numeric (string) shared capture: the array box must be retyped so the
+/// string-typed capture holder does not mangle the array handle.
+#[test]
+fn shared_mutable_string_capture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        "function f(){let s=\"x\";class T{app=()=>{s+=\"y\";return s;};}const t=new T();t.app();console.log(s,t.app());}f();",
+    );
+    assert_eq!(out, "xy xyy\n");
+}
+
+/// A plain method (not a field-init arrow) mutating the shared capture.
+#[test]
+fn shared_mutable_method_writes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        "function f(){let c=0;class T{inc(){c+=1;return c;}}const t=new T();t.inc();console.log(c,t.inc());}f();",
+    );
+    assert_eq!(out, "1 2\n");
 }
