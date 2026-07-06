@@ -81,9 +81,9 @@ pub(crate) fn string_only_method_arity_ok(name: &str, argc: usize) -> bool {
 }
 
 /// True when `object`'s statically-known class (or an ancestor) defines its
-/// OWN instance method or getter named `name`. Keeps the static String-method
-/// fast path from hijacking a user class method that merely shares a
-/// `String.prototype` name. This matters most for the char-access methods
+/// OWN instance method, getter, or field named `name`. Keeps the static
+/// String-method fast path from hijacking a user class member that merely
+/// shares a `String.prototype` name. This matters most for the char-access methods
 /// (`charAt`/`charCodeAt`/`codePointAt`): their arity gate can never
 /// disambiguate a user method from the builtin (any arg count is spec-valid,
 /// so `string_only_method_arity_ok` always returns `true`), so without this a
@@ -106,6 +106,16 @@ pub(crate) fn receiver_class_defines_method(ctx: &FnCtx<'_>, object: &Expr, name
         };
         if class.methods.iter().any(|m| m.name == name)
             || class.getters.iter().any(|(g, _)| g == name)
+            // An instance FIELD of that name shadows the builtin too: its
+            // init can be a function value (`charAt = (n) => …`), and even a
+            // non-function field makes `obj.charAt(0)` a runtime "not a
+            // function" TypeError — never the String builtin. A computed key
+            // (`key_expr`) could evaluate to `name`, so treat it as defining
+            // the member (same conservatism as `class_chain_has_field_named`).
+            || class
+                .fields
+                .iter()
+                .any(|f| f.key_expr.is_some() || (!f.is_private && f.name == name))
         {
             return true;
         }

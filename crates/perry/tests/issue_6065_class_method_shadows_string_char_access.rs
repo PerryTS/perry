@@ -19,7 +19,7 @@
 //! esbuild-bundled CLI app that parses YAML at module-init time) at 100% CPU.
 //!
 //! Fix: don't take the static String path when the receiver's statically-known
-//! class defines its own method of that name.
+//! class defines its own method, getter, or instance field of that name.
 //!
 //! Expected outputs are byte-for-byte what `node --experimental-strip-types`
 //! prints. The generator/lexer cases are timeout-bounded so a regression FAILS
@@ -96,7 +96,7 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
 /// A plain class method named `charAt` must call the user's method — not
 /// `String.prototype.charAt` on a `"[object Object]"`-coerced receiver.
 #[test]
-fn plain_method_named_charAt_is_user_method() {
+fn plain_method_named_char_at_is_user_method() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
@@ -113,9 +113,30 @@ console.log(b.charAt(0) + b.charAt(1) + b.charAt(4));
     assert_eq!(stdout, "heo\n");
 }
 
+/// A field holding a function value (`charAt = (n) => …`) shadows the builtin
+/// the same way a method does — the receiver-class guard must treat instance
+/// fields as defining the name, not just methods/getters.
+#[test]
+fn arrow_function_field_named_char_at_is_user_function() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+class Buf {
+  buffer = "hello";
+  pos = 0;
+  charAt = (n: number) => this.buffer[this.pos + n];
+}
+const b = new Buf();
+console.log(b.charAt(0) + b.charAt(1) + b.charAt(4));
+"#,
+    );
+    assert_eq!(stdout, "heo\n");
+}
+
 /// `charCodeAt` and `codePointAt` are affected by the same arity-gate no-op.
 #[test]
-fn plain_methods_named_charCodeAt_and_codePointAt_are_user_methods() {
+fn plain_methods_named_char_code_at_and_code_point_at_are_user_methods() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
@@ -135,7 +156,7 @@ console.log(c.charCodeAt(0) + "," + c.codePointAt(2));
 /// A genuine string receiver must still get `String.prototype.charAt` — the
 /// fix must not break real string char access.
 #[test]
-fn real_string_charAt_still_works() {
+fn real_string_char_at_still_works() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
@@ -151,7 +172,7 @@ console.log(s.charAt(0) + s.charAt(4) + "|" + s.charCodeAt(1));
 /// yielding `switch` loop that only terminates when `charAt` returns the real
 /// chars. Mirrors the `yaml` `Lexer` indicator scan.
 #[test]
-fn generator_using_own_charAt_in_switch_loop_terminates() {
+fn generator_using_own_char_at_in_switch_loop_terminates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
