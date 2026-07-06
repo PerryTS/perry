@@ -73,7 +73,8 @@ pub use u8_codec::{
 
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----
 pub use access::{
-    js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_set_from_value, js_buffer_slice,
+    js_buffer_get, js_buffer_index_get_value, js_buffer_set, js_buffer_set_from,
+    js_buffer_set_from_value, js_buffer_slice,
 };
 
 // ---- Re-exports: DataView numeric accessors (#2878) ----
@@ -323,6 +324,39 @@ mod tests {
         let buf = js_buffer_alloc(5, 0);
         js_buffer_set(buf, 2, 0x42);
         assert_eq!(js_buffer_get(buf, 2), 0x42);
+    }
+
+    /// #6088: the JS-value accessor reads `undefined` for an out-of-range
+    /// canonical index (IntegerIndexedExotic `[[Get]]`), unlike the native
+    /// `js_buffer_get` which returns the `0` byte-sentinel. In-range reads
+    /// still return the byte as a plain (non-NaN) f64 number.
+    #[test]
+    fn test_buffer_index_get_value_oob_is_undefined() {
+        let buf = js_buffer_alloc(3, 0);
+        js_buffer_set(buf, 0, 5);
+        js_buffer_set(buf, 1, 6);
+        js_buffer_set(buf, 2, 7);
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+        // In-range: the byte value as a number (not undefined).
+        assert_eq!(js_buffer_index_get_value(buf, 0), 5.0);
+        assert_eq!(js_buffer_index_get_value(buf, 2), 7.0);
+
+        // Out-of-range and negative: undefined, NOT the 0 sentinel.
+        assert_eq!(js_buffer_index_get_value(buf, 3).to_bits(), undef.to_bits());
+        assert_eq!(js_buffer_index_get_value(buf, 9).to_bits(), undef.to_bits());
+        assert_eq!(
+            js_buffer_index_get_value(buf, -1).to_bits(),
+            undef.to_bits()
+        );
+        // The native accessor keeps its 0-for-OOB contract for its callers.
+        assert_eq!(js_buffer_get(buf, 9), 0);
+
+        // Null receiver: undefined.
+        assert_eq!(
+            js_buffer_index_get_value(std::ptr::null(), 0).to_bits(),
+            undef.to_bits()
+        );
     }
 
     #[test]

@@ -32,7 +32,6 @@ use crate::type_analysis::{
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 
-use super::arrays_finds::lower_buffer_index_get_i32;
 #[allow(unused_imports)]
 use super::{
     array_kind_fact, buffer_access_materialization_reason, buffer_alias_metadata_suffix,
@@ -1401,9 +1400,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &arr_i64), (DOUBLE, &key_box)],
                     ));
                 }
-                let value = lower_buffer_index_get_i32(ctx, object, index)?;
-                let reason = buffer_access_materialization_reason(ctx, object);
-                return Ok(materialize_js_value(ctx, value, reason));
+                // #6088: the index is a proven non-negative i32 key, but the
+                // inline load above bailed, so its value is NOT proven in
+                // bounds. The native `js_uint8array_get` accessor returns the
+                // `0` byte-sentinel for an out-of-range read; a JS-value
+                // `buf[i]` / `uint8array[i]` must instead read `undefined`
+                // (ECMAScript IntegerIndexedExotic `[[Get]]`). Route the
+                // unproven-bounds slow path through the JS-value getter (robust
+                // for both a real Uint8Array and a Buffer-backed receiver) —
+                // in-range reads still return the byte as a number.
+                let arr_box = lower_expr(ctx, object)?;
+                let idx_i32 = lower_expr_as_i32(ctx, index)?;
+                let blk = ctx.block();
+                let handle = unbox_to_i64(blk, &arr_box);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_uint8array_index_get_value",
+                    &[(I64, &handle), (I32, &idx_i32)],
+                ));
             }
             // Scalar-replaced array literal: `arr[k]` where arr was bound to
             // `[...]` and never escaped, and k is a compile-time index in
