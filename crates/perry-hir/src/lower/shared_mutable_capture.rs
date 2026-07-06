@@ -67,49 +67,165 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     if std::env::var("PERRY_NO_5951").is_ok() {
         return;
     }
-    let shared = detect_shared_mutable_captures(module);
-    if shared.is_empty() {
+    // Module-level bisection gate (#6089 diagnosis): skip the desugar for any
+    // module whose name contains one of the comma-separated substrings.
+    if let Ok(skips) = std::env::var("PERRY_5951_SKIP_MODS") {
+        if skips
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .any(|s| module.name.contains(s))
+        {
+            return;
+        }
+    }
+    // ---- detection, kept PER BODY ------------------------------------------
+    //
+    // LocalIds are NOT unique across function scopes (member params/lets restart
+    // their id space; sibling functions likewise). The first cut of this pass
+    // collected one module-global id set and rewrote EVERY body with it — at
+    // Next.js-bundle scale an unrelated local in some other function sharing a
+    // flagged numeric id had its reads rewritten to `local[0]`, yielding
+    // `undefined` and a uniform `Object.keys(undefined)` 500 on every route
+    // (#6089). Detection results and rewrites are now scoped to the body that
+    // owns the ids.
+    let (mut fn_shared, mut init_shared) = {
+        let classes: HashMap<&str, &Class> = module
+            .classes
+            .iter()
+            .map(|c| (c.name.as_str(), c))
+            .collect();
+        let fn_shared: Vec<HashSet<LocalId>> = module
+            .functions
+            .iter()
+            .map(|f| detect_shared_in_body(&f.body, &classes))
+            .collect();
+        let init_shared = detect_shared_in_body(&module.init, &classes);
+        (fn_shared, init_shared)
+    };
+    // Keep only ids that are UNAMBIGUOUS within their body (declared exactly
+    // once across deep `Let`s + nested closure params — see
+    // `retain_unambiguous`). Nested closures restart their id spaces, so a
+    // numeric rewrite over the whole body is only sound for unique ids.
+    for (f, s) in module.functions.iter().zip(fn_shared.iter_mut()) {
+        if s.is_empty() {
+            continue;
+        }
+        let mut counts: HashMap<LocalId, u32> = HashMap::new();
+        for p in &f.params {
+            *counts.entry(p.id).or_default() += 1;
+        }
+        for st in &f.body {
+            collect_declared_counts_stmt(st, &mut counts);
+        }
+        retain_unambiguous(s, &counts);
+    }
+    if !init_shared.is_empty() {
+        let mut counts: HashMap<LocalId, u32> = HashMap::new();
+        for st in &module.init {
+            collect_declared_counts_stmt(st, &mut counts);
+        }
+        retain_unambiguous(&mut init_shared, &counts);
+    }
+    let mut all_shared: HashSet<LocalId> = init_shared.iter().copied().collect();
+    for s in &fn_shared {
+        all_shared.extend(s.iter().copied());
+    }
+    if all_shared.is_empty() {
         return;
     }
-    // The per-closure rebind locals (`let __perry_cap_<id> = ClassCaptureValue`)
-    // hold the captured pointer — now the array — so their VALUE uses inside the
-    // lifted class bodies must also go through `[0]`. Their `Let` init stays.
-    let rebind_ids = collect_rebind_ids(module, &shared);
-    let mut index_uses = shared.clone();
-    index_uses.extend(rebind_ids.iter().copied());
 
-    for f in &mut module.functions {
-        rewrite_stmts(&mut f.body, &shared, &index_uses);
+    // ---- declaring bodies: rewrite with ONLY the ids detected in them -------
+    for (f, s) in module.functions.iter_mut().zip(fn_shared.iter()) {
+        if !s.is_empty() {
+            rewrite_stmts(&mut f.body, s, s);
+        }
     }
-    rewrite_stmts(&mut module.init, &shared, &index_uses);
+    if !init_shared.is_empty() {
+        rewrite_stmts(&mut module.init, &init_shared, &init_shared);
+    }
 
+    // ---- lifted class members: per-member rebind ids ------------------------
+    //
+    // The per-closure rebind locals (`let __perry_cap_<id> = ClassCaptureValue`)
+    // and the synthesized ctor params hold the captured pointer — now the array
+    // — so their VALUE uses inside the lifted bodies must go through `[0]`.
+    // Match them BY NAME within each member and rewrite only that member's body
+    // with its own ids (never the declaring `shared` set — the declaring `Let`
+    // that gets array-wrapped lives outside the class).
+    let targets: HashSet<String> = all_shared
+        .iter()
+        .map(|id| format!("__perry_cap_{}", id))
+        .collect();
+    let no_shared: HashSet<LocalId> = HashSet::new();
     for c in &mut module.classes {
         for m in &mut c.methods {
-            rewrite_stmts(&mut m.body, &shared, &index_uses);
+            rewrite_member_scoped(m, &targets, &no_shared);
         }
         for (_, g) in &mut c.getters {
-            rewrite_stmts(&mut g.body, &shared, &index_uses);
+            rewrite_member_scoped(g, &targets, &no_shared);
         }
         for (_, s) in &mut c.setters {
-            rewrite_stmts(&mut s.body, &shared, &index_uses);
+            rewrite_member_scoped(s, &targets, &no_shared);
         }
         for sm in &mut c.static_methods {
-            rewrite_stmts(&mut sm.body, &shared, &index_uses);
+            rewrite_member_scoped(sm, &targets, &no_shared);
         }
         for member in &mut c.computed_members {
-            rewrite_stmts(&mut member.function.body, &shared, &index_uses);
+            rewrite_member_scoped(&mut member.function, &targets, &no_shared);
         }
-        if let Some(ctor) = &mut c.constructor {
-            rewrite_stmts(&mut ctor.body, &shared, &index_uses);
+        // The constructor and the field initializers share one scope: a
+        // field-init closure captures the synthesized CTOR param, so field
+        // inits must be rewritten with the ctor-scope ids too.
+        let mut ctor_ids: HashSet<LocalId> = HashSet::new();
+        if let Some(ctor) = &c.constructor {
+            collect_fn_target_ids(ctor, &targets, &mut ctor_ids);
         }
-        // Field initializers hold the field-init closures whose body mutates the
-        // captured constructor param — rewrite their value uses too.
-        for f in &mut c.fields {
-            if let Some(init) = &mut f.init {
-                rewrite_expr(init, &shared, &index_uses);
+        for f in &c.fields {
+            let mut names: HashMap<LocalId, String> = HashMap::new();
+            if let Some(init) = &f.init {
+                collect_let_names_expr(init, &mut names);
             }
-            if let Some(key) = &mut f.key_expr {
-                rewrite_expr(key, &shared, &index_uses);
+            if let Some(key) = &f.key_expr {
+                collect_let_names_expr(key, &mut names);
+            }
+            for (id, n) in names {
+                if targets.contains(&n) {
+                    ctor_ids.insert(id);
+                }
+            }
+        }
+        if !ctor_ids.is_empty() {
+            // Uniqueness over the whole ctor+fields region (one scope).
+            let mut counts: HashMap<LocalId, u32> = HashMap::new();
+            if let Some(ctor) = &c.constructor {
+                for p in &ctor.params {
+                    *counts.entry(p.id).or_default() += 1;
+                }
+                for st in &ctor.body {
+                    collect_declared_counts_stmt(st, &mut counts);
+                }
+            }
+            for f in &c.fields {
+                if let Some(init) = &f.init {
+                    collect_declared_counts_expr(init, &mut counts);
+                }
+                if let Some(key) = &f.key_expr {
+                    collect_declared_counts_expr(key, &mut counts);
+                }
+            }
+            retain_unambiguous(&mut ctor_ids, &counts);
+        }
+        if !ctor_ids.is_empty() {
+            if let Some(ctor) = &mut c.constructor {
+                rewrite_stmts(&mut ctor.body, &no_shared, &ctor_ids);
+            }
+            for f in &mut c.fields {
+                if let Some(init) = &mut f.init {
+                    rewrite_expr(init, &no_shared, &ctor_ids);
+                }
+                if let Some(key) = &mut f.key_expr {
+                    rewrite_expr(key, &no_shared, &ctor_ids);
+                }
             }
         }
     }
@@ -120,7 +236,117 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // a type-specific representation (e.g. a `string` holder mangles the array
     // handle — #5951 e4). Retype them to `Any` so they use the generic pointer
     // representation, matching the array they now hold.
-    retype_capture_holders(module, &shared);
+    if std::env::var("PERRY_5951_NO_RETYPE").is_err() {
+        retype_capture_holders(module, &all_shared);
+    }
+    if std::env::var("PERRY_5951_TRACE").as_deref() == Ok("1") {
+        let mut per_fn: Vec<String> = Vec::new();
+        for (f, s) in module.functions.iter().zip(fn_shared.iter()) {
+            if !s.is_empty() {
+                per_fn.push(format!("{}:{:?}", f.name, s));
+            }
+        }
+        if !init_shared.is_empty() {
+            per_fn.push(format!("<init>:{init_shared:?}"));
+        }
+        eprintln!(
+            "[5951] module={} desugared {}",
+            module.name,
+            per_fn.join(" ")
+        );
+    }
+}
+
+/// The ids in `f`'s own scope (params + `Let`s, descending into nested
+/// closures) whose NAME is a flagged `__perry_cap_<id>` rebind target.
+fn collect_fn_target_ids(f: &Function, targets: &HashSet<String>, out: &mut HashSet<LocalId>) {
+    for p in &f.params {
+        if targets.contains(&p.name) {
+            out.insert(p.id);
+        }
+    }
+    let mut names: HashMap<LocalId, String> = HashMap::new();
+    for s in &f.body {
+        collect_let_names_stmt(s, &mut names);
+    }
+    for (id, n) in names {
+        if targets.contains(&n) {
+            out.insert(id);
+        }
+    }
+}
+
+/// Rewrite one lifted member body with ONLY its own rebind ids — and only
+/// those that are UNAMBIGUOUS within the member (declared exactly once across
+/// its params and deep `Let`s/closure params; see `retain_unambiguous`).
+fn rewrite_member_scoped(
+    f: &mut Function,
+    targets: &HashSet<String>,
+    no_shared: &HashSet<LocalId>,
+) {
+    let mut ids: HashSet<LocalId> = HashSet::new();
+    collect_fn_target_ids(f, targets, &mut ids);
+    if ids.is_empty() {
+        return;
+    }
+    let mut counts: HashMap<LocalId, u32> = HashMap::new();
+    for p in &f.params {
+        *counts.entry(p.id).or_default() += 1;
+    }
+    for s in &f.body {
+        collect_declared_counts_stmt(s, &mut counts);
+    }
+    retain_unambiguous(&mut ids, &counts);
+    if !ids.is_empty() {
+        rewrite_stmts(&mut f.body, no_shared, &ids);
+    }
+}
+
+/// Drop every id that is declared more than once in the rewritten region.
+///
+/// LocalIds restart per closure scope (#5143 family): inside a CJS module
+/// wrapper the whole module body is ONE function whose nested closures reuse
+/// low numeric ids constantly. Rewriting `LocalGet(id)` by number is only
+/// sound when exactly one binding with that number exists in the region —
+/// otherwise an unrelated same-numbered local in a sibling closure would be
+/// index-rewritten (`local[0]` on a non-array → `undefined`), which 500'd
+/// every route of the Next.js standalone server (#6089). An ambiguous id is
+/// skipped: its capture stays a split cell (the lesser, pre-#6054 behavior)
+/// instead of corrupting unrelated code.
+fn retain_unambiguous(ids: &mut HashSet<LocalId>, counts: &HashMap<LocalId, u32>) {
+    if std::env::var("PERRY_5951_TRACE").as_deref() == Ok("1") {
+        let dropped: Vec<LocalId> = ids
+            .iter()
+            .copied()
+            .filter(|id| counts.get(id).copied().unwrap_or(0) != 1)
+            .collect();
+        if !dropped.is_empty() {
+            eprintln!("[5951] skipped ambiguous ids {dropped:?}");
+        }
+    }
+    ids.retain(|id| counts.get(id).copied().unwrap_or(0) == 1);
+}
+
+/// Count declarations per id across a region: `Let`s plus nested closure
+/// PARAMS (which `collect_let_names_*` ignores), descending into closures.
+fn collect_declared_counts_stmt(stmt: &Stmt, out: &mut HashMap<LocalId, u32>) {
+    if let Stmt::Let { id, .. } = stmt {
+        *out.entry(*id).or_default() += 1;
+    }
+    for_each_child_stmt(stmt, &mut |s| collect_declared_counts_stmt(s, out));
+    for_each_top_expr(stmt, &mut |e| collect_declared_counts_expr(e, out));
+}
+
+fn collect_declared_counts_expr(expr: &Expr, out: &mut HashMap<LocalId, u32>) {
+    if let Expr::Closure { params, body, .. } = expr {
+        for p in params {
+            *out.entry(p.id).or_default() += 1;
+        }
+        for s in body {
+            collect_declared_counts_stmt(s, out);
+        }
+    }
+    walk_expr_children(expr, &mut |e| collect_declared_counts_expr(e, out));
 }
 
 fn retype_capture_holders(module: &mut Module, shared: &HashSet<LocalId>) {
@@ -231,47 +457,37 @@ fn retype_lets_in_expr(expr: &mut Expr, targets: &HashSet<String>) {
 // Detection
 // ---------------------------------------------------------------------------
 
-fn detect_shared_mutable_captures(module: &Module) -> HashSet<LocalId> {
+/// Detect the shared-mutable capture ids declared in ONE body. The returned
+/// ids are meaningful only within that body's scope — callers must not apply
+/// them to other functions (LocalIds repeat across scopes; see #6089).
+fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> HashSet<LocalId> {
     let mut shared = HashSet::new();
-    let classes: HashMap<&str, &Class> = module
-        .classes
-        .iter()
-        .map(|c| (c.name.as_str(), c))
-        .collect();
-
-    let mut check = |body: &[Stmt]| {
-        let mut regs = Vec::new();
-        for s in body {
-            find_regs_stmt(s, &mut regs);
-        }
-        if regs.is_empty() {
-            return;
-        }
-        let mut assigned: HashSet<LocalId> = HashSet::new();
-        for s in body {
-            collect_assigned_deep_stmt(s, &mut assigned);
-        }
-        for (class_name, ids) in regs {
-            for id in ids {
-                // Declaring-function-side mutation (`c = 99` after `new T()`).
-                if assigned.contains(&id) {
+    let mut regs = Vec::new();
+    for s in body {
+        find_regs_stmt(s, &mut regs);
+    }
+    if regs.is_empty() {
+        return shared;
+    }
+    let mut assigned: HashSet<LocalId> = HashSet::new();
+    for s in body {
+        collect_assigned_deep_stmt(s, &mut assigned);
+    }
+    for (class_name, ids) in regs {
+        for id in ids {
+            // Declaring-function-side mutation (`c = 99` after `new T()`).
+            if assigned.contains(&id) {
+                shared.insert(id);
+                continue;
+            }
+            // Class-side mutation: a member assigns rebind local `__perry_cap_<id>`.
+            if let Some(c) = classes.get(class_name.as_str()) {
+                if class_mutates_capture(c, id) {
                     shared.insert(id);
-                    continue;
-                }
-                // Class-side mutation: a member assigns rebind local `__perry_cap_<id>`.
-                if let Some(c) = classes.get(class_name.as_str()) {
-                    if class_mutates_capture(c, id) {
-                        shared.insert(id);
-                    }
                 }
             }
         }
-    };
-
-    for f in &module.functions {
-        check(&f.body);
     }
-    check(&module.init);
     shared
 }
 
@@ -282,22 +498,6 @@ fn class_mutates_capture(c: &Class, id: LocalId) -> bool {
     assigned
         .iter()
         .any(|aid| id_name.get(aid).is_some_and(|n| *n == target))
-}
-
-fn collect_rebind_ids(module: &Module, shared: &HashSet<LocalId>) -> HashSet<LocalId> {
-    let targets: HashSet<String> = shared
-        .iter()
-        .map(|id| format!("__perry_cap_{}", id))
-        .collect();
-    let mut rebind = HashSet::new();
-    for c in &module.classes {
-        for (id, name) in collect_class_names(c) {
-            if targets.contains(&name) {
-                rebind.insert(id);
-            }
-        }
-    }
-    rebind
 }
 
 /// id -> name across a class: every member function's PARAMS (a field-init
@@ -528,9 +728,19 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
                 rewrite_expr(e, shared, index_uses);
             }
             if shared.contains(id) {
-                if let Some(e) = init.take() {
-                    *init = Some(Expr::Array(vec![e]));
-                }
+                // #6089: an UNINITIALIZED `let prop;` must still become a
+                // one-element array — every use is rewritten to `prop[0]`, so
+                // leaving `init` as None makes the first write an IndexSet on
+                // `undefined` ("Cannot convert undefined or null to object").
+                // SWC emits exactly this shape for hoisted computed-property
+                // temps (`let prop; class C { static #_ = prop = KEY; }`,
+                // next/dist/server/base-http/node.js) — it 500'd every route
+                // of the Next.js standalone server at first lazy require.
+                let wrapped = match init.take() {
+                    Some(e) => e,
+                    None => Expr::Undefined,
+                };
+                *init = Some(Expr::Array(vec![wrapped]));
                 *ty = Type::Array(Box::new(ty.clone()));
             }
         }
