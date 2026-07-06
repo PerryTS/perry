@@ -738,6 +738,41 @@ pub unsafe extern "C" fn js_native_call_method(
             }
         }
     }
+    // AbortSignal on a type-erased receiver — same wall class as the
+    // URLSearchParams block above (#5961/#5964): the statically-typed receiver
+    // form lowers to the native call, but a fused dynamic method call lands
+    // here, and the generic field-scan would miss and throw
+    // `addEventListener is not a function` (the shape minified SDK code takes
+    // when it stores a signal in an untyped local). `options` (arg 2) is
+    // accepted and ignored — a signal only ever fires "abort" once, so
+    // `{ once: true }` is behaviorally implied.
+    if matches!(
+        method_name,
+        "addEventListener" | "removeEventListener" | "throwIfAborted"
+    ) && jsval.is_pointer()
+    {
+        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        if !recv_ptr.is_null() && (*recv_ptr).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID {
+            let arg = |i: usize| {
+                if i < args_len && !args_ptr.is_null() {
+                    *args_ptr.add(i)
+                } else {
+                    f64::from_bits(JSValue::undefined().bits())
+                }
+            };
+            return match method_name {
+                "addEventListener" => {
+                    crate::url::js_abort_signal_add_listener(recv_ptr, arg(0), arg(1));
+                    f64::from_bits(JSValue::undefined().bits())
+                }
+                "removeEventListener" => {
+                    crate::url::js_abort_signal_remove_listener(recv_ptr, arg(0), arg(1));
+                    f64::from_bits(JSValue::undefined().bits())
+                }
+                _ => crate::url::js_abort_signal_throw_if_aborted(recv_ptr),
+            };
+        }
+    }
     // Generic `Array.prototype` mutators borrowed onto a plain array-like
     // object (`Array.prototype.splice.call(obj, …)` whose synthesized member
     // call dispatches by name with no own method). The dense array arms further

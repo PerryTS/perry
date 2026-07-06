@@ -1255,6 +1255,23 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // AbortSignal method read through a DYNAMICALLY-typed receiver
+        // (`const s: any = c.signal; s.addEventListener` / `typeof
+        // s.addEventListener`). The static receiver form lowers to the native
+        // call, but this generic walk found no method property and returned
+        // undefined (the #5964 URLSearchParams dynamic-dispatch class).
+        // Returns a bound-method closure for the known signal methods.
+        if (*obj).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if let Some(bound) =
+                crate::url::abort::abort_signal_method_bind(obj as *mut ObjectHeader, key_bytes)
+            {
+                return JSValue::from_bits(bound.to_bits());
+            }
+        }
+
         // Refs #420 / #618 followup: `instance.constructor` returns the
         // class ref. Pre-fix this fell through to the keys_array lookup
         // which never finds "constructor" (the class itself isn't stored
