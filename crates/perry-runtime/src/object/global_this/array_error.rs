@@ -226,6 +226,13 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    // ECMA-262 21.4.4.41 Date.prototype.toString does `thisTimeValue(this)`,
+    // which throws a TypeError when the receiver has no [[DateValue]] slot
+    // (`Date.prototype.toString.call(0)`, `.call({})`, `Date.prototype.toString()`
+    // with this === Date.prototype). test262 Date/prototype/toString/non-date-receiver.
+    if !crate::date::is_date_value(this_value) {
+        super::super::object_ops::throw_object_type_error(b"this is not a Date object.");
+    }
     let string = crate::date::js_date_to_string(this_value);
     crate::value::js_nanbox_string(string as i64)
 }

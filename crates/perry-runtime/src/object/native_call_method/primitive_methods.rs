@@ -572,6 +572,31 @@ pub(super) unsafe fn dispatch_primitive(
     // through and silently dropped setter mutations — e.g. dayjs's
     // `this.$d[l]($)` made `.add()`/`.date(n)` no-ops (#5133).
     if crate::date::is_date_value(object) {
+        // An own callable expando shadows the intrinsic Date.prototype method:
+        // `Object.defineProperty(d, "toString", {value: Number.prototype.toString});
+        // d.toString()` must run the *transferred* method (which brand-checks its
+        // receiver and throws a TypeError), not Date.prototype.toString (test262
+        // Number/prototype/{toString,valueOf}/*_A*_T03 and Boolean/prototype/
+        // {toString,valueOf}/*_A2_T3 — transfer-to-Date). Date instances are
+        // DateCell exotics, so own props live in the exotic expando table, not
+        // the ordinary object keys_array read by js_object_get_own_field_or_undef.
+        let recv_bits = object.to_bits();
+        let recv_addr = (recv_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if let Some(v) = super::exotic_expando::exotic_get_own_property(
+            recv_addr,
+            super::exotic_expando::ExoticKind::Date,
+            method_name,
+            object,
+        ) {
+            if (v.to_bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                && crate::closure::is_closure_ptr((v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize)
+            {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                let result = crate::closure::js_native_call_value(v, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return Some(result);
+            }
+        }
         let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
         let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
         if ctor_ptr != 0 {
