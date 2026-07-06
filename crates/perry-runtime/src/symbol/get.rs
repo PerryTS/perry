@@ -257,6 +257,26 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
         return crate::proxy::js_proxy_get(obj_f64, sym_f64);
     }
+    // A `Date` is a `DateCell` (NaN-boxed pointer, NOT an `ObjectHeader`). A
+    // symbol-keyed read (`d[Symbol.toPrimitive]`, `d[Symbol.iterator]`) must
+    // NOT reach the pointer-deref paths below — they reinterpret the cell as an
+    // `ObjectHeader` (`js_object_get_class_id`, prototype walk) and read
+    // garbage. Resolve OWN symbol props from the side table first (a user may
+    // `d[sym] = x`), then inherit from `Date.prototype` (which carries the
+    // installed `[Symbol.toPrimitive]`). This is the DateCell analogue of the
+    // ordinary object's own-then-prototype symbol walk.
+    if crate::date::is_date_value(obj_f64) {
+        if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+            return v;
+        }
+        let proto = crate::object::builtin_prototype_value("Date");
+        if (proto.to_bits() >> 48) == 0x7FFD {
+            if let Some(v) = own_symbol_property(proto, sym_f64) {
+                return v;
+            }
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();

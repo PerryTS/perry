@@ -398,6 +398,20 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
             return crate::value::js_nanbox_string(p as i64);
         }
     }
+    // A `Date` is a `DateCell` cell, NOT an `ObjectHeader`. `Date.prototype`
+    // now carries an installed `[Symbol.toPrimitive]` (its own reflective
+    // `.call(obj, hint)` surface), but implicit `+`/`String()`/template
+    // coercion of a Date is already handled by the dedicated Date fast paths
+    // downstream (`js_add_coerce_to_primitive` string-coerces via
+    // `js_date_to_string`; `js_number_coerce` reads the timestamp). Returning
+    // the value unchanged here keeps that proven coercion path — and the
+    // installed method is still reachable through the explicit read+call form
+    // (`d[Symbol.toPrimitive](hint)` / `Date.prototype[@@toPrimitive].call(…)`),
+    // which does not route through `js_to_primitive`. This mirrors the Temporal
+    // short-circuit above and avoids re-routing a hot, well-tested path.
+    if crate::date::is_date_value(value) {
+        return value;
+    }
     // Look up obj[Symbol.toPrimitive].
     let wk_ptr = well_known_symbol("toPrimitive");
     let sym_f64 = f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));

@@ -564,6 +564,10 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 date_prototype_to_string_thunk as *const u8,
                 0,
             );
+            // `Date.prototype[Symbol.toPrimitive]` — a generic `OrdinaryToPrimitive`
+            // dispatcher (non-enumerable own method, `.name` "[Symbol.toPrimitive]",
+            // `.length` 1). test262 `built-ins/Date/prototype/Symbol.toPrimitive/*`.
+            date_proto_thunks::install_date_proto_to_primitive(proto_obj);
         }
         "RegExp" => {
             // Real accessor getters (`source`/`flags`/`global`/…) so reflection

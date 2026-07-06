@@ -142,6 +142,63 @@ fn throw_cannot_convert_to_primitive() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Spec-faithful `OrdinaryToPrimitive(O, hint)` (ES2024 §7.1.1.1) for the
+/// `Date.prototype[@@toPrimitive]` thunk. Unlike the coercion helpers above
+/// (which special-case a *missing* `toString` as the inherited
+/// `Object.prototype.toString` → `"[object Object]"` for `String()`/`+`), this
+/// implements the abstract operation directly: it `Get`s each of the ordered
+/// method names off the receiver (firing accessor getters + walking the
+/// prototype chain via `js_reflect_get`), and — only when the resolved value
+/// `IsCallable` — invokes it with `this = value` and returns the first
+/// *primitive* result. A non-callable slot (including `null`/`undefined`) is
+/// SKIPPED, not treated as the default. If no method yields a primitive, it
+/// throws `TypeError`.
+///
+/// `try_string_first`: `true` for hint "string"/"default" (order `toString`
+/// then `valueOf`), `false` for hint "number" (order `valueOf` then
+/// `toString`). `value` MUST already be an Object (the thunk brand-checks
+/// `Type(O) is Object` first).
+pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
+    value: f64,
+    try_string_first: bool,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let order: [&[u8]; 2] = if try_string_first {
+        [b"toString", b"valueOf"]
+    } else {
+        [b"valueOf", b"toString"]
+    };
+    for name in order {
+        let recv = value_handle.get_nanbox_f64();
+        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
+        // `Get(O, name)` — fires accessor getters and walks the prototype chain,
+        // exactly like the spec's abstract `Get` (so `{ get valueOf() {…} }` is
+        // observed and a getter throw propagates).
+        let method = crate::proxy::js_reflect_get(recv, key, recv);
+        if !crate::collection_iter::is_callable(method) {
+            // Non-callable (or absent) — skip to the next name.
+            continue;
+        }
+        let method_handle = scope.root_nanbox_f64(method);
+        let recv = value_handle.get_nanbox_f64();
+        let prev_this = crate::object::js_implicit_this_set(recv);
+        let result = crate::closure::js_native_call_value(
+            method_handle.get_nanbox_f64(),
+            std::ptr::null(),
+            0,
+        );
+        crate::object::js_implicit_this_set(prev_this);
+        if is_primitive_value(result) {
+            return result;
+        }
+        // A callable that returned an Object: continue to the next name (spec
+        // step 5.a.iii only returns when the result is NOT an Object).
+    }
+    throw_cannot_convert_to_primitive()
+}
+
 /// Outcome of resolving a function/closure's custom `toString`/`valueOf` for
 /// the string-hint `ToPrimitive`. Distinct from a bare `Option` so the
 /// "no custom method at all" case (fall back to the function's own source
