@@ -1213,6 +1213,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Decl-site snapshot of a function-nested class's captured locals —
     // consumed by the dynamic-construction replay (`new mod.C()`).
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
+    // #6052: TDZ-suppression window around the snapshot's capture loads — a
+    // refresh emitted between two `let`/`const` initializers (the #6037
+    // refresh-after-each-assignment strategy) legally reads a sibling capture
+    // still in its dead zone; it must snapshot `undefined`, not throw.
+    module.declare_function("js_tdz_suppress_begin", VOID, &[]);
+    module.declare_function("js_tdz_suppress_end", VOID, &[]);
     // Static-method prologue read of one decl-site capture snapshot slot.
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
     // #5437: snapshot slot read with a `new`-site appended cap-arg fallback

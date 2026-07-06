@@ -208,11 +208,53 @@ pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
         // closure-captured, and compound reads alike); the resulting message is
         // the spec-generic form.
         if bits == crate::value::TAG_TDZ {
+            // #6044 regression (#6052): Perry-internal materialization reads —
+            // the class-capture decl-site snapshot refreshes emitted after EACH
+            // captured var's assignment (`RegisterClassCaptures`, the #6037
+            // refresh strategy) — legally observe sibling captures that are
+            // still in their dead zone (`const _fs = ..; <refresh reads _path>;
+            // const _path = ..`, the SWC CJS interop shape). Those are not user
+            // reads: pre-TDZ they snapshotted `undefined` and the next refresh
+            // fixed the value up. Inside the codegen-bracketed suppression
+            // window, keep exactly that behavior instead of throwing.
+            if TDZ_SUPPRESS_DEPTH.with(|d| d.get()) > 0 {
+                return crate::value::TAG_UNDEFINED as i64;
+            }
             crate::error::js_throw_reference_error_tdz(f64::from_bits(crate::value::TAG_UNDEFINED));
         }
         bits as i64
     }
 }
+
+thread_local! {
+    /// #6052: >0 while codegen-emitted Perry-internal materialization reads
+    /// (the `RegisterClassCaptures` decl-site snapshot refresh) are running —
+    /// a dead-zone box then reads as `undefined` (pre-#6044 behavior) instead
+    /// of throwing. Never spans user code: the bracketed window contains only
+    /// side-effect-free capture loads.
+    static TDZ_SUPPRESS_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Enter a TDZ-suppression window (see `TDZ_SUPPRESS_DEPTH`). Emitted by
+/// codegen immediately before a `RegisterClassCaptures` snapshot's capture
+/// loads; paired with `js_tdz_suppress_end`.
+#[no_mangle]
+pub extern "C" fn js_tdz_suppress_begin() {
+    TDZ_SUPPRESS_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+}
+
+/// Leave the TDZ-suppression window opened by `js_tdz_suppress_begin`.
+#[no_mangle]
+pub extern "C" fn js_tdz_suppress_end() {
+    TDZ_SUPPRESS_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+}
+
+/// Keepalive anchors for the auto-optimize whole-program build (generated-code-
+/// only callees — without these the symbols dead-strip and the app link fails).
+#[used]
+static KEEP_JS_TDZ_SUPPRESS_BEGIN: extern "C" fn() = js_tdz_suppress_begin;
+#[used]
+static KEEP_JS_TDZ_SUPPRESS_END: extern "C" fn() = js_tdz_suppress_end;
 
 /// Compatibility wrapper for legacy f64-lowered boxed locals.
 #[no_mangle]

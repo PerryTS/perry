@@ -135,10 +135,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             captures,
         } => {
+            // #6052: the snapshot refresh emitted after EACH captured var's
+            // assignment (#6037) can legally read a SIBLING capture whose
+            // `let`/`const` has not run yet (`const _fs = ..; <refresh>;
+            // const _path = ..` — the SWC CJS interop shape). Those loads are
+            // Perry-internal materialization, not user reads: bracket them in
+            // a TDZ-suppression window so a dead-zone box snapshots as
+            // `undefined` (a later refresh fixes it up) instead of throwing
+            // the #6044 ReferenceError. The window holds only these
+            // side-effect-free capture loads — no user code runs inside it.
+            ctx.block().call_void("js_tdz_suppress_begin", &[]);
             let mut lowered: Vec<String> = Vec::with_capacity(captures.len());
             for c in captures {
                 lowered.push(lower_expr(ctx, c)?);
             }
+            ctx.block().call_void("js_tdz_suppress_end", &[]);
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 && !lowered.is_empty() {
                     let n = lowered.len();
