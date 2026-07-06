@@ -237,6 +237,45 @@ unsafe fn collection_iter_obj_for_receiver(arr: *const ArrayHeader, kind: u8) ->
     if raw < 0x10000 {
         return None;
     }
+    // Web Fetch collection handles (Headers / FormData / URLSearchParams) are
+    // fetch-band ids, not heap `ArrayHeader`s. An any-typed
+    // `.keys()`/`.entries()`/`.values()` on such a handle — the static type
+    // erased through an object property or destructure, e.g. an SDK
+    // auth-header wrapper's `{ values: Headers }` consumed via
+    // `let { values: z } = wrapper; ...z.entries()` — folds to
+    // `Expr::Array{Keys,Entries,Values}` (perry-hir #597 any-typed catch-all)
+    // and lands here. Reading the handle id as an `ArrayHeader` yields an
+    // empty iterator; route through the dynamic method dispatch instead so it
+    // reaches the stdlib fetch handlers (`js_headers_{keys,entries,values}`,
+    // which return a materialized, iterable array). A fetch handle that lacks
+    // the requested iterator method (Response / Request / Blob) returns
+    // `undefined`; fall through to the empty-array path then.
+    if (crate::value::addr_class::FETCH_HANDLE_BAND_START
+        ..crate::value::addr_class::FETCH_HANDLE_BAND_END)
+        .contains(&raw)
+    {
+        let recv = f64::from_bits(JSValue::pointer(arr as *const u8).bits());
+        let method: &[u8] = match kind {
+            1 => b"keys",
+            2 => b"entries",
+            _ => b"values",
+        };
+        let result = crate::object::js_native_call_method(
+            recv,
+            method.as_ptr() as *const i8,
+            method.len(),
+            std::ptr::null(),
+            0,
+        );
+        let rv = JSValue::from_bits(result.to_bits());
+        if !rv.is_undefined() && !rv.is_null() {
+            let ptr = (result.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            if ptr != 0 {
+                return Some(ptr);
+            }
+        }
+        return None;
+    }
     if crate::map::is_registered_map(raw) {
         let m = raw as *const crate::map::MapHeader;
         return Some(match kind {
