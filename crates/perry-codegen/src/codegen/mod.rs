@@ -886,7 +886,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Issue #26: record the authoritative root→leaf init chain. `parent_chain`
         // was pushed direct-parent-first, so reverse it (deepest ancestor first),
         // then append the leaf class `c` (with its own fields, init exprs intact).
-        {
+        let chain: Vec<(String, Vec<perry_hir::ClassField>)> = {
             let mut chain: Vec<(String, Vec<perry_hir::ClassField>)> =
                 parent_chain.iter().rev().cloned().collect();
             chain.push((c.name.clone(), c.fields.clone()));
@@ -896,7 +896,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     .entry(alias.clone())
                     .or_insert_with(|| chain.clone());
             }
-        }
+            chain
+        };
         // Refs #486: register self-binding aliases (`_X` from `var X = class _X`)
         // so the inline-alloc fast path at lower_call.rs:2532 finds the keys
         // global when the class is referenced by its inner name. Without this,
@@ -908,7 +909,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .entry(alias.clone())
                 .or_insert_with(|| global_name.clone());
         }
-        let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        // Refs #5094: derive the GC raw-f64/pointer masks from the SAME
+        // prefix-disambiguated chain that built `packed_keys` above, so mask
+        // bits stay aligned with the actual slot layout when same-named
+        // cross-module parents exist (the name-keyed `class_typed_layout`
+        // walk picks whichever stub won the bare-name race).
+        let typed_layout = crate::typed_shape::class_typed_layout_from_chain(&chain);
         class_field_counts_map.insert(c.name.clone(), total_field_count);
         for alias in &c.aliases {
             class_field_counts_map
@@ -999,18 +1005,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }
-        let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
         class_field_counts_map
             .entry(c.name.clone())
             .or_insert(total_field_count);
         // Issue #26: authoritative root→leaf init chain for the imported class
         // (prefix-disambiguated parents + this stub's own fields as the leaf).
-        {
+        // Refs #5094: the GC raw-f64/pointer masks derive from this same chain
+        // (not the name-keyed `class_typed_layout` walk) so mask bits stay
+        // aligned with the packed-keys slot layout under same-named
+        // cross-module parents.
+        let typed_layout = {
             let mut chain: Vec<(String, Vec<perry_hir::ClassField>)> =
                 parent_chain.iter().rev().cloned().collect();
             chain.push((c.name.clone(), c.fields.clone()));
+            let typed_layout = crate::typed_shape::class_typed_layout_from_chain(&chain);
             class_init_chains_map.entry(c.name.clone()).or_insert(chain);
-        }
+            typed_layout
+        };
         class_keys_init_data.push((
             global_name,
             packed_keys,
