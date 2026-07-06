@@ -44,6 +44,7 @@ use super::{
 
 mod build_and_run;
 mod link_cache;
+mod linux_ui_libs;
 mod native_features;
 mod pkg_config;
 mod platform_cmd;
