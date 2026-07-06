@@ -43,6 +43,8 @@ mod match_all;
 mod replace_expand;
 mod replace_fn;
 #[cfg(feature = "regex-engine")]
+mod unicode17;
+#[cfg(feature = "regex-engine")]
 use class_range_validate::has_out_of_order_double_dash_class_range;
 #[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;

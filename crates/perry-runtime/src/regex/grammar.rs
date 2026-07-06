@@ -458,10 +458,8 @@ fn is_unsupported_property_value(value: &str) -> bool {
         .or_else(|| value.strip_prefix("se="))
         .or_else(|| value.strip_prefix("scriptextensions="));
     if let Some(sv) = script_val {
-        return matches!(
-            sv,
-            "unknown" | "zzzz" | "beriaerfe" | "sidetic" | "taiyo" | "tolongsiki"
-        );
+        // Beria_Erfe/Sidetic/Tai_Yo/Tolong_Siki now expand via `unicode17`; only Unknown/Zzzz stay never-matching.
+        return matches!(sv, "unknown" | "zzzz");
     }
     value == "changeswhennfkccasefolded"
 }
@@ -1434,6 +1432,16 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     // mis-compiling (Node also rejects `\P{RGI_Emoji}`).
                     // All other properties pass through to the crate unchanged.
                     match parse_unicode_property(&chars, i) {
+                        Some((value, negated, end))
+                            if super::unicode17::script_replacement(&value, negated, in_class)
+                                .is_some() =>
+                        {
+                            result.push_str(
+                                &super::unicode17::script_replacement(&value, negated, in_class)
+                                    .unwrap(),
+                            );
+                            i = end;
+                        }
                         Some((value, negated, end)) if is_unsupported_property_value(&value) => {
                             if in_class {
                                 if negated {

@@ -390,3 +390,75 @@ fn high_surrogate_distributes_over_group() {
     );
     assert!(!re.is_match("AB"), "does not match plain ASCII");
 }
+
+/// Unicode 17.0 scripts (`Beria_Erfe`, `Sidetic`, `Tai_Yo`, `Tolong_Siki`) are
+/// absent from `regex-syntax`'s bundled Unicode-16 UCD. Instead of throwing a
+/// `SyntaxError` or compiling to a never-matching class, Perry expands them to
+/// the explicit code-point ranges Unicode 17 assigns — so `built-ins/RegExp/`
+/// `property-escapes` Test262 cases that expect real matches pass. Covers every
+/// alias form (`Script`/`sc`/`Script_Extensions`/`scx`) and long + short names.
+#[test]
+fn unicode17_scripts_expand_to_codepoint_ranges() {
+    // Positive `\p{Script=...}` → explicit class of the script's ranges.
+    assert_eq!(
+        js_regex_to_rust(r"\p{Script=Beria_Erfe}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    // Short alias, `sc=` key, and `scx=` all resolve to the same body.
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Berf}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{scx=Beria_Erfe}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{Script_Extensions=Berf}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    // The other three scripts.
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Sidetic}"),
+        r"[\x{10940}-\x{10959}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Tai_Yo}"),
+        r"[\x{1E6C0}-\x{1E6DE}\x{1E6E0}-\x{1E6F5}\x{1E6FE}-\x{1E6FF}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Tolong_Siki}"),
+        r"[\x{11DB0}-\x{11DDB}\x{11DE0}-\x{11DE9}]"
+    );
+    // Negated form → complemented class.
+    assert_eq!(
+        js_regex_to_rust(r"\P{sc=Sidetic}"),
+        r"[^\x{10940}-\x{10959}]"
+    );
+
+    // End-to-end: the compiled anchored regex matches the script's own code
+    // points and rejects an adjacent non-member (mirrors the Test262 shape).
+    let re = js_regexp_new(make_string(r"^\p{Script=Beria_Erfe}+$"), make_string("u"));
+    assert!(!re.is_null(), "Beria_Erfe pattern must construct");
+    assert!(
+        js_regexp_test(re, make_string("\u{16EA0}\u{16EB8}\u{16EBB}\u{16ED3}")) != 0,
+        "matches Beria_Erfe code points"
+    );
+    // U+16EB9/U+16EBA sit in the gap between the two ranges → not members.
+    assert!(
+        js_regexp_test(re, make_string("\u{16EB9}")) == 0,
+        "gap code point U+16EB9 is not Beria_Erfe"
+    );
+
+    // Negated: `\P{sc=Sidetic}` matches an ASCII letter, not a Sidetic point.
+    let rn = js_regexp_new(make_string(r"^\P{sc=Sidetic}$"), make_string("u"));
+    assert!(!rn.is_null(), "negated Sidetic pattern must construct");
+    assert!(
+        js_regexp_test(rn, make_string("A")) != 0,
+        "ASCII is non-Sidetic"
+    );
+    assert!(
+        js_regexp_test(rn, make_string("\u{10940}")) == 0,
+        "U+10940 is Sidetic, excluded by the negation"
+    );
+}
