@@ -72,6 +72,15 @@ unsafe fn root_holder(value_f64: f64) -> f64 {
 /// fires when the object actually has a closure-typed `toJSON` field. Returns
 /// the (possibly substituted) value.
 #[inline]
+/// #5989: a real GC heap object pointer is in the low canonical VA range
+/// (top 16 bits 0 or 1) and 8-byte aligned. A value whose extracted
+/// "pointer" fails this is a corrupted / mis-encoded pointer, never a
+/// dereferenceable `GcHeader` — feeding it to `gc_obj_type` SIGBUSes.
+#[inline]
+fn ptr_derefable(ptr: usize) -> bool {
+    (ptr >> 48) <= 1 && ptr >= 0x10000 && (ptr & 0x7) == 0
+}
+
 unsafe fn apply_to_json(value: f64) -> f64 {
     let bits = value.to_bits();
     // A BigInt is a primitive, not a POINTER_TAG value — `extract_pointer`
@@ -89,6 +98,13 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream
         // handle) is never a dereferenceable heap pointer.
         if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return value;
+        }
+        // #5989: a mis-aligned or out-of-range pointer is a corrupted value, not
+        // a real GC object; `gc_obj_type` below would deref its `GcHeader` and
+        // SIGBUS. Guard by magnitude + 8-byte alignment (mirrors
+        // `is_object_pointer`'s pre-load sanity) — skip the toJSON probe.
+        if !ptr_derefable(ptr as usize) {
             return value;
         }
         // An array can carry an own `toJSON` expando too (test262
@@ -201,6 +217,14 @@ unsafe fn dispatch_pointer_with_replacer(
         buf.push_str("null");
         return;
     }
+    // #5989: a mis-aligned / out-of-range pointer is a corrupted value, not a
+    // GC object — `gc_obj_type` (and the buffer/typed-array registry probes)
+    // would deref its header and SIGBUS. Emit "null" (unserializable), matching
+    // the handle-band fallback above, rather than crash the render.
+    if !ptr_derefable(ptr as usize) {
+        buf.push_str("null");
+        return;
+    }
     // #3857 follow-up: a boxed primitive wrapper returned by a replacer function
     // (`new Boolean(true)`, `new Number(n)`, `new String(s)`) must serialize as
     // its underlying primitive, not as `{}`. Must run before the GC-type dispatch
@@ -237,7 +261,17 @@ unsafe fn dispatch_pointer_with_replacer(
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => {
-            stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
+            // #5989: `gc_obj_type` can mis-read a corrupted / mis-classified
+            // structure as an array — its `length` field then reads as garbage
+            // (e.g. ~2.7e9) and `stringify_array`'s `0..len` walk runs OOB and
+            // SIGBUSes. Sanity-cap the length (mirrors `is_object_pointer`'s 10M
+            // cap): beyond that it is not a real array — emit "null", not a crash.
+            let len = (*(ptr as *const crate::ArrayHeader)).length;
+            if len > 10_000_000 {
+                buf.push_str("null");
+            } else {
+                stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
+            }
         }
         crate::gc::GC_TYPE_OBJECT => {
             if is_object_pointer(ptr) {
