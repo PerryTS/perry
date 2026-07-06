@@ -156,6 +156,17 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         acc = blk.and(I1, &acc, &fc_ok);
         acc = blk.and(I1, &acc, &ka_ok);
 
+        // #5654: a receiver that has ever had a property / accessor descriptor
+        // installed on it needs the guard's descriptor-aware dispatch (an
+        // accessor must fire on reads, a non-writable slot must reject
+        // stores). Instance-level installs no longer flip the process-global
+        // gate, so the hoisted check must vet the per-object flag — once, for
+        // the whole loop: installing a descriptor mid-loop would require a
+        // runtime call, which the call-free fast clone cannot make.
+        let has_desc = blk.and(I16, &reserved, OBJ_FLAG_HAS_DESCRIPTORS_BIT);
+        let no_desc = blk.icmp_eq(I16, &has_desc, "0");
+        acc = blk.and(I1, &acc, &no_desc);
+
         if require_raw_f64 {
             let intact = blk.and(I16, &reserved, TYPED_LAYOUT_INTACT_BIT);
             let intact_ok = blk.icmp_ne(I16, &intact, "0");
