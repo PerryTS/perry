@@ -188,17 +188,24 @@ fn ui_build_embeds_manifest_via_lld_link() {
 fn mt_dir_probe_picks_newest_versioned_sdk() {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path();
-    // Older SDK with both arches, newest SDK with x64 only, plus a newer
-    // version dir that lacks mt.exe entirely (must be skipped).
+    // Older SDK with both arches, newest mt-bearing SDK also with both
+    // arches (x64 must win within it), plus a newer version dir that lacks
+    // mt.exe entirely (must be skipped).
     for dir in [
         "10.0.19041.0/x64",
         "10.0.19041.0/x86",
         "10.0.22621.0/x64",
+        "10.0.22621.0/x86",
         "10.0.26100.0/arm64",
     ] {
         std::fs::create_dir_all(bin.join(dir)).unwrap();
     }
-    for mt in ["10.0.19041.0/x64/mt.exe", "10.0.19041.0/x86/mt.exe", "10.0.22621.0/x64/mt.exe"] {
+    for mt in [
+        "10.0.19041.0/x64/mt.exe",
+        "10.0.19041.0/x86/mt.exe",
+        "10.0.22621.0/x64/mt.exe",
+        "10.0.22621.0/x86/mt.exe",
+    ] {
         std::fs::write(bin.join(mt), b"").unwrap();
     }
     assert_eq!(
