@@ -286,6 +286,12 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // Register arrow function parameters with known native types as native instances
     for param in &params {
         if let Type::Named(type_name) = &param.ty {
+            // #6003: a param typed with a USER class that shares a native
+            // name (`class Headers { ... }; (h: Headers) => ...`) must
+            // dispatch through the user class, not the native FFI.
+            if ctx.lookup_class(type_name).is_some() {
+                continue;
+            }
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),

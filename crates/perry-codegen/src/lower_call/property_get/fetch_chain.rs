@@ -83,7 +83,12 @@ pub(crate) fn try_lower_fetch_chain(
     }
     // Chain `new Response(...).text()` / `.json()` etc.
     if let Expr::New { class_name: nc, .. } = object {
-        let fetch_dispatch = matches!(nc.as_str(), "Response" | "Headers" | "Request");
+        // #6003: `new Headers().set(...)` only dispatches through the fetch
+        // FFI when the name still refers to the built-in — a user-defined
+        // `class Headers`/`Response`/`Request` constructs the user class,
+        // whose methods resolve via the ordinary class dispatch.
+        let fetch_dispatch = matches!(nc.as_str(), "Response" | "Headers" | "Request")
+            && !ctx.classes.contains_key(nc.as_str());
         if fetch_dispatch {
             let module = match nc.as_str() {
                 "Response" => "fetch",

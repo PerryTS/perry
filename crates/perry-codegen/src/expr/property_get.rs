@@ -1019,7 +1019,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     ));
                 }
+                // #6003: `class_name == "Headers"` only means the NATIVE
+                // fetch Headers when the user hasn't defined their own
+                // `class Headers` — a user class of that name owns the
+                // receiver type, so fall through to the user-class
+                // getter/method dispatch below.
                 if class_name == "Headers"
+                    && !ctx.classes.contains_key(&class_name)
                     && matches!(
                         property.as_str(),
                         "append"
@@ -1101,7 +1107,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
-                if class_name == "Headers" && is_headers_method_name(property) {
+                if class_name == "Headers"
+                    && !ctx.classes.contains_key(&class_name)
+                    && is_headers_method_name(property)
+                {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =

@@ -359,7 +359,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .get(ty)
                 .map(|source| source.strip_prefix("node:").unwrap_or(source) == "net")
                 .unwrap_or(false);
+            // #6003: a user-defined class lexically shadows a same-named
+            // built-in (`class Headers {}` vs the fetch global), so the
+            // bare-identifier RHS must resolve to the USER class id before
+            // the reserved built-in mapping below. `class_ids` holds only
+            // user classes (local `hir.classes` + cross-module imported
+            // user classes); plain built-in names never appear in it, so
+            // unshadowed built-ins keep their reserved ids.
+            let user_cid = ctx.class_ids.get(ty).copied();
             let cid = match ty.as_str() {
+                _ if user_cid.is_some() => user_cid.unwrap(),
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
                 "RangeError" => 0xFFFF0011u32,
