@@ -706,7 +706,11 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Observed 19-37 min/shard on the first real sharded PR run. 40 left only
+    # ~3 min headroom over the slowest shard, so a slow-runner day could trip
+    # the timeout and (once this gate is a required context) flaky-red-block
+    # every PR. 55 gives comfortable headroom without hiding a genuine hang.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v7
 
