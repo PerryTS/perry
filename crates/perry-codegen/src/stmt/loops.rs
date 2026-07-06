@@ -986,6 +986,551 @@ fn lower_packed_f64_range_versioned_for(
     Ok(true)
 }
 
+/// #5093: property names with dedicated branches in the property-get/set
+/// lowering dispatch ahead of the class-field diamond (`length` header loads,
+/// `errors` runtime call, accessor-ish names, …). A tracked field must not
+/// collide or the fast clone's access would lower through a different —
+/// possibly calling — path, breaking the call-free guarantee.
+const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
+    "length",
+    "errors",
+    "size",
+    "prototype",
+    "constructor",
+    "__proto__",
+    "caller",
+    "arguments",
+    "name",
+    "message",
+    "stack",
+    "toString",
+    "valueOf",
+];
+
+/// #5093: class names with dedicated (builtin-flavored) branches in the
+/// property lowering dispatch; a user class sharing one of these names could
+/// be intercepted before the class-field diamond.
+const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
+    "Headers",
+    "URLPattern",
+    "ClientRequest",
+    "Agent",
+    "Socket",
+    "Server",
+    "BlockList",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+    "URL",
+    "URLSearchParams",
+    "Function",
+];
+
+#[derive(Clone, Copy)]
+enum ClassFieldLoopBound {
+    /// `i < <integer literal>`.
+    Constant(i64),
+    /// `i < b` where `b` is a loop-invariant plain local or module global.
+    Local(u32),
+}
+
+struct ClassFieldVersionedLoop {
+    counter_id: u32,
+    bound: ClassFieldLoopBound,
+    recv_id: u32,
+    class_name: String,
+    expected_class_id: u32,
+    keys_global_name: String,
+    /// property -> (packed slot index, written). All raw-f64 candidates.
+    fields: std::collections::BTreeMap<String, (u32, bool)>,
+}
+
+/// #5093: effect-free expression walk for the class-field versioned loop.
+/// Tracked `recv.prop` reads, numeric locals, numeric literals and pure
+/// arithmetic/Math only — the same shapes `packed_f64_range_loop_pure_expr_
+/// collect` admits, minus array accesses, plus class-field reads. Everything
+/// here must lower without emitting a call that can allocate (libm intrinsic
+/// calls are fine: they cannot trigger a GC).
+fn class_field_loop_pure_expr_collect(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    counter_id: u32,
+    recv: &mut Option<u32>,
+    props: &mut std::collections::BTreeMap<String, bool>,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::PropertyGet { object, property } => {
+            let Expr::LocalGet(obj_id) = object.as_ref() else {
+                return false;
+            };
+            if *obj_id == counter_id {
+                return false;
+            }
+            match recv {
+                Some(r) if *r == *obj_id => {}
+                Some(_) => return false, // single receiver per loop
+                None => *recv = Some(*obj_id),
+            }
+            props.entry(property.clone()).or_insert(false);
+            true
+        }
+        // Reading the receiver as a VALUE (outside a tracked field access)
+        // could flow it into arbitrary lowering; only allow scalar reads the
+        // type analysis proves numeric.
+        Expr::LocalGet(id) => {
+            recv.map_or(true, |r| r != *id) && crate::type_analysis::is_numeric_expr(ctx, expr)
+        }
+        Expr::Number(_) | Expr::Integer(_) => true,
+        Expr::Binary { left, right, .. } => {
+            crate::type_analysis::is_numeric_expr(ctx, expr)
+                && class_field_loop_pure_expr_collect(ctx, left, counter_id, recv, props)
+                && class_field_loop_pure_expr_collect(ctx, right, counter_id, recv, props)
+        }
+        Expr::NumberCoerce(operand) => {
+            class_field_loop_pure_expr_collect(ctx, operand, counter_id, recv, props)
+        }
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            class_field_loop_pure_expr_collect(ctx, left, counter_id, recv, props)
+                && class_field_loop_pure_expr_collect(ctx, right, counter_id, recv, props)
+        }
+        Expr::MathMin(values) | Expr::MathMax(values) => values
+            .iter()
+            .all(|expr| class_field_loop_pure_expr_collect(ctx, expr, counter_id, recv, props)),
+        Expr::MathAbs(value)
+        | Expr::MathSqrt(value)
+        | Expr::MathFloor(value)
+        | Expr::MathCeil(value)
+        | Expr::MathRound(value)
+        | Expr::MathTrunc(value)
+        | Expr::MathSign(value)
+        | Expr::MathF16round(value) => {
+            class_field_loop_pure_expr_collect(ctx, value, counter_id, recv, props)
+        }
+        _ => false,
+    }
+}
+
+/// #5093: class-field versioned loop — the "collapse" this issue tracks.
+///
+/// Matches `for (let i = k0; i < B; i++) <single statement>` where `B` is an
+/// integer literal or a loop-invariant local/module-global and the statement's
+/// only side effect is a raw-f64 class-field store on a loop-invariant
+/// receiver of statically known class (or a scalar `LocalSet` accumulator),
+/// with every other subexpression pure per the walker above.
+///
+/// The single-statement / effect-last restriction is the side-exit protocol
+/// (same as the #6011 range loop): the fast clone's only mid-loop bail is the
+/// store's inline plain-finite value check, which fires BEFORE the store — so
+/// jumping to the slow clone's preheader re-executes the current iteration
+/// without duplicating any effect.
+fn match_class_field_versioned_loop(
+    ctx: &FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<ClassFieldVersionedLoop> {
+    use perry_hir::{CompareOp, Expr, UpdateOp};
+    // Oversized modules full-outline the class-field diamonds for code size;
+    // keep the versioned clone (which would re-inline them) off there.
+    if crate::codegen::full_outline_ic_enabled() {
+        return None;
+    }
+    if !ctx.pending_labels.is_empty() {
+        return None;
+    }
+    let (counter_id, start) = match init? {
+        Stmt::Let {
+            id,
+            init: Some(init_expr),
+            ..
+        } => {
+            let start = match init_expr {
+                Expr::Integer(n) => *n,
+                Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => *n as i64,
+                _ => return None,
+            };
+            (*id, start)
+        }
+        _ => return None,
+    };
+    if !(0..=i64::from(i32::MAX)).contains(&start) {
+        return None;
+    }
+    let (op, left, right) = match condition? {
+        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        _ => return None,
+    };
+    if !matches!(op, CompareOp::Lt) || !matches!(left, Expr::LocalGet(id) if *id == counter_id) {
+        return None;
+    }
+    let bound = match right {
+        Expr::Integer(k) if (0..=i64::from(i32::MAX)).contains(k) => {
+            ClassFieldLoopBound::Constant(*k)
+        }
+        Expr::LocalGet(bound_id) if *bound_id != counter_id => {
+            if ctx.boxed_vars.contains(bound_id) {
+                return None;
+            }
+            if !ctx.locals.contains_key(bound_id) && !ctx.module_globals.contains_key(bound_id) {
+                return None;
+            }
+            if !local_bound_is_loop_invariant(condition?, update, body, *bound_id) {
+                return None;
+            }
+            ClassFieldLoopBound::Local(*bound_id)
+        }
+        _ => return None,
+    };
+    if !matches!(
+        update?,
+        Expr::Update {
+            id,
+            op: UpdateOp::Increment,
+            ..
+        } if *id == counter_id
+    ) {
+        return None;
+    }
+    if !ctx.locals.contains_key(&counter_id)
+        || ctx.boxed_vars.contains(&counter_id)
+        || !ctx.integer_locals.contains(&counter_id)
+        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+        || !loop_counter_entry_i32_range_is_safe(init, counter_id)
+    {
+        return None;
+    }
+
+    // Single-statement body whose only side effect commits after every
+    // potential side exit.
+    let [Stmt::Expr(effect)] = body else {
+        return None;
+    };
+    let mut recv: Option<u32> = None;
+    let mut props: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    match effect {
+        // `recv.prop = <pure numeric>` — the benchmark shape. Lowering
+        // rewrites the static-key PutValueSet through the PropertySet
+        // class-field diamond (`put_value_static_property_fast_path`).
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let (Expr::LocalGet(t), Expr::LocalGet(r)) = (target.as_ref(), receiver.as_ref())
+            else {
+                return None;
+            };
+            if t != r {
+                return None;
+            }
+            let Expr::String(prop) = key.as_ref() else {
+                return None;
+            };
+            recv = Some(*t);
+            if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
+                return None;
+            }
+            props
+                .entry(prop.clone())
+                .and_modify(|written| *written = true)
+                .or_insert(true);
+        }
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } => {
+            let Expr::LocalGet(obj_id) = object.as_ref() else {
+                return None;
+            };
+            recv = Some(*obj_id);
+            if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
+                return None;
+            }
+            props
+                .entry(property.clone())
+                .and_modify(|written| *written = true)
+                .or_insert(true);
+        }
+        // Scalar accumulator: `acc = <pure numeric over tracked reads>`. No
+        // store side exit exists, so re-execution can never happen; the
+        // LocalSet itself must still target a plain numeric non-shadow local.
+        Expr::LocalSet(id, value) => {
+            if *id == counter_id
+                || !ctx.locals.contains_key(id)
+                || ctx.boxed_vars.contains(id)
+                || ctx.module_globals.contains_key(id)
+                || ctx.shadow_slot_map.contains_key(id)
+                || !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id))
+            {
+                return None;
+            }
+            if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
+                return None;
+            }
+            if recv == Some(*id) {
+                return None;
+            }
+            if let ClassFieldLoopBound::Local(bound_id) = bound {
+                if bound_id == *id {
+                    return None;
+                }
+            }
+        }
+        _ => return None,
+    }
+    let recv_id = recv?;
+    if props.is_empty() || recv_id == counter_id {
+        return None;
+    }
+    if let ClassFieldLoopBound::Local(bound_id) = bound {
+        if bound_id == recv_id {
+            return None;
+        }
+    }
+
+    // Receiver: loop-invariant, directly addressable, not aliased by another
+    // representation (POD / scalar replacement take different lowering paths).
+    if ctx.boxed_vars.contains(&recv_id)
+        || ctx.pod_records.contains_key(&recv_id)
+        || ctx.scalar_replaced.contains_key(&recv_id)
+    {
+        return None;
+    }
+    if !ctx.locals.contains_key(&recv_id) && !ctx.module_globals.contains_key(&recv_id) {
+        return None;
+    }
+    if !local_bound_is_loop_invariant(condition?, update, body, recv_id) {
+        return None;
+    }
+    let class_name =
+        crate::type_analysis::receiver_class_name(ctx, &perry_hir::Expr::LocalGet(recv_id))?;
+    if CLASS_FIELD_LOOP_CLASS_DENYLIST.contains(&class_name.as_str()) {
+        return None;
+    }
+    let class = ctx.classes.get(&class_name)?;
+    if !class.computed_members.is_empty() {
+        return None;
+    }
+    let expected_class_id = *ctx.class_ids.get(&class_name)?;
+    let keys_global_name = ctx.class_keys_globals.get(&class_name)?.clone();
+
+    let mut fields = std::collections::BTreeMap::new();
+    for (prop, written) in props {
+        if CLASS_FIELD_LOOP_PROP_DENYLIST.contains(&prop.as_str()) {
+            return None;
+        }
+        // Accessors route through synthesized __get_/__set_ methods before
+        // the class-field diamond; `class_field_global_index` also rejects
+        // accessor-shadowed names, but mirror the dispatch gate exactly.
+        if ctx
+            .methods
+            .contains_key(&(class_name.clone(), format!("__get_{prop}")))
+            || ctx
+                .methods
+                .contains_key(&(class_name.clone(), format!("__set_{prop}")))
+        {
+            return None;
+        }
+        let field_index = crate::type_analysis::class_field_global_index(ctx, &class_name, &prop)?;
+        let raw_f64 = crate::type_analysis::class_field_declared_type(ctx, &class_name, &prop)
+            .as_ref()
+            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+        if !raw_f64 {
+            return None;
+        }
+        fields.insert(prop, (field_index, written));
+    }
+
+    Some(ClassFieldVersionedLoop {
+        counter_id,
+        bound,
+        recv_id,
+        class_name,
+        expected_class_id,
+        keys_global_name,
+        fields,
+    })
+}
+
+/// #5093: lowering for [`match_class_field_versioned_loop`], modeled on
+/// [`lower_packed_f64_range_versioned_for`]. The bound is materialized to i32
+/// once (with a finite-integral check for local/global bounds), the inline
+/// class-field shape check runs once in the preheader, and the fast clone
+/// lowers with a scoped [`crate::expr::ClassFieldLoopFact`] so every tracked
+/// field access is a bare GEP load/store on the preheader-cached object
+/// pointer. Store side exits resume at the current `i` in the slow clone.
+///
+/// SAFETY (memory-corruption class — see #5093): between the preheader's
+/// receiver load and the end of the fast clone, NO call may be emitted. The
+/// matcher enforces this by shape (single pure-arithmetic statement, all
+/// field accesses tracked, counter/bound machinery call-free); the preheader
+/// itself emits only bit ops, loads, and the finite-integral bound checks.
+/// Call-free ⇒ allocation-free ⇒ no GC ⇒ the object cannot move and none of
+/// the checked shape facts can change while the fast clone runs.
+fn lower_class_field_versioned_for(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<bool> {
+    let Some(matched) = match_class_field_versioned_loop(ctx, init, condition, update, body) else {
+        return Ok(false);
+    };
+    // The fast clone's cond reads the counter through its i32 slot; without
+    // one the versioned copy would win nothing.
+    if !ctx.i32_counter_slots.contains_key(&matched.counter_id) {
+        return Ok(false);
+    }
+
+    let fast_pre_idx = ctx.new_block("class_field.loop.fast.preheader");
+    let slow_pre_idx = ctx.new_block("class_field.loop.slow.preheader");
+    let merge_idx = ctx.new_block("class_field.loop.merge");
+    let fast_pre_label = ctx.block_label(fast_pre_idx);
+    let slow_pre_label = ctx.block_label(slow_pre_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    // One-time i32 materialization of the bound (mirrors the #6011 range
+    // loop): non-number / NaN / fractional / out-of-range bounds keep full JS
+    // trip-count semantics in the slow clone.
+    let bound_i32: String = match matched.bound {
+        ClassFieldLoopBound::Constant(k) => k.to_string(),
+        ClassFieldLoopBound::Local(bound_id) => {
+            let bound_d = lower_expr(ctx, &perry_hir::Expr::LocalGet(bound_id))?;
+            let is_number = emit_js_value_is_number(ctx, &bound_d);
+            let range_idx = ctx.new_block("class_field.loop.bound.range");
+            let convert_idx = ctx.new_block("class_field.loop.bound.convert");
+            let check_idx = ctx.new_block("class_field.loop.shape_check");
+            let range_label = ctx.block_label(range_idx);
+            let convert_label = ctx.block_label(convert_idx);
+            let check_label = ctx.block_label(check_idx);
+            ctx.block()
+                .cond_br(&is_number, &range_label, &slow_pre_label);
+
+            ctx.current_block = range_idx;
+            let ge_zero = ctx.block().fcmp("oge", &bound_d, "0.0");
+            let le_max = {
+                let max_literal = format!("{:.1}", i32::MAX as f64);
+                ctx.block().fcmp("ole", &bound_d, &max_literal)
+            };
+            let in_range = ctx.block().and(I1, &ge_zero, &le_max);
+            ctx.block()
+                .cond_br(&in_range, &convert_label, &slow_pre_label);
+
+            ctx.current_block = convert_idx;
+            let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_d, I32);
+            let roundtrip = ctx.block().sitofp(I32, &bound_i32, DOUBLE);
+            let is_integral = ctx.block().fcmp("oeq", &roundtrip, &bound_d);
+            ctx.block()
+                .cond_br(&is_integral, &check_label, &slow_pre_label);
+
+            ctx.current_block = check_idx;
+            bound_i32
+        }
+    };
+
+    // Receiver load + hoisted shape check. From here to loop entry the
+    // emitted IR is call-free, so the pointer the check validates is the
+    // pointer the fast clone uses.
+    let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
+    let (obj_bits, obj_handle, expected_keys) = {
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+        let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
+        let expected_keys = blk.load(I64, &format!("@{}", matched.keys_global_name));
+        (obj_bits, obj_handle, expected_keys)
+    };
+    let max_field_index = matched
+        .fields
+        .values()
+        .map(|(field_index, _)| *field_index)
+        .max()
+        .expect("matcher requires >= 1 tracked field");
+    let has_store = matched.fields.values().any(|(_, written)| *written);
+    let expected_class_id_str = matched.expected_class_id.to_string();
+    let (obj_ptr, shape_ok) =
+        crate::expr::class_field_inline_guard::emit_class_field_loop_preheader_check(
+            ctx,
+            &obj_bits,
+            &obj_handle,
+            &expected_class_id_str,
+            &expected_keys,
+            max_field_index,
+            // Every tracked field is a raw-f64 candidate: reads rely on the
+            // intact bit, so require it whether or not the loop stores.
+            true,
+            has_store,
+            &slow_pre_label,
+        );
+    // The deref block is left unterminated on purpose: it branches into the
+    // fast clone only after the clone is PROVEN call-free below.
+    let deref_idx = ctx.current_block;
+
+    let scope_id = ctx.next_loop_proof_scope_id();
+    let fast_scan_start = ctx.func.num_blocks();
+    ctx.current_block = fast_pre_idx;
+    ctx.class_field_loop_facts
+        .push(crate::expr::ClassFieldLoopFact {
+            recv_local_id: matched.recv_id,
+            scope_id,
+            class_name: matched.class_name.clone(),
+            obj_ptr,
+            side_exit_label: slow_pre_label.clone(),
+            fields: matched
+                .fields
+                .iter()
+                .map(|(prop, (field_index, _))| (prop.clone(), *field_index))
+                .collect(),
+        });
+    lower_for_after_init_with_i32_bound(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.class_field_fast",
+        Some((matched.counter_id, bound_i32)),
+    )?;
+    ctx.class_field_loop_facts
+        .retain(|fact| fact.scope_id != scope_id);
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+    let fast_scan_end = ctx.func.num_blocks();
+
+    // Compile-time verification of the safety invariant: the fast clone must
+    // be call-free (no runtime call ⇒ no allocation ⇒ no GC ⇒ the cached
+    // `obj_ptr` cannot move and the hoisted shape check stays true). The
+    // matcher makes this true by construction; if some unpredicted lowering
+    // path emitted a call anyway, never enter the fast clone — run the slow
+    // clone unconditionally and leave the fast blocks as unreachable code.
+    let fast_clone_call_free = !ctx.func.blocks()[fast_pre_idx].contains_gc_unsafe_call()
+        && (fast_scan_start..fast_scan_end)
+            .all(|idx| !ctx.func.blocks()[idx].contains_gc_unsafe_call());
+    ctx.current_block = deref_idx;
+    if fast_clone_call_free {
+        ctx.block()
+            .cond_br(&shape_ok, &fast_pre_label, &slow_pre_label);
+    } else {
+        ctx.block().br(&slow_pre_label);
+    }
+
+    ctx.current_block = slow_pre_idx;
+    lower_for_after_init(ctx, init, condition, update, body, "for.class_field_slow")?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Ok(true)
+}
+
 fn record_packed_f64_loop_guard_artifacts(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
@@ -1647,6 +2192,13 @@ pub(crate) fn lower_for(
     // local/module-global) with `a[i ± c]` accesses — EMA-style recurrences.
     // Tried only after the `i < arr.length` matcher above declined.
     if lower_packed_f64_range_versioned_for(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
+    // #5093: monomorphic class-field hot loops (`counter.value = counter.value
+    // + 1` after method inlining). Shape check hoisted to a preheader; fast
+    // clone is call-free raw slot access.
+    if lower_class_field_versioned_for(ctx, init, condition, update, body)? {
         return Ok(());
     }
 

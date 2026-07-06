@@ -445,6 +445,103 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
+                        // #5093 loop versioning: inside the fast clone of a
+                        // class-field versioned loop, a tracked raw-f64 field
+                        // store on the proven receiver lowers to an inline
+                        // plain-finite value check + bare slot store on the
+                        // preheader-cached object pointer. A value that is
+                        // not a plain finite double (±Inf/NaN, or any NaN-box
+                        // tag — including INT32-boxed integers) side-exits to
+                        // the slow clone's preheader BEFORE the store, so the
+                        // slow clone re-executes the whole iteration and
+                        // routes the value through the runtime guard exactly
+                        // as today (downgrade semantics preserved).
+                        if requires_raw_f64 {
+                            let loop_fact = match object.as_ref() {
+                                Expr::LocalGet(recv_id) => {
+                                    crate::expr::class_field_loop_fact_lookup(
+                                        &ctx.class_field_loop_facts,
+                                        *recv_id,
+                                        &class_name,
+                                        property,
+                                    )
+                                    .filter(|(_, loop_idx)| *loop_idx == field_index)
+                                    .map(|(fact, _)| {
+                                        (fact.obj_ptr.clone(), fact.side_exit_label.clone())
+                                    })
+                                }
+                                _ => None,
+                            };
+                            if let Some((obj_ptr, side_exit_label)) = loop_fact {
+                                let field_idx_str = field_index.to_string();
+                                let store_idx = ctx.new_block("class_field_loop_store.fast");
+                                let store_label = ctx.block_label(store_idx);
+                                {
+                                    let blk = ctx.block();
+                                    let val_bits = blk.bitcast_double_to_i64(&val_double);
+                                    let finite = crate::expr::class_field_inline_guard::
+                                        emit_plain_finite_number_check(blk, &val_bits);
+                                    blk.cond_br(&finite, &store_label, &side_exit_label);
+                                }
+                                ctx.current_block = store_idx;
+                                {
+                                    let blk = ctx.block();
+                                    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+                                    let field_ptr =
+                                        blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                                    // No raw-f64 canonicalization call is needed:
+                                    // INT32-boxed and NaN values — the only
+                                    // inputs `js_array_numeric_value_to_raw_f64`
+                                    // rewrites — cannot pass the finite check.
+                                    //
+                                    // GC_STORE_AUDIT(POINTER_FREE): the inline
+                                    // finite check proved `val_double` is a
+                                    // genuine (unboxed, finite) double, never a
+                                    // heap pointer — no edge, no write barrier.
+                                    blk.store(DOUBLE, &val_double, &field_ptr);
+                                }
+                                let stored = LoweredValue {
+                                    semantic: SemanticKind::JsNumber,
+                                    rep: NativeRep::F64,
+                                    llvm_ty: DOUBLE,
+                                    value: val_double.clone(),
+                                };
+                                ctx.record_lowered_value_with_access_mode_and_facts(
+                                    "ClassFieldSet",
+                                    None,
+                                    "class_field_set.loop_raw_f64_store",
+                                    &stored,
+                                    Some(BoundsState::Guarded {
+                                        guard_id: "class_field_loop_preheader_check".to_string(),
+                                    }),
+                                    None,
+                                    Some(BufferAccessMode::CheckedNative),
+                                    None,
+                                    None,
+                                    None,
+                                    vec![raw_f64_layout_fact(
+                                        None,
+                                        "consumed",
+                                        "class_field_loop_preheader_check",
+                                        None,
+                                    )],
+                                    Vec::new(),
+                                    false,
+                                    false,
+                                    vec![
+                                        format!("class={}", class_name),
+                                        format!("field={}", property),
+                                        format!("field_index={}", field_idx_str),
+                                        "receiver_proof=loop_preheader_shape_check".to_string(),
+                                        "field_layout=raw_f64_slot_array".to_string(),
+                                        "loop_versioning=class_field_fast_clone".to_string(),
+                                        "rhs_numeric_guard=inline_plain_finite_check".to_string(),
+                                        "store_guard_failure=side_exit_slow_restart".to_string(),
+                                    ],
+                                );
+                                return Ok(val_double);
+                            }
+                        }
                         // #5334 lever B: oversized modules full-outline the entire
                         // class-field-SET IC diamond (guard + fast store +
                         // fallback) to a single `js_class_field_set_ic(...)` call.

@@ -39,6 +39,151 @@ const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
 const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
+/// Emit the `i1` "plain finite number" predicate on a value's raw bits: true
+/// iff the exponent field is not all-ones. Rejects ±Inf, every NaN (canonical
+/// or boxed), and therefore every NaN-box tag — exactly the values the
+/// runtime set contract (`is_plain_number_bits`) refuses to store raw.
+pub(crate) fn emit_plain_finite_number_check(
+    blk: &mut crate::block::LlBlock,
+    value_bits: &str,
+) -> String {
+    let exp = blk.and(I64, value_bits, F64_EXP_MASK);
+    blk.icmp_ne(I64, &exp, F64_EXP_MASK)
+}
+
+/// #5093 loop versioning: emit the whole-loop shape check in a versioned
+/// loop's preheader.
+///
+/// This is the hoisted form of [`emit_class_field_inline_precheck`]: the same
+/// strict subset of the runtime `class_field_fast_contract`, evaluated ONCE
+/// before loop entry, branching to `fast_label` (the fast clone's preheader)
+/// when the monomorphic shape holds and to `slow_label` (the slow clone's
+/// preheader, i.e. today's guarded loop) otherwise. Evaluating it once is
+/// sound only because the fast clone's body is call-free (matcher-enforced in
+/// `stmt/loops.rs`): with no calls there is no allocation, so no GC can move
+/// the object or run any of the runtime paths that mutate class_id /
+/// keys_array / field_count / the typed-layout intact bit / the frozen bit /
+/// the process-global enable flag mid-loop.
+///
+/// `max_field_index` is the largest packed slot index the loop touches
+/// (`field_count ugt max_field_index` covers every access). `require_raw_f64`
+/// adds the per-object typed-layout intact check (any raw-f64 read or write in
+/// the loop); `require_not_frozen` adds the frozen-bit check (any write in the
+/// loop). Per-store value checks are NOT emitted here — the fast clone's
+/// stores keep their inline plain-finite check and side-exit to `slow_label`.
+///
+/// Returns `(obj_ptr, shape_ok)`: the SSA name of the receiver object pointer
+/// (`inttoptr` of `obj_handle`) and the accumulated `i1` shape predicate,
+/// both emitted in the deref block. The deref block is deliberately left
+/// UNTERMINATED with `ctx.current_block` pointing at it: the caller lowers
+/// the fast clone first, verifies it really came out call-free
+/// (`LlBlock::contains_gc_unsafe_call`), and only then terminates the deref
+/// block — `cond_br(shape_ok, fast, slow)` on success, or an unconditional
+/// branch to the slow clone if some unpredicted lowering path emitted a call
+/// (never enter a fast clone whose call-freeness is unproven). The deref
+/// block dominates the fast preheader, so the fast clone may use `obj_ptr`
+/// directly for raw slot access.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_class_field_loop_preheader_check(
+    ctx: &mut FnCtx,
+    obj_bits: &str,
+    obj_handle: &str,
+    expected_class_id: &str,
+    expected_keys: &str,
+    max_field_index: u32,
+    require_raw_f64: bool,
+    require_not_frozen: bool,
+    slow_label: &str,
+) -> (String, String) {
+    let deref_idx = ctx.new_block("class_field_loop.preheader.deref");
+    let deref_label = ctx.block_label(deref_idx);
+    let max_field_index_str = max_field_index.to_string();
+
+    // Gate: enable flag first (volatile — the runtime flips it sticky 0 -> 1
+    // when descriptors / typed feedback / verify mode come into use), then
+    // prove the receiver is a real heap object before dereferencing.
+    {
+        let blk = ctx.block();
+        let flag = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
+        let flag_ok = blk.icmp_eq(I8, &flag, "0");
+        let tag = blk.lshr(I64, obj_bits, "48");
+        let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+        let above_band = blk.icmp_ugt(I64, obj_handle, HANDLE_BAND_TOP);
+        let ptr_safe = blk.and(I1, &is_ptr, &above_band);
+        let can_inline = blk.and(I1, &ptr_safe, &flag_ok);
+        blk.cond_br(&can_inline, &deref_label, slow_label);
+    }
+
+    ctx.current_block = deref_idx;
+    {
+        let blk = ctx.block();
+        let obj_ptr = blk.inttoptr(I64, obj_handle);
+
+        // GcHeader (precedes the object by 8 bytes): obj_type @-8 (i8),
+        // gc_flags @-7 (i8), _reserved @-6 (i16).
+        let gtype_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+        let gtype = blk.load(I8, &gtype_ptr);
+        let gtype_ok = blk.icmp_eq(I8, &gtype, GC_TYPE_OBJECT);
+
+        let gflags_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-7")]);
+        let gflags = blk.load(I8, &gflags_ptr);
+        let fwd = blk.and(I8, &gflags, GC_FLAG_FORWARDED_I8);
+        let not_fwd = blk.icmp_eq(I8, &fwd, "0");
+
+        let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+        let reserved = blk.load(I16, &res_ptr);
+
+        // ObjectHeader: object_type @0 (i32)==REGULAR, class_id @4 (i32),
+        // field_count @12 (i32), keys_array @16 (i64).
+        let object_type = blk.load(I32, &obj_ptr);
+        let ot_ok = blk.icmp_eq(I32, &object_type, OBJECT_TYPE_REGULAR);
+
+        let cid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+        let class_id = blk.load(I32, &cid_ptr);
+        let cid_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
+
+        let fc_ptr = blk.gep(I8, &obj_ptr, &[(I64, "12")]);
+        let field_count = blk.load(I32, &fc_ptr);
+        let fc_ok = blk.icmp_ugt(I32, &field_count, &max_field_index_str);
+
+        let ka_ptr = blk.gep(I8, &obj_ptr, &[(I64, "16")]);
+        let keys_array = blk.load(I64, &ka_ptr);
+        let ka_ok = blk.icmp_eq(I64, &keys_array, expected_keys);
+
+        let mut acc = blk.and(I1, &gtype_ok, &not_fwd);
+        acc = blk.and(I1, &acc, &ot_ok);
+        acc = blk.and(I1, &acc, &cid_ok);
+        acc = blk.and(I1, &acc, &fc_ok);
+        acc = blk.and(I1, &acc, &ka_ok);
+
+        // #5654: a receiver that has ever had a property / accessor descriptor
+        // installed on it needs the guard's descriptor-aware dispatch (an
+        // accessor must fire on reads, a non-writable slot must reject
+        // stores). Instance-level installs no longer flip the process-global
+        // gate, so the hoisted check must vet the per-object flag — once, for
+        // the whole loop: installing a descriptor mid-loop would require a
+        // runtime call, which the call-free fast clone cannot make.
+        let has_desc = blk.and(I16, &reserved, OBJ_FLAG_HAS_DESCRIPTORS_BIT);
+        let no_desc = blk.icmp_eq(I16, &has_desc, "0");
+        acc = blk.and(I1, &acc, &no_desc);
+
+        if require_raw_f64 {
+            let intact = blk.and(I16, &reserved, TYPED_LAYOUT_INTACT_BIT);
+            let intact_ok = blk.icmp_ne(I16, &intact, "0");
+            acc = blk.and(I1, &acc, &intact_ok);
+        }
+
+        if require_not_frozen {
+            let frozen = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_BIT);
+            let not_frozen = blk.icmp_eq(I16, &frozen, "0");
+            acc = blk.and(I1, &acc, &not_frozen);
+        }
+
+        // No terminator: the caller branches after verifying the fast clone.
+        (obj_ptr, acc)
+    }
+}
+
 /// Emit the inline class-field shape pre-check.
 ///
 /// Before calling, the caller must have already created `fast_label` (the slot

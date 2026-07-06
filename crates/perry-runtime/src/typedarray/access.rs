@@ -454,6 +454,43 @@ pub extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32)
     }
 }
 
+/// `uint8array[i]` / `buffer[i]` read as a JS value. Mirrors the dispatch of
+/// the native i32 accessor `js_uint8array_get` (a real Uint8Array
+/// `TypedArrayHeader`, or a Buffer-backed registered buffer), but an
+/// out-of-range canonical integer index reads `undefined` — the ECMAScript
+/// IntegerIndexedExotic `[[Get]]` semantics — NOT the `0` byte-sentinel the
+/// i32 accessor is forced to return (#6088). `js_typed_array_get` and
+/// `js_buffer_index_get_value` both already yield `undefined` for out-of-range,
+/// so each arm forwards directly.
+#[no_mangle]
+pub extern "C" fn js_uint8array_index_get_value(
+    target: *const TypedArrayHeader,
+    index: i32,
+) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let addr = strip_nanbox(target as u64);
+    if addr < 0x1000 || index < 0 {
+        return undefined;
+    }
+    if let Some(kind) = lookup_typed_array_kind(addr) {
+        if !matches!(kind, KIND_UINT8 | KIND_UINT8_CLAMPED) {
+            return undefined;
+        }
+        js_typed_array_get(addr as *const TypedArrayHeader, index)
+    } else if crate::buffer::is_registered_buffer(addr) {
+        crate::buffer::js_buffer_index_get_value(addr as *const crate::buffer::BufferHeader, index)
+    } else {
+        undefined
+    }
+}
+
+// #6088: force-keep the JS-value Uint8Array index getter under LTO /
+// auto-optimize — it has zero internal Rust callers (codegen emits the only
+// call), so a whole-program bitcode link is otherwise free to dead-strip it.
+#[used]
+static KEEP_JS_UINT8ARRAY_INDEX_GET_VALUE: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
+    js_uint8array_index_get_value;
+
 #[no_mangle]
 pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, value: i32) {
     let addr = strip_nanbox(target as u64);

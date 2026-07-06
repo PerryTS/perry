@@ -160,6 +160,23 @@ pub(crate) unsafe fn own_key_present(
     if obj.is_null() || (obj as usize) < 0x10000 || (obj as usize) & 0x7 != 0 || key.is_null() {
         return false;
     }
+    // Only a genuine `GC_TYPE_OBJECT` carries a `keys_array` at ObjectHeader
+    // offset 16. A non-object receiver that still cleared the alignment/range
+    // guard above — most importantly a real `Map`/`Set`, whose 16-byte header
+    // is only `size`/`capacity`/`entries` — has no such field, so reading
+    // `(*obj).keys_array` loads 8 bytes past the header into the adjacent
+    // allocation. A `Map` reaching `js_object_get_field_by_name`'s `.size`
+    // fast path (an `any`-typed `map.size` dispatched by name) did exactly
+    // that: the out-of-bounds word was a live neighbour's GC-header value,
+    // which cleared the keys-pointer guard below and then SIGBUS'd on the
+    // `[keys-8]` type-tag read. `try_read_gc_header` rejects header-less slab
+    // allocations and non-heap addresses without dereferencing them. A
+    // non-object has no own string keys, so answer false and let the caller
+    // fall through to the type-specific tail (which serves e.g. `Map.size`).
+    match crate::value::addr_class::try_read_gc_header(obj as usize) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        _ => return false,
+    }
     let keys = (*obj).keys_array;
     if keys.is_null() {
         return false;
