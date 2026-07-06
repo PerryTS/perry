@@ -820,7 +820,15 @@ pub fn select_linker_command(
         .arg("/STACK:67108864")
         // Native libs (hone_editor_windows etc) bundle perry_runtime objects
         // that can't be fully stripped. Identical symbols are safe to merge.
-        .arg("/FORCE:MULTIPLE");
+        .arg("/FORCE:MULTIPLE")
+        // #6023: /FORCE:MULTIPLE makes the duplicate-definition merge
+        // deliberate, but link.exe still prints one LNK4006 line per merged
+        // symbol — hundreds of them (import descriptors duplicated inside
+        // perry_ui_windows.lib, perry_audio_* present in two members). That
+        // flood buried the real error in #6023; suppress it. lld-link
+        // silently ignores /IGNORE codes it doesn't implement, so the flag
+        // is safe on both linker paths.
+        .arg("/IGNORE:4006");
         // Set up MSVC library search paths if LIB env isn't already configured
         if std::env::var("LIB").is_err() {
             if let Some(lib_paths) = find_msvc_lib_paths() {

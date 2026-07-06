@@ -55,6 +55,8 @@ pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};
 pub use platform_cmd::select_linker_command;
 #[cfg(test)]
 pub(super) use windows_link::WINDOWS_APP_MANIFEST; // consumed only by windows_link_tests
+#[cfg(test)]
+pub(super) use windows_link::{embed_app_manifest, linker_is_msvc_link_exe}; // windows_link_tests (#6023)
 
 /// Symbols a plugin host must export so `dlopen`'d / `LoadLibrary`'d plugin
 /// shared libraries can resolve them against the host process at load time.
