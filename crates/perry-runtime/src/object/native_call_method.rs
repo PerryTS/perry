@@ -752,7 +752,13 @@ pub unsafe extern "C" fn js_native_call_method(
     ) && jsval.is_pointer()
     {
         let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        if !recv_ptr.is_null() && (*recv_ptr).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID {
+        // Skip native handles (nanbox-pointer-tagged small integer ids in the
+        // low handle band) — dereferencing one as an `ObjectHeader` to read
+        // `class_id` would fault.
+        if !recv_ptr.is_null()
+            && !crate::value::addr_class::is_small_handle(recv_ptr as usize)
+            && (*recv_ptr).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID
+        {
             let arg = |i: usize| {
                 if i < args_len && !args_ptr.is_null() {
                     *args_ptr.add(i)
