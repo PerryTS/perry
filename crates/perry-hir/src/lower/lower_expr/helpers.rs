@@ -270,6 +270,16 @@ pub(crate) fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
         | Expr::Number(_)
         | Expr::String(_)
         | Expr::Bool(_) => true,
+        // `process.env` and env-var reads are pure, side-effect-free, and
+        // stable within an expression, so they are safe to evaluate more than
+        // once (the guard AND the call). Without this, `process.env?.[k]?.m()`
+        // has a NON-repeatable receiver `IndexGet { object: ProcessEnv, .. }`,
+        // so the optional-method null-guard is dropped and `.m()` is called on
+        // the unguarded `undefined` an unset var reads as — e.g.
+        // `process.env.ANTHROPIC_BASE_URL?.trim()` returned the string
+        // "undefined" instead of short-circuiting to `undefined`.
+        Expr::ProcessEnv | Expr::EnvGet(_) => true,
+        Expr::EnvGetDynamic(key) => opt_call_receiver_repeatable(key),
         // `a.b` / `a[const]` chains over repeatable receivers stay repeatable
         // (property reads are not side-effecting in this codebase's model).
         Expr::PropertyGet { object, .. } => opt_call_receiver_repeatable(object),
