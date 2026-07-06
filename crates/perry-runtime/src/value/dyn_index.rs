@@ -68,20 +68,18 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         }
     }
     if jsval.is_string() || jsval.is_short_string() {
+        // Spec: string INDEXING `s[i]` returns `undefined` for a non-canonical
+        // or out-of-bounds index — unlike `s.charAt(i)`, which returns "".
+        // Route through the canonical-index helper (`js_string_index_get`,
+        // #3987) so an OOB read here is `undefined`. Calling `js_string_char_at`
+        // directly (charAt semantics) returned "" for OOB, which every
+        // generator/async LOCAL string read hit: the CPS box pass erases the
+        // local's static type, so `line[i]` reaches this dyn path instead of the
+        // `is_string_expr` static path — the `yaml` lexer's `parseDocument`
+        // `switch (line[n])` then never observed `undefined` at line-ends and
+        // its `*lex` state machine spun forever (#6067).
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
-        if s_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        let idx_i32 = if index.is_nan() || index.is_infinite() {
-            0
-        } else {
-            index as i32
-        };
-        let result = crate::string::js_string_char_at(s_ptr, idx_i32);
-        if result.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        return f64::from_bits(JSValue::string_ptr(result).bits());
+        return crate::string::js_string_index_get(s_ptr, index);
     }
     // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key]` where `C` is a
     // runtime class-ref value (e.g. a function parameter). Member-expression
