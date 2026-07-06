@@ -671,6 +671,20 @@ pub(crate) struct FnCtx<'a> {
     /// `i` in bounds.
     pub packed_f64_loop_facts: Vec<PackedF64LoopFact>,
 
+    /// #5093: scoped loop-versioning facts for monomorphic class-field loops.
+    /// Pushed only around the FAST clone of `lower_class_field_versioned_for`
+    /// (`stmt/loops.rs`): the loop preheader already proved the receiver's
+    /// exact class shape (class_id, keys identity, field_count, typed-layout
+    /// intact bit, not-frozen, inline-guard enable flag), and the matcher
+    /// proved the fast body is call-free (no allocation ⇒ no GC ⇒ the cached
+    /// `obj_ptr` cannot move and the shape cannot change mid-loop). Inside
+    /// that clone, `recv.field` GET/SET on a tracked raw-f64 field lowers to
+    /// a bare GEP+load/store on `obj_ptr` with no guard and no fallback call;
+    /// SET keeps an inline plain-finite-number check that side-exits to the
+    /// slow clone's preheader BEFORE committing any side effect of the
+    /// current iteration.
+    pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
+
     /// Parallel i32 counter slots for integer loop counters that are
     /// used as bounded array indices. When a for-loop counter is in
     /// `integer_locals` AND appears in `bounded_index_pairs`, `lower_for`
@@ -1157,6 +1171,47 @@ pub(crate) struct PackedF64LoopFact {
     pub allow_holes: bool,
 }
 
+/// #5093: one fact per (receiver, versioned loop). See
+/// `FnCtx::class_field_loop_facts` for the safety argument.
+#[derive(Debug, Clone)]
+pub(crate) struct ClassFieldLoopFact {
+    /// LocalId of the loop-invariant receiver (plain local or module global).
+    pub recv_local_id: u32,
+    pub scope_id: u32,
+    /// Class the preheader check proved exactly (by class_id compare).
+    pub class_name: String,
+    /// SSA name of the receiver object pointer, `inttoptr`'d in the
+    /// preheader's deref block. Dominates every block of the fast clone and
+    /// is stable for the clone's whole lifetime because the fast body is
+    /// call-free (no allocation ⇒ no GC ⇒ no evacuation).
+    pub obj_ptr: String,
+    /// Slow clone's preheader label. A raw-f64 store whose value fails the
+    /// inline plain-finite check branches here; the slow clone re-executes
+    /// the current iteration from scratch (no side effect has committed yet).
+    pub side_exit_label: String,
+    /// property name -> packed slot index. Every entry is a declared raw-f64
+    /// candidate field validated by the matcher via
+    /// `class_field_global_index` / `class_field_declared_type`.
+    pub fields: std::collections::BTreeMap<String, u32>,
+}
+
+/// Find the innermost active class-field loop fact covering
+/// `(recv_local_id, class_name, property)`. Returns the fact and the packed
+/// slot index of the field.
+pub(crate) fn class_field_loop_fact_lookup<'f>(
+    facts: &'f [ClassFieldLoopFact],
+    recv_local_id: u32,
+    class_name: &str,
+    property: &str,
+) -> Option<(&'f ClassFieldLoopFact, u32)> {
+    facts.iter().rev().find_map(|fact| {
+        if fact.recv_local_id != recv_local_id || fact.class_name != class_name {
+            return None;
+        }
+        fact.fields.get(property).map(|idx| (fact, *idx))
+    })
+}
+
 impl<'a> FnCtx<'a> {
     pub fn next_loop_proof_scope_id(&mut self) -> u32 {
         let id = self.next_loop_proof_scope_id;
@@ -1235,7 +1290,7 @@ pub(crate) use index_get::packed_f64_loop_index_parts;
 mod index_set;
 mod instance_misc1;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
-mod class_field_inline_guard;
+pub(crate) mod class_field_inline_guard;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;

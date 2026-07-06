@@ -545,6 +545,7 @@ pub(super) fn compile_function(
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
+        class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
