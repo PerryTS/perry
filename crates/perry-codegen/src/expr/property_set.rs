@@ -489,15 +489,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
                                     let field_ptr =
                                         blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                                    // GC_STORE_AUDIT(POINTER_FREE): the inline
-                                    // finite check above proved `val_double` is a
-                                    // genuine (unboxed, finite) double, never a
-                                    // heap pointer, so the slot carries no edge
-                                    // and needs no write barrier. No raw-f64
-                                    // canonicalization call is needed either:
+                                    // No raw-f64 canonicalization call is needed:
                                     // INT32-boxed and NaN values — the only
                                     // inputs `js_array_numeric_value_to_raw_f64`
-                                    // rewrites — cannot pass the check.
+                                    // rewrites — cannot pass the finite check.
+                                    //
+                                    // GC_STORE_AUDIT(POINTER_FREE): the inline
+                                    // finite check proved `val_double` is a
+                                    // genuine (unboxed, finite) double, never a
+                                    // heap pointer — no edge, no write barrier.
                                     blk.store(DOUBLE, &val_double, &field_ptr);
                                 }
                                 let stored = LoweredValue {
