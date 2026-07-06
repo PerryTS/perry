@@ -1205,8 +1205,16 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
                     return false;
                 }
             }
-            OwnSetDescriptor::Accessor { setter_bits } => {
-                return call_setter_with_receiver(setter_bits, receiver, value);
+            OwnSetDescriptor::Accessor { .. } => {
+                // OrdinarySetWithOwnDescriptor step 2.d.i: reaching here means
+                // the source (target own) descriptor was a data property (or
+                // absent -> CreateDataProperty). A RECEIVER own accessor makes
+                // the algorithm return false WITHOUT invoking the setter -- the
+                // setter only fires when it is the descriptor found by the
+                // OrdinarySet walk itself (the Accessor arm in
+                // ordinary_set_with_receiver), never through this
+                // CreateDataProperty-on-receiver tail.
+                return false;
             }
         }
     } else if crate::closure::is_closure_ptr(extract_pointer(receiver.to_bits()) as usize) {
