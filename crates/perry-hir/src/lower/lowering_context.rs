@@ -43,6 +43,12 @@ pub(crate) struct PrivMember {
 #[derive(Debug, Clone)]
 pub(crate) struct PrivateScope {
     pub(crate) class_name: String,
+    /// The declaring class's unique HIR id. Carried alongside `class_name`
+    /// because the name alone is ambiguous: minified bundles reuse class names,
+    /// and codegen's `class_ids` name→id map is last-writer-wins, so resolving a
+    /// private member's declaring class by name can bind to the wrong same-named
+    /// class and make the runtime brand check reject a legal `this.#x` access.
+    pub(crate) class_id: u32,
     pub(crate) members: HashMap<String, PrivMember>,
 }
 

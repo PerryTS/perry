@@ -307,10 +307,10 @@ impl LoweringContext {
     /// class and member kind by walking the private-scope stack innermost
     /// outward — matching the lexical resolution rule for private names. A
     /// nested class that redeclares the same name shadows the outer one.
-    pub(crate) fn resolve_private(&self, field_name: &str) -> Option<(String, PrivMember)> {
+    pub(crate) fn resolve_private(&self, field_name: &str) -> Option<(String, u32, PrivMember)> {
         for scope in self.private_scopes.iter().rev() {
             if let Some(m) = scope.members.get(field_name) {
-                return Some((scope.class_name.clone(), *m));
+                return Some((scope.class_name.clone(), scope.class_id, *m));
             }
         }
         None

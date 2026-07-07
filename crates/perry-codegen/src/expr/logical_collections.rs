@@ -796,6 +796,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::PrivateGuard {
             class_name,
+            class_id: declaring_class_id,
             field_name,
             kind,
             op,
@@ -805,7 +806,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // unchanged (or throw TypeError). The enclosing PropertyGet /
             // PropertySet / method-call lowering then operates on the result.
             let obj = lower_expr(ctx, object)?;
-            let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+            // Prefer the declaring class's unique HIR id carried on the node.
+            // Resolving `class_name` through `class_ids` is ambiguous: that map
+            // is keyed by name (last-writer-wins), so a minified bundle that
+            // reuses a class name would bind the brand to the wrong same-named
+            // class and reject a legal `this.#x`. Fall back to the name lookup
+            // only when the id is absent (0 = unresolved → no-op guard).
+            let class_id = if *declaring_class_id != 0 {
+                *declaring_class_id
+            } else {
+                ctx.class_ids.get(class_name).copied().unwrap_or(0)
+            };
             let key_label = emit_string_literal_global(ctx, field_name);
             Ok(ctx.block().call(
                 DOUBLE,

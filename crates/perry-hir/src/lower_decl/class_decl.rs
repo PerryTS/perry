@@ -335,7 +335,11 @@ pub fn lower_class_decl(
     // Push the private-name scope for this class body so `obj.#name` accesses
     // brand-check against the declaring class and reject illegal read/write
     // operations. Popped at the matching restore below.
-    ctx.push_private_scope(super::build_private_scope(&class_decl.class, &name));
+    ctx.push_private_scope(super::build_private_scope(
+        &class_decl.class,
+        &name,
+        class_id,
+    ));
 
     // Issue #562: track the parent class identifier so the `super({...})`
     // pre-scan in expr_call.rs can register the controller param as a
@@ -1439,7 +1443,7 @@ pub fn lower_class_from_ast(
     ctx.current_class_is_derived = class.super_class.is_some();
 
     // Private-name scope for this class-expression body (see lower_class_decl).
-    ctx.push_private_scope(super::build_private_scope(class, name));
+    ctx.push_private_scope(super::build_private_scope(class, name, class_id));
 
     // Issue #562: same as the parallel `lower_class_decl` arm — track the
     // parent class identifier so super({...}) controller-param pre-scan
