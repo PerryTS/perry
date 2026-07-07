@@ -56,8 +56,27 @@ pub(crate) fn pre_register_forward_captured_lets(
     body_entry_locals_len: usize,
 ) -> Vec<LocalId> {
     let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
-    let mut seen_closure_refs: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for stmt in &block.stmts {
+    // Worklist of block statement-lists, each processed as its OWN
+    // forward-capture scope. Nested block scopes (try / catch / finally / `{}`
+    // / loop bodies / switch cases) are appended so a closure created EARLIER
+    // in a nested block that references a `let`/`const` declared LATER in that
+    // SAME nested block is pre-registered too. Previously only the function-body
+    // TOP level was scanned, so a `try { let cb = () => x; let x = …; cb() }`
+    // (esbuild `__esm` streaming closures in the compiled query async-generator)
+    // fell through to `js_global_get_or_throw_unresolved` →
+    // `ReferenceError: x is not defined`. Forward-captured boxes from any depth
+    // still preallocate at function entry (Phase 4/5) and each declaration
+    // reuses its id by span (`lexical_forward_decls`).
+    let mut fwd_worklist: std::collections::VecDeque<&[ast::Stmt]> =
+        std::collections::VecDeque::new();
+    fwd_worklist.push_back(&block.stmts[..]);
+    while let Some(scope_stmts) = fwd_worklist.pop_front() {
+        for stmt in scope_stmts {
+            push_nested_block_stmt_lists(stmt, &mut fwd_worklist);
+        }
+        let mut seen_closure_refs: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for stmt in scope_stmts {
         if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
             if matches!(
                 var_decl.kind,
@@ -135,8 +154,80 @@ pub(crate) fn pre_register_forward_captured_lets(
         }
         // Record closures introduced by THIS statement for subsequent decls.
         cic_stmt(stmt, false, &mut seen_closure_refs);
+        }
     }
     forward_boxed_ids
+}
+
+/// Append the statement lists of the block scopes DIRECTLY nested in `stmt`
+/// (try / catch / finally / plain `{}` / loop bodies / labeled body / switch
+/// cases) to `worklist`. Deeper nesting is reached transitively as each queued
+/// scope is itself scanned. Used by [`pre_register_forward_captured_lets`] so
+/// forward-captured `let`/`const` bindings inside nested blocks are pre-
+/// registered, not just those at the function-body top level.
+fn push_nested_block_stmt_lists<'a>(
+    stmt: &'a ast::Stmt,
+    worklist: &mut std::collections::VecDeque<&'a [ast::Stmt]>,
+) {
+    use ast::Stmt::*;
+    match stmt {
+        Block(b) => worklist.push_back(&b.stmts[..]),
+        Try(t) => {
+            worklist.push_back(&t.block.stmts[..]);
+            if let Some(h) = &t.handler {
+                worklist.push_back(&h.body.stmts[..]);
+            }
+            if let Some(f) = &t.finalizer {
+                worklist.push_back(&f.stmts[..]);
+            }
+        }
+        If(i) => {
+            if let Block(b) = &*i.cons {
+                worklist.push_back(&b.stmts[..]);
+            }
+            if let Some(alt) = &i.alt {
+                if let Block(b) = &**alt {
+                    worklist.push_back(&b.stmts[..]);
+                }
+            }
+        }
+        For(f) => {
+            if let Block(b) = &*f.body {
+                worklist.push_back(&b.stmts[..]);
+            }
+        }
+        ForIn(f) => {
+            if let Block(b) = &*f.body {
+                worklist.push_back(&b.stmts[..]);
+            }
+        }
+        ForOf(f) => {
+            if let Block(b) = &*f.body {
+                worklist.push_back(&b.stmts[..]);
+            }
+        }
+        While(w) => {
+            if let Block(b) = &*w.body {
+                worklist.push_back(&b.stmts[..]);
+            }
+        }
+        DoWhile(w) => {
+            if let Block(b) = &*w.body {
+                worklist.push_back(&b.stmts[..]);
+            }
+        }
+        Labeled(l) => {
+            if let Block(b) = &*l.body {
+                worklist.push_back(&b.stmts[..]);
+            }
+        }
+        Switch(sw) => {
+            for c in &sw.cases {
+                worklist.push_back(&c.cons[..]);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_pat_forward_idents(pat: &ast::Pat, out: &mut Vec<(String, u32)>) {
