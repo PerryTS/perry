@@ -1432,13 +1432,13 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     // mis-compiling (Node also rejects `\P{RGI_Emoji}`).
                     // All other properties pass through to the crate unchanged.
                     match parse_unicode_property(&chars, i) {
+                        // Unicode-17.0 expansions the crate's UCD-16 tables get
+                        // wrong (`unicode17::expand`); precedes never-match below.
                         Some((value, negated, end))
-                            if super::unicode17::script_replacement(&value, negated, in_class)
-                                .is_some() =>
+                            if super::unicode17::expand(&value, negated, in_class).is_some() =>
                         {
                             result.push_str(
-                                &super::unicode17::script_replacement(&value, negated, in_class)
-                                    .unwrap(),
+                                &super::unicode17::expand(&value, negated, in_class).unwrap(),
                             );
                             i = end;
                         }
@@ -1980,7 +1980,7 @@ mod tests {
             (r"[\d-z]", r"[\d\-z]"),
             (r"[a\w-]", r"[a\w\-]"),
             (r"[a-\d]", r"[a\-\d]"),
-            (r"[\p{L}-x]", r"[\p{L}\-x]"),
+            (r"[\p{Greek}-x]", r"[\p{Greek}\-x]"),
         ] {
             assert_eq!(js_regex_to_rust(src), expect, "src={src}");
             assert!(
