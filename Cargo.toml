@@ -351,7 +351,7 @@ repository = "https://github.com/PerryTS/perry"
 [workspace.dependencies]
 # SWC for TypeScript parsing
 swc_ecma_parser = "32.0"
-swc_ecma_ast = "19.0"
+swc_ecma_ast = "25.0"
 swc_common = "18.0"
 
 # Runtime dependencies
