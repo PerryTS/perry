@@ -1629,6 +1629,13 @@ pub(crate) fn lower_stmt(
             let discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
             let mut cases = Vec::new();
             let switch_scope_mark = ctx.push_block_scope();
+            // Case statement-lists share the switch's block scope without
+            // being a `BlockStmt`, so they don't pass through
+            // `lower_block_stmt` — re-bind their pre-registered
+            // forward-captured lets here (all cases up front: one scope).
+            for case in &switch_stmt.cases {
+                rebind_nested_forward_scope_lets(ctx, &case.cons);
+            }
 
             for case in &switch_stmt.cases {
                 let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;

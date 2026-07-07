@@ -14,7 +14,52 @@ use crate::lower_types::*;
 use super::*;
 
 pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
+    rebind_nested_forward_scope_lets(ctx, &block.stmts);
     lower_stmts_using_aware(ctx, &block.stmts)
+}
+
+/// Make the forward-captured `let`/`const` bindings that
+/// [`pre_register_forward_captured_lets`] pre-registered for THIS nested block
+/// scope name-visible for the duration of the block's lowering. Nested-scope
+/// pre-registrations allocate a hidden id (no `ctx.locals` entry — see
+/// `nested_forward_scope_ids`), so an earlier closure in the block resolves
+/// the name only if we push the binding here, at scope entry. The entry is
+/// dropped again when the enclosing `pop_block_scope` / `exit_scope` mark
+/// unwinds, so the binding is visible exactly within its block — a same-named
+/// `let` in a sibling block gets its own id/box, and references after the
+/// block resolve to the outer binding (or stay global) as in Node.
+///
+/// Called from [`lower_block_stmt`] (every `{}`-shaped scope: block, `try` /
+/// `catch` / `finally`, block-bodied `if` / loop / labeled bodies) and from
+/// the two switch-case lowering arms (`lower/stmt.rs`, `lower_decl/
+/// body_stmt.rs`), whose case statement-lists share the switch's block scope
+/// without being a `BlockStmt`.
+pub(crate) fn rebind_nested_forward_scope_lets(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) {
+    if ctx.lexical_forward_decls.is_empty() {
+        return;
+    }
+    for stmt in stmts {
+        let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt else {
+            continue;
+        };
+        if !matches!(
+            var_decl.kind,
+            ast::VarDeclKind::Let | ast::VarDeclKind::Const
+        ) {
+            continue;
+        }
+        for decl in &var_decl.decls {
+            let mut binding_idents: Vec<(String, u32)> = Vec::new();
+            collect_pat_forward_idents(&decl.name, &mut binding_idents);
+            for (name, span_lo) in binding_idents {
+                if let Some(&id) = ctx.lexical_forward_decls.get(&span_lo) {
+                    if ctx.nested_forward_scope_ids.contains(&id) {
+                        ctx.locals.push((name, id, Type::Any));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Collect identifier names referenced INSIDE any closure (arrow / function
@@ -58,172 +103,197 @@ pub(crate) fn pre_register_forward_captured_lets(
     let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
     // Worklist of block statement-lists, each processed as its OWN
     // forward-capture scope. Nested block scopes (try / catch / finally / `{}`
-    // / loop bodies / switch cases) are appended so a closure created EARLIER
-    // in a nested block that references a `let`/`const` declared LATER in that
-    // SAME nested block is pre-registered too. Previously only the function-body
-    // TOP level was scanned, so a `try { let cb = () => x; let x = …; cb() }`
-    // (esbuild `__esm` streaming closures in the compiled query async-generator)
-    // fell through to `js_global_get_or_throw_unresolved` →
-    // `ReferenceError: x is not defined`. Forward-captured boxes from any depth
-    // still preallocate at function entry (Phase 4/5) and each declaration
-    // reuses its id by span (`lexical_forward_decls`).
-    let mut fwd_worklist: std::collections::VecDeque<&[ast::Stmt]> =
+    // / loop bodies / switch cases — including those behind non-block bodies
+    // like `else if` chains, see `push_nested_block_stmt_lists`) are appended
+    // so a closure created EARLIER in a nested block that references a
+    // `let`/`const` declared LATER in that SAME nested block is pre-registered
+    // too. Previously only the function-body TOP level was scanned, so a
+    // `try { let cb = () => x; let x = …; cb() }` (esbuild `__esm` streaming
+    // closures in the compiled query async-generator) fell through to
+    // `js_global_get_or_throw_unresolved` → `ReferenceError: x is not
+    // defined`. Forward-captured boxes from any depth still preallocate at
+    // function entry (Phase 4/5) and each declaration reuses its id by span
+    // (`lexical_forward_decls`).
+    //
+    // The bool is `is_nested`: only the function-body top level (front entry)
+    // defines its pre-registrations as name-visible function-scope locals.
+    // Nested scopes allocate a HIDDEN id (`fresh_local`, tracked in
+    // `nested_forward_scope_ids`) that `rebind_nested_forward_scope_lets`
+    // makes name-visible exactly while its own block is being lowered.
+    // Defining nested ids at function level (the initial implementation)
+    // leaked the name across the whole body: a same-named forward-captured
+    // `let` in a later sibling block was deduped against the earlier block's
+    // registration (both closures then shared one box — `1,1` instead of
+    // Node's `1,2`), and a reference AFTER the block resolved to the block's
+    // box (or its TDZ sentinel) instead of the outer/module binding.
+    // Function-WIDE closure-referenced names, for the `var` branch below.
+    // `var` bindings hoist to function scope, so a closure ANYWHERE in the
+    // body (before or after, same scope or not) that references the name must
+    // capture the live box — the per-scope ordered `seen_closure_refs` misses
+    // e.g. `let cb = () => n; { var n = 5; } cb()` (closure at top level, var
+    // in a nested block: the block's own seen-set never contains `n`).
+    let mut fn_wide_closure_refs: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for stmt in &block.stmts {
+        cic_stmt(stmt, false, &mut fn_wide_closure_refs);
+    }
+    let mut fwd_worklist: std::collections::VecDeque<(&[ast::Stmt], bool)> =
         std::collections::VecDeque::new();
-    fwd_worklist.push_back(&block.stmts[..]);
-    while let Some(scope_stmts) = fwd_worklist.pop_front() {
+    fwd_worklist.push_back((&block.stmts[..], false));
+    while let Some((scope_stmts, is_nested)) = fwd_worklist.pop_front() {
         for stmt in scope_stmts {
             push_nested_block_stmt_lists(stmt, &mut fwd_worklist);
         }
         let mut seen_closure_refs: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // Names already pre-registered in THIS scope (a `let`/`const` name can
+        // legally repeat only across scopes, but destructuring keeps this a
+        // set rather than trusting the parser).
+        let mut registered_here: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for stmt in scope_stmts {
-        if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
-            if matches!(
-                var_decl.kind,
-                ast::VarDeclKind::Let | ast::VarDeclKind::Const
-            ) {
-                for decl in &var_decl.decls {
-                    let mut binding_idents: Vec<(String, u32)> = Vec::new();
-                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
-                    for (name, span_lo) in binding_idents {
-                        if !seen_closure_refs.contains(&name) {
-                            continue;
-                        }
-                        let already_in_scope = ctx
-                            .locals
-                            .lookup_index_in_scope(&name, body_entry_locals_len)
-                            .is_some();
-                        if !already_in_scope {
-                            let id = ctx.define_local(name, Type::Any);
-                            ctx.var_hoisted_ids.insert(id);
-                            // Lexical let/const forward-decl: mark TDZ-eligible
-                            // so its box is seeded with the TAG_TDZ sentinel and
-                            // a read before the declaration throws.
-                            ctx.tdz_forward_ids.insert(id);
-                            forward_boxed_ids.push(id);
-                            ctx.lexical_forward_decls.insert(span_lo, id);
-                        }
-                    }
-                    // A closure in an EARLIER declarator of THIS same
-                    // `let`/`const` can forward-reference a name bound by a LATER
-                    // declarator in the SAME declaration:
-                    //   `let z = (w) => { … O … Y … A … },
-                    //        Y = () => z(false),
-                    //        A = () => clearTimeout(O),
-                    //        O = setTimeout(z, K);`
-                    // (the minified `new Promise` executor shape). Record this
-                    // declarator's closure refs NOW so the later declarators are
-                    // seen as forward-captured too — `seen_closure_refs` is
-                    // otherwise only updated by the trailing `cic_stmt` AFTER the
-                    // whole declaration, so intra-declaration forward-refs were
-                    // missed: the later names never got pre-registered, so the
-                    // ref fell through to `js_global_get_or_throw_unresolved` and
-                    // the closure captured a global instead of the local box —
-                    // e.g. a `new Promise` `resolve` that never fires, hanging
-                    // the awaiting caller. Cross-statement forward-refs were
-                    // already handled by the trailing `cic_stmt`.
-                    if let Some(init) = &decl.init {
-                        cic_expr(init, false, &mut seen_closure_refs);
-                    }
-                }
-            } else {
-                // `var` bindings are already predefined + boxed by
-                // `predefine_var_bindings_in_function_body`, but their box is
-                // NOT in the prealloc set. A closure created EARLIER in the body
-                // that references a `var` declared LATER (`r.d(t,{x:()=>n.x});
-                // var n=r("…")` — the webpack ESM re-export shape in Next.js'
-                // react-server.node.js) must capture the *live* box, not a
-                // TAG_UNDEFINED snapshot. Add forward-captured `var` ids to the
-                // prealloc set so codegen allocates the box at function entry.
-                for decl in &var_decl.decls {
-                    let mut binding_idents: Vec<(String, u32)> = Vec::new();
-                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
-                    for (name, _span_lo) in binding_idents {
-                        if !seen_closure_refs.contains(&name) {
-                            continue;
-                        }
-                        if let Some(id) = ctx.lookup_local(&name) {
-                            if !forward_boxed_ids.contains(&id) {
+            if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
+                if matches!(
+                    var_decl.kind,
+                    ast::VarDeclKind::Let | ast::VarDeclKind::Const
+                ) {
+                    for decl in &var_decl.decls {
+                        let mut binding_idents: Vec<(String, u32)> = Vec::new();
+                        collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                        for (name, span_lo) in binding_idents {
+                            if !seen_closure_refs.contains(&name) || registered_here.contains(&name)
+                            {
+                                continue;
+                            }
+                            if is_nested {
+                                // Hidden id: name-visibility is scoped to the
+                                // block via `rebind_nested_forward_scope_lets`.
+                                let id = ctx.fresh_local();
                                 ctx.var_hoisted_ids.insert(id);
+                                ctx.tdz_forward_ids.insert(id);
+                                ctx.nested_forward_scope_ids.insert(id);
                                 forward_boxed_ids.push(id);
+                                ctx.lexical_forward_decls.insert(span_lo, id);
+                                registered_here.insert(name);
+                            } else {
+                                let already_in_scope = ctx
+                                    .locals
+                                    .lookup_index_in_scope(&name, body_entry_locals_len)
+                                    .is_some();
+                                if !already_in_scope {
+                                    let id = ctx.define_local(name.clone(), Type::Any);
+                                    ctx.var_hoisted_ids.insert(id);
+                                    // Lexical let/const forward-decl: mark TDZ-eligible
+                                    // so its box is seeded with the TAG_TDZ sentinel and
+                                    // a read before the declaration throws.
+                                    ctx.tdz_forward_ids.insert(id);
+                                    forward_boxed_ids.push(id);
+                                    ctx.lexical_forward_decls.insert(span_lo, id);
+                                    registered_here.insert(name);
+                                }
+                            }
+                        }
+                        // A closure in an EARLIER declarator of THIS same
+                        // `let`/`const` can forward-reference a name bound by a LATER
+                        // declarator in the SAME declaration:
+                        //   `let z = (w) => { … O … Y … A … },
+                        //        Y = () => z(false),
+                        //        A = () => clearTimeout(O),
+                        //        O = setTimeout(z, K);`
+                        // (the minified `new Promise` executor shape). Record this
+                        // declarator's closure refs NOW so the later declarators are
+                        // seen as forward-captured too — `seen_closure_refs` is
+                        // otherwise only updated by the trailing `cic_stmt` AFTER the
+                        // whole declaration, so intra-declaration forward-refs were
+                        // missed: the later names never got pre-registered, so the
+                        // ref fell through to `js_global_get_or_throw_unresolved` and
+                        // the closure captured a global instead of the local box —
+                        // e.g. a `new Promise` `resolve` that never fires, hanging
+                        // the awaiting caller. Cross-statement forward-refs were
+                        // already handled by the trailing `cic_stmt`.
+                        if let Some(init) = &decl.init {
+                            cic_expr(init, false, &mut seen_closure_refs);
+                        }
+                    }
+                } else {
+                    // `var` bindings are already predefined + boxed by
+                    // `predefine_var_bindings_in_function_body`, but their box is
+                    // NOT in the prealloc set. A closure created EARLIER in the body
+                    // that references a `var` declared LATER (`r.d(t,{x:()=>n.x});
+                    // var n=r("…")` — the webpack ESM re-export shape in Next.js'
+                    // react-server.node.js) must capture the *live* box, not a
+                    // TAG_UNDEFINED snapshot. Add forward-captured `var` ids to the
+                    // prealloc set so codegen allocates the box at function entry.
+                    // Checked against the function-WIDE closure-ref set: `var`s
+                    // hoist, so the capturing closure can live in a DIFFERENT
+                    // (e.g. enclosing) scope than the `var` statement itself.
+                    for decl in &var_decl.decls {
+                        let mut binding_idents: Vec<(String, u32)> = Vec::new();
+                        collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                        for (name, _span_lo) in binding_idents {
+                            if !fn_wide_closure_refs.contains(&name) {
+                                continue;
+                            }
+                            if let Some(id) = ctx.lookup_local(&name) {
+                                if !forward_boxed_ids.contains(&id) {
+                                    ctx.var_hoisted_ids.insert(id);
+                                    forward_boxed_ids.push(id);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        // Record closures introduced by THIS statement for subsequent decls.
-        cic_stmt(stmt, false, &mut seen_closure_refs);
+            // Record closures introduced by THIS statement for subsequent decls.
+            cic_stmt(stmt, false, &mut seen_closure_refs);
         }
     }
     forward_boxed_ids
 }
 
-/// Append the statement lists of the block scopes DIRECTLY nested in `stmt`
-/// (try / catch / finally / plain `{}` / loop bodies / labeled body / switch
-/// cases) to `worklist`. Deeper nesting is reached transitively as each queued
-/// scope is itself scanned. Used by [`pre_register_forward_captured_lets`] so
-/// forward-captured `let`/`const` bindings inside nested blocks are pre-
-/// registered, not just those at the function-body top level.
+/// Append the statement lists of the block scopes nested in `stmt` (try /
+/// catch / finally / plain `{}` / loop bodies / labeled body / switch cases)
+/// to `worklist`, always as nested (`true`) scopes. Non-block single-statement
+/// bodies are RECURSED into rather than skipped, so a block behind any chain
+/// of wrappers is still found — `else if { … }`, `for (…) if (c) { … }`,
+/// `label: while (x) try { … }` and the like. (A lexical declaration cannot
+/// itself be a non-block body — `if (c) let x = 1` is a syntax error — so
+/// recursing to find blocks is sufficient.) Deeper same-shape nesting is
+/// reached transitively as each queued scope is itself scanned. Used by
+/// [`pre_register_forward_captured_lets`] so forward-captured `let`/`const`
+/// bindings inside nested blocks are pre-registered, not just those at the
+/// function-body top level.
 fn push_nested_block_stmt_lists<'a>(
     stmt: &'a ast::Stmt,
-    worklist: &mut std::collections::VecDeque<&'a [ast::Stmt]>,
+    worklist: &mut std::collections::VecDeque<(&'a [ast::Stmt], bool)>,
 ) {
     use ast::Stmt::*;
     match stmt {
-        Block(b) => worklist.push_back(&b.stmts[..]),
+        Block(b) => worklist.push_back((&b.stmts[..], true)),
         Try(t) => {
-            worklist.push_back(&t.block.stmts[..]);
+            worklist.push_back((&t.block.stmts[..], true));
             if let Some(h) = &t.handler {
-                worklist.push_back(&h.body.stmts[..]);
+                worklist.push_back((&h.body.stmts[..], true));
             }
             if let Some(f) = &t.finalizer {
-                worklist.push_back(&f.stmts[..]);
+                worklist.push_back((&f.stmts[..], true));
             }
         }
         If(i) => {
-            if let Block(b) = &*i.cons {
-                worklist.push_back(&b.stmts[..]);
-            }
+            push_nested_block_stmt_lists(&i.cons, worklist);
             if let Some(alt) = &i.alt {
-                if let Block(b) = &**alt {
-                    worklist.push_back(&b.stmts[..]);
-                }
+                push_nested_block_stmt_lists(alt, worklist);
             }
         }
-        For(f) => {
-            if let Block(b) = &*f.body {
-                worklist.push_back(&b.stmts[..]);
-            }
-        }
-        ForIn(f) => {
-            if let Block(b) = &*f.body {
-                worklist.push_back(&b.stmts[..]);
-            }
-        }
-        ForOf(f) => {
-            if let Block(b) = &*f.body {
-                worklist.push_back(&b.stmts[..]);
-            }
-        }
-        While(w) => {
-            if let Block(b) = &*w.body {
-                worklist.push_back(&b.stmts[..]);
-            }
-        }
-        DoWhile(w) => {
-            if let Block(b) = &*w.body {
-                worklist.push_back(&b.stmts[..]);
-            }
-        }
-        Labeled(l) => {
-            if let Block(b) = &*l.body {
-                worklist.push_back(&b.stmts[..]);
-            }
-        }
+        For(f) => push_nested_block_stmt_lists(&f.body, worklist),
+        ForIn(f) => push_nested_block_stmt_lists(&f.body, worklist),
+        ForOf(f) => push_nested_block_stmt_lists(&f.body, worklist),
+        While(w) => push_nested_block_stmt_lists(&w.body, worklist),
+        DoWhile(w) => push_nested_block_stmt_lists(&w.body, worklist),
+        Labeled(l) => push_nested_block_stmt_lists(&l.body, worklist),
         Switch(sw) => {
             for c in &sw.cases {
-                worklist.push_back(&c.cons[..]);
+                worklist.push_back((&c.cons[..], true));
             }
         }
         _ => {}
@@ -1563,7 +1633,9 @@ pub fn lower_block_stmt_scoped(
     block: &ast::BlockStmt,
 ) -> Result<Vec<Stmt>> {
     let mark = ctx.push_block_scope();
-    let stmts = lower_stmts_using_aware(ctx, &block.stmts)?;
+    // Via `lower_block_stmt` so this scope's pre-registered forward-captured
+    // lets are re-bound at entry (`rebind_nested_forward_scope_lets`).
+    let stmts = lower_block_stmt(ctx, block)?;
     ctx.pop_block_scope(mark);
     Ok(stmts)
 }

@@ -429,6 +429,18 @@ pub struct LoweringContext {
     /// declarator reuses the id at its Let site — a shadowing `const` in an
     /// inner block still lowers a fresh binding.
     pub(crate) lexical_forward_decls: HashMap<u32, LocalId>,
+    /// Ids in `lexical_forward_decls` that were pre-registered for a NESTED
+    /// block scope (not the function-body top level) by
+    /// `pre_register_forward_captured_lets`. These are lexical bindings, so
+    /// unlike top-level pre-registrations they must NOT be name-visible for
+    /// the whole body: `lower_block_stmt` / the switch-case lowering re-bind
+    /// them into `ctx.locals` exactly when their block scope is entered, and
+    /// `pop_block_scope` drops them at block exit (overriding the
+    /// `var_hoisted_ids` keep that would otherwise leak them into the
+    /// enclosing scope). Without this, a same-named `let` in a sibling block
+    /// was skipped (deduped by name) and any post-block reference of the name
+    /// resolved to the block's box instead of the outer binding.
+    pub(crate) nested_forward_scope_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec

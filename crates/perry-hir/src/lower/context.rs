@@ -121,6 +121,7 @@ impl LoweringContext {
             annexb_block_fn_var_ids: HashMap::new(),
             annexb_block_fn_names_all: HashSet::new(),
             lexical_forward_decls: HashMap::new(),
+            nested_forward_scope_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
             imported_functions_index: HashMap::new(),
@@ -1600,10 +1601,14 @@ impl LoweringContext {
         // the mark to the position just past the mark, then drop the rest.
         // Sloppy implicit globals (`undeclared = v` inside the block) are
         // module-scoped bindings too — keep them visible after the block.
+        // Nested-scope forward-captured `let`/`const` pre-registrations are in
+        // `var_hoisted_ids` only for box-at-entry allocation; they are lexical
+        // bindings, so their block-entry rebinding must die with the block.
         if self.locals.len() > locals_mark {
             let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
             for entry in self.locals.drain_from(locals_mark) {
-                if self.var_hoisted_ids.contains(&entry.1)
+                if (self.var_hoisted_ids.contains(&entry.1)
+                    && !self.nested_forward_scope_ids.contains(&entry.1))
                     || self.sloppy_implicit_global_ids.contains(&entry.1)
                 {
                     kept.push(entry);

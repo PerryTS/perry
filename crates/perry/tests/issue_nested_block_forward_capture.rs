@@ -82,6 +82,117 @@ console.log(`${f()} ${g()} ${h()}`);
     assert_eq!(stdout.trim(), "5 6 7");
 }
 
+/// `else if` bodies are `Stmt::If` in the alt position, not `Stmt::Block`, so
+/// the original worklist (which only enqueued DIRECT block bodies) never
+/// scanned them — the closure globalized and threw. Also covers a block
+/// behind a labeled `while` + non-block `if` chain.
+#[test]
+fn closure_in_else_if_and_labeled_while_forward_references_later_let() {
+    let stdout = compile_and_run(
+        r#"
+function f(n: number): number {
+  if (n === 0) {
+    return -1;
+  } else if (n === 1) {
+    let cb = () => q;
+    let q = 5;
+    return cb();
+  }
+  return -2;
+}
+function g(x: number): number {
+  outer: while (x > 0) {
+    if (x === 1) {
+      let cb = () => q;
+      let q = 42;
+      return cb();
+    }
+    x--;
+  }
+  return -1;
+}
+console.log(`${f(1)} ${g(3)}`);
+"#,
+    );
+    assert_eq!(stdout.trim(), "5 42");
+}
+
+/// Same-named forward-captured `let`s in SIBLING blocks must each get their
+/// own binding/box (the name-keyed dedup gave both closures the FIRST block's
+/// box: `1,1`), and a nested pre-registration must not stay name-visible
+/// outside its block — reads before/after the block resolve the OUTER
+/// (module) binding, not the block's box or its TDZ sentinel.
+#[test]
+fn sibling_same_name_blocks_and_no_scope_leak() {
+    let stdout = compile_and_run(
+        r#"
+let q = "module";
+function siblings(): string {
+  let out: string[] = [];
+  {
+    let cb = () => q;
+    let q = 1;
+    out.push(String(cb()));
+  }
+  {
+    let cb2 = () => q;
+    let q = 2;
+    out.push(String(cb2()));
+  }
+  return out.join(",");
+}
+function leak(): string {
+  let out: string[] = [];
+  out.push(String(q)); // before the block: outer binding, not TDZ
+  {
+    let cb = () => q;
+    let q = 3;
+    out.push(String(cb()));
+  }
+  out.push(String(q)); // after the block: outer binding again
+  return out.join(",");
+}
+console.log(`${siblings()} ${leak()}`);
+"#,
+    );
+    assert_eq!(stdout.trim(), "1,2 module,3,module");
+}
+
+/// Switch-case statement lists share the switch's block scope without being a
+/// `BlockStmt`, so they need their own re-binding hook at lowering; a `var`
+/// in a nested block hoists to function scope, so a closure in the ENCLOSING
+/// scope must still capture the live (preallocated) box.
+#[test]
+fn switch_case_forward_capture_and_nested_var_hoist() {
+    let stdout = compile_and_run(
+        r#"
+function sw(n: number): number {
+  switch (n) {
+    case 1: {
+      let cb = () => q;
+      let q = 10;
+      return cb();
+    }
+    case 2:
+      let cb2 = () => w;
+      let w = 20;
+      return cb2();
+  }
+  return -1;
+}
+function vh(): number {
+  let cb = () => n;
+  {
+    var n = 5;
+  }
+  return cb();
+}
+console.log(`${sw(1)} ${sw(2)} ${vh()}`);
+"#,
+    );
+    assert_eq!(stdout.trim(), "10 20 5");
+}
+
 /// The shape that first surfaced this: an async generator whose nested-block
 /// closures forward-reference (and mutate) later-declared locals.
 #[test]
