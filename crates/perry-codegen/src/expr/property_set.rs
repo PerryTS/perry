@@ -650,9 +650,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let field_set_barrier_needed =
                             !expr_produces_non_pointer_bits_by_construction(ctx, value);
                         let raw_stored_value = {
+                            // arm64_32 watchOS: the object fields region begins at
+                            // `size_of::<ObjectHeader>()` past the user pointer — 24 on
+                            // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is
+                            // 4 bytes there). A hardcoded 24 writes every class field 4
+                            // bytes off on a 32-bit watch; the paired inline read
+                            // (`property_get`) and the runtime setter must agree, so
+                            // derive it from the target triple (no-op on 64-bit; see
+                            // `target_layout`).
+                            let header_skip =
+                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                    .to_string();
                             let blk = ctx.block();
                             let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                            let header_skip = "24".to_string();
                             let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                             let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
                             let raw_stored_value = if requires_raw_f64 {

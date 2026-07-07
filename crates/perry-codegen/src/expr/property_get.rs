@@ -1325,10 +1325,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
+                        // arm64_32 watchOS: the object fields region begins at
+                        // `size_of::<ObjectHeader>()` past the user pointer — 24 on
+                        // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is 4
+                        // bytes there). A hardcoded 24 reads every class field 4 bytes
+                        // off on a 32-bit watch, so this inline class-field load
+                        // disagreed with the generic-PIC load / runtime setter (both
+                        // target-aware) and typed-object string fields came back as
+                        // word-swapped NaN-boxes. Derive it from the target triple
+                        // (no-op on 64-bit; see `target_layout`).
+                        let header_skip =
+                            crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                .to_string();
                         let blk = ctx.block();
                         let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                        // Skip the 24-byte ObjectHeader.
-                        let header_skip = "24".to_string();
                         let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                         let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
                         let val_fast = blk.load(DOUBLE, &field_ptr);
