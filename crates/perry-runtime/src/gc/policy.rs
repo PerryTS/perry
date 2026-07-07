@@ -1146,10 +1146,10 @@ pub fn gc_check_trigger() {
     // cycles; the 64 MB arena trigger was due after the first ~64 blocks
     // and simply never fired). When the budgeted machinery is structurally
     // unavailable, run the direct synchronous minor the pre-budgeted
-    // block-alloc trigger used to run. `gc_collect_minor_with_trigger`
-    // re-baselines `GC_NEXT_TRIGGER_BYTES` (and, when it sweeps malloc,
-    // the malloc trigger) on completion, and carries its own re-entrancy
-    // guard (GC_FLAG_IN_ALLOC). `force_full_scan` mirrors the OldReclaim
+    // block-alloc trigger used to run, then re-baseline the arming trigger
+    // below (the budgeted finisher never runs on this arm).
+    // `gc_collect_minor_with_trigger` carries its own re-entrancy guard
+    // (GC_FLAG_IN_ALLOC). `force_full_scan` mirrors the OldReclaim
     // arm: at an arbitrary allocation point a value mid-construction may
     // live only in registers, so the conservative native scan retains it —
     // which also makes copied-minor ineligible for THIS cycle, so the
@@ -1161,9 +1161,36 @@ pub fn gc_check_trigger() {
             _ => None,
         };
         if let Some(kind) = direct_kind {
+            let pre_in_use = crate::arena::arena_in_use_bytes();
+            let pre_malloc_count = malloc_object_count();
             let _scan = super::roots::ManualGcScanGuard::force_full_scan();
-            super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind))
-                .emit_after_current();
+            let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
+            // Re-baseline the arming trigger after the direct minor, mirroring
+            // `gc_finish_budgeted_cycle`. This arm is taken whenever
+            // synchronous-only root scanners block the budgeted stepper — i.e.
+            // every compiled program — so it, not the budgeted finisher, is the
+            // completion path for nursery collections there. Emitting the
+            // outcome without re-baselining left `GC_NEXT_TRIGGER_BYTES` /
+            // `GC_NEXT_MALLOC_TRIGGER` at the value that armed THIS collection.
+            // The non-moving minor reclaims dead objects into per-block free
+            // lists but does not lower `arena_total` (committed blocks), so a
+            // workload holding a large live set above the trigger — e.g.
+            // building an object graph that stays reachable while churning
+            // transient allocations — keeps `gc_budgeted_due_trigger` reporting
+            // the same trigger as due, and every fresh block re-arms a whole-
+            // arena mark/sweep. That is one O(arena) collection per block
+            // allocated: O(n^2) in the graph size, a ~100% CPU stall with a
+            // bounded live set that never makes progress. The finish helpers
+            // raise the trigger past the retained set (adapting the step),
+            // exactly as the budgeted and full-GC paths do on completion.
+            match kind {
+                GcTriggerKind::MallocCount => {
+                    gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+                }
+                _ => {
+                    gc_finish_arena_trigger_collection(pre_in_use, outcome);
+                }
+            }
             return;
         }
     }

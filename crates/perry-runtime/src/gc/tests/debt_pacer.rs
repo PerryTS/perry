@@ -318,3 +318,116 @@ fn allocation_assists_stop_before_unsliced_finalize_and_sweep() {
         "host-drained sweep should reclaim dead malloc churn"
     );
 }
+
+fn noop_copy_only_root_scanner(_visit: &mut dyn FnMut(f64)) {}
+
+/// Regression: the direct synchronous minor — taken whenever synchronous-only
+/// root scanners block the budgeted stepper, i.e. in every compiled program —
+/// must re-baseline the arming trigger on completion, exactly as the budgeted
+/// finisher (`gc_finish_budgeted_cycle`) does.
+///
+/// The bug: this arm merely emitted the outcome, leaving `GC_NEXT_TRIGGER_BYTES`
+/// at the value that armed the collection. The non-moving minor reclaims dead
+/// objects into per-block free lists without lowering `arena_total`, so a
+/// workload holding a large live set above the trigger kept
+/// `gc_budgeted_due_trigger` reporting the trigger as due and re-armed a whole-
+/// arena mark/sweep on every fresh block — O(n^2), a ~100% CPU stall with a
+/// bounded live set that never made progress.
+#[test]
+fn direct_arena_minor_rebaselines_trigger_above_live_set() {
+    let _nursery = CopyingNurseryTestGuard::new(1);
+    // A registered copy-only scanner makes the budgeted stepper ineligible, so
+    // gc_check_trigger takes the direct synchronous-minor arm.
+    let _scanners = ScopedRootScannerRegistryGuard::new();
+    gc_register_root_scanner(noop_copy_only_root_scanner);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = live_test_string(b"direct_minor_live");
+    js_shadow_slot_set(0, string_bits(live));
+    for _ in 0..(GC_MUTATOR_ASSIST_WORK_UNITS * 4) {
+        let _ = young_leaf();
+    }
+
+    // Arm the arena trigger (sets GC_NEXT_TRIGGER_BYTES = 0) so it is due.
+    trigger_guard.make_arena_trigger_due();
+    let before = gc_collection_count();
+
+    gc_check_trigger();
+
+    // The direct arm runs a synchronous collection to completion (unlike the
+    // budgeted stepper, which would only arm an assist here)...
+    assert!(
+        gc_collection_count() > before,
+        "a registered synchronous-only scanner should drive gc_check_trigger \
+         through the direct synchronous minor, not the budgeted stepper"
+    );
+    // ...and re-baselines the arena trigger above the retained live set, so the
+    // next allocation does not immediately re-arm another whole-arena minor.
+    let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get());
+    let arena_total = crate::arena::arena_total_bytes();
+    assert!(
+        next_trigger > arena_total,
+        "direct minor must rebaseline the arena trigger above arena_total \
+         (next_trigger={next_trigger}, arena_total={arena_total}); leaving it at \
+         the arming value re-triggers a full minor on every block"
+    );
+}
+
+/// Companion to the arena case for the `MallocCount` arm: the direct minor must
+/// dispatch to `gc_finish_malloc_trigger_collection`, which sweeps malloc (its
+/// `debug_assert!(outcome.malloc_swept)` is exercised here) and re-baselines
+/// `GC_NEXT_MALLOC_TRIGGER` to `survivors + step`. Without the re-baseline the
+/// malloc trigger stays at the arming value and every tracked allocation
+/// re-arms a full synchronous minor.
+#[test]
+fn direct_malloc_minor_rebaselines_trigger_above_survivors() {
+    let _nursery = CopyingNurseryTestGuard::new(1);
+    let _scanners = ScopedRootScannerRegistryGuard::new();
+    gc_register_root_scanner(noop_copy_only_root_scanner);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live_malloc = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(live_malloc);
+    }
+    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+
+    let churn_headers = allocate_dead_malloc_churn_headers(128);
+    assert_eq!(
+        tracked_malloc_headers_matching(&churn_headers),
+        churn_headers.len()
+    );
+
+    // Arm the malloc-count trigger so the direct minor takes the MallocCount arm.
+    let malloc_count = malloc_object_count();
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_count.saturating_sub(1)));
+
+    let before = gc_collection_count();
+    gc_check_trigger();
+
+    // The direct arm runs a synchronous collection to completion...
+    assert!(
+        gc_collection_count() > before,
+        "a registered synchronous-only scanner should drive the MallocCount \
+         trigger through the direct synchronous minor, not the budgeted stepper"
+    );
+    // ...and re-baselines the malloc trigger to survivors + step (the same
+    // formula the budgeted finisher applies), leaving it strictly above the
+    // surviving count so the next allocation does not immediately re-arm.
+    let survivors_after = malloc_object_count();
+    let malloc_step_after = GC_MALLOC_COUNT_STEP.with(|step| step.get());
+    let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.get());
+    assert_eq!(
+        next_malloc_trigger,
+        survivors_after + malloc_step_after,
+        "direct malloc minor must rebaseline GC_NEXT_MALLOC_TRIGGER to \
+         survivors + step (next={next_malloc_trigger}, survivors={survivors_after}, \
+         step={malloc_step_after})"
+    );
+    assert!(next_malloc_trigger > survivors_after);
+}
