@@ -442,7 +442,7 @@ image = { version = "0.25", optional = true }
 scraper = { version = "0.27", optional = true }
 
 # Scheduler
-cron = { version = "0.16", optional = true }
+cron = { version = "0.17", optional = true }
 tokio-cron-scheduler = { version = "0.15", optional = true }
 
 # Rate limiting
