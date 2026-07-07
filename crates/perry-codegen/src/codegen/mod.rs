@@ -1775,15 +1775,33 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // closure through `@perry_global_*`, NOT the closure's capture array —
     // `closure.rs` filters module globals OUT of `closure_captures`, so the
     // closure is `alloc_singleton` with no capture slots. But advertising the
-    // local's type here made the typed-ABI specialization
-    // (`__typed_f64`/i32/…) read `js_closure_get_capture_bits(this, 0)` — an
-    // UNSET slot (0) — while the generic variant correctly loads the global;
-    // the dispatcher picked the typed body, so every closure returned 0.
-    // Repro (bisected to #5466 representation lowering):
+    // local's type to the typed-ABI closure specialization
+    // (`__typed_f64`/i32/…) made it read `js_closure_get_capture_bits(this,
+    // 0)` — an UNSET slot (0) — while the generic variant correctly loads the
+    // global; the dispatcher picked the typed body, so every closure returned
+    // 0. Repro (bisected to #5466 representation lowering):
     //   for (let i=0;i<5;i++){ const c=i; fns.push(()=>c); }  // → 0,0,0,0,0
     // A module-global capture has no capture-slot representation, so — like a
-    // boxed slot — it must not feed the type-directed unboxed capture path.
-    module_local_types.retain(|id, _| !module_globals.contains_key(id));
+    // boxed slot — it must not feed the type-directed unboxed *capture* path.
+    //
+    // #6039 originally stripped these ids from `module_local_types` outright,
+    // but that map is ALSO the receiver-type oracle for every function body
+    // (`FnCtx.local_types` → `static_type_of` / `is_array_expr`). Dropping a
+    // module-global's declared type there mis-classified a captured array
+    // receiver as untyped inside a closure, so `arr.every()` (undefined
+    // callbackfn) fell to the generic dynamic dispatch that skips the
+    // `js_validate_array_callback` throw — the test262 harness's
+    // `assert.throws(TypeError, () => arr.every())` then saw no exception
+    // (24 regressions: Array HOF + symbol-strict [[Set]], all via harness
+    // closures). Only the typed-ABI *specialization* decision needs the
+    // module-globals removed, so scope the filter to a dedicated copy and
+    // leave `module_local_types` (the receiver oracle) module-global-inclusive.
+    let typed_abi_local_types: std::collections::HashMap<u32, perry_types::Type> =
+        module_local_types
+            .iter()
+            .filter(|(id, _)| !module_globals.contains_key(id))
+            .map(|(id, ty)| (*id, ty.clone()))
+            .collect();
 
     // Cross-module function declares are emitted lazily by `lower_call`
     // via `FnCtx.pending_declares` (drained back into `llmod` at the
@@ -1815,7 +1833,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     cross_module.typed_string_closure_capture_counts.clear();
     cross_module.typed_i1_closure_param_reps.clear();
     for (func_id, expr) in &closures {
-        match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &module_local_types) {
+        match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
             None => {
                 cross_module.typed_f64_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1844,7 +1863,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             ),
         }
-        match typed_abi::typed_i1_closure_rejection_reason_with_types(expr, &module_local_types) {
+        match typed_abi::typed_i1_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
             None => {
                 cross_module.typed_i1_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1873,7 +1893,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             ),
         }
-        match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &module_local_types) {
+        match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
             None => {
                 cross_module.typed_i32_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1902,8 +1923,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             ),
         }
-        match typed_abi::typed_string_closure_rejection_reason_with_types(expr, &module_local_types)
-        {
+        match typed_abi::typed_string_closure_rejection_reason_with_types(
+            expr,
+            &typed_abi_local_types,
+        ) {
             None => {
                 cross_module.typed_string_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1914,7 +1937,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     }
                 }
                 let capture_count =
-                    typed_abi::typed_string_closure_capture_reps(expr, &module_local_types)
+                    typed_abi::typed_string_closure_capture_reps(expr, &typed_abi_local_types)
                         .map(|captures| captures.len())
                         .unwrap_or(0);
                 cross_module
