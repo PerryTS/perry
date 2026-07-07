@@ -989,9 +989,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.65"
+version = "1.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
+checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -10340,9 +10340,9 @@ dependencies = [
 
 [[package]]
 name = "x448"
-version = "0.14.0-pre.11"
+version = "0.14.0-pre.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a6fb1c7b65593243419dae9d296b7cf5ceb720c266f002af33b093e143e3b4"
+checksum = "1c166d06b9fa4328c890d46bda797269fb6aeca96393aeaad0e74b4b11550e06"
 dependencies = [
  "ed448-goldilocks",
  "zeroize",
