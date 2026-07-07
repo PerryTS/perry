@@ -660,6 +660,17 @@ pub(crate) fn build_and_run_link(
             .arg("CoreFoundation")
             .arg("-framework")
             .arg("Security")
+            // AVFAudio: AVAudioEngine / AVAudioSession / AVAudioApplication for
+            // microphone capture + the record-permission API (perry/system
+            // audioStart, getLevel, recording). Without this the audio classes
+            // aren't registered in the objc runtime, so `AnyClass::get` returns
+            // nil and audio silently no-ops on device — e.g. a watchOS dB meter
+            // shows no levels and never prompts for mic permission. (The iOS
+            // branch already links these; watchOS was missing them.)
+            .arg("-framework")
+            .arg("AVFAudio")
+            .arg("-framework")
+            .arg("AVFoundation")
             .arg("-lSystem")
             .arg("-lresolv");
         if is_watchos_game_loop {
