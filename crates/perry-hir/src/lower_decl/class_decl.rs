@@ -450,10 +450,16 @@ pub fn lower_class_decl(
                 // Lexical local shadow → dynamic parent via `extends_expr` (the
                 // in-scope local value), invoked by `super()` through
                 // `js_fetch_or_value_super`. See the class-expression arm below
-                // for the full rationale (Next.js p-queue `PQueue`).
+                // for the full rationale (Next.js p-queue `PQueue`). Leave
+                // `extends_name` None too: the parent Ident is a lexical LOCAL,
+                // not a class; a retained name is re-resolved by the static
+                // parent-chain walks (layout / parent-edge / inherited-method /
+                // type-facts) to an UNRELATED same-named class, corrupting the
+                // subclass. Matches the fully-dynamic `class X extends
+                // <runtimeValue>` shape (`extends`+`extends_name` both None).
                 match lower_expr(ctx, super_class) {
-                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
-                    Err(_) => (None, Some(parent_name), None, None),
+                    Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                    Err(_) => (None, None, None, None),
                 }
             } else {
                 // #5437 (Next.js NodeNextRequest cross-module heritage): a
@@ -1548,16 +1554,17 @@ pub fn lower_class_from_ast(
                 // rename exists (that disambiguation is exact). Pure-Ident
                 // module-global heritage (no shadowing local) is unaffected —
                 // `ctx.locals.lookup` returns `None` for a class name.
-                // Do NOT set a static `extends` (parent_cid) here: the only
-                // candidate would be `lookup_class(parent_name)`, which is the
-                // wrong same-named module-global class we are deliberately
-                // avoiding (wiring it would mis-route inherited-method / vtable
-                // dispatch to that class's members). The dynamic `extends_expr`
-                // path registers the correct parent edge at runtime via
-                // `RegisterClassParentDynamic` + `function_class_id`.
+                // Do NOT set a static `extends` (parent_cid) OR `extends_name`
+                // here: the only candidate is `lookup_class(parent_name)`, the
+                // wrong same-named module-global class we deliberately avoid — and
+                // a retained `extends_name` is re-resolved back to it by the
+                // static parent-chain walks (layout / parent-edge / inherited-
+                // method / vtable / type-facts), corrupting the subclass. The
+                // dynamic `extends_expr` path registers the correct parent edge at
+                // runtime via `RegisterClassParentDynamic` + `function_class_id`.
                 match lower_expr(ctx, super_class) {
-                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
-                    Err(_) => (None, Some(parent_name), None, None),
+                    Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                    Err(_) => (None, None, None, None),
                 }
             } else {
                 // #5437: resolve the parent through active scope-local class

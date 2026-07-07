@@ -261,12 +261,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
             };
-            let Some(parent_name) = current_class.extends_name.as_deref().map(|s| s.to_string())
-            else {
-                for a in super_args {
-                    let _ = lower_expr(ctx, a)?;
+            let parent_name = match current_class.extends_name.as_deref() {
+                Some(s) => s.to_string(),
+                // A lexically-shadowed / fully-dynamic parent carries no
+                // `extends_name` (the parent is a runtime value, not a named
+                // class) but DOES carry `extends_expr`. Proceed with an empty
+                // placeholder name — for this shape `static_parent_lookup` below
+                // is forced to `None` (extends_expr present) and the builtin-name
+                // gate is disabled by `heritage_lexically_shadowed`, so the name
+                // is never consulted; `super()` dispatches via `extends_expr`.
+                // Without this, `super()` in such a subclass silently no-ops and
+                // the (dynamic) parent constructor never runs.
+                None if current_class.extends_expr.is_some() => String::new(),
+                None => {
+                    for a in super_args {
+                        let _ = lower_expr(ctx, a)?;
+                    }
+                    return Ok(double_literal(0.0));
                 }
-                return Ok(double_literal(0.0));
             };
             // #5437 (Next.js p-queue `PQueue`): when HIR captured a dynamic
             // `extends_expr` for this class, the parent is a LEXICAL runtime
