@@ -291,6 +291,10 @@ fn push_nested_block_stmt_lists<'a>(
         While(w) => push_nested_block_stmt_lists(&w.body, worklist),
         DoWhile(w) => push_nested_block_stmt_lists(&w.body, worklist),
         Labeled(l) => push_nested_block_stmt_lists(&l.body, worklist),
+        // Sloppy-mode `with (o) { … }` — a block-scoped `let` in the body is
+        // nearer than the with-object's properties, so it forward-captures
+        // like any other nested block (mirrors the `With` arm in `cic_stmt`).
+        With(w) => push_nested_block_stmt_lists(&w.body, worklist),
         Switch(sw) => {
             for c in &sw.cases {
                 worklist.push_back((&c.cons[..], true));
