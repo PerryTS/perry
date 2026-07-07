@@ -1574,7 +1574,11 @@ pub(crate) fn get_field_by_name_object_tail(
         };
         let keys_id = keys as usize;
 
-        let key_count = crate::array::js_array_length(keys) as usize;
+        // Clamp the keys length to capacity so a bogus/oversized length can't
+        // drive the wide-key map build or the linear scan below into unbounded
+        // work (see `keys_array_len_capped_to_capacity`). No-op for well-formed
+        // arrays.
+        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
 
         // Thread-local inline cache: fixed-size direct-mapped cache (no allocation, no HashMap)
         // Each entry stores (keys_ptr, key_hash, field_index). Copied-minor

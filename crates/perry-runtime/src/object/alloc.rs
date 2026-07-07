@@ -1245,7 +1245,12 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     } else {
         let src_keys = (*src).keys_array;
         if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
-            let key_count = crate::array::js_array_length(src_keys) as usize;
+            // Cap the key count at the keys array's capacity: a malformed keys
+            // array can report a bogus, pointer-sized length, and an unclamped
+            // `0..key_count` copy loop turns Object.assign / object spread into a
+            // minutes-long spin (each `js_array_get` on the phantom tail walks
+            // the slow sparse path). Same guard as the wide-key field-get walk.
+            let key_count = crate::array::keys_array_len_capped_to_capacity(src_keys);
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
             for i in 0..key_count {

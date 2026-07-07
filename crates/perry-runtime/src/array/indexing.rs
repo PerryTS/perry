@@ -393,6 +393,30 @@ fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringH
 }
 
 #[no_mangle]
+/// Reported length of an object's keys/property array, capped at its physical
+/// capacity.
+///
+/// Object property walks (the wide-key field-get index and `Object.assign`'s
+/// source enumeration) size their work by the keys array's length. A dense
+/// keys array's logical length can never exceed its capacity, so for a
+/// well-formed array this is a no-op. But when a keys array is malformed and
+/// `js_array_length` reports a bogus, oversized value (observed: a pointer-
+/// sized length ~= the keys pointer's own low bits, far beyond the real key
+/// count), an unclamped `for i in 0..len` / `HashMap::with_capacity(len)` turns
+/// a single missing-property read or `Object.assign` into a multi-GB / minutes-
+/// long spin. Capping to capacity bounds that work to physically-present slots.
+///
+/// FOR DENSE KEYS/PROPERTY ARRAYS ONLY — general JS arrays may have
+/// `length > capacity` (sparse), where this cap would be incorrect.
+pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) -> usize {
+    let raw = js_array_length(arr) as usize;
+    if arr.is_null() {
+        raw
+    } else {
+        raw.min((*arr).capacity as usize)
+    }
+}
+
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     // #5135: a Proxy typed (statically) as an array (immer drafts) reaches here
     // with the masked proxy id. Read `length` through the proxy `get` trap
@@ -1623,5 +1647,37 @@ fn canonical_index_of_set_key(idx: f64) -> Option<u32> {
         Some(n as u32)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod keys_len_cap_tests {
+    use super::{js_array_length, keys_array_len_capped_to_capacity};
+
+    #[test]
+    fn keys_len_capped_bounds_bogus_length_to_capacity() {
+        // Freshly-allocated array: well-formed (length 0 <= capacity), so the
+        // cap is a no-op and returns the real length.
+        let arr = crate::array::js_array_alloc(8);
+        let capacity = unsafe { (*arr).capacity } as usize;
+        assert!(capacity >= 8);
+        assert_eq!(unsafe { keys_array_len_capped_to_capacity(arr) }, 0);
+
+        // Simulate a malformed keys array whose length field reports a bogus,
+        // pointer-sized value — the pathology the object property walks guard
+        // against. Un-capped, callers would iterate/allocate ~645M slots.
+        unsafe {
+            (*arr).length = 645_115_168;
+        }
+        assert_eq!(
+            js_array_length(arr) as usize,
+            645_115_168,
+            "sanity: js_array_length reflects the forged length"
+        );
+        assert_eq!(
+            unsafe { keys_array_len_capped_to_capacity(arr) },
+            capacity,
+            "cap must bound a bogus oversized length to the array's capacity"
+        );
     }
 }
