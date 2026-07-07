@@ -1,3 +1,12 @@
+## v0.5.1255 — chore(deps): bump crossbeam-epoch 0.9.18 → 0.9.20 (RUSTSEC-2026-0204)
+
+RUSTSEC-2026-0204 (published 2026-07-06) flags crossbeam-epoch < 0.9.20 for an
+invalid pointer dereference in the `fmt::Pointer` impl for `Atomic`/`Shared`
+when the underlying pointer is invalid. crossbeam-epoch is a transitive dep
+(rayon → crossbeam-deque), so this is a `Cargo.lock`-only bump — no manifest
+changes. The advisory was failing the required `security-audit` check on every
+open PR (first seen on #6097/#6098).
+
 ## v0.5.1254 — metadata catch-up fold (PRs #6036–#6054)
 
 Consolidated version bump documenting the code-only merges that landed on `main` since v0.5.1240. Each PR carries its own detailed rationale in its description and commit body.
