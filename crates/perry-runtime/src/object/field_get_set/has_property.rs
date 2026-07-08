@@ -685,10 +685,18 @@ unsafe fn ordinary_has_property(
             // absent. Hop through that synthetic prototype object and continue; the
             // field-GET path resolves the same chain via `resolve_proto_chain_field`.
             None => {
-                let synth_proto = crate::object::class_prototype_object(unsafe { (*cur).class_id });
-                if !synth_proto.is_null() && synth_proto as *const ObjectHeader != cur {
-                    cur = synth_proto as *const ObjectHeader;
-                    continue;
+                // A prototype hop can land on a real `ArrayHeader` (`Foo.prototype
+                // = [1,2,3]`), whose layout has no `class_id` field — reading one
+                // would misinterpret the array's `length`/`capacity` as a class id
+                // and could spuriously hop. Arrays never model a synthetic
+                // prototype, so skip the lookup for them.
+                if !cur_is_array {
+                    let synth_proto =
+                        crate::object::class_prototype_object(unsafe { (*cur).class_id });
+                    if !synth_proto.is_null() && synth_proto as *const ObjectHeader != cur {
+                        cur = synth_proto as *const ObjectHeader;
+                        continue;
+                    }
                 }
                 break;
             }
