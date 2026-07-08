@@ -1153,10 +1153,11 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     maybe_schedule_old_reclaim_after_copied_minor();
     if std::env::var_os("PERRY_GC_DIAG").is_some() {
         eprintln!(
-            "[gc-copy-minor] ran copied_objects={} copied_bytes={} promoted_objects={} freed_bytes={}",
+            "[gc-copy-minor] ran copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={}",
             collector.stats.copied_objects,
             collector.stats.copied_bytes,
             collector.stats.promoted_objects,
+            collector.stats.promoted_bytes,
             freed_bytes
         );
     }
