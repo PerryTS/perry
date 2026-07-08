@@ -375,6 +375,21 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 }
 
 #[inline]
+/// Phase 1+ of the moving-GC project (see the `project_gc_one_great_moving_gc`
+/// design): gate the copying (moving) minor that runs at precise-root
+/// safepoints. Default OFF while the moving path is validated; flipped on
+/// (with `PERRY_GC_MOVING_SAFEPOINT=0` as the escape hatch) once moving is the
+/// permanent default.
+pub(crate) fn gc_moving_safepoint_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
     if GC_TRACE_TEST_FORCE.with(Cell::get) {
@@ -1301,6 +1316,48 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     }
 
     None
+}
+
+/// Phase 1 of the moving-GC project: run a copying (moving) minor at a
+/// precise-root safepoint — the outermost microtask-pump boundary, where the
+/// JS stack has fully unwound so no live heap pointer sits in an unspilled
+/// register. Unlike the alloc-point nursery-churn arm, NO `force_full_scan` is
+/// taken: `conservative_stack_scan_decision()` stays `SkipDisabled`, so the
+/// copying minor is eligible with precise, rewritable roots and actually MOVES
+/// (compacting, O(survivors), no sweep) instead of falling back to the
+/// non-moving minor. Trigger detection + re-baseline mirror the nursery-churn
+/// arm; this is purely additive (the alloc-point fallback is untouched) and
+/// gated by `gc_moving_safepoint_enabled` (default off).
+pub(super) fn gc_safepoint_moving_minor() {
+    // Same start guards the budgeted collector uses, minus the (here
+    // irrelevant) scanner block: never collect mid-allocation, inside a
+    // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
+        || gc_blocked_by_unsafe_zone()
+        || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || gc_budgeted_cycle_active()
+    {
+        return;
+    }
+    // Only nursery-pressure triggers take the moving minor here; OldReclaim
+    // stays on its existing full mark-sweep path.
+    let kind = match gc_budgeted_due_trigger() {
+        Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
+        Some(BudgetedGcTrigger::MallocCount) => GcTriggerKind::MallocCount,
+        _ => return,
+    };
+    let pre_in_use = crate::arena::arena_in_use_bytes();
+    let pre_malloc_count = malloc_object_count();
+    // No `force_full_scan`: roots are precise at this safepoint.
+    let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
+    match kind {
+        GcTriggerKind::MallocCount => {
+            gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+        }
+        _ => {
+            gc_finish_arena_trigger_collection(pre_in_use, outcome);
+        }
+    }
 }
 
 struct BudgetedGcStepGuard;
