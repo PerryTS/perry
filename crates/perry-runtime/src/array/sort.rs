@@ -159,7 +159,7 @@ fn sort_defined_values(defined: &mut [f64], scratch: *mut f64, cmp: Option<Compa
             for &v in defined.iter() {
                 pairs.push((sort_key_string(v), v));
             }
-            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            pairs.sort_by(|a, b| crate::string::utf16_cmp_bytes(a.0.as_bytes(), b.0.as_bytes()));
             for (i, (_, v)) in pairs.into_iter().enumerate() {
                 defined[i] = v;
             }
@@ -626,7 +626,7 @@ unsafe fn sort_array_receiver(
             let val = *elements_ptr.add(i);
             pairs.push((sort_key_string(val), val));
         }
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs.sort_by(|a, b| crate::string::utf16_cmp_bytes(a.0.as_bytes(), b.0.as_bytes()));
         mark_array_layout_unknown(arr);
         for (i, (_, val)) in pairs.into_iter().enumerate() {
             // GC_STORE_AUDIT(BARRIERED): default sort writes are followed by layout/barrier rebuild.
