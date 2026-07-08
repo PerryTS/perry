@@ -928,7 +928,10 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                             value
                         } else {
-                            continue;
+                            // #6143: an unresolvable shorthand is a ReferenceError,
+                            // not a silently-dropped property (see the non-spread
+                            // path above). Lower a normal identifier read.
+                            lower_expr(ctx, &ast::Expr::Ident(ident.clone()))?
                         };
                         ops.push(SpreadOp::Set {
                             key: Expr::String(name),
@@ -1223,7 +1226,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         value
                     } else {
-                        continue;
+                        // #6143: an unresolvable shorthand (`{ undeclaredName }`) is
+                        // a ReferenceError, not a silently-dropped property. Lower a
+                        // normal identifier read, which throws for a truly-undeclared
+                        // name (and reads a sloppy implicit global if one exists).
+                        lower_expr(ctx, &ast::Expr::Ident(ident.clone()))?
                     };
                     props.push((name, value));
                 }
