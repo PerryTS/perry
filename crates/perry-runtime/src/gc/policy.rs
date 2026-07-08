@@ -375,11 +375,15 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 }
 
 #[inline]
-/// Phase 1+ of the moving-GC project (see the `project_gc_one_great_moving_gc`
-/// design): gate the copying (moving) minor that runs at precise-root
-/// safepoints. Default OFF while the moving path is validated; flipped on
-/// (with `PERRY_GC_MOVING_SAFEPOINT=0` as the escape hatch) once moving is the
-/// permanent default.
+/// Phase 1 of the moving-GC project: gate the copying (moving) minor that runs
+/// at precise-root event-loop safepoints. **EXPERIMENTAL — default OFF.** When
+/// off, behaviour is exactly today's non-moving GC (this whole path is
+/// skipped). Enabling it runs the copying minor, which is CORRECT on the
+/// validated clean path (byte-identical output, survivors evacuated) but still
+/// exposes PRE-EXISTING relocation-correctness bugs in the copying/evacuation
+/// machinery (objects with an Array + a TypedArray field can corrupt on move;
+/// see the copying-minor relocation issue) — so it can crash on programs that
+/// hit those. Do NOT flip the default on until relocation is hardened.
 pub(crate) fn gc_moving_safepoint_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
@@ -1328,7 +1332,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
 /// non-moving minor. Trigger detection + re-baseline mirror the nursery-churn
 /// arm; this is purely additive (the alloc-point fallback is untouched) and
 /// gated by `gc_moving_safepoint_enabled` (default off).
-pub(super) fn gc_safepoint_moving_minor() {
+pub(crate) fn gc_safepoint_moving_minor() {
     // Same start guards the budgeted collector uses, minus the (here
     // irrelevant) scanner block: never collect mid-allocation, inside a
     // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
