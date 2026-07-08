@@ -239,6 +239,32 @@ pub(super) struct BuildConfig {
     pub(super) native_tuning: Option<bool>,
 }
 
+/// Resolve the CPU baseline forwarded to the build worker (#6125).
+///
+/// `--march` wins over `[build] march`, which wins over the
+/// `[build] native_tuning` boolean shorthand (`true` → `native`, `false` →
+/// `generic`). Linux defaults to the portable `x86-64-v2`: the hub worker
+/// compiles linux-on-linux natively, and an unpinned baseline bakes the
+/// build box's full ISA (AVX-512) into the binary, which SIGILLs on
+/// non-AVX-512 hosts (Zen2/EPYC-Rome, pre-Skylake Xeons). Forwarded to the
+/// worker as `BuildManifest.build_march` → `perry compile --march`.
+pub(super) fn resolve_build_march(
+    march_flag: Option<&str>,
+    build: Option<&BuildConfig>,
+    is_linux: bool,
+) -> Option<String> {
+    march_flag
+        .or_else(|| build.and_then(|b| b.march.as_deref()))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            build
+                .and_then(|b| b.native_tuning)
+                .map(|tuning| if tuning { "native" } else { "generic" }.to_string())
+        })
+        .or_else(|| is_linux.then(|| "x86-64-v2".to_string()))
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct PublishConfig {
     pub(super) server: Option<String>,
