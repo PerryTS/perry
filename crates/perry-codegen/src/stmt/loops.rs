@@ -2708,16 +2708,21 @@ fn lower_for_after_init_with_i32_bound(
     Ok(())
 }
 
-/// Whether to emit loop back-edge safepoint polls — ON by default (the moving
-/// GC is the default). Compiling with `PERRY_GC_MOVING_SAFEPOINT=0` omits them
-/// (the kill switch), matching the runtime default so the two stay coherent.
+/// Whether to emit loop back-edge safepoint polls — OPT-IN, default OFF
+/// (`PERRY_GC_MOVING_LOOP_POLLS=1`). The moving GC is the default at the
+/// event-loop safepoint, but the loop poll emits a `js_gc_loop_safepoint()`
+/// CALL at every loop back-edge, which defeats LLVM auto-vectorization and
+/// violates the native-region "no runtime calls in hot loop" proofs. Until the
+/// poll is emitted only in loops that actually ALLOCATE (so numeric/vectorizable
+/// loops stay call-free), it is opt-in and a tight allocating loop defers to the
+/// event-loop safepoint instead.
 fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
+        matches!(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
         )
     })
 }

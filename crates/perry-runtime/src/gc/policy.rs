@@ -375,15 +375,15 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 }
 
 #[inline]
-/// The moving (copying) minor at precise-root safepoints — **Perry's default
-/// GC.** The copying minor runs at the event-loop safepoint and, via the
-/// codegen loop back-edge polls, at loop safepoints; it moves survivors
-/// (compacting, O(survivors), no sweep). `PERRY_GC_MOVING_SAFEPOINT=0` is a
-/// kill switch that reverts to the non-moving path (for bisecting a regression
-/// while we harden). Known hardening items: programs that hit the codegen
-/// Array+TypedArray bug (#6132) can corrupt the heap and crash the collector;
-/// the old-page force-evacuation path (#6133); and loop back-edge poll coverage
-/// for the specialized loop-lowering paths.
+/// The moving (copying) minor at the precise-root event-loop safepoint —
+/// **Perry's default GC.** At the outermost microtask-pump boundary the JS stack
+/// has unwound, so the copying minor runs with precise, rewritable roots and
+/// moves survivors (compacting, O(survivors), no sweep). `PERRY_GC_MOVING_SAFEPOINT=0`
+/// is a kill switch that reverts to the non-moving path (for bisecting a
+/// regression while we harden). Making the moving minor primary INSIDE loops
+/// (back-edge polls + alloc-point deferral) is the separate opt-in
+/// `PERRY_GC_MOVING_LOOP_POLLS` — off by default because the poll defeats loop
+/// vectorization until it is emitted only for allocating loops.
 pub(crate) fn gc_moving_safepoint_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
@@ -412,6 +412,23 @@ pub(crate) fn gc_incremental_enabled() -> bool {
     *CACHED.get_or_init(|| {
         matches!(
             std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
+/// Phase 2/3 (opt-in, default OFF): also make the moving minor PRIMARY inside
+/// loops — defer the alloc-point nursery collection to a codegen loop back-edge
+/// poll (`js_gc_loop_safepoint`) instead of collecting non-moving mid-expression.
+/// Off by default because the poll emits a call in every loop, defeating
+/// vectorization; when it's emitted only for allocating loops this can flip on.
+/// Must match the codegen `moving_safepoint_polls_enabled` (same env) so the
+/// deferral and the polls that drain it stay coherent.
+pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
             Ok("1") | Ok("on") | Ok("true")
         )
     })
@@ -1226,7 +1243,7 @@ pub fn gc_check_trigger() {
             // register-imprecise point. Safety valve: once committed arena bytes
             // pass the hard cap (a mega-expression that reached no poll), fall
             // through and collect non-moving here so growth stays bounded.
-            if gc_moving_safepoint_enabled()
+            if gc_moving_loop_polls_enabled()
                 && crate::arena::arena_total_bytes() < GC_MOVING_DEFER_HARD_CAP_BYTES
             {
                 GC_SAFEPOINT_PENDING.with(|p| p.set(true));
@@ -1432,7 +1449,7 @@ pub(crate) fn gc_safepoint_moving_minor() {
 /// one thread-local read).
 #[no_mangle]
 pub extern "C" fn js_gc_loop_safepoint() {
-    if !gc_moving_safepoint_enabled() || !GC_SAFEPOINT_PENDING.with(Cell::get) {
+    if !gc_moving_loop_polls_enabled() || !GC_SAFEPOINT_PENDING.with(Cell::get) {
         return;
     }
     gc_safepoint_moving_minor();
