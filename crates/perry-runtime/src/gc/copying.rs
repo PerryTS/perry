@@ -498,6 +498,29 @@ impl CopyingNurseryCollector {
         }
 
         let total = (*header).size as usize;
+        // Safety net (partial mitigation, NOT a full fix): a genuine
+        // young/survivor object is always small — large objects are allocated
+        // old-gen/malloc, never in the copying nursery — so a "young" object
+        // whose size is out of range is a corrupt/mis-classified header (e.g. an
+        // off-heap pointer whose preceding bytes coincidentally pass
+        // `plausible_gc_header`). Refuse to memmove through such a garbage size:
+        // that turns the worst outcome (a wild out-of-bounds copy → SIGSEGV)
+        // into a no-op, and surfaces it under PERRY_GC_DIAG. It does NOT catch a
+        // plausible-but-wrong *small* size; the root fix is stronger arena
+        // classification / page unregistration so off-heap addresses never
+        // reach here. See the copying-minor relocation issue.
+        const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
+        if total < GC_HEADER_SIZE || total > MAX_YOUNG_MOVE_BYTES {
+            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+                eprintln!(
+                    "[gc-move-guard] refusing wild young move user={:#x} obj_type={} size={}",
+                    old_user as usize,
+                    (*header).obj_type,
+                    total
+                );
+            }
+            return old_user as usize;
+        }
         let payload = total - GC_HEADER_SIZE;
         let prior_age = copied_survival_age((*header)._reserved, flags);
         let next_age = prior_age.saturating_add(1);
