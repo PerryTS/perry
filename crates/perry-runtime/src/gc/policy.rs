@@ -597,7 +597,20 @@ thread_local! {
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
     pub(super) static GC_OLD_RECLAIM_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+    /// Phase 2/3 of the moving-GC project: set when an alloc-point nursery
+    /// trigger fires while moving mode is on, deferring the collection to the
+    /// next precise-root safepoint (event-loop boundary or a codegen loop
+    /// back-edge poll) so the copying minor can MOVE survivors instead of the
+    /// conservative non-moving minor running mid-expression.
+    pub(super) static GC_SAFEPOINT_PENDING: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Hard cap on committed arena bytes before which a nursery trigger may be
+/// deferred to a safepoint (Phase 2/3). Loop back-edge polls drain the pending
+/// flag every iteration, so the arena never grows near this in normal code;
+/// the cap only bounds a pathological single mega-expression that reaches no
+/// poll — there the alloc-point non-moving minor runs as a safety valve.
+pub(super) const GC_MOVING_DEFER_HARD_CAP_BYTES: usize = 256 * 1024 * 1024;
 
 /// RAII guard that marks a #5476 direct old-gen reclaim in progress so a nested
 /// `gc_check_trigger` can't re-enter it. See `GC_OLD_RECLAIM_IN_PROGRESS`.
@@ -1180,6 +1193,19 @@ pub fn gc_check_trigger() {
             _ => None,
         };
         if let Some(kind) = direct_kind {
+            // Phase 2/3: with moving mode on, DEFER this alloc-point collection
+            // to the next precise-root safepoint (event-loop boundary or a
+            // codegen loop back-edge poll) so the copying minor MOVES survivors
+            // instead of the conservative non-moving minor running here at a
+            // register-imprecise point. Safety valve: once committed arena bytes
+            // pass the hard cap (a mega-expression that reached no poll), fall
+            // through and collect non-moving here so growth stays bounded.
+            if gc_moving_safepoint_enabled()
+                && crate::arena::arena_total_bytes() < GC_MOVING_DEFER_HARD_CAP_BYTES
+            {
+                GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+                return;
+            }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
             let _scan = super::roots::ManualGcScanGuard::force_full_scan();
@@ -1341,8 +1367,13 @@ pub(crate) fn gc_safepoint_moving_minor() {
         || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
         || gc_budgeted_cycle_active()
     {
+        // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
+        // retries; do not clear it here.
         return;
     }
+    // We are handling this safepoint (collect or find nothing due): clear the
+    // deferral flag set by the alloc-point arm (Phase 2/3).
+    GC_SAFEPOINT_PENDING.with(|p| p.set(false));
     // Only nursery-pressure triggers take the moving minor here; OldReclaim
     // stays on its existing full mark-sweep path.
     let kind = match gc_budgeted_due_trigger() {
@@ -1362,6 +1393,23 @@ pub(crate) fn gc_safepoint_moving_minor() {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
         }
     }
+}
+
+/// Phase 2 of the moving-GC project: codegen emits a call to this at loop
+/// back-edges — but ONLY when the compiler was invoked with the moving-safepoint
+/// opt-in, so default binaries carry zero loop overhead. At a back-edge the
+/// loop-body expression has completed, so no heap value lives in an unspilled
+/// register (every live value is a named local on the shadow stack): a
+/// precise-root safepoint. If moving mode is on and an alloc-point nursery
+/// trigger deferred a collection (`GC_SAFEPOINT_PENDING`), drain it here so the
+/// copying minor MOVES survivors. Cheap no-op otherwise (one cached-bool load +
+/// one thread-local read).
+#[no_mangle]
+pub extern "C" fn js_gc_loop_safepoint() {
+    if !gc_moving_safepoint_enabled() || !GC_SAFEPOINT_PENDING.with(Cell::get) {
+        return;
+    }
+    gc_safepoint_moving_minor();
 }
 
 struct BudgetedGcStepGuard;
