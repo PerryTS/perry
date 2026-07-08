@@ -5902,6 +5902,7 @@ dependencies = [
  "lazy_static",
  "perry-ffi",
  "perry-runtime",
+ "rustls",
  "tokio",
  "tokio-tungstenite",
 ]

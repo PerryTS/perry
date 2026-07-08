@@ -116,7 +116,11 @@ bundled-streams = ["dep:flate2", "dep:brotli"]
 # `import 'ws'` can route to perry-ext-ws without duplicate
 # `_js_ws_*` symbols at link time.
 websocket = ["bundled-ws"]
-bundled-ws = ["dep:tokio-tungstenite", "dep:futures-util", "async-runtime"]
+# #6117: `dep:rustls` so the client-connect path can install a process-level
+# CryptoProvider before the first `wss://` handshake — feature unification
+# enables BOTH `ring` and `aws-lc-rs` in the final link, so rustls panics
+# unless one is installed explicitly (same as the `tls` feature's paths).
+bundled-ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:rustls", "async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to

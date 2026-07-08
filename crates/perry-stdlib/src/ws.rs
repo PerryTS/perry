@@ -20,6 +20,17 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
 use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
+/// #6117 — rustls panics resolving the process-level CryptoProvider on the
+/// first `wss://` handshake when both `ring` and `aws-lc-rs` end up
+/// feature-unified into the final link (perry-ext-http-server brings ring;
+/// net/tls bring aws-lc-rs). Install one explicitly before connecting.
+/// Idempotent — `install_default` errors (ignored) if a provider is already
+/// set. Mirrors `net::mod` / `tls` (#4971) and `perry-ext-net`.
+#[cfg(not(target_os = "ios"))]
+fn ensure_tls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 fn ws_file_log(msg: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -116,6 +127,13 @@ struct WsConnection {
     sender: mpsc::UnboundedSender<WsCommand>,
     messages: Vec<String>,
     is_open: bool,
+    /// #6117 — `close()` was called but the close handshake hasn't finished:
+    /// `readyState` reports CLOSING (2).
+    is_closing: bool,
+    /// #6117 — the connection terminated (close event, IO error, or connect
+    /// failure): `readyState` reports CLOSED (3). Distinguishes a dead entry
+    /// from a pre-open one (CONNECTING, 0) — both have `is_open == false`.
+    is_closed: bool,
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -180,6 +198,7 @@ fn mark_ws_connection_closed(ws_id: usize) -> bool {
         .map(|conn| {
             let was_open = conn.is_open;
             conn.is_open = false;
+            conn.is_closed = true;
             was_open
         })
         .unwrap_or(false)
@@ -217,6 +236,7 @@ pub unsafe extern "C" fn js_ws_connect(
     url_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
     ensure_gc_scanner_registered();
+    ensure_tls_crypto_provider();
     #[cfg(target_os = "android")]
     {
         extern "C" {
@@ -301,6 +321,8 @@ pub unsafe extern "C" fn js_ws_connect(
                         sender: tx,
                         messages: Vec::new(),
                         is_open: true,
+                        is_closing: false,
+                        is_closed: false,
                     },
                 );
 
@@ -457,6 +479,7 @@ pub unsafe extern "C" fn js_ws_connect(
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ensure_gc_scanner_registered();
+    ensure_tls_crypto_provider();
     #[cfg(target_os = "android")]
     {
         extern "C" {
@@ -491,6 +514,8 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
             sender: tx,
             messages: Vec::new(),
             is_open: false,
+            is_closing: false,
+            is_closed: false,
         },
     );
 
@@ -606,6 +631,9 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                 });
             }
             Err(e) => {
+                // #6117 — readyState must report CLOSED (3), not
+                // CONNECTING (0), once the connect has failed.
+                mark_ws_connection_closed(ws_id);
                 push_ws_event(PendingWsEvent::Error(
                     ws_id,
                     format!("WebSocket connection error: {}", e),
@@ -688,8 +716,10 @@ pub unsafe extern "C" fn js_ws_close(handle: i64) {
 
     // Otherwise close client connection
     let ws_id = handle as usize;
-    let guard = WS_CONNECTIONS.lock().unwrap();
-    if let Some(conn) = guard.get(&ws_id) {
+    let mut guard = WS_CONNECTIONS.lock().unwrap();
+    if let Some(conn) = guard.get_mut(&ws_id) {
+        // #6117 — readyState reports CLOSING (2) until the close completes.
+        conn.is_closing = true;
         let _ = conn.sender.send(WsCommand::Close);
     }
 }
@@ -741,6 +771,35 @@ pub extern "C" fn js_ws_is_open(handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_ws_is_open(handle: i64) -> f64 {
     unsafe { perry_native_ws_is_open(handle as f64) }
+}
+
+/// #6117 — `ws.readyState` per npm-ws semantics: CONNECTING=0, OPEN=1,
+/// CLOSING=2, CLOSED=3. An id with no map entry is CLOSED — either the
+/// entry was cleaned up after close, or the promise-path connect failed
+/// before an entry was ever created.
+#[cfg(not(target_os = "ios"))]
+#[no_mangle]
+pub extern "C" fn js_ws_ready_state(handle: i64) -> f64 {
+    let ws_id = handle as usize;
+    match WS_CONNECTIONS.lock().unwrap().get(&ws_id) {
+        Some(conn) if conn.is_closed => 3.0,
+        Some(conn) if conn.is_closing => 2.0,
+        Some(conn) if conn.is_open => 1.0,
+        Some(_) => 0.0,
+        None => 3.0,
+    }
+}
+
+/// iOS: NSURLSessionWebSocketTask exposes no CONNECTING/CLOSING signal
+/// through the existing native bridge — approximate with open/closed.
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn js_ws_ready_state(handle: i64) -> f64 {
+    if unsafe { perry_native_ws_is_open(handle as f64) } == 1.0 {
+        1.0
+    } else {
+        3.0
+    }
 }
 
 /// Get the number of pending messages
@@ -1020,6 +1079,8 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                         sender: tx,
                                         messages: Vec::new(),
                                         is_open: true,
+                                        is_closing: false,
+                                        is_closed: false,
                                     });
 
                                     // Initialize client listeners
@@ -1496,6 +1557,8 @@ mod tests {
                 sender: tx,
                 messages: Vec::new(),
                 is_open: false,
+                is_closing: false,
+                is_closed: false,
             },
         );
         WS_CLIENT_LISTENERS.lock().unwrap().insert(
@@ -1530,6 +1593,46 @@ mod tests {
         assert_eq!(js_ws_has_active_handles(), 0);
 
         crate::common::drop_handle(server_handle);
+        clear_test_state();
+    }
+
+    /// #6117 — `readyState` walks the npm-ws lifecycle: CONNECTING (0)
+    /// pre-open, OPEN (1), CLOSING (2) after `close()` is requested,
+    /// CLOSED (3) once the IO loop marks the connection dead, and CLOSED
+    /// for ids with no entry (cleaned up, or promise-path connect failed).
+    #[test]
+    fn ready_state_reports_npm_ws_lifecycle() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_test_state();
+
+        let ws_id = 91usize;
+        let (tx, _rx) = mpsc::unbounded_channel::<WsCommand>();
+        WS_CONNECTIONS.lock().unwrap().insert(
+            ws_id,
+            WsConnection {
+                sender: tx,
+                messages: Vec::new(),
+                is_open: false,
+                is_closing: false,
+                is_closed: false,
+            },
+        );
+
+        assert_eq!(js_ws_ready_state(ws_id as i64), 0.0);
+        WS_CONNECTIONS
+            .lock()
+            .unwrap()
+            .get_mut(&ws_id)
+            .unwrap()
+            .is_open = true;
+        assert_eq!(js_ws_ready_state(ws_id as i64), 1.0);
+        unsafe { js_ws_close(ws_id as i64) };
+        assert_eq!(js_ws_ready_state(ws_id as i64), 2.0);
+        mark_ws_connection_closed(ws_id);
+        assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
+        cleanup_ws_client(ws_id);
+        assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
+
         clear_test_state();
     }
 }
