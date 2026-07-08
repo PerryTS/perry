@@ -903,6 +903,23 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace.root_sources.native_stack_fallback.scanned =
             matches!(decision, ConservativeStackScanDecision::Scan);
     }
+    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        let reason = match eligibility.fallback_reason {
+            CopiedMinorFallbackReason::None => "none",
+            CopiedMinorFallbackReason::NotAttempted => "not_attempted",
+            CopiedMinorFallbackReason::BarriersInactive => "barriers_inactive",
+            CopiedMinorFallbackReason::ConservativeStack => "conservative_stack",
+            CopiedMinorFallbackReason::CopyOnlyRoots => "copy_only_roots",
+            CopiedMinorFallbackReason::MallocRegistryUnavailable => "malloc_registry_unavailable",
+            CopiedMinorFallbackReason::PinnedYoungRoot => "pinned_young_root",
+            CopiedMinorFallbackReason::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
+            CopiedMinorFallbackReason::PinnedYoungTransitive => "pinned_young_transitive",
+        };
+        eprintln!(
+            "[gc-copy-minor] eligible={} fallback={}",
+            eligibility.eligible, reason
+        );
+    }
     if !eligibility.eligible {
         return None;
     }
@@ -1111,6 +1128,15 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace.capture_layout_scans();
     }
     maybe_schedule_old_reclaim_after_copied_minor();
+    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        eprintln!(
+            "[gc-copy-minor] ran copied_objects={} copied_bytes={} promoted_objects={} freed_bytes={}",
+            collector.stats.copied_objects,
+            collector.stats.copied_bytes,
+            collector.stats.promoted_objects,
+            freed_bytes
+        );
+    }
     Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,
