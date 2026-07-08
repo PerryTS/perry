@@ -206,6 +206,34 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         None
     };
 
+    // --- Resolve CPU baseline (#6125) ---
+    // `--march` wins over `[build] march`, which wins over the
+    // `[build] native_tuning` boolean shorthand (true → `native`, false →
+    // `generic`). Linux defaults to the portable `x86-64-v2`: the hub worker
+    // compiles linux-on-linux natively, and an unpinned baseline bakes the
+    // build box's full ISA (AVX-512) into the binary, which SIGILLs on
+    // non-AVX-512 hosts (Zen2/EPYC-Rome, pre-Skylake Xeons). Forwarded to
+    // the worker as `build_march` → `perry compile --march`.
+    let build_march: Option<String> = args
+        .march
+        .as_deref()
+        .or_else(|| config.build.as_ref().and_then(|b| b.march.as_deref()))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            config
+                .build
+                .as_ref()
+                .and_then(|b| b.native_tuning)
+                .map(|tuning| if tuning { "native" } else { "generic" }.to_string())
+        })
+        .or_else(|| is_linux.then(|| "x86-64-v2".to_string()));
+    if is_linux {
+        if let (OutputFormat::Text, Some(march)) = (&format, &build_march) {
+            println!("  CPU:       {} baseline", style(march).bold());
+        }
+    }
+
     // --- Resolve server URL ---
     let server_url = args
         .server
@@ -1333,6 +1361,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             None
         },
         linux_libc: linux_libc.clone(),
+        build_march: build_march.clone(),
         release_notes: config.release_notes.clone(),
         features: config.project.as_ref().and_then(|p| p.features.clone()),
     };

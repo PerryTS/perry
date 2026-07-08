@@ -55,6 +55,16 @@ pub fn run_with_parse_cache(
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
     }
 
+    // #6125: resolve the CPU-baseline knob (`--march` / env / perry.toml
+    // `[build] march` / `[build] native_tuning`) into the canonical
+    // PERRY_TARGET_CPU env var, exactly like `--debug-symbols` above.
+    // Codegen's clang invocation, the object/build cache keys, and the
+    // auto-optimize runtime rebuild all read that one var, so a build meant
+    // to run on other machines (publish workers, CI) can pin a portable
+    // baseline (e.g. x86-64-v2) instead of baking the build box's full ISA
+    // (AVX-512) into the shipped binary.
+    bootstrap::promote_cpu_baseline_env(&args);
+
     // `--trace <stages>` consolidates the scattered debug-dump knobs into one
     // flag. Parse it up-front (single-threaded, before codegen spawns rayon
     // workers) so the `llvm` stage can promote itself to the env vars the

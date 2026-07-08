@@ -228,6 +228,15 @@ pub(super) struct WindowsConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct BuildConfig {
     pub(super) out_dir: Option<String>,
+    /// CPU baseline for the produced binaries (#6125): an LLVM CPU name
+    /// (`x86-64-v2`, `x86-64-v3`, `znver2`, …), `native`, or `generic`.
+    /// Forwarded to the build worker as `build_march`, which drives
+    /// `perry compile --march`. Wins over `native_tuning`.
+    pub(super) march: Option<String>,
+    /// Boolean shorthand: `true` → tune to the build worker's CPU
+    /// (`native`), `false` → the target's portable baseline (`generic`).
+    /// Ignored when `march` is set.
+    pub(super) native_tuning: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

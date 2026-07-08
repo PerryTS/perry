@@ -230,17 +230,21 @@ fn stable_type_key(ty: &perry_types::Type) -> String {
 /// at compile time but that aren't part of `CompileOptions`:
 /// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`,
 /// `PERRY_WRITE_BARRIERS`, `PERRY_SHADOW_STACK`,
-/// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`, and
-/// `PERRY_UNBOXED_OBJECT_FIELDS`. See the env-var block at the bottom of
-/// this function for the rationale.
+/// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`,
+/// `PERRY_UNBOXED_OBJECT_FIELDS`, and `PERRY_TARGET_CPU`. See the env-var
+/// block at the bottom of this function for the rationale.
 ///
-/// NOT captured in the key: the host CPU. `compile_ll_to_object` passes
-/// `-mcpu=native`/`-march=native` to clang, so the emitted `.o` bakes in
-/// whatever instruction set the build machine supports. The cache is
-/// consequently **machine-local** — the default `node_modules/.cache/perry`
+/// NOT captured in the key: the host CPU. By default (`PERRY_TARGET_CPU`
+/// unset) `compile_ll_to_object` passes `-mcpu=native`/`-march=native` to
+/// clang for host builds, so the emitted `.o` bakes in whatever instruction
+/// set the build machine supports. The cache is consequently
+/// **machine-local** — the default `node_modules/.cache/perry`
 /// is inside the already-gitignored `node_modules/` for this reason.
 /// Sharing across machines with different CPUs (rsync,
-/// NFS, Docker bind-mount) can produce SIGILL at runtime.
+/// NFS, Docker bind-mount) can produce SIGILL at runtime. Pinning an
+/// explicit baseline (`--march x86-64-v2` / `[build] march`, #6125) removes
+/// the machine dependence — the chosen baseline IS keyed, via the
+/// `PERRY_TARGET_CPU` env field.
 ///
 /// Cross-platform non-determinism (Mach-O LC_UUID, PE TimeDateStamp,
 /// codesigning) affects the *linked binary*, not the object file — so
@@ -765,6 +769,11 @@ fn compute_object_cache_key_with_env(
     //     not be bypassed by a stale cache hit.
     //   - PERRY_UNBOXED_OBJECT_FIELDS=1 changes object-literal layout
     //     lowering for exact typed object shapes.
+    //   - PERRY_TARGET_CPU (#6125, set directly or promoted from `--march` /
+    //     perry.toml `[build] march`/`native_tuning`) changes the clang
+    //     `-march`/`-mcpu` tuning flag, i.e. which instruction-set baseline
+    //     the .o bytes assume. Serving a host-native-tuned object to a
+    //     pinned-baseline build would silently ship AVX-512 again.
     // Hashing the values (not just presence) means a persistent override
     // like PERRY_LLVM_CLANG=/opt/homebrew/opt/llvm/bin/clang in a shell rc
     // still gets cache reuse across runs, while flipping a debug flag on
@@ -806,6 +815,10 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_UNBOXED_OBJECT_FIELDS")
             .as_deref()
             .unwrap_or(""),
+    );
+    h.field(
+        "env_target_cpu",
+        env_var("PERRY_TARGET_CPU").as_deref().unwrap_or(""),
     );
 
     h.finish()
@@ -1609,6 +1622,7 @@ mod object_cache_tests {
             "PERRY_DISABLE_BUFFER_FAST_PATH",
             "PERRY_VERIFY_NATIVE_REGIONS",
             "PERRY_UNBOXED_OBJECT_FIELDS",
+            "PERRY_TARGET_CPU",
         ] {
             // Sample state without the var, with the var, and with a different
             // value — all three keys must be distinct.
