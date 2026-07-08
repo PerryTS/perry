@@ -217,11 +217,12 @@ pub extern "C" fn js_math_f16round(value: f64) -> f64 {
 /// Math.clz32(x) -> number — count leading zeros of 32-bit integer
 #[no_mangle]
 pub extern "C" fn js_math_clz32(x: f64) -> f64 {
-    // JS spec: convert to UInt32 first
-    let n = if x.is_nan() || x.is_infinite() {
+    // JS spec: ToUint32(x) first. `x as i64 as u32` SATURATES for |x| >= 2^63
+    // (Math.clz32(1e20) came out 0 instead of 1); use truncate-mod-2^32.
+    let n = if !x.is_finite() {
         0u32
     } else {
-        x as i64 as u32
+        x.trunc().rem_euclid(4_294_967_296.0) as u32
     };
     n.leading_zeros() as f64
 }

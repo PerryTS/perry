@@ -524,12 +524,30 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
     // toward zero and reduce modulo 2^32. `as i64` is NOT equivalent — it
     // saturates for |v| >= 2^63, so `~(1e20)` came out as `~(-1)` == 0
     // instead of -1661992961 (CodeRabbit review on #5466).
-    let a_i32 = if a_num.is_nan() || !a_num.is_finite() {
-        0i32
+    (!dyn_to_int32(a_num)) as f64
+}
+
+/// ES ToInt32 (7.1.6): truncate toward zero, reduce modulo 2^32, reinterpret as
+/// signed. NaN / ±0 / ±Infinity map to 0. `v as i64 as i32` is WRONG — Rust's
+/// float→int cast SATURATES for |v| >= 2^63, so e.g. ToInt32(1e20) came out as
+/// -1 instead of 1661992960 (#6079).
+#[inline]
+fn dyn_to_int32(v: f64) -> i32 {
+    if !v.is_finite() {
+        0
     } else {
-        a_num.trunc().rem_euclid(4294967296.0) as u32 as i32
-    };
-    (!a_i32) as f64
+        (v.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+    }
+}
+
+/// ES ToUint32 (7.1.7): as ToInt32 but reinterpreted as unsigned.
+#[inline]
+fn dyn_to_uint32(v: f64) -> u32 {
+    if !v.is_finite() {
+        0
+    } else {
+        v.trunc().rem_euclid(4_294_967_296.0) as u32
+    }
 }
 
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
@@ -540,10 +558,9 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shr);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    // Rust `f64 as i32` saturates at i32::MAX for values >= 2^31, but JS wraps.
-    let ai = (a as i64) as i32;
-    let bi = ((b as i64) as i32) & 0x1f;
+    // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
+    let ai = dyn_to_int32(a);
+    let bi = dyn_to_uint32(b) & 0x1f;
     (ai >> bi) as f64
 }
 
@@ -555,9 +572,9 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shl);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    let ai = (a as i64) as i32;
-    let bi = ((b as i64) as i32) & 0x1f;
+    // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
+    let ai = dyn_to_int32(a);
+    let bi = dyn_to_uint32(b) & 0x1f;
     (ai << bi) as f64
 }
 
@@ -571,8 +588,8 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_and);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    (((a as i64) as i32) & ((b as i64) as i32)) as f64
+    // JS ToInt32 both operands (#6079).
+    (dyn_to_int32(a) & dyn_to_int32(b)) as f64
 }
 
 /// Dynamic bitwise OR: BigInt | if either operand is BigInt, else i32 | for numbers.
@@ -583,8 +600,8 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_or);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    (((a as i64) as i32) | ((b as i64) as i32)) as f64
+    // JS ToInt32 both operands (#6079).
+    (dyn_to_int32(a) | dyn_to_int32(b)) as f64
 }
 
 /// Dynamic bitwise XOR: BigInt ^ if either operand is BigInt, else i32 ^ for numbers.
@@ -595,8 +612,8 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_xor);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    (((a as i64) as i32) ^ ((b as i64) as i32)) as f64
+    // JS ToInt32 both operands (#6079).
+    (dyn_to_int32(a) ^ dyn_to_int32(b)) as f64
 }
 
 /// Dynamic exponentiation: `BigInt ** BigInt` when both operands are BigInt
@@ -628,9 +645,9 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
         let err = crate::error::js_typeerror_new(s);
         crate::exception::js_throw(js_nanbox_pointer(err as i64));
     }
-    // JS ToUint32 then logical shift, count masked to 5 bits.
-    let ai = (a as i64) as u32;
-    let bi = ((b as i64) as i32 as u32) & 0x1f;
+    // JS ToUint32(a) then logical shift; ToUint32(b) & 0x1F count (#6079).
+    let ai = dyn_to_uint32(a);
+    let bi = dyn_to_uint32(b) & 0x1f;
     (ai >> bi) as f64
 }
 
