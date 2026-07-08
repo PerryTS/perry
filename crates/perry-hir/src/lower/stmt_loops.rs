@@ -1893,15 +1893,25 @@ pub(crate) fn lower_stmt_for_in(
     // lowered below can reference them).
     let head_binding = predefine_for_head(ctx, &for_in_stmt.left, Type::String)?;
 
-    // Lower the object expression
+    // Lower the object expression once, spilling it into a temp so each
+    // iteration can re-check that the current key still exists on the
+    // receiver (for-in deletion semantics — see `guard_for_in_body`).
     let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
+    let obj_id = ctx.fresh_local();
+    module.init.push(Stmt::Let {
+        id: obj_id,
+        name: format!("__forin_obj_{}", obj_id),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(obj_expr),
+    });
 
     // for-in enumerates the receiver's own AND inherited enumerable string
     // keys (deduplicated), and is a no-op — not a throw — on null/undefined.
     // `ForInKeys` carries those semantics; `ObjectKeys` (Object.keys) would
     // throw on nullish and miss inherited keys. Refs language/statements/for-in
     // S12.6.4_A1/A2 (nullish) and A6/A6.1 (prototype chain).
-    let keys_expr = Expr::ForInKeys(Box::new(obj_expr));
+    let keys_expr = Expr::ForInKeys(Box::new(Expr::LocalGet(obj_id)));
 
     // Create internal variables for the keys array and index
     let keys_id = ctx.fresh_local();
@@ -1928,6 +1938,9 @@ pub(crate) fn lower_stmt_for_in(
     for (i, stmt) in binding_stmts.into_iter().enumerate() {
         loop_body.insert(i, stmt);
     }
+
+    // Skip keys deleted from the receiver before they are visited.
+    let loop_body = guard_for_in_body(obj_id, keys_id, idx_id, loop_body);
 
     // Create the for loop:
     // for (let __i = 0; __i < __keys.length; __i++) { ... }

@@ -675,9 +675,23 @@ unsafe fn ordinary_has_property(
                 }
                 cur = p as *const ObjectHeader;
             }
-            // No explicit prototype recorded — the default `Object.prototype`
-            // applies (handled below), so stop the explicit walk here.
-            None => break,
+            // No explicit static `[[Prototype]]` recorded. But `Object.create(proto)`
+            // and `Function.prototype = obj` model the prototype link via a synthetic
+            // class_id → prototype object (`CLASS_PROTOTYPE_OBJECTS`), which the
+            // recorded-static-prototype walk above can't see. Without hopping it,
+            // `key in Object.create({ key: … })` — and even inherited
+            // `Object.prototype` members on such a receiver (its synthetic class_id
+            // makes the `Object.prototype` tail below bail) — were wrongly reported
+            // absent. Hop through that synthetic prototype object and continue; the
+            // field-GET path resolves the same chain via `resolve_proto_chain_field`.
+            None => {
+                let synth_proto = crate::object::class_prototype_object(unsafe { (*cur).class_id });
+                if !synth_proto.is_null() && synth_proto as *const ObjectHeader != cur {
+                    cur = synth_proto as *const ObjectHeader;
+                    continue;
+                }
+                break;
+            }
         }
     }
     // Wall 10 — a class instance's prototype METHODS / GETTERS / SETTERS live in

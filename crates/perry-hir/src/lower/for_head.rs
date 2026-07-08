@@ -208,3 +208,46 @@ pub(crate) fn for_head_binding_stmts(
         }
     }
 }
+
+/// Wrap a desugared for-in loop body so a key that is deleted from the
+/// receiver *before it is visited* is skipped, per ECMAScript for-in deletion
+/// semantics (EnumerateObjectProperties: "If a property that has not yet been
+/// visited during enumeration is deleted, then it will not be visited").
+///
+/// The keys are snapshotted once (`ForInKeys`), so without this guard a key
+/// deleted mid-iteration would still be visited. `obj_id` holds the receiver
+/// (spilled to a temp by the caller so it can be re-read each iteration),
+/// `keys_id`/`idx_id` the snapshot array and cursor.
+///
+/// A primitive string is the only primitive whose for-in snapshot is non-empty
+/// (its indices); its keys cannot be deleted, and the `in` operator *throws* on
+/// a primitive receiver — so strings bypass the recheck and are always visited.
+/// Objects/functions go through `key in obj`, which is `false` for a deleted
+/// key and skips it. Nullish receivers never reach here (empty snapshot).
+pub(crate) fn guard_for_in_body(
+    obj_id: LocalId,
+    keys_id: LocalId,
+    idx_id: LocalId,
+    body: Vec<Stmt>,
+) -> Vec<Stmt> {
+    let guard = Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),
+            right: Box::new(Expr::String("string".to_string())),
+        }),
+        then_expr: Box::new(Expr::Bool(true)),
+        else_expr: Box::new(Expr::In {
+            property: Box::new(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(keys_id)),
+                index: Box::new(Expr::LocalGet(idx_id)),
+            }),
+            object: Box::new(Expr::LocalGet(obj_id)),
+        }),
+    };
+    vec![Stmt::If {
+        condition: guard,
+        then_branch: body,
+        else_branch: None,
+    }]
+}

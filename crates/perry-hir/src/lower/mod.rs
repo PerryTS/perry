@@ -49,7 +49,7 @@ mod stmt;
 mod unimpl_hints;
 pub(crate) use stmt::*;
 mod for_head;
-pub(crate) use for_head::{for_head_binding_stmts, predefine_for_head};
+pub(crate) use for_head::{for_head_binding_stmts, guard_for_in_body, predefine_for_head};
 mod stmt_loops;
 pub(crate) use stmt_loops::{
     insert_iterator_close_on_abrupt, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,

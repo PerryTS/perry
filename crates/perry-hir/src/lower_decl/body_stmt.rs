@@ -1809,10 +1809,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             let head_binding =
                 crate::lower::predefine_for_head(ctx, &for_in_stmt.left, Type::String)?;
 
+            // Spill the receiver into a temp so each iteration can re-check
+            // that the current key still exists (for-in deletion semantics).
             let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
+            let obj_id = ctx.fresh_local();
+            result.push(Stmt::Let {
+                id: obj_id,
+                name: format!("__forin_obj_{}", obj_id),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(obj_expr),
+            });
             // for-in: own + inherited enumerable keys, nullish-safe (no throw).
             // See lower/stmt_loops.rs::lower_stmt_for_in for the rationale.
-            let keys_expr = Expr::ForInKeys(Box::new(obj_expr));
+            let keys_expr = Expr::ForInKeys(Box::new(Expr::LocalGet(obj_id)));
             let keys_id = ctx.fresh_local();
             let idx_id = ctx.fresh_local();
 
@@ -1836,6 +1846,9 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             for (i, stmt) in binding_stmts.into_iter().enumerate() {
                 loop_body.insert(i, stmt);
             }
+
+            // Skip keys deleted from the receiver before they are visited.
+            let loop_body = crate::lower::guard_for_in_body(obj_id, keys_id, idx_id, loop_body);
 
             // Create the for loop
             result.push(Stmt::For {
