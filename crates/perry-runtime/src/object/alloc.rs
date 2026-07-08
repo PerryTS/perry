@@ -648,10 +648,21 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
 
     let header_size = std::mem::size_of::<ObjectHeader>();
 
-    // If source is invalid, create an empty object with enough capacity for the static props.
-    // Physical slot count = max(extra_count, 8) to match js_object_set_field_by_name's
-    // alloc_limit = max(field_count, 8) expectation.
-    if src_raw < 0x10000 {
+    // If source is invalid OR not a genuine heap object, create an empty object
+    // with capacity for the static props. Physical slot count = max(extra_count,
+    // 8) to match js_object_set_field_by_name's alloc_limit = max(field_count, 8).
+    // The `top16 >= 0x7FF8` extraction above admits SSO/BigInt/INT32/negative-
+    // double payloads and exotic headers (Map/Set/Promise/…) whose bytes are not
+    // an ObjectHeader; deref'ing `field_count`/`keys_array` off them is type
+    // confusion (#6070). The sole production caller (`js_structured_clone`)
+    // already gates on GC_TYPE_OBJECT, so this only hardens against a future one.
+    let src_is_object = src_raw >= 0x10000
+        && !crate::value::addr_class::is_handle_band(src_raw)
+        && matches!(
+            crate::value::addr_class::try_read_gc_header(src_raw),
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
+        );
+    if !src_is_object {
         let phys_slots = std::cmp::max(extra_count, 8);
         let total_size = header_size + phys_slots as usize * 8;
         let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
@@ -1199,11 +1210,23 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // keys_array read below would deref a garbage pointer and crash (the prior
     // behavior — a hard SIGSEGV on a common operation). Enumerate the dense
     // index range directly through the array API instead. (#5347 Object/assign)
-    let source_is_array = {
-        let gc_header =
-            (src_raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+    // Classify the source's GC type once. A genuine plain/class object keeps
+    // its own string-keyed props in `ObjectHeader.keys_array`; an array keeps
+    // indexed elements in its `ArrayHeader` buffer (handled below). Anything
+    // else (Map/Set/Promise/Date/WeakMap/…) has its OWN header layout — reading
+    // its bytes as `ObjectHeader.keys_array` yields a garbage pointer that the
+    // key-copy loop then walks as an array (a memory-layout-dependent SIGBUS on
+    // `Object.assign({}, new Map())`, #6070). Per CopyDataProperties such
+    // exotics expose no own enumerable string keys through this path, so they
+    // contribute nothing — skip them (mirrors `js_object_copy_own_fields`).
+    // Probe the GcHeader without deref-faulting — a handle-band id that passed
+    // the guards above would otherwise deref a non-heap address; mirrors the
+    // sibling `js_object_copy_own_fields`.
+    let source_obj_type = match crate::value::addr_class::try_read_gc_header(src_raw) {
+        Some(h) => h.obj_type,
+        None => return target_f64,
     };
+    let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
 
     // 1) Copy own string-keyed enumerable properties from source to target,
     //    in source insertion order. Mirrors `js_object_copy_own_fields`.
@@ -1242,7 +1265,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             object_assign_set_string_key(target, target_is_array, key_ptr, value);
         }
-    } else {
+    } else if source_obj_type == crate::gc::GC_TYPE_OBJECT {
         let src_keys = (*src).keys_array;
         if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
             // Cap the key count at the keys array's capacity: a malformed keys
