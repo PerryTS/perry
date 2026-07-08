@@ -1173,6 +1173,10 @@ fn lower_bounded_array_index_get(
     ))
 }
 
+// #6132: retired — inline-read a value as a plain ArrayHeader, which is unsafe
+// for off-heap typed arrays (garbage reads). Callers now use the typed-feedback
+// guarded path. Kept temporarily behind allow(dead_code); slated for deletion.
+#[allow(dead_code)]
 fn lower_legacy_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -1658,11 +1662,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 let idx_i32 = lower_expr_as_i32(ctx, index)?;
-                if !require_numeric_layout
-                    && !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_))
-                {
-                    return lower_legacy_array_index_get(ctx, &arr_box, &idx_i32);
-                }
+                // #6132: a member receiver of unknown type (e.g. `n.buf[i]` where
+                // `n.buf` is a Uint32Array) must NOT go through the legacy inline
+                // reader — that path reads the value as a plain `ArrayHeader`
+                // (gc_type at `handle-8`, raw f64 slot at `handle+8+i*8`), but a
+                // small typed array is off-heap with no GcHeader, so both reads
+                // are garbage and it returned nondeterministic junk. Route through
+                // the typed-feedback-guarded path: its runtime guard rejects
+                // non-plain arrays and takes the boxed fallback (which dispatches
+                // typed arrays correctly), while plain arrays keep the fast path.
                 return lower_guarded_array_index_get(
                     ctx,
                     &arr_box,
