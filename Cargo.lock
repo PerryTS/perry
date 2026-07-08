@@ -2685,7 +2685,7 @@ dependencies = [
  "gobject-sys 0.20.10",
  "libc",
  "system-deps",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5491,7 +5491,7 @@ dependencies = [
  "async-trait",
  "atty",
  "clap",
- "console 0.15.11",
+ "console 0.16.3",
  "dashmap",
  "dialoguer 0.11.0",
  "dotenvy",
