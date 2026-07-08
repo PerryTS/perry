@@ -268,6 +268,31 @@ fn collect_archive_symbols_flat(
         .unwrap_or_default()
 }
 
+/// Flat union of every *external* symbol defined anywhere in the archive.
+/// Distinct from [`collect_archive_symbols_flat`], which includes local
+/// definitions: a local definition cannot satisfy a cross-object reference,
+/// so callers deciding "can this reference resolve from that archive
+/// instead?" must use this variant.
+fn collect_archive_global_symbols_flat(
+    llvm_nm: &Path,
+    archive: &Path,
+) -> std::collections::HashSet<String> {
+    let out = match Command::new(llvm_nm)
+        .arg("--defined-only")
+        .arg("--extern-only")
+        .arg("--format=bsd")
+        .arg(archive)
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => return Default::default(),
+    };
+    parse_nm_archive_output(&String::from_utf8_lossy(&out.stdout))
+        .into_values()
+        .flatten()
+        .collect()
+}
+
 /// Run `nm --undefined-only` on an archive and parse the output into a
 /// per-member map of the symbols each member *references* but does not define.
 /// Same parse as [`collect_archive_symbols_by_member`]; returns `None` if nm
@@ -988,6 +1013,157 @@ pub(super) fn strip_bundled_runtime_from_well_known_lib(
          (stdlib provides the single runtime copy)",
         remove_set.len()
     );
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    Ok(trimmed_lib)
+}
+
+/// Mach-O companion to the well-known dropper for the prebuilt UI staticlib.
+/// The UI lib ships from the release bundle, so every dependency copy it
+/// bundles — perry-runtime, std, itoa, data-encoding, … — comes from a
+/// foreign crate graph: member names can never match the (auto-optimized,
+/// locally rebuilt) stdlib's bundled copies, Rule 1 of
+/// [`strip_bundled_runtime_from_well_known_lib`] can't fire, and on Mach-O —
+/// where ld64.lld has no `--allow-multiple-definition` — both copies load and
+/// the link dies with duplicate `_js_*` / std / itoa externs.
+///
+/// The bundled members cannot simply be dropped: sibling UI members reach
+/// shared-generic monomorphizations instantiated inside them
+/// (`RawVec::grow_one`, `hashbrown::…::reserve_rehash`) whose symbol hashes
+/// embed the foreign crate fingerprint — no locally rebuilt archive can ever
+/// provide those. Instead, LOCALIZE every global a member defines that the
+/// actually-linked stdlib/runtime archives also export: sibling references
+/// rebind to the single linked copy (one set of runtime/std mutable state —
+/// the #5920 invariant), each member keeps exporting only its unique
+/// generics, and whatever becomes unreferenced dead-strips
+/// (SUBSECTIONS_VIA_SYMBOLS). No global remains defined on both sides, so
+/// the duplicate-symbol errors are structurally gone.
+///
+/// Non-fatal by construction: any nm/ar/objcopy failure returns the original
+/// archive unchanged at the callsite.
+pub(super) fn dedup_ui_lib_against_linked_libs(
+    lib_path: &PathBuf,
+    reference_libs: &[&Path],
+) -> Result<PathBuf> {
+    let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
+
+    let llvm_ar = find_llvm_tool("llvm-ar")
+        .or_else(|| find_path_tool("ar"))
+        .ok_or_else(|| anyhow::anyhow!("ar not found"))?;
+    let objcopy = find_nightly_llvm_tool("llvm-objcopy")
+        .or_else(|| find_llvm_tool("llvm-objcopy"))
+        .or_else(|| find_path_tool("objcopy"))
+        .ok_or_else(|| anyhow::anyhow!("objcopy not found"))?;
+    let nm = find_nightly_llvm_tool("llvm-nm")
+        .or_else(|| find_llvm_tool("llvm-nm"))
+        .or_else(|| find_path_tool("nm"))
+        .ok_or_else(|| anyhow::anyhow!("nm not found"))?;
+
+    let abs_lib = std::fs::canonicalize(lib_path)?;
+
+    let out = Command::new(&llvm_ar).arg("t").arg(&abs_lib).output()?;
+    if !out.status.success() {
+        return Err(anyhow::anyhow!("failed to list members of {lib_name}"));
+    }
+    let members: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+
+    // Union of the external symbols provided by the archives actually on the
+    // link line (auto-optimized or prebuilt stdlib + the standalone runtime
+    // gap-filler). Extern-only: a local definition over there cannot satisfy
+    // a reference rebound away from the bundled copy.
+    let mut linked_globals: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for reference in reference_libs {
+        let abs_ref = std::fs::canonicalize(reference)?;
+        linked_globals.extend(collect_archive_global_symbols_flat(&nm, &abs_ref));
+    }
+    if linked_globals.is_empty() {
+        return Err(anyhow::anyhow!(
+            "failed to inspect linked stdlib/runtime symbols (empty set)"
+        ));
+    }
+
+    let defined_by_member = collect_archive_symbols_by_member(&nm, &abs_lib)
+        .ok_or_else(|| anyhow::anyhow!("failed to inspect defined symbols of {lib_name}"))?;
+
+    let mut to_localize_by_member: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let mut total_localized = 0usize;
+    for member in &members {
+        let Some(defined) = defined_by_member.get(member) else {
+            continue;
+        };
+        let mut duplicated: Vec<String> = defined
+            .iter()
+            .filter(|s| linked_globals.contains(*s))
+            .cloned()
+            .collect();
+        if duplicated.is_empty() {
+            continue;
+        }
+        duplicated.sort();
+        total_localized += duplicated.len();
+        to_localize_by_member.insert(member.clone(), duplicated);
+    }
+    if to_localize_by_member.is_empty() {
+        return Ok(lib_path.clone());
+    }
+    eprintln!(
+        "[strip-dedup] {lib_name}: localizing {total_localized} bundled global(s) across \
+         {} member(s) already provided by the linked stdlib/runtime",
+        to_localize_by_member.len()
+    );
+
+    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_base).ok();
+    let extract_dir = tmp_base.join(format!("_{lib_name}_uiruntime_extract"));
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)?;
+    let trimmed_lib = tmp_base.join(format!("_{lib_name}_uiruntime.lib"));
+    let _ = std::fs::remove_file(&trimmed_lib);
+
+    let extract_out = Command::new(&llvm_ar)
+        .arg("x")
+        .arg(&abs_lib)
+        .current_dir(&extract_dir)
+        .output()?;
+    if !extract_out.status.success() {
+        let stderr = String::from_utf8_lossy(&extract_out.stderr);
+        return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
+    }
+
+    for (member, symbols) in &to_localize_by_member {
+        let member_path = extract_dir.join(member);
+        let list_path = extract_dir.join(format!("{member}.localize-list"));
+        std::fs::write(&list_path, symbols.join("\n"))?;
+        let out = Command::new(&objcopy)
+            .arg(format!("--localize-symbols={}", list_path.display()))
+            .arg(&member_path)
+            .output()?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(anyhow::anyhow!(
+                "failed to localize bundled runtime globals in {member}: {stderr}"
+            ));
+        }
+        let _ = std::fs::remove_file(&list_path);
+    }
+
+    let mut ar_cmd = Command::new(&llvm_ar);
+    ar_cmd.arg("crs").arg(&trimmed_lib);
+    for member in &members {
+        ar_cmd.arg(extract_dir.join(member));
+    }
+    let ar_out = ar_cmd.output()?;
+    if !ar_out.status.success() {
+        let stderr = String::from_utf8_lossy(&ar_out.stderr);
+        return Err(anyhow::anyhow!(
+            "failed to create runtime-localized archive for {lib_name}: {stderr}"
+        ));
+    }
+
     let _ = std::fs::remove_dir_all(&extract_dir);
     Ok(trimmed_lib)
 }
