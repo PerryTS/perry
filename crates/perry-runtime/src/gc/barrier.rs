@@ -760,13 +760,28 @@ pub(super) fn incremental_mark_barrier_active() -> bool {
 pub(super) fn heap_word_candidate_addr(bits: u64) -> Option<usize> {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        let ptr = (bits & POINTER_MASK) as usize;
+        let payload = bits & POINTER_MASK;
+        // arm64_32 (ILP32): a real heap pointer fits in 32 bits, so `payload as
+        // usize` is lossless only when the high 16 payload bits are zero. A
+        // mistagged/immediate value with a >32-bit payload would otherwise
+        // truncate to a garbage 32-bit address that the GC marks/derefs,
+        // corrupting unrelated heap memory. Reject it.
+        #[cfg(not(target_pointer_width = "64"))]
+        if payload > 0xFFFF_FFFF {
+            return None;
+        }
+        let ptr = payload as usize;
         return (ptr != 0).then_some(ptr);
     }
     if tag >= 0x7FF8_0000_0000_0000 {
         return None;
     }
     if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
+        // Same ILP32 guard for the raw-f64 pointer path.
+        #[cfg(not(target_pointer_width = "64"))]
+        if bits > 0xFFFF_FFFF {
+            return None;
+        }
         Some(bits as usize)
     } else {
         None

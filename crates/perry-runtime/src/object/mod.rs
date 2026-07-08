@@ -717,21 +717,35 @@ const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 /// but a grep across crates/perry-codegen confirms no codegen path ever
 /// resolved against it, so the export was dead.
 thread_local! {
-    static TRANSITION_CACHE_GLOBAL: std::cell::UnsafeCell<[TransitionEntry; TRANSITION_CACHE_SIZE]> =
-        const { std::cell::UnsafeCell::new([TransitionEntry {
-            prev_keys: 0,
-            key_ptr: 0,
-            next_keys: 0,
-            slot_idx: 0,
-            target_len: 0,
-        }; TRANSITION_CACHE_SIZE]) };
+    // arm64_32 fix: HEAP-allocate the 320KB cache (Box) instead of storing it
+    // inline in TLS. Oversized `#[thread_local]` storage overflows the ILP32
+    // TLS layout and its writes corrupt adjacent thread-locals (confirmed on a
+    // real Series 7: shrinking OR boxing removes the corruption). `vec!` builds
+    // directly on the heap (no 320KB stack temporary).
+    static TRANSITION_CACHE_GLOBAL: std::cell::UnsafeCell<Box<[TransitionEntry]>> =
+        std::cell::UnsafeCell::new(
+            vec![
+                TransitionEntry {
+                    prev_keys: 0,
+                    key_ptr: 0,
+                    next_keys: 0,
+                    slot_idx: 0,
+                    target_len: 0,
+                };
+                TRANSITION_CACHE_SIZE
+            ]
+            .into_boxed_slice(),
+        );
 }
 
 #[inline]
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
 ) -> R {
-    TRANSITION_CACHE_GLOBAL.with(|c| f(c.get()))
+    TRANSITION_CACHE_GLOBAL.with(|c| unsafe {
+        let boxed = &mut *c.get();
+        f(boxed.as_mut_ptr() as *mut [TransitionEntry; TRANSITION_CACHE_SIZE])
+    })
 }
 
 /// FNV-1a content hash for a property-name string.
