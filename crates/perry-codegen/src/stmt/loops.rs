@@ -2708,16 +2708,16 @@ fn lower_for_after_init_with_i32_bound(
     Ok(())
 }
 
-/// Phase 2 of the moving-GC project: whether to emit loop back-edge safepoint
-/// polls. Gated on the compiler being invoked with `PERRY_GC_MOVING_SAFEPOINT`
-/// set, so default binaries carry ZERO loop overhead (no poll emitted at all).
+/// Whether to emit loop back-edge safepoint polls — ON by default (the moving
+/// GC is the default). Compiling with `PERRY_GC_MOVING_SAFEPOINT=0` omits them
+/// (the kill switch), matching the runtime default so the two stay coherent.
 fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }

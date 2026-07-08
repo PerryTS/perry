@@ -1073,7 +1073,13 @@ impl GcCycleState {
             .is_some_and(|minor| minor.evacuation_policy.considered);
 
         self.root_scan.get_or_insert_with(RootScanCycleState::new);
-        let allow_synchronous_scanners = !self.progress_kind.is_budgeted();
+        // Phase 4 (incremental old-gen, gated): allow the initial root-scan step
+        // of a budgeted cycle to run unbudgeted scanners synchronously (a
+        // bounded initial-mark pause), so the stepper can start on programs that
+        // register unbudgeted mutable scanners. Marking still proceeds
+        // incrementally in later steps (they don't consult this flag).
+        let allow_synchronous_scanners =
+            !self.progress_kind.is_budgeted() || super::gc_incremental_enabled();
         loop {
             let phase_name = self
                 .root_scan

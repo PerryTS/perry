@@ -375,20 +375,43 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 }
 
 #[inline]
-/// Phase 1 of the moving-GC project: gate the copying (moving) minor that runs
-/// at precise-root event-loop safepoints. **EXPERIMENTAL — default OFF.** When
-/// off, behaviour is exactly today's non-moving GC (this whole path is
-/// skipped). Enabling it runs the copying minor, which is CORRECT on the
-/// validated clean path (byte-identical output, survivors evacuated) but still
-/// exposes PRE-EXISTING relocation-correctness bugs in the copying/evacuation
-/// machinery (objects with an Array + a TypedArray field can corrupt on move;
-/// see the copying-minor relocation issue) — so it can crash on programs that
-/// hit those. Do NOT flip the default on until relocation is hardened.
+/// The moving (copying) minor at precise-root safepoints — **Perry's default
+/// GC.** The copying minor runs at the event-loop safepoint and, via the
+/// codegen loop back-edge polls, at loop safepoints; it moves survivors
+/// (compacting, O(survivors), no sweep). `PERRY_GC_MOVING_SAFEPOINT=0` is a
+/// kill switch that reverts to the non-moving path (for bisecting a regression
+/// while we harden). Known hardening items: programs that hit the codegen
+/// Array+TypedArray bug (#6132) can corrupt the heap and crash the collector;
+/// the old-page force-evacuation path (#6133); and loop back-edge poll coverage
+/// for the specialized loop-lowering paths.
 pub(crate) fn gc_moving_safepoint_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
+/// budgeted stepper). **EXPERIMENTAL — default OFF.** Perry has a full budgeted
+/// mark/sweep stepper but it never runs, because every compiled program
+/// registers unbudgeted mutable root scanners and
+/// `registered_root_scanners_block_budgeted_gc()` blocks the cycle from ever
+/// starting. When this is on, the stepper is allowed to start and runs those
+/// unbudgeted scanners SYNCHRONOUSLY in its initial root-scan step (a bounded
+/// initial-mark pause), then marks/sweeps the old gen incrementally across
+/// safepoints — the standard "initial-mark + incremental-mark" design. Off ⇒
+/// exactly today's non-incremental GC (the whole path is skipped). Independent
+/// of `PERRY_GC_MOVING_SAFEPOINT`; this is the concurrency layer that reduces
+/// old-gen pause time.
+pub(crate) fn gc_incremental_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
         matches!(
-            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
+            std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
             Ok("1") | Ok("on") | Ok("true")
         )
     })
@@ -607,10 +630,13 @@ thread_local! {
 
 /// Hard cap on committed arena bytes before which a nursery trigger may be
 /// deferred to a safepoint (Phase 2/3). Loop back-edge polls drain the pending
-/// flag every iteration, so the arena never grows near this in normal code;
-/// the cap only bounds a pathological single mega-expression that reaches no
-/// poll — there the alloc-point non-moving minor runs as a safety valve.
-pub(super) const GC_MOVING_DEFER_HARD_CAP_BYTES: usize = 256 * 1024 * 1024;
+/// flag every iteration, so the arena never grows near this in normal code; the
+/// cap bounds RSS for code that reaches no safepoint before the next trigger —
+/// a synchronous loop on a specialized lowering path that doesn't yet emit the
+/// poll, or a single mega-expression — where the alloc-point non-moving minor
+/// runs as the safety valve. Kept modest so those cases don't balloon under the
+/// default-on moving GC (raise once poll coverage is complete).
+pub(super) const GC_MOVING_DEFER_HARD_CAP_BYTES: usize = 128 * 1024 * 1024;
 
 /// RAII guard that marks a #5476 direct old-gen reclaim in progress so a nested
 /// `gc_check_trigger` can't re-enter it. See `GC_OLD_RECLAIM_IN_PROGRESS`.
