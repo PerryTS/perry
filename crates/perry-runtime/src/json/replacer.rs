@@ -261,13 +261,27 @@ unsafe fn dispatch_pointer_with_replacer(
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => {
-            // #5989: `gc_obj_type` can mis-read a corrupted / mis-classified
-            // structure as an array — its `length` field then reads as garbage
-            // (e.g. ~2.7e9) and `stringify_array`'s `0..len` walk runs OOB and
-            // SIGBUSes. Sanity-cap the length (mirrors `is_object_pointer`'s 10M
-            // cap): beyond that it is not a real array — emit "null", not a crash.
+            // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
+            // stub at the OLD location (`js_array_grow`, issue #233) — its first
+            // 8 bytes now hold the forwarding pointer to the grown array, so
+            // reading them as length/capacity yields a bogus multi-GB "length".
+            // A stale pre-grow pointer reaches here from the object graph (e.g.
+            // React's RSC flight stores a `[key, value]` pair, then `pair[i] = …`
+            // grows it while the payload still holds the pre-grow reference).
+            // Follow the forwarding chain — as `clean_arr_ptr` does for every hot
+            // accessor and as the plain-JSON path (`json/stringify.rs`) already
+            // does — so the CURRENT grown array is serialized instead of the
+            // defunct stub. Without this, the raw read produced a garbage length
+            // that only the 10M cap below (emit "null") kept from SIGBUS-ing,
+            // silently dropping the real data.
+            let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+            if ptr.is_null() {
+                buf.push_str("null");
+                return;
+            }
             let len = (*(ptr as *const crate::ArrayHeader)).length;
             if len > 10_000_000 {
+                // Defensive backstop for a genuinely mis-classified pointer.
                 buf.push_str("null");
             } else {
                 stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
@@ -1093,6 +1107,14 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     depth: usize,
     use_pretty: bool,
 ) {
+    // #5989: follow GC_FLAG_FORWARDED array-growth stubs (`js_array_grow`, issue
+    // #233) so a stale pre-grow pointer serializes the current grown array —
+    // mirrors the resolution in `dispatch_pointer_with_replacer`'s array arm.
+    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+    if ptr.is_null() {
+        buf.push_str("null");
+        return;
+    }
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
