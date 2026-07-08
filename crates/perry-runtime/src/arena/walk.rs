@@ -50,6 +50,10 @@ pub(crate) struct ArenaObjectCursorBuilder {
     region: usize,
     block_pos: usize,
     inspected_blocks: usize,
+    /// When set, the `old` arena region is skipped so the walk covers only the
+    /// young generation — used to build a nursery-scoped valid-pointer set for
+    /// non-moving minors (#6083).
+    young_only: bool,
 }
 
 const ARENA_CURSOR_REGION_COUNT: usize = 5;
@@ -71,7 +75,18 @@ impl ArenaObjectCursorBuilder {
             region: 0,
             block_pos: 0,
             inspected_blocks: 0,
+            young_only: false,
         }
+    }
+
+    /// Like `new`, but excludes the `old` arena region so the walk covers only
+    /// the young generation (eden + survivors + longlived). For a non-moving
+    /// minor this yields a valid-pointer set equivalent to the whole-heap one at
+    /// O(nursery) cost (#6083).
+    pub(crate) fn new_young_scoped(order: ArenaWalkOrder) -> Self {
+        let mut builder = Self::new(order);
+        builder.young_only = true;
+        builder
     }
 
     pub(crate) fn step(&mut self, remaining: &mut usize) -> Option<ArenaObjectCursor> {
@@ -123,7 +138,12 @@ impl ArenaObjectCursorBuilder {
         let survivor0_n = SURVIVOR_ARENA_0.with(|a| unsafe { (*a.get()).blocks.len() });
         let survivor1_n = SURVIVOR_ARENA_1.with(|a| unsafe { (*a.get()).blocks.len() });
         let longlived_n = LONGLIVED_ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
-        let old_n = OLD_ARENA.with(|a| unsafe { (*a.get()).blocks.len() });
+        // #6083: a young-scoped build skips the old arena entirely.
+        let old_n = if self.young_only {
+            0
+        } else {
+            OLD_ARENA.with(|a| unsafe { (*a.get()).blocks.len() })
+        };
 
         self.region_lengths = [general_n, survivor0_n, survivor1_n, longlived_n, old_n];
         self.region_bases = [

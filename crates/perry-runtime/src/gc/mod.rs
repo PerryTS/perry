@@ -189,6 +189,24 @@ pub fn gen_gc_evacuate_enabled() -> bool {
     })
 }
 
+/// #6083: opt-in nursery-scoped valid-pointer set for non-moving minors.
+/// `PERRY_NURSERY_SCOPED_MINOR=1`/`on`/`true` builds a minor's valid-pointer set
+/// over the young generation only (eden + survivors + longlived, skipping the
+/// old arena) — O(nursery) instead of O(total heap). Equivalent for a fully
+/// non-moving minor (old is never marked-for-sweep or reclaimed in a minor, and
+/// mark bits are per-cycle). Default off while it soaks: a missed old→young edge
+/// here would be a use-after-free.
+pub(super) fn nursery_scoped_minor_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_NURSERY_SCOPED_MINOR").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 fn gc_force_evacuate_enabled() -> bool {
     gen_gc_evacuate_enabled()
         && matches!(

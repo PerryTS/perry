@@ -1025,9 +1025,23 @@ impl GcCycleState {
 
     fn step_build_valid_pointer_set(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
-        let builder = self
-            .valid_builder
-            .get_or_insert_with(ValidPointerSetBuilder::new);
+        // #6083: a minor with no old-page defrag selected can build the
+        // valid-pointer set over the young generation only — equivalent to the
+        // whole-heap set for a fully non-moving minor (old is never marked-for-
+        // sweep or reclaimed here), at O(nursery) instead of O(total heap). We
+        // additionally force this minor non-moving below. Gated OFF by default.
+        let young_scoped = nursery_scoped_minor_enabled()
+            && self
+                .minor
+                .as_ref()
+                .is_some_and(|m| m.old_page_selection.selected_pages == 0);
+        let builder = self.valid_builder.get_or_insert_with(|| {
+            if young_scoped {
+                ValidPointerSetBuilder::new_young_scoped()
+            } else {
+                ValidPointerSetBuilder::new()
+            }
+        });
         if !builder.step(budget.work_units) {
             trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
             return;

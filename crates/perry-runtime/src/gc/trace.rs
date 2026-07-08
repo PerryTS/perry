@@ -75,6 +75,18 @@ impl ValidPointerSet {
         self.record_pointer_range(ptr);
     }
 
+    /// #6083: add an old remembered-set parent object to the exact-lookup set
+    /// (and range prefilter) only — NOT the arena runs. A young-scoped minor
+    /// build must include these so `mark_remembered_set_roots` validates the
+    /// old→young parent (barrier.rs) and marks its young children; but old
+    /// objects need no interior-pointer support in a minor (they are never
+    /// swept), and appending them out of address order would break the sorted
+    /// arena-run invariant `find_arena_floor` relies on for young objects.
+    pub(super) fn push_remembered_parent(&mut self, ptr: usize) {
+        self.lookup_set.insert(ptr);
+        self.record_pointer_range(ptr);
+    }
+
     pub(super) fn record_tenured_nursery_bytes(&mut self, bytes: usize) {
         self.tenured_nursery_bytes += bytes;
     }
@@ -181,6 +193,9 @@ pub(super) struct ValidPointerSetBuilder {
     arena_cursor_builder: Option<crate::arena::ArenaObjectCursorBuilder>,
     arena_cursor: Option<crate::arena::ArenaObjectCursor>,
     malloc_index: usize,
+    /// #6083: when the arena walk is young-scoped, an extra phase adds the old
+    /// remembered-set parents (objects on dirty pages) to the exact set.
+    young_scoped: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,6 +203,7 @@ pub(super) enum ValidPointerSetBuildPhase {
     ArenaCursorSetup,
     ArenaWalk,
     MallocWalk,
+    DirtyOldPageWalk,
     Finalize,
     Done,
 }
@@ -213,6 +229,24 @@ impl ValidPointerSetBuilder {
             )),
             arena_cursor: None,
             malloc_index: 0,
+            young_scoped: false,
+        }
+    }
+
+    /// #6083: build the valid-pointer set over the young generation only (the
+    /// arena walk skips the old region; the malloc walk is unchanged, since
+    /// young malloc objects are still swept). Equivalent to `new()` for a fully
+    /// non-moving minor.
+    pub(super) fn new_young_scoped() -> Self {
+        Self {
+            set: ValidPointerSet::new(),
+            phase: ValidPointerSetBuildPhase::ArenaCursorSetup,
+            arena_cursor_builder: Some(crate::arena::ArenaObjectCursorBuilder::new_young_scoped(
+                crate::arena::ArenaWalkOrder::Address,
+            )),
+            arena_cursor: None,
+            malloc_index: 0,
+            young_scoped: true,
         }
     }
 
@@ -257,6 +291,17 @@ impl ValidPointerSetBuilder {
                     if !self.step_malloc_walk(&mut remaining) {
                         return false;
                     }
+                    self.phase = if self.young_scoped {
+                        ValidPointerSetBuildPhase::DirtyOldPageWalk
+                    } else {
+                        ValidPointerSetBuildPhase::Finalize
+                    };
+                    if !unbounded {
+                        return false;
+                    }
+                }
+                ValidPointerSetBuildPhase::DirtyOldPageWalk => {
+                    self.step_dirty_old_page_walk();
                     self.phase = ValidPointerSetBuildPhase::Finalize;
                     if !unbounded {
                         return false;
@@ -306,6 +351,40 @@ impl ValidPointerSetBuilder {
             self.record_arena_header(header_ptr);
         }
         false
+    }
+
+    /// #6083: a young-scoped build excludes the old arena, but old objects that
+    /// hold old→young pointers (the remembered-set parents on dirty pages) must
+    /// stay exact-lookup-valid, or `mark_remembered_set_roots` skips them and
+    /// their young children are collected (UAF). Add those parents to the exact
+    /// set only (not the arena runs — old objects need no interior-pointer
+    /// support in a minor). Bounded by the dirty-page set, so the build stays
+    /// O(nursery + dirty-old) rather than O(total heap).
+    fn step_dirty_old_page_walk(&mut self) {
+        let snapshot = super::barrier::remembered_dirty_snapshot();
+        let mut user_ptrs = Vec::new();
+        // Must match EXACTLY the parent objects `mark_remembered_set_roots`
+        // validates against the set, across all three of its sources:
+        // (1) objects on dirty old pages — `dirty_pages` already folds in the
+        //     external-entry pages, so this covers those too;
+        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_pages, |header_ptr| {
+            let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) as usize };
+            user_ptrs.push(user_ptr);
+        });
+        // (2) external-buffer dirty entries, by header (belt-and-suspenders —
+        //     their pages are in `dirty_pages` above);
+        for &(_, header_addr) in &snapshot.external_dirty_entries {
+            user_ptrs.push(header_addr + GC_HEADER_SIZE);
+        }
+        // (3) the fallback per-header remembered set — NOT page-tracked, so the
+        //     page walk above misses these; without them the mark skips these
+        //     old→young parents and their young children are collected (UAF).
+        for &header_addr in &snapshot.fallback_headers {
+            user_ptrs.push(header_addr + GC_HEADER_SIZE);
+        }
+        for ptr in user_ptrs {
+            self.set.push_remembered_parent(ptr);
+        }
     }
 
     fn record_arena_header(&mut self, header_ptr: *mut u8) {
