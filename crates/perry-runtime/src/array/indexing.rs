@@ -417,6 +417,14 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
     }
 }
 
+/// Auto-opt dead-strip anchor: codegen emits a bare `js_array_length` symbol in
+/// native-region wrappers (`__perry_wrap_*`) and elsewhere, so it must be a
+/// `#[no_mangle]` C export AND survive dead-stripping even when no Rust caller
+/// keeps it referenced — mirroring the neighbouring `js_array_push`.
+#[used]
+static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_length;
+
+#[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
     // #5135: a Proxy typed (statically) as an array (immer drafts) reaches here
     // with the masked proxy id. Read `length` through the proxy `get` trap
