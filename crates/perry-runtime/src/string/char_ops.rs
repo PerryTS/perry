@@ -98,14 +98,13 @@ pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> 
 
 /// `s[key]` indexed read with ECMAScript CanonicalNumericIndexString semantics
 /// (#3987): returns the single-UTF-16-code-unit string at `key` only when `key`
-/// is `"length"` or a canonical array index — a non-negative integer (or a
-/// numeric string that round-trips, e.g. `"1"`) within `[0, length)`. Other
-/// keys return `undefined`: `NaN`, `Infinity`, negatives, fractions like
-/// `1.5`, out-of-range indices, non-canonical strings like `"01"` / `" 1"` /
-/// `"1.0"`, and non-index property names. Previously codegen `fptosi`'d the
-/// key and called `js_string_char_at`, which truncated `1.5`→`1`, mapped
-/// `NaN`→`0`, returned `""` (not `undefined`) for OOB/negatives, and
-/// mis-resolved string keys.
+/// is a canonical array index — a non-negative integer (or a numeric string
+/// that round-trips, e.g. `"1"`) within `[0, length)`. Every other key returns
+/// `undefined`: `NaN`, `Infinity`, negatives, fractions like `1.5`,
+/// out-of-range indices, non-canonical strings like `"01"` / `" 1"` / `"1.0"`,
+/// and non-numeric keys. Previously codegen `fptosi`'d the key and called
+/// `js_string_char_at`, which truncated `1.5`→`1`, mapped `NaN`→`0`, returned
+/// `""` (not `undefined`) for OOB/negatives, and mis-resolved string keys.
 #[no_mangle]
 pub extern "C" fn js_string_index_get(s: *const StringHeader, key: f64) -> f64 {
     const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -114,8 +113,6 @@ pub extern "C" fn js_string_index_get(s: *const StringHeader, key: f64) -> f64 {
     }
     let len = unsafe { (*s).utf16_len } as u64;
     let jsval = crate::value::JSValue::from_bits(key.to_bits());
-    let raw_key_bits = key.to_bits();
-    let raw_key_ptr = raw_key_bits as *const StringHeader;
 
     let idx: u64 = if jsval.is_int32() {
         let i = jsval.as_int32();
@@ -129,44 +126,14 @@ pub extern "C" fn js_string_index_get(s: *const StringHeader, key: f64) -> f64 {
             return UNDEFINED;
         }
         key as u64 // saturating; an out-of-range magnitude fails the bound below
-    } else if (raw_key_bits >> 48) == 0 && is_valid_string_ptr(raw_key_ptr) {
-        let key_content = string_as_str(raw_key_ptr).to_string();
-        if key_content == "length" {
-            return len as f64;
-        }
-        match canonical_string_index(&key_content) {
+    } else if jsval.is_any_string() {
+        match crate::builtins::jsvalue_string_content(key).and_then(|k| canonical_string_index(&k))
+        {
             Some(i) => i,
             None => return UNDEFINED,
         }
     } else {
-        let key_content = if jsval.is_any_string() {
-            let Some(content) = crate::builtins::jsvalue_string_content(key) else {
-                return UNDEFINED;
-            };
-            content
-        } else {
-            let direct_key_ptr = crate::value::js_jsvalue_to_string(key);
-            if is_valid_string_ptr(direct_key_ptr) {
-                string_as_str(direct_key_ptr).to_string()
-            } else {
-                let property_key = unsafe { crate::object::js_to_property_key(key) };
-                if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
-                    return UNDEFINED;
-                }
-                let key_ptr = crate::value::js_jsvalue_to_string(property_key);
-                if !is_valid_string_ptr(key_ptr) {
-                    return UNDEFINED;
-                }
-                string_as_str(key_ptr).to_string()
-            }
-        };
-        if key_content == "length" {
-            return len as f64;
-        }
-        match canonical_string_index(&key_content) {
-            Some(i) => i,
-            None => return UNDEFINED,
-        }
+        return UNDEFINED;
     };
 
     if idx >= len {

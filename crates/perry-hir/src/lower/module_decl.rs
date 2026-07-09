@@ -17,7 +17,6 @@ use crate::ir::*;
 // Topical sub-modules extracted from this file (issue #1435 — pure code move).
 mod namespace;
 mod native_default_import;
-mod reexports;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -25,7 +24,6 @@ pub(crate) use namespace::lower_namespace_as_class;
 use native_default_import::{
     is_cjs_style_native_default_import, node_submodule_default_export_key,
 };
-use reexports::imported_binding_reexport;
 
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
@@ -1322,7 +1320,6 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, true)?;
                     let enum_name = en.name.clone();
-                    module.init.push(crate::lower_decl::enum_runtime_let(ctx, &en));
                     module.enums.push(en);
                     module.exported_objects.push(enum_name.clone());
                     module.exports.push(Export::Named {
@@ -1471,17 +1468,6 @@ pub(crate) fn lower_module_decl(
                             module.exports.push(Export::NamespaceReExport {
                                 source: ns_source,
                                 name: exported.clone(),
-                            });
-                            continue;
-                        }
-
-                        if let Some((source, imported)) =
-                            imported_binding_reexport(&module.imports, &local)
-                        {
-                            module.exports.push(Export::ReExport {
-                                source,
-                                imported,
-                                exported: exported.clone(),
                             });
                             continue;
                         }

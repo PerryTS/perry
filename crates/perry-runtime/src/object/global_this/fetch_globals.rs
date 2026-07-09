@@ -65,6 +65,20 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // First access on this thread — allocate our own global.
     let new_ptr = js_object_alloc(0, 0) as i64;
     THREAD_GLOBAL_THIS.with(|c| c.set(new_ptr));
+    // The thread-local cache above stores a *raw* heap pointer. Unlike
+    // `GLOBAL_THIS_PTR` (a scanned static that `scan_object_cache_roots_mut`
+    // relocates), this cache slot is otherwise invisible to the GC, so a
+    // copying collection that evacuates `globalThis` leaves the cache pointing
+    // at the stale from-space address. Later `js_get_global_this()` calls then
+    // read a dead object whose overflow fields (e.g. `globalThis.Error`) have
+    // already been rekeyed to the moved copy — the reads return `undefined`.
+    // Register the cache slot as a mutable global root (mirroring
+    // `js_module_top_this`) so the collector rewrites it to the forwarding
+    // address on every move; raw-pointer slots are handled by
+    // `mark_global_root_bits` / `rewrite_value_bits`.
+    crate::gc::runtime_write_barrier_root_heap_word(new_ptr as u64);
+    let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
+    crate::gc::js_gc_register_global_root(cache_slot as i64);
     // Publish to the process-global GC-root slot so this thread's collector marks
     // it (the unit-test harness runs tests sequentially, so the slot always holds
     // the running thread's global). `GLOBAL_THIS_READY` is toggled around

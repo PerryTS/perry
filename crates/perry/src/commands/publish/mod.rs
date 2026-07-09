@@ -41,7 +41,7 @@ pub(crate) use saved_config::{
 pub(crate) use tarball::{create_project_tarball, create_project_tarball_with_excludes};
 
 // Sibling-only items used by run_async and tests.
-use config_types::PerryToml;
+use config_types::{resolve_build_march, PerryToml};
 use credentials::{
     auto_export_p12_from_keychain, prompt_target, resolve_credential, resolve_path_credential,
     validate_credentials_for_distribute,
@@ -205,6 +205,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     } else {
         None
     };
+
+    // --- Resolve CPU baseline (#6125) — see resolve_build_march ---
+    let build_march = resolve_build_march(args.march.as_deref(), config.build.as_ref(), is_linux);
+    if is_linux {
+        if let (OutputFormat::Text, Some(march)) = (&format, &build_march) {
+            println!("  CPU:       {} baseline", style(march).bold());
+        }
+    }
 
     // --- Resolve server URL ---
     let server_url = args
@@ -1333,6 +1341,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             None
         },
         linux_libc: linux_libc.clone(),
+        build_march: build_march.clone(),
         release_notes: config.release_notes.clone(),
         features: config.project.as_ref().and_then(|p| p.features.clone()),
     };

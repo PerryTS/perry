@@ -43,6 +43,12 @@ pub(crate) struct PrivMember {
 #[derive(Debug, Clone)]
 pub(crate) struct PrivateScope {
     pub(crate) class_name: String,
+    /// The declaring class's unique HIR id. Carried alongside `class_name`
+    /// because the name alone is ambiguous: minified bundles reuse class names,
+    /// and codegen's `class_ids` name→id map is last-writer-wins, so resolving a
+    /// private member's declaring class by name can bind to the wrong same-named
+    /// class and make the runtime brand check reject a legal `this.#x` access.
+    pub(crate) class_id: u32,
     pub(crate) members: HashMap<String, PrivMember>,
 }
 
@@ -218,6 +224,18 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// Source-level inner name of the class currently being lowered — the
+    /// binding visible *inside* the class body (`class C {...}` -> `C`,
+    /// `const K = class Named {...}` -> `Named`). Unlike `current_class`
+    /// (which for a class expression may be a synthetic dedup key), this is
+    /// the identifier the user writes. Assigning to it inside the body is a
+    /// `const`-binding violation and must throw a TypeError.
+    pub(crate) current_class_inner_name: Option<String>,
+    /// Set by a class-EXPRESSION caller to the source ident of the class
+    /// about to be lowered, so `lower_class_from_ast` can record the inner
+    /// binding name (the synthetic dedup key it receives is not the
+    /// user-visible name). Consumed (taken) at the start of lowering.
+    pub(crate) pending_class_inner_name: Option<String>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
     /// Lexical stack of private-name scopes — one entry per enclosing class
@@ -374,6 +392,14 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// LocalIds of lexical let/const bindings that are forward-referenced
+    /// (read before their declaration, directly or via a closure) in the
+    /// current function/module body. These get a TDZ-seeded box via
+    /// Stmt::PreallocateTdzBoxes so a read-before-declaration throws a spec
+    /// ReferenceError. A subset of var_hoisted_ids restricted to lexical
+    /// (non-var) bindings. Populated by pre_register_forward_captured_lets
+    /// and drained when the body's prealloc set is assembled.
+    pub(crate) tdz_forward_ids: HashSet<LocalId>,
     /// Names bound by an enclosing `catch (e)` parameter that is currently in
     /// scope (a stack, innermost last). Annex B B.3.4: a `var e = init;` whose
     /// name collides with a live catch parameter assigns to that *catch
@@ -409,6 +435,18 @@ pub struct LoweringContext {
     /// declarator reuses the id at its Let site — a shadowing `const` in an
     /// inner block still lowers a fresh binding.
     pub(crate) lexical_forward_decls: HashMap<u32, LocalId>,
+    /// Ids in `lexical_forward_decls` that were pre-registered for a NESTED
+    /// block scope (not the function-body top level) by
+    /// `pre_register_forward_captured_lets`. These are lexical bindings, so
+    /// unlike top-level pre-registrations they must NOT be name-visible for
+    /// the whole body: `lower_block_stmt` / the switch-case lowering re-bind
+    /// them into `ctx.locals` exactly when their block scope is entered, and
+    /// `pop_block_scope` drops them at block exit (overriding the
+    /// `var_hoisted_ids` keep that would otherwise leak them into the
+    /// enclosing scope). Without this, a same-named `let` in a sibling block
+    /// was skipped (deduped by name) and any post-block reference of the name
+    /// resolved to the block's box instead of the outer binding.
+    pub(crate) nested_forward_scope_ids: HashSet<LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec

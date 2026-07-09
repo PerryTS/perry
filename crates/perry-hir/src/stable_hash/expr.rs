@@ -79,7 +79,7 @@ impl SH for Expr {
             Expr::InstanceOf { expr, ty, ty_expr } => { tag(h, 38); expr.as_ref().hash(h); ty.hash(h); ty_expr.hash(h); }
             Expr::In { property, object } => { tag(h, 39); property.as_ref().hash(h); object.as_ref().hash(h); }
             Expr::PrivateBrandCheck { class_name, field_name, object } => { tag(h, 12401); class_name.hash(h); field_name.hash(h); object.as_ref().hash(h); }
-            Expr::PrivateGuard { class_name, field_name, kind, op, object } => { tag(h, 12402); class_name.hash(h); field_name.hash(h); kind.hash(h); op.hash(h); object.as_ref().hash(h); }
+            Expr::PrivateGuard { class_name, class_id, field_name, kind, op, object } => { tag(h, 12402); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); op.hash(h); object.as_ref().hash(h); }
             Expr::Await(e) => { tag(h, 40); e.as_ref().hash(h); }
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             // #5253: `byte_offset` is diagnostic-only — excluded from the hash

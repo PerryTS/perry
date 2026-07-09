@@ -1597,7 +1597,9 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 const TIMER_SCAN_TIMEOUTS: u8 = 0;
 const TIMER_SCAN_CALLBACKS: u8 = 1;
 const TIMER_SCAN_INTERVALS: u8 = 2;
-const TIMER_SCAN_DONE: u8 = 3;
+const TIMER_SCAN_MOCK_CALLBACKS: u8 = 3;
+const TIMER_SCAN_MOCK_INTERVALS: u8 = 4;
+const TIMER_SCAN_DONE: u8 = 5;
 
 #[derive(Default)]
 pub(crate) struct TimerRootScanState {
@@ -1644,6 +1646,8 @@ pub(crate) fn scan_timer_roots_mut_step(
             TIMER_SCAN_TIMEOUTS => scan_timeout_timers_step(visitor, state, remaining),
             TIMER_SCAN_CALLBACKS => scan_callback_timers_step(visitor, state, remaining),
             TIMER_SCAN_INTERVALS => scan_interval_timers_step(visitor, state, remaining),
+            TIMER_SCAN_MOCK_CALLBACKS => scan_mock_timers_step(visitor, state, remaining, false),
+            TIMER_SCAN_MOCK_INTERVALS => scan_mock_timers_step(visitor, state, remaining, true),
             TIMER_SCAN_DONE => true,
             _ => true,
         };
@@ -1779,6 +1783,67 @@ fn scan_interval_timers_step(
         }
         state.index += 1;
         state.finish_timer();
+    }
+    true
+}
+
+// Step twin of the MOCK_TIMERS block in `scan_timer_roots_mut`. Cycle-based
+// collections run only the step scanner, so before these phases existed,
+// `node:test` mocked-timer callbacks/args/contexts reachable only through
+// MOCK_TIMERS were swept while scheduled — `.tick()` then invoked a freed
+// closure. One function serves both lists (distinct structs, same fields).
+fn scan_mock_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+    intervals: bool,
+) -> bool {
+    let mut guard = MOCK_TIMERS.lock().unwrap();
+    macro_rules! scan_mock_list {
+        ($list:expr) => {{
+            while state.index < $list.len() {
+                let timer = &mut $list[state.index];
+                if state.slot == 0 {
+                    if !consume_timer_root_work(remaining) {
+                        return false;
+                    }
+                    if !timer.cleared && timer.callback != 0 {
+                        visitor.visit_i64_slot(&mut timer.callback);
+                    }
+                    state.slot = 1;
+                }
+                if state.slot == 1 {
+                    while state.arg_index < timer.args.len() {
+                        if !consume_timer_root_work(remaining) {
+                            return false;
+                        }
+                        visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                        state.arg_index += 1;
+                    }
+                    state.slot = 2;
+                    state.arg_index = 0;
+                }
+                if state.slot == 2 {
+                    if !crate::async_context::scan_snapshot_roots_mut_step(
+                        &mut timer.context,
+                        visitor,
+                        &mut state.context_entry,
+                        &mut state.context_store,
+                        remaining,
+                    ) {
+                        return false;
+                    }
+                    state.slot = 3;
+                }
+                state.index += 1;
+                state.finish_timer();
+            }
+        }};
+    }
+    if intervals {
+        scan_mock_list!(guard.intervals)
+    } else {
+        scan_mock_list!(guard.callbacks)
     }
     true
 }

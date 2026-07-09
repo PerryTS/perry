@@ -49,15 +49,6 @@ fn is_backed_collection_method(
     }
 }
 
-unsafe fn dispatch_inherited_object_method(object: f64, method_name: &str) -> Option<f64> {
-    match method_name {
-        "toString" => Some(crate::object::js_object_to_string(object)),
-        "toLocaleString" => Some(js_object_default_to_locale_string(object)),
-        "valueOf" => Some(js_object_default_value_of(object)),
-        _ => None,
-    }
-}
-
 pub(super) unsafe fn dispatch_map_set(
     root_scope: &crate::gc::RuntimeHandleScope,
     object_handle: &crate::gc::RuntimeHandle,
@@ -226,14 +217,6 @@ pub(super) unsafe fn dispatch_map_set(
                         crate::map::js_map_foreach(map, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
                     }
-                    _ if args.is_empty() => {
-                        if let Some(result) = dispatch_inherited_object_method(object, method_name)
-                        {
-                            result
-                        } else {
-                            f64::from_bits(crate::value::TAG_UNDEFINED)
-                        }
-                    }
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 });
             }
@@ -287,14 +270,6 @@ pub(super) unsafe fn dispatch_map_set(
                             .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                         crate::set::js_set_foreach(set, args[0], this_arg);
                         f64::from_bits(crate::value::TAG_UNDEFINED)
-                    }
-                    _ if args.is_empty() => {
-                        if let Some(result) = dispatch_inherited_object_method(object, method_name)
-                        {
-                            result
-                        } else {
-                            f64::from_bits(crate::value::TAG_UNDEFINED)
-                        }
                     }
                     // #2872: ES2024 Set composition methods. union/intersection/
                     // difference/symmetricDifference return a new Set; the

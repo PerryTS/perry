@@ -25,6 +25,33 @@ pub(super) fn set_exec_array_metadata(arr: *mut ArrayHeader, input: &str, index:
     crate::array::js_array_set_string_key(arr, input_key, input_value);
 }
 
+/// [`set_exec_array_metadata`] variant taking the `input` property as an
+/// already-boxed string VALUE (typically the rooted original subject) instead
+/// of a `&str` to copy. Both the array and the input value are rooted across
+/// the internal key-string allocations, which can trigger a (potentially
+/// moving) minor GC.
+pub(super) fn set_exec_array_metadata_value(arr: *mut ArrayHeader, input_value: f64, index: f64) {
+    if arr.is_null() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let input_handle = scope.root_nanbox_f64(input_value);
+    let index_key = js_string_from_str("index");
+    crate::array::js_array_set_string_key(
+        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+        index_key,
+        index,
+    );
+
+    let input_key = js_string_from_str("input");
+    crate::array::js_array_set_string_key(
+        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+        input_key,
+        input_handle.get_nanbox_f64(),
+    );
+}
+
 /// Attach the `groups` own property to a regex match-result array.
 ///
 /// Mirrors `set_exec_array_metadata` for `index`/`input`: the result of

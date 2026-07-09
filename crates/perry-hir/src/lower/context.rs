@@ -76,6 +76,8 @@ impl LoweringContext {
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
+            current_class_inner_name: None,
+            pending_class_inner_name: None,
             current_class_member_is_static: false,
             private_scopes: Vec::new(),
             object_super_home_stack: Vec::new(),
@@ -114,10 +116,12 @@ impl LoweringContext {
             unresolved_ident_as_global: false,
             with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
+            tdz_forward_ids: HashSet::new(),
             catch_param_scopes: Vec::new(),
             annexb_block_fn_var_ids: HashMap::new(),
             annexb_block_fn_names_all: HashSet::new(),
             lexical_forward_decls: HashMap::new(),
+            nested_forward_scope_ids: HashSet::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
             imported_functions_index: HashMap::new(),
@@ -303,10 +307,10 @@ impl LoweringContext {
     /// class and member kind by walking the private-scope stack innermost
     /// outward — matching the lexical resolution rule for private names. A
     /// nested class that redeclares the same name shadows the outer one.
-    pub(crate) fn resolve_private(&self, field_name: &str) -> Option<(String, PrivMember)> {
+    pub(crate) fn resolve_private(&self, field_name: &str) -> Option<(String, u32, PrivMember)> {
         for scope in self.private_scopes.iter().rev() {
             if let Some(m) = scope.members.get(field_name) {
-                return Some((scope.class_name.clone(), *m));
+                return Some((scope.class_name.clone(), scope.class_id, *m));
             }
         }
         None
@@ -1597,10 +1601,14 @@ impl LoweringContext {
         // the mark to the position just past the mark, then drop the rest.
         // Sloppy implicit globals (`undeclared = v` inside the block) are
         // module-scoped bindings too — keep them visible after the block.
+        // Nested-scope forward-captured `let`/`const` pre-registrations are in
+        // `var_hoisted_ids` only for box-at-entry allocation; they are lexical
+        // bindings, so their block-entry rebinding must die with the block.
         if self.locals.len() > locals_mark {
             let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
             for entry in self.locals.drain_from(locals_mark) {
-                if self.var_hoisted_ids.contains(&entry.1)
+                if (self.var_hoisted_ids.contains(&entry.1)
+                    && !self.nested_forward_scope_ids.contains(&entry.1))
                     || self.sloppy_implicit_global_ids.contains(&entry.1)
                 {
                     kept.push(entry);

@@ -107,6 +107,41 @@ pub(crate) fn class_field_global_index(
     if accessor_in_chain(ctx, class_name, property) {
         return None;
     }
+    // Issue #26 / #321 (via #5654): prefer the authoritative, source-prefix-
+    // disambiguated ancestor chain — the SAME data the packed-keys global and
+    // constructor field-init are built from — so the returned index matches
+    // the runtime keys array even when same-named cross-module classes collide
+    // in the name-keyed `ctx.classes` (effect's `Type` in SchemaAST.ts vs
+    // ParseResult.ts made `PropertySignature.isOptional` resolve to slot 4
+    // instead of 2). The always-on guard call used to mask the wrong index at
+    // runtime (`object_key_matches_field` missed → by-name fallback); with the
+    // #5654 inline fast path live, the index must actually be correct.
+    if let Some(chain) = ctx.class_init_chains.get(class_name) {
+        // Slot layout is the chain's keyable fields, root → leaf. The
+        // most-derived declaration wins (TS shadowing), so search leaf → root.
+        let mut prefix_counts: Vec<u32> = Vec::with_capacity(chain.len());
+        let mut acc = 0u32;
+        for (_, fields) in chain {
+            prefix_counts.push(acc);
+            acc += count_keyable(fields);
+        }
+        for (i, (_, fields)) in chain.iter().enumerate().rev() {
+            let mut own_idx = 0u32;
+            for f in fields {
+                if f.key_expr.is_some() {
+                    continue;
+                }
+                if f.name == property {
+                    return Some(prefix_counts[i] + own_idx);
+                }
+                own_idx += 1;
+            }
+        }
+        // The chain is authoritative for this class's layout: absent means the
+        // property is not an inline slot. Do NOT fall through to the name-keyed
+        // walk — it could "find" the field on a wrong same-named stub.
+        return None;
+    }
     fn walk(
         ctx: &FnCtx<'_>,
         class_name: &str,
@@ -183,6 +218,21 @@ pub(crate) fn class_field_declared_type(
     class_name: &str,
     property: &str,
 ) -> Option<HirType> {
+    // Issue #26 / #321 (via #5654): same authoritative-chain preference as
+    // `class_field_global_index` — the declared type gates the raw-f64 slot
+    // contract, so it must come from the class that actually owns the slot,
+    // not a same-named cross-module impostor from the name-keyed table.
+    if let Some(chain) = ctx.class_init_chains.get(class_name) {
+        for (_, fields) in chain.iter().rev() {
+            if let Some(field) = fields
+                .iter()
+                .find(|field| field.key_expr.is_none() && field.name == property)
+            {
+                return Some(field.ty.clone());
+            }
+        }
+        return None;
+    }
     let mut current = ctx.classes.get(class_name).copied();
     // Guard against cyclic parent links so the walk terminates.
     let mut seen_class_names: std::collections::HashSet<String> = std::collections::HashSet::new();

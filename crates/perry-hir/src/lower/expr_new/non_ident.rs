@@ -132,6 +132,7 @@ pub(crate) fn lower_new_non_ident(
     };
     if let Some(class_expr) = class_expr_opt {
         let synthetic_name = format!("__anon_class_{}", ctx.fresh_class());
+        ctx.pending_class_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
         let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
         ctx.pending_classes.push(class);
         let mut args: Vec<Expr> = new_expr

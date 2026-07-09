@@ -958,7 +958,7 @@ fn queue_microtask_with_type(callback: i64, type_name: &str, args: Vec<f64>) {
         false,
     );
     QUEUED_MICROTASKS.with(|q| {
-        q.borrow_mut().push(QueuedMicrotask {
+        q.borrow_mut().push_back(QueuedMicrotask {
             callback,
             context,
             async_id: ids.async_id,
@@ -977,7 +977,9 @@ pub(crate) struct QueuedMicrotask {
 }
 
 thread_local! {
-    static QUEUED_MICROTASKS: std::cell::RefCell<Vec<QueuedMicrotask>> = const { std::cell::RefCell::new(Vec::new()) };
+    // VecDeque so the drain pops from the front in O(1); a `Vec` + `remove(0)`
+    // is O(n) per job → O(n²) to drain a burst of n nextTick jobs (#6084).
+    static QUEUED_MICROTASKS: std::cell::RefCell<std::collections::VecDeque<QueuedMicrotask>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     static QUEUED_MICROTASK_PREV_CONTEXTS: std::cell::RefCell<Vec<crate::async_context::AsyncContextSnapshot>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -1005,14 +1007,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
     };
     let mut ran = 0;
     loop {
-        let task = QUEUED_MICROTASKS.with(|q| {
-            let mut queue = q.borrow_mut();
-            if queue.is_empty() {
-                None
-            } else {
-                Some(queue.remove(0))
-            }
-        });
+        let task = QUEUED_MICROTASKS.with(|q| q.borrow_mut().pop_front());
         match task {
             Some(QueuedMicrotask {
                 callback: cb,
@@ -1118,7 +1113,7 @@ pub(crate) fn test_seed_queued_microtask(callback: i64, context_store: f64) {
     QUEUED_MICROTASKS.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
-        q.push(QueuedMicrotask {
+        q.push_back(QueuedMicrotask {
             callback,
             context,
             async_id: 0,
@@ -1144,7 +1139,7 @@ pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64, u64) {
     QUEUED_MICROTASKS.with(|q| {
         let q = q.borrow();
         let (callback, store_bits) = q
-            .first()
+            .front()
             .map(|task| {
                 (
                     task.callback as usize,

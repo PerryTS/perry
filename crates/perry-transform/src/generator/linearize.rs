@@ -1598,6 +1598,67 @@ fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
                     rewrite_labeled_bc_in_stmts(f, label);
                 }
             }
+            // #5975: a `continue <label>` that targets THIS enclosing labeled
+            // loop from inside a nested `switch` case. A switch never captures
+            // `continue`, so it continues the loop — rewrite it to a plain
+            // `continue` here so the loop's linearization (and the #5868
+            // yielding-switch desugar) map it to the loop's re-entry sentinel.
+            // Without this the `LabeledContinue` survives verbatim into the
+            // desugared switch's state machine, where nothing lowers it, and a
+            // `loop: while (…) { switch (…) { case …: yield …; continue loop } }`
+            // (e.g. the `yaml` package's block-scalar / indicator lexer, a
+            // generator) spins forever. `break <label>` is deliberately NOT
+            // rewritten in a nested switch: a switch DOES capture `break`, so a
+            // plain `break` would exit only the switch, not the loop — that is
+            // the pre-existing single-sentinel limitation documented above.
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    rewrite_labeled_continue_in_stmts(&mut case.body, label);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rewrite `continue <label>` → plain `continue` for `label`, descending
+/// through `if` / `try` / `switch` (none of which capture `continue`) but
+/// stopping at nested loops (which bind their own `continue`). Unlike
+/// [`rewrite_labeled_bc_in_stmts`] this does NOT touch `break <label>`: it is
+/// used only when recursing into a nested `switch`, where a plain `break`
+/// would be captured by the switch rather than escaping to the loop (#5975).
+fn rewrite_labeled_continue_in_stmts(stmts: &mut [Stmt], label: &str) {
+    for s in stmts.iter_mut() {
+        match s {
+            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                rewrite_labeled_continue_in_stmts(then_branch, label);
+                if let Some(eb) = else_branch.as_mut() {
+                    rewrite_labeled_continue_in_stmts(eb, label);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_labeled_continue_in_stmts(body, label);
+                if let Some(c) = catch.as_mut() {
+                    rewrite_labeled_continue_in_stmts(&mut c.body, label);
+                }
+                if let Some(f) = finally.as_mut() {
+                    rewrite_labeled_continue_in_stmts(f, label);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    rewrite_labeled_continue_in_stmts(&mut case.body, label);
+                }
+            }
             _ => {}
         }
     }

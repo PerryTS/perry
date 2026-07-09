@@ -23,7 +23,8 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => false,
         Stmt::If {
             condition,
             then_branch,

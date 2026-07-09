@@ -148,22 +148,42 @@ pub(crate) fn lower_destructuring_assignment(
             //   expr (result)
 
             let mut exprs = Vec::new();
+            // Computed keys destructured here (`{ [k]: t }`), lowered once for the
+            // rest exclusion below. This is the value-used assignment-expression
+            // form (`y = ({ [k]: t, ...rest } = o)`); it builds a pure-expression
+            // Sequence with no statement slots, so a computed key can't be spilled
+            // to a shared temp and is re-lowered for the exclusion — a
+            // side-effecting computed key evaluates twice in this rare form.
+            let mut computed_excl_keys: Vec<Expr> = Vec::new();
 
             // Now assign each property
             for prop in &obj_pat.props {
                 match prop {
                     ast::ObjectPatProp::KeyValue(kv) => {
                         // { key: target } - extract obj.key into target
-                        let key = match &kv.key {
-                            ast::PropName::Ident(ident) => ident.sym.to_string(),
-                            ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                            ast::PropName::Num(n) => n.value.to_string(),
-                            _ => continue, // Skip computed keys
-                        };
-
-                        let prop_expr = Expr::PropertyGet {
-                            object: value.clone(),
-                            property: key,
+                        let prop_expr = match &kv.key {
+                            ast::PropName::Ident(ident) => Expr::PropertyGet {
+                                object: value.clone(),
+                                property: ident.sym.to_string(),
+                            },
+                            ast::PropName::Str(s) => Expr::PropertyGet {
+                                object: value.clone(),
+                                property: s.value.as_str().unwrap_or("").to_string(),
+                            },
+                            ast::PropName::Num(n) => Expr::PropertyGet {
+                                object: value.clone(),
+                                property: n.value.to_string(),
+                            },
+                            ast::PropName::Computed(computed) => {
+                                // `{ [k]: target }` → target = obj[k]; also record
+                                // the key so `...rest` can exclude it below.
+                                computed_excl_keys.push(lower_expr(ctx, &computed.expr)?);
+                                Expr::IndexGet {
+                                    object: value.clone(),
+                                    index: Box::new(lower_expr(ctx, &computed.expr)?),
+                                }
+                            }
+                            _ => continue, // BigInt property names, etc.
                         };
 
                         match &*kv.value {
@@ -238,6 +258,16 @@ pub(crate) fn lower_destructuring_assignment(
                                 let name = ident.id.sym.to_string();
                                 if let Some(id) = ctx.lookup_local(&name) {
                                     exprs.push(Expr::LocalSet(id, Box::new(rest_expr)));
+                                    // ObjectRest only excludes statically-named
+                                    // keys; delete the computed ones from the fresh
+                                    // rest object (a private copy, so the source is
+                                    // untouched).
+                                    for key in computed_excl_keys.drain(..) {
+                                        exprs.push(Expr::Delete(Box::new(Expr::IndexGet {
+                                            object: Box::new(Expr::LocalGet(id)),
+                                            index: Box::new(key),
+                                        })));
+                                    }
                                 } else {
                                     return Err(anyhow!(
                                         "Assignment to undeclared variable in destructuring rest: {}",

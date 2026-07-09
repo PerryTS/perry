@@ -1328,3 +1328,332 @@ fn test_lazy_media_mutable_scanner_rewrites_callback_slots() {
         (fixture.old_bits, fixture.old_bits)
     );
 }
+
+// ---------------------------------------------------------------------------
+// 2026-07-09 GC audit, wave 1: raw-pointer windows across user callbacks.
+// Each test forces a COPIED (moving) minor GC from inside the user callback —
+// with the pre-fix code the helper kept reading through pre-move raw
+// pointers / unrooted Rust buffers, publishing from-space addresses.
+// ---------------------------------------------------------------------------
+
+fn string_value_content(value: f64) -> String {
+    let bits = value.to_bits();
+    assert_eq!(
+        bits & TAG_MASK,
+        STRING_TAG,
+        "expected a live string value, got bits {bits:#x}"
+    );
+    crate::string::string_as_str((bits & POINTER_MASK) as *const crate::StringHeader).to_string()
+}
+
+extern "C" fn test_sort_comparator_force_minor_gc(
+    _closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let a_handle = scope.root_nanbox_f64(a);
+    let b_handle = scope.root_nanbox_f64(b);
+    let _ = crate::gc::gc_collect_minor();
+    let a_str = string_value_content(a_handle.get_nanbox_f64());
+    let b_str = string_value_content(b_handle.get_nanbox_f64());
+    match a_str.cmp(&b_str) {
+        std::cmp::Ordering::Less => -1.0,
+        std::cmp::Ordering::Equal => 0.0,
+        std::cmp::Ordering::Greater => 1.0,
+    }
+}
+
+/// `Array.prototype.sort(comparator)` where every comparator call forces a
+/// copied minor GC: the receiver, the #6076 temp copy, the merge scratch, and
+/// the comparator closure itself must all be re-derived from rooted handles.
+/// 40 elements exercises the run + bottom-up-merge engine (threshold 32); the
+/// 8-element pass covers the pure insertion-sort path.
+#[test]
+fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    for count in [8usize, 40usize] {
+        let scope = RuntimeHandleScope::new();
+        let comparator =
+            crate::closure::js_closure_alloc(test_sort_comparator_force_minor_gc as *const u8, 0);
+        let comparator_handle = scope.root_raw_const_ptr(comparator);
+        let arr = crate::array::js_array_alloc(count as u32);
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        for i in 0..count {
+            // Descending heap strings ("s39", "s38", …) so the sort has real
+            // work and stale pre-move addresses are observable as garbage.
+            let text = format!("s{:02}", count - 1 - i);
+            let sp = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            let sp_handle = scope.root_string_ptr(sp);
+            let arr = crate::array::js_array_push(
+                arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+                crate::JSValue::from_bits(string_bits(
+                    sp_handle.get_raw_const_ptr::<crate::StringHeader>() as usize,
+                )),
+            );
+            arr_handle.set_raw_mut_ptr(arr);
+        }
+
+        let before = gc_collection_count();
+        let sorted = crate::array::js_array_sort_with_comparator(
+            arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+            comparator_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
+        );
+        assert!(
+            gc_collection_count() > before,
+            "comparator should force copied-minor GCs during the sort"
+        );
+        unsafe {
+            assert_eq!((*sorted).length as usize, count);
+            let elems = (sorted as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
+                as *const f64;
+            for i in 0..count {
+                let got = string_value_content(*elems.add(i));
+                assert_eq!(
+                    got,
+                    format!("s{i:02}"),
+                    "element {i} of the {count}-element sort should hold the \
+                     post-move string, not a stale pre-move address"
+                );
+            }
+        }
+    }
+}
+
+extern "C" fn test_tojson_force_minor_gc(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let _ = crate::gc::gc_collect_minor();
+    test_string_value(b"tojson-out")
+}
+
+fn json_test_object_with_gc_forcing_tojson(scope: &RuntimeHandleScope) -> f64 {
+    let to_json = crate::closure::js_closure_alloc(test_tojson_force_minor_gc as *const u8, 0);
+    let to_json_handle = scope.root_raw_mut_ptr(to_json);
+    let nested = crate::object::js_object_alloc(0, 1);
+    let nested_handle = scope.root_raw_mut_ptr(nested);
+    let key = crate::string::js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    crate::object::js_object_set_field_by_name(
+        nested_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
+        key,
+        f64::from_bits(ptr_bits(to_json_handle.get_raw_mut_ptr::<u8>() as usize)),
+    );
+    f64::from_bits(ptr_bits(nested_handle.get_raw_mut_ptr::<u8>() as usize))
+}
+
+fn set_string_field(
+    scope: &RuntimeHandleScope,
+    obj_handle: &crate::gc::RuntimeHandle<'_>,
+    key: &[u8],
+    value: &[u8],
+) {
+    let value_handle = scope.root_nanbox_f64(test_string_value(value));
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
+        key_ptr,
+        value_handle.get_nanbox_f64(),
+    );
+}
+
+/// `JSON.stringify` of an object whose MIDDLE field is a nested object with a
+/// GC-forcing `toJSON`: after the callback moves the parent, the remaining
+/// fields must be read through the re-derived keys/field buffers (the pre-fix
+/// code hoisted `keys_elements`/`fields_ptr` once, before any user code).
+#[test]
+fn test_json_stringify_object_rederives_fields_after_tojson_minor_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let scope = RuntimeHandleScope::new();
+    let obj = crate::object::js_object_alloc(0, 3);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    set_string_field(&scope, &obj_handle, b"a", b"first");
+    let nested_value = json_test_object_with_gc_forcing_tojson(&scope);
+    let nested_handle = scope.root_nanbox_f64(nested_value);
+    {
+        let key_ptr = crate::string::js_string_from_bytes(b"b".as_ptr(), 1);
+        crate::object::js_object_set_field_by_name(
+            obj_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
+            key_ptr,
+            nested_handle.get_nanbox_f64(),
+        );
+    }
+    set_string_field(&scope, &obj_handle, b"c", b"last");
+
+    let before = gc_collection_count();
+    let out = unsafe {
+        crate::json::js_json_stringify(
+            f64::from_bits(ptr_bits(obj_handle.get_raw_mut_ptr::<u8>() as usize)),
+            0,
+        )
+    };
+    assert!(
+        gc_collection_count() > before,
+        "nested toJSON should force a copied-minor GC mid-stringify"
+    );
+    unsafe {
+        assert_string_bytes(out, br#"{"a":"first","b":"tojson-out","c":"last"}"#);
+    }
+}
+
+/// `JSON.stringify` of an array whose MIDDLE element serializes through a
+/// GC-forcing `toJSON`: the elements after it must be read through the
+/// re-derived element base (the pre-fix code hoisted `elements` once).
+#[test]
+fn test_json_stringify_array_rederives_elements_after_tojson_minor_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let scope = RuntimeHandleScope::new();
+    let arr = crate::array::js_array_alloc(3);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let first = scope.root_nanbox_f64(test_string_value(b"head"));
+    let nested = scope.root_nanbox_f64(json_test_object_with_gc_forcing_tojson(&scope));
+    let last = scope.root_nanbox_f64(test_string_value(b"tail"));
+    for value in [&first, &nested, &last] {
+        let arr = crate::array::js_array_push(
+            arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+            crate::JSValue::from_bits(value.get_nanbox_f64().to_bits()),
+        );
+        arr_handle.set_raw_mut_ptr(arr);
+    }
+
+    let before = gc_collection_count();
+    let out = unsafe {
+        crate::json::js_json_stringify(
+            f64::from_bits(ptr_bits(arr_handle.get_raw_mut_ptr::<u8>() as usize)),
+            0,
+        )
+    };
+    assert!(
+        gc_collection_count() > before,
+        "element toJSON should force a copied-minor GC mid-stringify"
+    );
+    unsafe {
+        assert_string_bytes(out, br#"["head","tojson-out","tail"]"#);
+    }
+}
+
+extern "C" fn test_replacer_force_minor_gc(
+    _closure: *const crate::closure::ClosureHeader,
+    matched: f64,
+    _offset: f64,
+    _whole: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let matched_handle = scope.root_nanbox_f64(matched);
+    let _ = crate::gc::gc_collect_minor();
+    // The matched argument must still be a live string after the collection.
+    let _ = string_value_content(matched_handle.get_nanbox_f64());
+    test_string_value(b"<R>")
+}
+
+/// `String.prototype.replaceAll(pattern, fn)` where every replacer call
+/// forces a copied minor GC: the subject's `&str` view must be re-derived
+/// from the rooted handle for the between-match slices (the pre-fix code
+/// cached `str_data` once and kept a live `match_indices` borrow across the
+/// callbacks).
+#[test]
+fn test_string_replace_all_fn_rederives_subject_after_callback_minor_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let scope = RuntimeHandleScope::new();
+    let callback = crate::closure::js_closure_alloc(test_replacer_force_minor_gc as *const u8, 0);
+    let callback_handle = scope.root_raw_mut_ptr(callback);
+    let s = crate::string::js_string_from_bytes(b"one--two--three".as_ptr(), 15);
+    let s_handle = scope.root_string_ptr(s);
+    let pattern = crate::string::js_string_from_bytes(b"--".as_ptr(), 2);
+    let pattern_handle = scope.root_string_ptr(pattern);
+
+    let before = gc_collection_count();
+    let out = crate::regex::js_string_replace_all_string_fn(
+        s_handle.get_raw_const_ptr::<crate::StringHeader>(),
+        pattern_handle.get_raw_const_ptr::<crate::StringHeader>(),
+        f64::from_bits(ptr_bits(callback_handle.get_raw_mut_ptr::<u8>() as usize)),
+    );
+    assert!(
+        gc_collection_count() > before,
+        "replacer should force copied-minor GCs during replaceAll"
+    );
+    unsafe {
+        assert_string_bytes(out, b"one<R>two<R>three");
+    }
+}
+
+extern "C" fn test_bigint_comparator_force_minor_gc(
+    _closure: *const crate::closure::ClosureHeader,
+    a: f64,
+    b: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let a_handle = scope.root_nanbox_f64(a);
+    let b_handle = scope.root_nanbox_f64(b);
+    let _ = crate::gc::gc_collect_minor();
+    let read = |value: f64| -> i64 {
+        let bits = value.to_bits();
+        let ptr = (bits & POINTER_MASK) as *const crate::bigint::BigIntHeader;
+        let cleaned = crate::bigint::clean_bigint_ptr(ptr);
+        assert!(!cleaned.is_null(), "comparator arg should be a live BigInt");
+        unsafe { (*cleaned).limbs[0] as i64 }
+    };
+    let av = read(a_handle.get_nanbox_f64());
+    let bv = read(b_handle.get_nanbox_f64());
+    match av.cmp(&bv) {
+        std::cmp::Ordering::Less => -1.0,
+        std::cmp::Ordering::Equal => 0.0,
+        std::cmp::Ordering::Greater => 1.0,
+    }
+}
+
+/// `BigInt64Array.prototype.sort(comparator)` where every comparator call
+/// forces a copied minor GC: the raw lanes are sorted through an owned Rust
+/// buffer with two per-compare boxed (and rooted) BigInts — the pre-fix code
+/// parked a `Vec<f64>` full of unrooted BigInt boxes across every call.
+#[test]
+fn test_bigint64_sort_comparator_boxes_survive_copied_minor_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let scope = RuntimeHandleScope::new();
+    let comparator =
+        crate::closure::js_closure_alloc(test_bigint_comparator_force_minor_gc as *const u8, 0);
+    let comparator_handle = scope.root_raw_const_ptr(comparator);
+
+    let lanes: [i64; 6] = [42, -7, 1_000_000_000_007, 0, -900_000_000_001, 13];
+    let ta = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_BIGINT64, 6);
+    unsafe {
+        let base = crate::typedarray::data_ptr_mut(ta) as *mut i64;
+        for (i, v) in lanes.iter().enumerate() {
+            *base.add(i) = *v;
+        }
+    }
+
+    let before = gc_collection_count();
+    let sorted = crate::typedarray::js_typed_array_sort_with_comparator(
+        ta,
+        comparator_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>(),
+    );
+    assert!(
+        gc_collection_count() > before,
+        "comparator should force copied-minor GCs during the BigInt64 sort"
+    );
+    unsafe {
+        let base = crate::typedarray::data_ptr_mut(sorted) as *const i64;
+        let mut expected = lanes;
+        expected.sort_unstable();
+        for (i, v) in expected.iter().enumerate() {
+            assert_eq!(
+                *base.add(i),
+                *v,
+                "lane {i} should hold the comparator-sorted value"
+            );
+        }
+    }
+}

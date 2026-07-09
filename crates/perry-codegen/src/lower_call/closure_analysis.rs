@@ -181,7 +181,7 @@ pub fn find_outer_writes_stmt(
             }
         }
         Stmt::Labeled { body, .. } => find_outer_writes_stmt(body, inner_ids, out),
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

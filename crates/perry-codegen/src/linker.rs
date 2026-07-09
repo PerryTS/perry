@@ -50,6 +50,52 @@ fn native_tuning_arg_for_host() -> &'static str {
     }
 }
 
+/// Resolve the CPU-tuning clang flag for one `.ll` → `.o` compile (#6125).
+///
+/// `requested` is the value of `PERRY_TARGET_CPU` — set directly, or promoted
+/// by the compile driver from `--march` / perry.toml `[build] march` /
+/// `[build] native_tuning`:
+///
+///   - `None` (unset) — historical default: a host build (no explicit target
+///     triple) tunes to the build machine via `-march=native`/`-mcpu=native`;
+///     an explicit-triple build gets no tuning flag (the target's portable
+///     baseline).
+///   - `"native"` — force build-machine tuning.
+///   - `"generic"` / `"off"` / `"none"` / `"0"` / `"false"` — no tuning flag:
+///     the target architecture's portable baseline, even for host builds.
+///   - anything else — an explicit LLVM CPU name (`x86-64-v2`, `x86-64-v3`,
+///     `znver2`, `apple-m1`, …) the emitted code must not exceed.
+///
+/// The flag spelling follows the EFFECTIVE target, not the host: x86 targets
+/// take `-march=<cpu>`, everything else (aarch64/arm, riscv) `-mcpu=<cpu>`.
+/// This knob exists because binaries built on one machine and run on another
+/// (the `perry publish` hub, shared CI caches) must not bake the build box's
+/// full instruction set — e.g. AVX-512 — into the shipped objects, which
+/// SIGILLs on any CPU missing those extensions.
+fn cpu_tuning_arg_for(
+    requested: Option<&str>,
+    target_triple: Option<&str>,
+    effective_target: &str,
+) -> Option<String> {
+    let arch_flag = |cpu: &str| {
+        let is_x86 = effective_target.starts_with("x86_64")
+            || effective_target.starts_with("i686")
+            || effective_target.starts_with("i586");
+        if is_x86 {
+            format!("-march={cpu}")
+        } else {
+            format!("-mcpu={cpu}")
+        }
+    };
+    match requested.map(str::trim).filter(|s| !s.is_empty()) {
+        None => target_triple
+            .is_none()
+            .then(|| native_tuning_arg_for_host().to_string()),
+        Some("generic") | Some("off") | Some("none") | Some("0") | Some("false") => None,
+        Some(cpu) => Some(arch_flag(cpu)),
+    }
+}
+
 /// Default IR-size cutoff above which a module is compiled at `-O0` instead
 /// of `-O3` (#4880). A module dominated by a huge generated literal
 /// (config / lookup table) lowers to one enormous function whose
@@ -135,9 +181,9 @@ fn build_clang_compile_plan(
     let effective_target = target_triple
         .map(|s| s.to_string())
         .unwrap_or_else(crate::codegen::default_target_triple);
-    let native_tuning_arg = target_triple
-        .is_none()
-        .then(|| native_tuning_arg_for_host().to_string());
+    let requested_cpu = std::env::var("PERRY_TARGET_CPU").ok();
+    let native_tuning_arg =
+        cpu_tuning_arg_for(requested_cpu.as_deref(), target_triple, &effective_target);
     let stderr_remarks_path = PathBuf::from(format!("{}.clang-stderr", obj_path.display()));
 
     // #4880: oversized modules don't get the speed-tuned -O3 pipeline (it goes
@@ -280,8 +326,10 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     // host default when target is None) makes clang trust the IR and
     // skips the override path.
     //
-    // Native CPU tuning remains part of the same plan when no explicit target
-    // is supplied: only host builds receive `-mcpu=native` / `-march=native`.
+    // CPU tuning rides the same plan: by default only host builds receive
+    // `-mcpu=native` / `-march=native`; `PERRY_TARGET_CPU` (from `--march` /
+    // perry.toml `[build]`) overrides that with an explicit baseline or
+    // disables tuning entirely. See `cpu_tuning_arg_for` (#6125).
 
     log::debug!("perry-codegen: {:?}", cmd);
     let output = cmd
@@ -1055,6 +1103,75 @@ mod tests {
             .clang_args
             .iter()
             .any(|arg| arg == "-march=native" || arg == "-mcpu=native"));
+    }
+
+    #[test]
+    fn cpu_tuning_unset_keeps_historical_defaults() {
+        // Host build (no triple) → native tuning; explicit triple → none.
+        assert_eq!(
+            cpu_tuning_arg_for(None, None, "x86_64-apple-darwin").as_deref(),
+            Some(native_tuning_arg_for_host())
+        );
+        assert_eq!(
+            cpu_tuning_arg_for(
+                None,
+                Some("x86_64-unknown-linux-gnu"),
+                "x86_64-unknown-linux-gnu"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cpu_tuning_explicit_cpu_spells_march_or_mcpu_by_target_arch() {
+        // #6125: an explicit baseline applies to host AND cross builds, and
+        // the flag spelling follows the effective target's architecture.
+        assert_eq!(
+            cpu_tuning_arg_for(Some("x86-64-v2"), None, "x86_64-unknown-linux-gnu").as_deref(),
+            Some("-march=x86-64-v2")
+        );
+        assert_eq!(
+            cpu_tuning_arg_for(
+                Some("x86-64-v3"),
+                Some("x86_64-unknown-linux-musl"),
+                "x86_64-unknown-linux-musl"
+            )
+            .as_deref(),
+            Some("-march=x86-64-v3")
+        );
+        assert_eq!(
+            cpu_tuning_arg_for(Some("apple-m1"), None, "arm64-apple-macosx15.0.0").as_deref(),
+            Some("-mcpu=apple-m1")
+        );
+    }
+
+    #[test]
+    fn cpu_tuning_generic_disables_native_tuning_on_host_builds() {
+        for off in ["generic", "off", "none", "0", "false"] {
+            assert_eq!(
+                cpu_tuning_arg_for(Some(off), None, "x86_64-apple-darwin"),
+                None,
+                "'{off}' should disable tuning"
+            );
+        }
+        // Whitespace / empty values fall back to the default.
+        assert_eq!(
+            cpu_tuning_arg_for(Some("  "), None, "x86_64-apple-darwin").as_deref(),
+            Some(native_tuning_arg_for_host())
+        );
+    }
+
+    #[test]
+    fn cpu_tuning_native_can_be_forced_for_explicit_triples() {
+        assert_eq!(
+            cpu_tuning_arg_for(
+                Some("native"),
+                Some("x86_64-unknown-linux-gnu"),
+                "x86_64-unknown-linux-gnu"
+            )
+            .as_deref(),
+            Some("-march=native")
+        );
     }
 
     #[test]

@@ -954,17 +954,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx.block().call(DOUBLE, "llvm.ceil.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathRound(operand) => {
-            // JS Math.round: round-half-toward-positive-infinity. We
-            // emulate via floor(x + 0.5) then fcopysign to preserve -0.
+            // JS Math.round: round-half-toward-+∞ with -0 preservation. The
+            // inline `floor(x + 0.5)` is wrong for `x = 0.5 - ε/4` (the add
+            // pre-rounds to 1.0) and large odd integers (the `.5` is lost) — see
+            // js_math_round_value / test262 Math/round/S15.8.2.15_A7 — so route
+            // through the runtime helper that compares the exact fractional part.
             let v = lower_math_operand(ctx, operand)?;
-            let blk = ctx.block();
-            let half = blk.fadd(&v, "0.5");
-            let floored = blk.call(DOUBLE, "llvm.floor.f64", &[(DOUBLE, &half)]);
-            Ok(blk.call(
-                DOUBLE,
-                "llvm.copysign.f64",
-                &[(DOUBLE, &floored), (DOUBLE, &v)],
-            ))
+            Ok(ctx.block().call(DOUBLE, "js_math_round", &[(DOUBLE, &v)]))
         }
         Expr::MathTrunc(operand) => {
             let v = lower_expr(ctx, operand)?;

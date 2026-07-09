@@ -535,6 +535,25 @@ pub unsafe fn dispatch_rest_bundled(
         };
     }
 
+    // Use a macro for higher rest arities so this stays in sync with the
+    // documented 0..=15 support and the generated closure-call ceiling.
+    macro_rules! rest_arm {
+        (@ty $i:tt) => {
+            f64
+        };
+        ($($i:tt),* $(,)?) => {{
+            if let Some(arguments_double) = all_arguments_double {
+                let f: extern "C" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure $(, a!($i))*, rest_double, arguments_double)
+            } else {
+                let f: extern "C" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                f(closure $(, a!($i))*, rest_double)
+            }
+        }};
+    }
+
     match k {
         0 => {
             if let Some(arguments_double) = all_arguments_double {
@@ -725,6 +744,14 @@ pub unsafe fn dispatch_rest_bundled(
                 )
             }
         }
+        8 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7),
+        9 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8),
+        10 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+        11 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        12 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        13 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        14 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        15 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
         _ => {
             // Unsupported arity — fall back to undefined so we don't
             // mis-call the body and trigger UB. This mirrors the upper

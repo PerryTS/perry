@@ -608,3 +608,49 @@ fn test_server_is_local() {
     assert!(!server_is_local("http://10.0.0.5:3000"));
     assert!(!server_is_local("not a url"));
 }
+
+#[test]
+fn test_resolve_build_march_precedence_and_linux_default() {
+    // #6125 — CLI --march > [build] march > [build] native_tuning shorthand
+    // > linux portable default > nothing.
+    fn bc(march: Option<&str>, native_tuning: Option<bool>) -> config_types::BuildConfig {
+        config_types::BuildConfig {
+            out_dir: None,
+            march: march.map(str::to_string),
+            native_tuning,
+        }
+    }
+
+    // CLI flag wins over everything.
+    let cfg = bc(Some("x86-64-v3"), Some(false));
+    assert_eq!(
+        resolve_build_march(Some("znver2"), Some(&cfg), true).as_deref(),
+        Some("znver2")
+    );
+    // [build] march wins over native_tuning.
+    assert_eq!(
+        resolve_build_march(None, Some(&cfg), true).as_deref(),
+        Some("x86-64-v3")
+    );
+    // native_tuning shorthand: false → generic, true → native.
+    assert_eq!(
+        resolve_build_march(None, Some(&bc(None, Some(false))), true).as_deref(),
+        Some("generic")
+    );
+    assert_eq!(
+        resolve_build_march(None, Some(&bc(None, Some(true))), true).as_deref(),
+        Some("native")
+    );
+    // Unset on linux → portable x86-64-v2 default (whitespace-only march
+    // counts as unset).
+    assert_eq!(
+        resolve_build_march(None, None, true).as_deref(),
+        Some("x86-64-v2")
+    );
+    assert_eq!(
+        resolve_build_march(Some("  "), Some(&bc(Some(" "), None)), true).as_deref(),
+        Some("x86-64-v2")
+    );
+    // Unset on a non-linux target → nothing is sent.
+    assert_eq!(resolve_build_march(None, None, false), None);
+}

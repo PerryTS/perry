@@ -26,15 +26,23 @@ pub(crate) const INTERN_MAX_BYTE_LEN: u32 = 64;
 /// `static mut`, which both raced under concurrent allocation and risked
 /// handing back foreign-arena pointers.
 thread_local! {
-    pub(crate) static INTERN_TABLE: std::cell::UnsafeCell<[InternEntry; INTERN_TABLE_SIZE]> =
-        const { std::cell::UnsafeCell::new([InternEntry { hash: 0, string_ptr: 0 }; INTERN_TABLE_SIZE]) };
+    // arm64_32 fix: HEAP-allocate (Box) this ~128KB table instead of inline TLS.
+    // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
+    // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.
+    pub(crate) static INTERN_TABLE: std::cell::UnsafeCell<Box<[InternEntry]>> =
+        std::cell::UnsafeCell::new(
+            vec![InternEntry { hash: 0, string_ptr: 0 }; INTERN_TABLE_SIZE].into_boxed_slice(),
+        );
 }
 
 #[inline]
 pub(crate) fn with_intern_table<R>(
     f: impl FnOnce(*mut [InternEntry; INTERN_TABLE_SIZE]) -> R,
 ) -> R {
-    INTERN_TABLE.with(|c| f(c.get()))
+    INTERN_TABLE.with(|c| unsafe {
+        let boxed = &mut *c.get();
+        f(boxed.as_mut_ptr() as *mut [InternEntry; INTERN_TABLE_SIZE])
+    })
 }
 
 /// Intern a property-name string. Returns the canonical pointer for

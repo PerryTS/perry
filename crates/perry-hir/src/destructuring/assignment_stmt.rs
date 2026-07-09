@@ -209,12 +209,17 @@ fn lower_object_assignment_from_expr(
     source: Expr,
 ) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
+    let mut computed_key_temps: Vec<LocalId> = Vec::new();
 
     for prop in &obj_pat.props {
         match prop {
             ast::ObjectPatProp::KeyValue(kv) => {
-                let (key_prepare, get_value) =
-                    object_property_get_expr(ctx, &kv.key, source.clone())?;
+                let (key_prepare, get_value) = object_property_get_expr(
+                    ctx,
+                    &kv.key,
+                    source.clone(),
+                    &mut computed_key_temps,
+                )?;
                 result.extend(key_prepare);
 
                 let (prepare, target, default_value) = prepare_target_with_default(ctx, &kv.value)?;
@@ -273,7 +278,34 @@ fn lower_object_assignment_from_expr(
                 // default.
                 let (prepare, target, _default) = prepare_target_with_default(ctx, &rest.arg)?;
                 result.extend(prepare);
-                result.extend(assign_prepared_target(ctx, target, rest_expr)?);
+                if computed_key_temps.is_empty() {
+                    result.extend(assign_prepared_target(ctx, target, rest_expr)?);
+                } else {
+                    // Computed keys can't be excluded statically — spill the fresh
+                    // rest object and `delete` each once-evaluated computed key from
+                    // it before assigning to the target (#6153). Deleting from the
+                    // freshly-cloned rest never touches the source.
+                    let (rest_id, rest_name) =
+                        fresh_destruct_local(ctx, "destruct_rest", Type::Any);
+                    result.push(Stmt::Let {
+                        id: rest_id,
+                        name: rest_name,
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(rest_expr),
+                    });
+                    for key_id in &computed_key_temps {
+                        result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(rest_id)),
+                            index: Box::new(Expr::LocalGet(*key_id)),
+                        }))));
+                    }
+                    result.extend(assign_prepared_target(
+                        ctx,
+                        target,
+                        Expr::LocalGet(rest_id),
+                    )?);
+                }
             }
         }
     }
@@ -285,6 +317,9 @@ fn object_property_get_expr(
     ctx: &mut LoweringContext,
     key: &ast::PropName,
     source: Expr,
+    // Collects the once-evaluated temp for each COMPUTED key so the `...rest`
+    // handler can exclude it from the rest object (#6153).
+    computed_key_temps: &mut Vec<LocalId>,
 ) -> Result<(Vec<Stmt>, Expr)> {
     match key {
         ast::PropName::Ident(ident) => Ok((
@@ -314,6 +349,7 @@ fn object_property_get_expr(
                 vec![lower_expr(ctx, &computed.expr)?],
             );
             let (key_id, key_name) = fresh_destruct_local(ctx, "destruct_key", Type::Any);
+            computed_key_temps.push(key_id);
             Ok((
                 vec![Stmt::Let {
                     id: key_id,

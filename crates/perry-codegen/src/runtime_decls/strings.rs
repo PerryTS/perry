@@ -70,6 +70,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
     module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_math_trunc", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_round", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_sign", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_imul", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_pow", DOUBLE, &[DOUBLE, DOUBLE]);
@@ -364,6 +365,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_from_array", I64, &[I64]);
     module.declare_function("js_map_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_in_operator", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_private_brand_check", DOUBLE, &[DOUBLE, I32, PTR, I32]);
     module.declare_function(
         "js_private_guard",
@@ -1039,6 +1041,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // would do. (Map ptr, entry idx) → key / value.
     module.declare_function("js_map_entry_key_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_map_entry_value_at", DOUBLE, &[I64, I32]);
+    // #6075: current index of a key/value (or -1) for the delete-safe for-of
+    // fast path. Takes the NaN-boxed collection + key; strips internally.
+    module.declare_function("js_map_find_key_index", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_set_find_value_index", DOUBLE, &[DOUBLE, DOUBLE]);
     // Map/Set forEach: (collection_ptr, callback_nanboxed_f64, thisArg_f64) -> void (#2830)
     module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
@@ -1211,6 +1217,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Decl-site snapshot of a function-nested class's captured locals —
     // consumed by the dynamic-construction replay (`new mod.C()`).
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
+    // #6052: TDZ-suppression window around the snapshot's capture loads — a
+    // refresh emitted between two `let`/`const` initializers (the #6037
+    // refresh-after-each-assignment strategy) legally reads a sibling capture
+    // still in its dead zone; it must snapshot `undefined`, not throw.
+    module.declare_function("js_tdz_suppress_begin", VOID, &[]);
+    module.declare_function("js_tdz_suppress_end", VOID, &[]);
     // Static-method prologue read of one decl-site capture snapshot slot.
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
     // #5437: snapshot slot read with a `new`-site appended cap-arg fallback
@@ -1342,6 +1354,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // write for `i++`/`i--` on a sloppy implicit global (#3575).
     module.declare_function("js_global_get_optional", DOUBLE, &[DOUBLE]);
     module.declare_function("js_global_update", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #5989: strict-mode `Date = wrapped` — write an EXISTING global
+    // property, throw the spec ReferenceError only when absent.
+    module.declare_function(
+        "js_global_assign_existing_or_throw",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_throw_reference_error_this_before_super", DOUBLE, &[]);
     module.declare_function("js_throw_reference_error_super_delete", DOUBLE, &[]);
     module.declare_function(

@@ -151,13 +151,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         );
                     }
                     perry_hir::CallArg::Spread(e) => {
-                        // `js_array_push_spread_any` also handles the
-                        // arguments OBJECT (array-like, not ArrayHeader) —
-                        // the `super(...arguments)` source.
+                        // Route every spread operand through the full iterator
+                        // protocol (`js_array_spread_append` -> `array_from_
+                        // spread_value`): it drives a custom `[Symbol.iterator]`
+                        // (`super(...iter)`), spreads the arguments OBJECT
+                        // (`super(...arguments)`), arrays, sets/maps, typed
+                        // arrays, and strings, AND propagates an abrupt
+                        // completion from a throwing iterator step/value — the
+                        // `call-spread-*-iter` / `call-spread-err-*` cases. The
+                        // old `js_array_push_spread_any` only handled arrays and
+                        // array-like (`.length`) objects, so a plain iterable
+                        // (no `.length`) contributed zero args.
                         let v = lower_expr(ctx, e)?;
                         arr = ctx.block().call(
                             I64,
-                            "js_array_push_spread_any",
+                            "js_array_spread_append",
                             &[(I64, &arr), (DOUBLE, &v)],
                         );
                     }
@@ -253,12 +261,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(double_literal(0.0));
                 }
             };
-            let Some(parent_name) = current_class.extends_name.as_deref().map(|s| s.to_string())
-            else {
-                for a in super_args {
-                    let _ = lower_expr(ctx, a)?;
+            let parent_name = match current_class.extends_name.as_deref() {
+                Some(s) => s.to_string(),
+                // A lexically-shadowed / fully-dynamic parent carries no
+                // `extends_name` (the parent is a runtime value, not a named
+                // class) but DOES carry `extends_expr`. Proceed with an empty
+                // placeholder name — for this shape `static_parent_lookup` below
+                // is forced to `None` (extends_expr present) and the builtin-name
+                // gate is disabled by `heritage_lexically_shadowed`, so the name
+                // is never consulted; `super()` dispatches via `extends_expr`.
+                // Without this, `super()` in such a subclass silently no-ops and
+                // the (dynamic) parent constructor never runs.
+                None if current_class.extends_expr.is_some() => String::new(),
+                None => {
+                    for a in super_args {
+                        let _ = lower_expr(ctx, a)?;
+                    }
+                    return Ok(double_literal(0.0));
                 }
-                return Ok(double_literal(0.0));
             };
             // #5437 (Next.js p-queue `PQueue`): when HIR captured a dynamic
             // `extends_expr` for this class, the parent is a LEXICAL runtime
@@ -810,13 +830,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 );
                             }
                         }
-                        let current_class_name =
-                            ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
                     }
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }

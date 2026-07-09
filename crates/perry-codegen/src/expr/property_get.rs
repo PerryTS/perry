@@ -111,17 +111,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let arr_handle = blk.call(I64, "js_error_get_errors", &[(I64, &recv_handle)]);
-            let is_missing = blk.icmp_eq(I64, &arr_handle, "0");
-            let tagged = nanbox_pointer_inline(blk, &arr_handle);
-            let tagged_bits = blk.bitcast_double_to_i64(&tagged);
-            let selected = blk.select(
-                I1,
-                &is_missing,
-                I64,
-                crate::nanbox::TAG_UNDEFINED_I64,
-                &tagged_bits,
-            );
-            Ok(blk.bitcast_i64_to_double(&selected))
+            Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
         Expr::PropertyGet { object, property }
@@ -576,8 +566,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // discards the INT32 tag during the unbox and ends up returning
             // undefined.
             let is_class_ref_object = matches!(object.as_ref(), Expr::ClassRef(_))
-                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name)
-                    && !ctx.namespace_imports.contains(name));
+                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
             if is_class_ref_object {
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(property);
@@ -847,14 +836,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // misses the class ref and falls back to the global
                     // `Number`, dropping all inherited statics (effect's
                     // `S.Number.ast`).
-                    if let Some(nested_prefix) = ctx
-                        .namespace_member_namespace_prefixes
-                        .get(&(name.clone(), property.clone()))
-                    {
-                        return Ok(ctx
-                            .block()
-                            .load(DOUBLE, &format!("@__perry_ns_{}", nested_prefix)));
-                    }
                     let class_cid = ctx.class_ids.get(property).copied().or_else(|| {
                         ctx.import_function_origin_names
                             .get(property)
@@ -867,19 +848,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Issue #680: prefer the per-namespace map so
                     // `random.make` and `tracer.make` resolve to their
                     // own sources even when both modules export `make`.
-                    // Do not fall back to flat import maps here: another
-                    // module can export a homonymous class/function with the
-                    // same local name as this namespace.
-                    let ns_lookup_name = if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                    // Falls back to the flat `import_function_prefixes`
+                    // for namespaces with no overlapping conflicts.
+                    let _ns_lookup_name = if let Expr::ExternFuncRef { name, .. } = object.as_ref()
+                    {
                         Some(name.clone())
                     } else {
                         None
                     };
-                    let source_prefix_opt = ns_lookup_name.as_ref().and_then(|ns| {
-                        ctx.namespace_member_prefixes
-                            .get(&(ns.clone(), property.clone()))
-                            .cloned()
-                    });
+                    let source_prefix_opt = _ns_lookup_name
+                        .as_ref()
+                        .and_then(|ns| {
+                            ctx.namespace_member_prefixes
+                                .get(&(ns.clone(), property.clone()))
+                                .cloned()
+                        })
+                        .or_else(|| ctx.import_function_prefixes.get(property).cloned());
                     if let Some(source_prefix) = source_prefix_opt {
                         // Issue #678 followup: V8-fallback namespace member
                         // read as a value (e.g. `let r = ns.render`) — there
@@ -928,50 +912,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // body. The body only runs later when the consumer
                         // actually calls `HashMap.keySet(self)`, by which time
                         // both modules have finished `__init`.
-                        // Issue #678 / #5924: re-export renames mean the suffix
-                        // in the origin module differs from the consumer-visible
-                        // name. Consult the per-namespace map first (so a rename
-                        // in a different namespace imported into this file can't
-                        // clobber this namespace's unrenamed member of the same
-                        // name), then the flat `import_function_origin_names`.
+                        // Issue #678/#5924: re-export renames mean the suffix
+                        // in the origin module differs from the
+                        // consumer-visible name. Namespace-scoped lookup
+                        // first so a rename in a different namespace
+                        // imported into this file can't clobber this
+                        // namespace's unrenamed member of the same name.
                         let origin_suffix = import_origin_suffix_ns(
                             ctx.import_function_origin_names,
                             ctx.namespace_member_origin_names,
-                            ns_lookup_name.as_deref().unwrap_or(""),
+                            _ns_lookup_name.as_deref().unwrap_or(""),
                             property,
                         );
-                        // Issue #680: a per-namespace exported VAR member is a
-                        // getter returning a closure — read it off the actual
-                        // namespace object rather than emitting a direct call to
-                        // the zero-arg getter symbol.
-                        let is_namespace_var = ns_lookup_name.as_ref().is_some_and(|ns| {
-                            ctx.namespace_member_vars
-                                .contains(&(ns.clone(), property.clone()))
-                        });
-                        if is_namespace_var {
-                            if let Some(namespace_prefix) = ns_lookup_name
-                                .as_ref()
-                                .and_then(|ns| ctx.namespace_import_prefixes.get(ns))
-                            {
-                                let ns_value = ctx
-                                    .block()
-                                    .load(DOUBLE, &format!("@__perry_ns_{}", namespace_prefix));
-                                let key_idx = ctx.strings.intern(property);
-                                let key_handle_global =
-                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                                let blk = ctx.block();
-                                let ns_bits = blk.bitcast_double_to_i64(&ns_value);
-                                let ns_handle = blk.and(I64, &ns_bits, POINTER_MASK_I64);
-                                let key_box = blk.load(DOUBLE, &key_handle_global);
-                                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                                let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                                return Ok(blk.call(
-                                    DOUBLE,
-                                    "js_object_get_field_by_name_f64",
-                                    &[(I64, &ns_handle), (I64, &key_handle)],
-                                ));
-                            }
-                        }
                         if ctx.imported_vars.contains(property) {
                             let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
@@ -1067,7 +1019,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     ));
                 }
+                // #6003: `class_name == "Headers"` only means the NATIVE
+                // fetch Headers when the user hasn't defined their own
+                // `class Headers` — a user class of that name owns the
+                // receiver type, so fall through to the user-class
+                // getter/method dispatch below.
                 if class_name == "Headers"
+                    && !ctx.classes.contains_key(&class_name)
                     && matches!(
                         property.as_str(),
                         "append"
@@ -1149,7 +1107,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
-                if class_name == "Headers" && is_headers_method_name(property) {
+                if class_name == "Headers"
+                    && !ctx.classes.contains_key(&class_name)
+                    && is_headers_method_name(property)
+                {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
@@ -1195,6 +1156,69 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.class_ids.get(&class_name),
                         ctx.class_keys_globals.get(&class_name).cloned(),
                     ) {
+                        // #5093 loop versioning: inside the fast clone of a
+                        // class-field versioned loop, a tracked field read on
+                        // the proven receiver lowers to a bare slot load on
+                        // the preheader-cached object pointer — no shape
+                        // check, no guard call, no fallback (the preheader
+                        // proved the shape once and the call-free clone keeps
+                        // it true; see stmt/loops.rs).
+                        let loop_fact_ptr = match object.as_ref() {
+                            Expr::LocalGet(recv_id) => crate::expr::class_field_loop_fact_lookup(
+                                &ctx.class_field_loop_facts,
+                                *recv_id,
+                                &class_name,
+                                property,
+                            )
+                            .filter(|(_, loop_idx)| *loop_idx == field_index)
+                            .map(|(fact, _)| fact.obj_ptr.clone()),
+                            _ => None,
+                        };
+                        if let Some(obj_ptr) = loop_fact_ptr {
+                            let field_idx_str = field_index.to_string();
+                            let blk = ctx.block();
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            let val = blk.load(DOUBLE, &field_ptr);
+                            let fast = LoweredValue {
+                                semantic: SemanticKind::JsNumber,
+                                rep: NativeRep::F64,
+                                llvm_ty: DOUBLE,
+                                value: val.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                "ClassFieldGet",
+                                None,
+                                "class_field_get.loop_raw_f64_load",
+                                &fast,
+                                Some(BoundsState::Guarded {
+                                    guard_id: "class_field_loop_preheader_check".to_string(),
+                                }),
+                                None,
+                                Some(BufferAccessMode::CheckedNative),
+                                None,
+                                None,
+                                None,
+                                vec![raw_f64_layout_fact(
+                                    None,
+                                    "consumed",
+                                    "class_field_loop_preheader_check",
+                                    None,
+                                )],
+                                Vec::new(),
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                    "receiver_proof=loop_preheader_shape_check".to_string(),
+                                    "field_layout=raw_f64_slot_array".to_string(),
+                                    "loop_versioning=class_field_fast_clone".to_string(),
+                                ],
+                            );
+                            return Ok(val);
+                        }
                         let recv_box = lower_expr(ctx, object)?;
                         let key_idx = ctx.strings.intern(property);
                         let key_handle_global =
@@ -1301,10 +1325,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
+                        // arm64_32 watchOS: the object fields region begins at
+                        // `size_of::<ObjectHeader>()` past the user pointer — 24 on
+                        // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is 4
+                        // bytes there). A hardcoded 24 reads every class field 4 bytes
+                        // off on a 32-bit watch, so this inline class-field load
+                        // disagreed with the generic-PIC load / runtime setter (both
+                        // target-aware) and typed-object string fields came back as
+                        // word-swapped NaN-boxes. Derive it from the target triple
+                        // (no-op on 64-bit; see `target_layout`).
+                        let header_skip =
+                            crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                .to_string();
                         let blk = ctx.block();
                         let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                        // Skip the 24-byte ObjectHeader.
-                        let header_skip = "24".to_string();
                         let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                         let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
                         let val_fast = blk.load(DOUBLE, &field_ptr);

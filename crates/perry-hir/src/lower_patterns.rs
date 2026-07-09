@@ -159,18 +159,10 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
         ast::Lit::Bool(b) => Ok(Expr::Bool(b.value)),
         ast::Lit::Null(_) => Ok(Expr::Null),
         ast::Lit::BigInt(bi) => Ok(Expr::BigInt(bi.value.to_string())),
-        ast::Lit::Regex(re) => {
-            let pattern = re.exp.to_string();
-            let pattern = if pattern.is_ascii() {
-                pattern
-            } else {
-                repair_latin1_decoded_utf8(&pattern)
-            };
-            Ok(Expr::RegExp {
-                pattern,
-                flags: re.flags.to_string(),
-            })
-        }
+        ast::Lit::Regex(re) => Ok(Expr::RegExp {
+            pattern: re.exp.to_string(),
+            flags: re.flags.to_string(),
+        }),
         _ => Err(anyhow!("Unsupported literal type")),
     }
 }
@@ -182,10 +174,6 @@ fn normalize_swc_string_literal(lit: &ast::Str, decoded: &str) -> String {
     if raw.is_ascii() || decoded.is_ascii() {
         return decoded.to_string();
     }
-    repair_latin1_decoded_utf8(decoded)
-}
-
-fn repair_latin1_decoded_utf8(decoded: &str) -> String {
     let mut bytes = Vec::with_capacity(decoded.len());
     for ch in decoded.chars() {
         let code = ch as u32;
@@ -194,7 +182,10 @@ fn repair_latin1_decoded_utf8(decoded: &str) -> String {
         }
         bytes.push(code as u8);
     }
-    String::from_utf8(bytes).unwrap_or_else(|_| decoded.to_string())
+    match String::from_utf8(bytes) {
+        Ok(repaired) => repaired,
+        Err(_) => decoded.to_string(),
+    }
 }
 
 /// Convert an assignment target to an expression for reading its current value

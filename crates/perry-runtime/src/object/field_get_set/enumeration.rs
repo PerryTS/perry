@@ -3,6 +3,55 @@
 
 use super::*;
 
+/// Map/Set receivers: the collection's DATA lives in internal slots (never
+/// own enumerable properties — Node: `Object.keys(new Map([...])) === []`),
+/// but user EXPANDOS (`cache.custom = x`) live in the exotic side table
+/// (`ExoticKind::Map`/`Set`). Shared by the keys/values/entries guards.
+enum MapSetEnum {
+    Keys,
+    Values,
+    Entries,
+}
+
+fn map_set_exotic_enum(stripped: *const ObjectHeader, what: MapSetEnum) -> *mut ArrayHeader {
+    let addr = stripped as usize;
+    let kind = if crate::map::is_registered_map(addr) {
+        super::super::exotic_expando::ExoticKind::Map
+    } else {
+        super::super::exotic_expando::ExoticKind::Set
+    };
+    let keys = super::super::exotic_expando::exotic_own_keys(kind, addr, true);
+    let arr = crate::array::js_array_alloc(keys.len().max(1) as u32);
+    let mut out = arr;
+    let receiver = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+    for name in keys {
+        let value = || unsafe {
+            super::super::exotic_expando::exotic_get_own_property(addr, kind, &name, receiver)
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+        };
+        match what {
+            MapSetEnum::Keys => {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                out = crate::array::js_array_push(out, JSValue::string_ptr(key));
+            }
+            MapSetEnum::Values => {
+                out = crate::array::js_array_push_f64(out, value());
+            }
+            MapSetEnum::Entries => {
+                let pair = crate::array::js_array_alloc(2);
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::array::js_array_push(pair, JSValue::string_ptr(key));
+                crate::array::js_array_push_f64(pair, value());
+                out = crate::array::js_array_push(
+                    out,
+                    JSValue::from_bits(JSValue::pointer(pair as *const u8).bits()),
+                );
+            }
+        }
+    }
+    out
+}
+
 /// `Object.keys(value)` entry point that inspects the NaN-boxed *value* (not a
 /// raw pointer) so it handles primitives safely. A string yields its index
 /// keys `"0".."length-1"` (`Object.keys("abc") === ["0","1","2"]`); objects and
@@ -554,6 +603,46 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
     if keys.is_null() {
         return false;
     }
+    // Hot on the JSON.stringify path — called once per serialized object
+    // (#6009). Keys arrays are always materialized dense GC arrays, so read
+    // the element slots raw instead of paying the exported `js_array_get`
+    // validation per element, and reject on the first byte: a canonical
+    // array index must start with an ASCII digit, which almost no object key
+    // does, so the utf8 + numeric parse runs only for digit-leading keys.
+    {
+        let keys_addr = keys as usize;
+        let aligned = (keys_addr as u64) >> 48 == 0 && keys_addr >= 0x10000 && keys_addr & 0x7 == 0;
+        if aligned {
+            let keys_gc =
+                (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY && (*keys).length <= (*keys).capacity
+            {
+                let len = (*keys).length as usize;
+                let elements =
+                    (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+                let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                for i in 0..len {
+                    let key_val = crate::JSValue::from_bits((*elements.add(i)).to_bits());
+                    let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
+                    else {
+                        continue;
+                    };
+                    if !bytes.first().is_some_and(|b| b.is_ascii_digit()) {
+                        continue;
+                    }
+                    if std::str::from_utf8(bytes)
+                        .ok()
+                        .and_then(canonical_array_index)
+                        .is_some()
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+    }
+    // Fallback for anything that doesn't look like a plain dense keys array.
     let len = crate::array::js_array_length(keys);
     let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for i in 0..len {
@@ -598,6 +687,19 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
             obj
         }
     };
+    // A Map/Set receiver is a MapHeader/SetHeader, NOT an ObjectHeader — the
+    // generic object walk below reads collection-internal bytes as a
+    // `keys_array` pointer and SIGSEGVs downstream (js_array_length's GC-kind
+    // probe on the garbage pointer). Per spec a collection's entries live in
+    // internal slots, not own enumerable properties: Node returns [] for
+    // `Object.keys(new Map([...]))` — and likewise for values/entries/for-in.
+    // A telemetry path in a large esbuild-bundled CLI app hit this via
+    // `Object.keys(cache)` on a lodash-memoize Map cache.
+    if crate::map::is_registered_map(stripped as usize)
+        || crate::set::is_registered_set(stripped as usize)
+    {
+        return map_set_exotic_enum(stripped, MapSetEnum::Keys);
+    }
     if let Some(addr) =
         crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
     {
@@ -835,18 +937,19 @@ pub(crate) unsafe fn instance_private_key_hidden(
         .unwrap_or(false)
 }
 
-/// True for perry's hidden runtime-internal own keys — currently exactly the
+/// True for perry's hidden runtime-internal own keys — the
 /// `__perry_collection_backing__` field stashed on a `class … extends Map/Set`
-/// instance. This physically lives in the instance keys_array but must NEVER
+/// instance, and the `__perry_wk_entries` field backing a `WeakMap`/`WeakSet`
+/// (#6120). These physically live in the object's keys_array but must NEVER
 /// surface to `Object.keys` / `for…in` / `Object.getOwnPropertyNames` /
 /// `JSON.stringify` / `Object.hasOwn` / `hasOwnProperty` / `propertyIsEnumerable`.
 ///
-/// Matches the backing key EXACTLY (an allowlist), not a broad `__perry_*`
-/// prefix — a prefix test would wrongly hide legitimate user properties whose
-/// name happens to begin with `__perry_` (e.g. `this.__perry_user = 1`).
+/// Matches each key EXACTLY (an allowlist), not a broad `__perry_*` prefix — a
+/// prefix test would wrongly hide legitimate user properties whose name happens
+/// to begin with `__perry_` (e.g. `this.__perry_user = 1`).
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
-    b == crate::object::map_set_subclass::BACKING_KEY
+    b == crate::object::map_set_subclass::BACKING_KEY || b == crate::weakref::WEAK_ENTRIES_KEY
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].
@@ -891,6 +994,13 @@ pub extern "C" fn js_object_values(obj: *const ObjectHeader) -> *mut ArrayHeader
             obj
         }
     };
+    // Map/Set receiver → no own enumerable properties; see the matching
+    // guard in `js_object_keys` for the rationale.
+    if crate::map::is_registered_map(stripped as usize)
+        || crate::set::is_registered_set(stripped as usize)
+    {
+        return map_set_exotic_enum(stripped, MapSetEnum::Values);
+    }
     if let Some(addr) =
         crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
     {
@@ -1033,6 +1143,13 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
             obj
         }
     };
+    // Map/Set receiver → no own enumerable properties; see the matching
+    // guard in `js_object_keys` for the rationale.
+    if crate::map::is_registered_map(stripped as usize)
+        || crate::set::is_registered_set(stripped as usize)
+    {
+        return map_set_exotic_enum(stripped, MapSetEnum::Entries);
+    }
     if let Some(addr) =
         crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
     {

@@ -49,11 +49,6 @@ pub(super) fn try_imported_array_methods(
                                 param_types,
                                 return_type,
                             };
-                            let extern_is_array = matches!(
-                                extern_ref,
-                                Expr::ExternFuncRef { ref return_type, .. }
-                                    if matches!(return_type, Type::Array(_))
-                            );
                             match method_name {
                                 "join" => {
                                     // Issue #420 (drizzle): `sql.join(arr)` — `sql`
@@ -80,7 +75,7 @@ pub(super) fn try_imported_array_methods(
                                     // Fall through.
                                 }
                                 "map"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayMap {
@@ -89,7 +84,7 @@ pub(super) fn try_imported_array_methods(
                                         }));
                                     }
                                 "filter"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayFilter {
@@ -98,7 +93,7 @@ pub(super) fn try_imported_array_methods(
                                         }));
                                     }
                                 "forEach"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayForEach {
@@ -107,7 +102,7 @@ pub(super) fn try_imported_array_methods(
                                         }));
                                     }
                                 "find"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayFind {
@@ -143,7 +138,7 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 "indexOf"
                                     // #2804: carry the optional fromIndex (2nd arg).
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let mut it = args.into_iter();
                                         let value = it.next().unwrap();
                                         let from_index = it.next().map(Box::new);
@@ -154,7 +149,7 @@ pub(super) fn try_imported_array_methods(
                                         }));
                                     }
                                 "includes"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let mut it = args.into_iter();
                                         let value = it.next().unwrap();
                                         let from_index = it.next().map(Box::new);
@@ -165,7 +160,7 @@ pub(super) fn try_imported_array_methods(
                                         }));
                                     }
                                 "slice"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let mut args_iter = args.into_iter();
                                         let start = args_iter.next().unwrap();
                                         let end = args_iter.next();
@@ -176,7 +171,7 @@ pub(super) fn try_imported_array_methods(
                                         }));
                                     }
                                 "reduce"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let mut args_iter = args.into_iter();
                                         let callback = args_iter.next().unwrap();
                                         let initial = args_iter.next().map(Box::new);
@@ -188,13 +183,13 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 "flat"
                                     // depth-aware calls fall through.
-                                    if args.is_empty() && extern_is_array => {
+                                    if args.is_empty() => {
                                         return Ok(Ok(Expr::ArrayFlat {
                                             array: Box::new(extern_ref),
                                         }));
                                     }
                                 "reduceRight"
-                                    if !args.is_empty() && extern_is_array => {
+                                    if !args.is_empty() => {
                                         let mut args_iter = args.into_iter();
                                         let callback = args_iter.next().unwrap();
                                         let initial = args_iter.next().map(Box::new);
@@ -204,19 +199,19 @@ pub(super) fn try_imported_array_methods(
                                             initial,
                                         }));
                                     }
-                                "toReversed" if extern_is_array => {
+                                "toReversed" => {
                                     return Ok(Ok(Expr::ArrayToReversed {
                                         array: Box::new(extern_ref),
                                     }));
                                 }
-                                "toSorted" if extern_is_array => {
+                                "toSorted" => {
                                     let comparator = args.into_iter().next().map(Box::new);
                                     return Ok(Ok(Expr::ArrayToSorted {
                                         array: Box::new(extern_ref),
                                         comparator,
                                     }));
                                 }
-                                "toSpliced" if extern_is_array => {
+                                "toSpliced" => {
                                     // #2794: handle omitted args.
                                     let arg_count = args.len();
                                     let mut args_iter = args.into_iter();
@@ -235,7 +230,7 @@ pub(super) fn try_imported_array_methods(
                                     }));
                                 }
                                 "with"
-                                    if args.len() >= 2 && extern_is_array => {
+                                    if args.len() >= 2 => {
                                         let mut args_iter = args.into_iter();
                                         let index = args_iter.next().unwrap();
                                         let value = args_iter.next().unwrap();
@@ -245,13 +240,13 @@ pub(super) fn try_imported_array_methods(
                                             value: Box::new(value),
                                         }));
                                     }
-                                "entries" if extern_is_array => {
+                                "entries" => {
                                     return Ok(Ok(Expr::ArrayEntries(Box::new(extern_ref))));
                                 }
-                                "keys" if extern_is_array => {
+                                "keys" => {
                                     return Ok(Ok(Expr::ArrayKeys(Box::new(extern_ref))));
                                 }
-                                "values" if extern_is_array => {
+                                "values" => {
                                     return Ok(Ok(Expr::ArrayValues(Box::new(extern_ref))));
                                 }
                                 _ => {} // Fall through for other methods

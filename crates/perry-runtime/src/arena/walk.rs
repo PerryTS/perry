@@ -799,6 +799,21 @@ pub fn general_block_count() -> usize {
     ARENA.with(|arena| unsafe { (*arena.get()).blocks.len() })
 }
 
+/// Per-block `size` for the general (nursery-Eden) arena, indexed by
+/// general block index (`0..general_block_count()`, tombstones report
+/// size 0). Used by the evacuation policy to translate "this block's
+/// reset is blocked only by movable candidates" into the block-granule
+/// bytes a defrag would actually hand back.
+pub(crate) fn general_block_sizes() -> Vec<usize> {
+    ARENA.with(|arena| unsafe {
+        (*arena.get())
+            .blocks
+            .iter()
+            .map(|block| if block.data.is_null() { 0 } else { block.size })
+            .collect()
+    })
+}
+
 /// Whether a general-arena block is in the caller-saved-register safety
 /// window used by `arena_reset_empty_blocks`.
 #[inline]

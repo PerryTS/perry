@@ -52,20 +52,28 @@ const MAX_TRY_DEPTH: usize = 1024;
 /// live in TLS once `perry/thread` workers can run user code that
 /// throws. Previously all five were process-wide `static mut`s and would
 /// corrupt under any concurrent throw.
+// arm64_32 fix: the three per-depth arrays are HEAP-allocated (`Box<[..]>`)
+// instead of stored inline in TLS. At MAX_TRY_DEPTH=1024 they are ~280KB of
+// initialized thread-local data (`jump_buffers` alone is 1024 * 256B = 256KB),
+// which overflows ld64's 64KB `__thread_data` cap for arm64_32 (and the ILP32
+// TLS layout generally). Boxing leaves only three fat pointers + scalars inline
+// in TLS; the arrays live on the heap. `[T]` indexing on `Box<[T]>` is
+// unchanged, so the accessors below need no edits. (Mirrors the
+// TRANSITION_CACHE / VTABLE_IC / INTERN_TABLE boxing.)
 struct ExceptionState {
-    jump_buffers: [JmpBuf; MAX_TRY_DEPTH],
+    jump_buffers: Box<[JmpBuf]>,
     /// Shadow-stack depth captured when each `try` block was pushed, so the
     /// unwind path can drop the orphaned frames `longjmp` leaves behind (see
     /// `js_throw` / issue #1830). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
-    shadow_savepoints: [ShadowSavepoint; MAX_TRY_DEPTH],
+    shadow_savepoints: Box<[ShadowSavepoint]>,
     /// `js_native_call_method` recursion depth captured when each `try` was
     /// pushed. A throw `longjmp`s past the in-flight method frames, skipping
     /// their `CallMethodDepthGuard` `Drop`s; the unwind path restores this so
     /// the counter doesn't leak (see `js_throw` / `crate::object`'s
     /// `call_method_depth_*`). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
-    call_method_depths: [u32; MAX_TRY_DEPTH],
+    call_method_depths: Box<[u32]>,
     try_depth: usize,
     current_exception: f64,
     has_exception: bool,
@@ -73,11 +81,13 @@ struct ExceptionState {
 }
 
 impl ExceptionState {
-    const fn new() -> Self {
+    // No longer `const`: `vec!` builds the arrays directly on the heap (no large
+    // stack temporary), so first access lazily allocates ~280KB off the TLS.
+    fn new() -> Self {
         ExceptionState {
-            jump_buffers: [JmpBuf::new(); MAX_TRY_DEPTH],
-            shadow_savepoints: [ShadowSavepoint::EMPTY; MAX_TRY_DEPTH],
-            call_method_depths: [0; MAX_TRY_DEPTH],
+            jump_buffers: vec![JmpBuf::new(); MAX_TRY_DEPTH].into_boxed_slice(),
+            shadow_savepoints: vec![ShadowSavepoint::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
+            call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
             try_depth: 0,
             current_exception: 0.0,
             has_exception: false,
@@ -88,7 +98,7 @@ impl ExceptionState {
 
 thread_local! {
     static EXCEPTION_STATE: std::cell::UnsafeCell<ExceptionState> =
-        const { std::cell::UnsafeCell::new(ExceptionState::new()) };
+        std::cell::UnsafeCell::new(ExceptionState::new());
 }
 
 #[inline]

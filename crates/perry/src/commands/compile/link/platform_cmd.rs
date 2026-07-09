@@ -116,26 +116,53 @@ pub fn select_linker_command(
                         .unwrap_or(false)
                 })
             });
-        // arm64_32: rust-objcopy crashes on these Mach-O objects, so the entry
-        // symbol was emitted directly by codegen (PERRY_ENTRY_SYMBOL) instead of
-        // renamed here. Skip the objcopy pass entirely.
-        if let Some(entry_obj) = entry_obj.filter(|_| !arm64_32) {
-            let objcopy = std::env::var("HOME").ok()
-                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
-                .filter(|p| p.exists())
-                .or_else(|| std::env::var("HOME").ok()
-                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
-                    .filter(|p| p.exists()))
-                .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
-            let rename = if is_watchos_game_loop || is_watchos_swift_app {
-                "_main=__perry_user_main"
+        if let Some(entry_obj) = entry_obj {
+            // Entry-symbol rename: the TS `_main` must move out of the way so
+            // the Swift `@main` (default tree-renderer shell) or the native
+            // lib's own `@main` (game-loop / swift-app) owns the process entry,
+            // while the compiled TS init is still reachable under a stable name.
+            let (from_sym, to_sym) = if is_watchos_game_loop || is_watchos_swift_app {
+                ("_main", "__perry_user_main")
             } else {
-                "_main=_perry_main_init"
+                ("_main", "_perry_main_init")
             };
-            let _ = Command::new(&objcopy)
-                .args(["--redefine-sym", rename])
-                .arg(entry_obj)
-                .status();
+            if arm64_32 {
+                // arm64_32: rust-objcopy / llvm-objcopy SIGSEGV writing these
+                // Mach-O objects with `--redefine-sym` (LLVM MachOWriter bug,
+                // still present through LLVM 22). Do the rename via `ld -r`
+                // instead — a different Mach-O writer that doesn't crash:
+                // `-alias` exposes the entry at `_main`'s address and
+                // `-unexported_symbol` demotes the original `_main` to a local
+                // so it can't collide with the Swift/native `@main`. Without
+                // this the default shell's `perry_main_init` is never defined
+                // and every arm64_32 device link fails "undefined
+                // _perry_main_init" (the old code skipped the rename for
+                // arm64_32 expecting a codegen PERRY_ENTRY_SYMBOL emit that is
+                // never wired up).
+                let tmp = entry_obj.with_extension("aliased.o");
+                let status = Command::new("ld")
+                    .args(["-r", "-arch", "arm64_32"])
+                    .arg(entry_obj)
+                    .arg("-o")
+                    .arg(&tmp)
+                    .args(["-alias", from_sym, to_sym, "-unexported_symbol", from_sym])
+                    .status();
+                if matches!(status, Ok(s) if s.success()) && tmp.exists() {
+                    let _ = std::fs::rename(&tmp, entry_obj);
+                }
+            } else {
+                let objcopy = std::env::var("HOME").ok()
+                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
+                    .filter(|p| p.exists())
+                    .or_else(|| std::env::var("HOME").ok()
+                        .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
+                        .filter(|p| p.exists()))
+                    .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+                let _ = Command::new(&objcopy)
+                    .args(["--redefine-sym", &format!("{from_sym}={to_sym}")])
+                    .arg(entry_obj)
+                    .status();
+            }
         }
 
         if is_watchos_game_loop {
@@ -820,7 +847,15 @@ pub fn select_linker_command(
         .arg("/STACK:67108864")
         // Native libs (hone_editor_windows etc) bundle perry_runtime objects
         // that can't be fully stripped. Identical symbols are safe to merge.
-        .arg("/FORCE:MULTIPLE");
+        .arg("/FORCE:MULTIPLE")
+        // #6023: /FORCE:MULTIPLE makes the duplicate-definition merge
+        // deliberate, but link.exe still prints one LNK4006 line per merged
+        // symbol — hundreds of them (import descriptors duplicated inside
+        // perry_ui_windows.lib, perry_audio_* present in two members). That
+        // flood buried the real error in #6023; suppress it. lld-link
+        // silently ignores /IGNORE codes it doesn't implement, so the flag
+        // is safe on both linker paths.
+        .arg("/IGNORE:4006");
         // Set up MSVC library search paths if LIB env isn't already configured
         if std::env::var("LIB").is_err() {
             if let Some(lib_paths) = find_msvc_lib_paths() {

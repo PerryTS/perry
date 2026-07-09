@@ -184,6 +184,113 @@ pub(crate) fn test_date_to_json_current_this() -> f64 {
     date_to_json(std::ptr::null())
 }
 
+/// True iff `value` is an ECMAScript Object (`Type(O) is Object`). Objects are
+/// the pointer-tagged heap values EXCEPT registered `Symbol`s (which share the
+/// pointer band) and `BigInt`s (distinct tag). All the primitive tags
+/// (undefined/null/bool/number/int32/string/bigint/symbol) are NOT Objects.
+fn value_is_object(value: f64) -> bool {
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jsv.is_pointer() {
+        return false;
+    }
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    !crate::symbol::is_registered_symbol(raw)
+}
+
+/// `Date.prototype [ @@toPrimitive ] ( hint )` (ECMA-262 §21.4.4.45).
+///
+/// Unlike the other `Date.prototype` methods this is NOT brand-checked to a
+/// Date and does NOT read the time value — it is a *generic* `OrdinaryToPrimitive`
+/// dispatcher installed on `Date.prototype` and invoked with `this` = whatever
+/// the caller supplies (`.call(obj, hint)`). Steps:
+///   1. Let O be the `this` value. If `Type(O)` is not Object, throw a TypeError.
+///   2. If `hint` is "string" or "default" → `tryFirst = string`.
+///   3. Else if `hint` is "number" → `tryFirst = number`.
+///   4. Else throw a TypeError.
+///   5. Return `OrdinaryToPrimitive(O, tryFirst)`.
+///
+/// The `hint` comparison is against the primitive String value only: a
+/// `new String("number")` wrapper or any non-string is an invalid hint
+/// (TypeError), matching test262 `hint-invalid.js`.
+extern "C" fn date_to_primitive(_closure: *const crate::closure::ClosureHeader, hint: f64) -> f64 {
+    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    // Step 1: brand-check `Type(O) is Object` (throws for undefined/null/86/''/true).
+    if !value_is_object(this) {
+        super::object_ops::throw_object_type_error(
+            b"Date.prototype[Symbol.toPrimitive] called on non-object",
+        );
+    }
+    // Steps 2-4: resolve `tryFirst` from the primitive-string hint.
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let try_string_first = match crate::string::str_bytes_from_jsvalue(hint, &mut scratch) {
+        Some((ptr, len)) => {
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+            match bytes {
+                b"string" | b"default" => true,
+                b"number" => false,
+                _ => super::object_ops::throw_object_type_error(
+                    b"Date.prototype[Symbol.toPrimitive] called with invalid hint",
+                ),
+            }
+        }
+        // Not a primitive string (undefined, a `new String(...)` wrapper, …).
+        None => super::object_ops::throw_object_type_error(
+            b"Date.prototype[Symbol.toPrimitive] called with invalid hint",
+        ),
+    };
+    // Step 5: OrdinaryToPrimitive(O, tryFirst).
+    unsafe { crate::value::ordinary_to_primitive_for_toprimitive(this, try_string_first) }
+}
+
+/// Install `Date.prototype[Symbol.toPrimitive]` — a non-enumerable own method
+/// keyed by the real well-known `Symbol.toPrimitive` (not an `@@`-string own
+/// property, which would leak into `getOwnPropertyNames`). Its property
+/// descriptor is `{ writable: false, enumerable: false, configurable: true }`
+/// and the function's own `name` is `"[Symbol.toPrimitive]"` with `.length` 1
+/// (test262 `built-ins/Date/prototype/Symbol.toPrimitive/{prop-desc,name,
+/// length}.js`). Called from `populate_builtin_prototype_methods`'s `"Date"`
+/// arm.
+pub(crate) fn install_date_proto_to_primitive(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    let func_ptr = date_to_primitive as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    super::native_module::set_bound_native_closure_name(closure, "[Symbol.toPrimitive]");
+    super::native_module::set_builtin_closure_length(closure as usize, 1);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // The function's own `name`/`length` are `{ writable:false, enumerable:false,
+    // configurable:true }` per ES §17.
+    let name_len_attrs = super::PropertyAttrs::new(false, false, true);
+    super::set_builtin_property_attrs(closure as usize, "name".to_string(), name_len_attrs);
+    super::set_builtin_property_attrs(closure as usize, "length".to_string(), name_len_attrs);
+    let sym = crate::symbol::well_known_symbol("toPrimitive");
+    if sym.is_null() {
+        return;
+    }
+    let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+    let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+    let fn_value = crate::value::js_nanbox_pointer(closure as i64);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(proto_value, sym_value, fn_value);
+    }
+    // The property is `{ writable:false, enumerable:false, configurable:true }`
+    // (test262 `prop-desc.js`). Symbol props default to
+    // `{ writable:true, enumerable:true, configurable:true }`, so record the
+    // spec attrs explicitly.
+    let sym_key = unsafe { crate::symbol::sym_key_from_f64(sym_value) };
+    let proto_key = proto_obj as usize;
+    crate::symbol::set_symbol_property_attrs(
+        proto_key,
+        sym_key,
+        super::PropertyAttrs::new(false, false, true),
+    );
+}
+
 // --- Date constructor static methods (Date.now / Date.parse / Date.UTC) ---
 //
 // The functional call forms are codegen intrinsics (`Expr::DateNow` /

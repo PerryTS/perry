@@ -801,30 +801,43 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
             let captures_ref = captures_arc.clone();
 
             let handle = scope.spawn(move || {
-                // Each thread has its own arena (via thread_local!)
+                // Each thread has its own arena (via thread_local!).
+                // Register this thread's root scanners BEFORE any allocation
+                // can cross a GC trigger — a fresh worker otherwise collects
+                // with an empty scanner registry (and an empty shadow stack)
+                // and sweeps everything it just deserialized.
+                crate::gc::ensure_gc_initialized();
                 let mut results = Vec::with_capacity(chunk.len());
 
-                // Reconstruct closure on this thread's arena
-                let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
+                // Reconstruct closure on this thread's arena, rooted for the
+                // whole loop: per-element deserialization below can allocate
+                // and trigger a worker GC, and a bare local is not a root.
+                let gc_scope = crate::gc::RuntimeHandleScope::new();
+                let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
+                    let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_nanbox_on_current_thread(cap);
                         crate::closure::js_closure_set_capture_f64(
-                            c,
+                            h.get_raw_mut_ptr::<ClosureHeader>(),
                             i as u32,
                             f64::from_bits(bits),
                         );
                     }
-                    c as *const ClosureHeader
+                    Some(h)
                 } else {
-                    ptr::null()
+                    None
                 };
 
                 let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
+                    let local_closure = closure_handle
+                        .as_ref()
+                        .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
+                        .unwrap_or(ptr::null());
                     let result = call_fn(local_closure, arg);
                     results.push(serialize_nanbox_for_thread(result.to_bits()));
                 }
@@ -871,10 +884,12 @@ unsafe fn single_thread_map(
     func: *const u8,
     closure_ptr: i64,
 ) -> i64 {
-    let elements_ptr =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
-    let result_arr = crate::array::js_array_alloc(len as u32);
+    // Root the input array BEFORE allocating the result (the allocation can
+    // trigger a moving minor), and re-derive the elements pointer from the
+    // rooted handle each iteration — the user callback can allocate too.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr as *mut crate::array::ArrayHeader);
+    let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let closure = if closure_ptr != 0 {
@@ -886,6 +901,9 @@ unsafe fn single_thread_map(
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
 
     for i in 0..len {
+        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
         let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
@@ -1001,28 +1019,38 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
             let captures_ref = captures_arc.clone();
 
             let handle = scope.spawn(move || {
+                // See parallel_map's worker: scanner registration must precede
+                // any allocation, and the rebuilt closure must be rooted
+                // across the per-element deserialization allocations.
+                crate::gc::ensure_gc_initialized();
                 let mut kept = Vec::new();
 
-                let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
+                let gc_scope = crate::gc::RuntimeHandleScope::new();
+                let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
+                    let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_nanbox_on_current_thread(cap);
                         crate::closure::js_closure_set_capture_f64(
-                            c,
+                            h.get_raw_mut_ptr::<ClosureHeader>(),
                             i as u32,
                             f64::from_bits(bits),
                         );
                     }
-                    c as *const ClosureHeader
+                    Some(h)
                 } else {
-                    ptr::null()
+                    None
                 };
 
                 let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
+                    let local_closure = closure_handle
+                        .as_ref()
+                        .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
+                        .unwrap_or(ptr::null());
                     let result = call_fn(local_closure, arg);
                     let keep = is_truthy_bits(result.to_bits());
                     if keep {
@@ -1071,16 +1099,20 @@ unsafe fn single_thread_filter(
     func: *const u8,
     closure: *const ClosureHeader,
 ) -> i64 {
-    let elements_ptr =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
-    let result_arr = crate::array::js_array_alloc(len as u32);
+    // Same rooting discipline as single_thread_map: the result allocation
+    // and every user callback can trigger a moving minor.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr as *mut crate::array::ArrayHeader);
+    let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
     let mut count = 0u32;
 
     for i in 0..len {
+        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
         let keep = is_truthy_bits(result.to_bits());
@@ -1132,7 +1164,11 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     };
 
     // ── 1. Allocate Promise on main thread ───────────────────────────
-    let promise = crate::promise::js_promise_new();
+    // Cross-thread variant: this promise is referenced only by a raw usize
+    // in PENDING_THREAD_RESULTS (no scanner) until drain — a nursery
+    // resident would be destroyed by the copied-minor from-space flip even
+    // while pinned. Malloc space is non-moving and sweeps honor the pin.
+    let promise = crate::promise::js_promise_new_cross_thread();
 
     // Pin the promise so GC doesn't collect it while the thread is running
     let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
@@ -1160,26 +1196,36 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // ── 3. Spawn background thread ───────────────────────────────────
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
-        // Reconstruct closure in this thread's arena
-        let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) =
-            serialized_captures
-        {
+        // Register this thread's root scanners before any allocation can
+        // cross a GC trigger (see the parallel_map worker for rationale).
+        crate::gc::ensure_gc_initialized();
+        // Reconstruct closure in this thread's arena, rooted across the
+        // capture-deserialization allocations.
+        let gc_scope = crate::gc::RuntimeHandleScope::new();
+        let closure_handle = if let Some((cc, ref cap_vals)) = serialized_captures {
             let c = closure::js_closure_alloc(func_usize as *const u8, cc);
+            let h = gc_scope.root_raw_mut_ptr(c);
             for (i, cap) in cap_vals.iter().enumerate() {
                 unsafe {
                     let bits = deserialize_nanbox_on_current_thread(cap);
-                    crate::closure::js_closure_set_capture_f64(c, i as u32, f64::from_bits(bits));
+                    crate::closure::js_closure_set_capture_f64(
+                        h.get_raw_mut_ptr::<ClosureHeader>(),
+                        i as u32,
+                        f64::from_bits(bits),
+                    );
                 }
             }
-            c as *const ClosureHeader
+            h
         } else {
             // No captures — create a minimal closure header
-            closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
+            gc_scope.root_raw_mut_ptr(closure::js_closure_alloc(func_usize as *const u8, 0))
         };
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let call_fn: ClosureCall0Fn = unsafe { std::mem::transmute(func_usize) };
+            let local_closure =
+                closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
             unsafe { call_fn(local_closure) }
         }));
 

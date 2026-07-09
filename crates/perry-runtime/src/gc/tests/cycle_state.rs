@@ -1,4 +1,5 @@
 use super::super::*;
+use super::barrier::assert_heap_child_marked;
 use super::support::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -1353,4 +1354,48 @@ fn full_cycle_console_singleton_store_after_root_scan_preserves_new_value() {
         replacement as i64
     );
     crate::builtins::test_set_console_log_singleton(0);
+}
+
+// Regression (2026-07 GC audit, sync/step scanner divergence): cycle-based
+// collections run ONLY the budgeted STEP scanner when one is registered, and
+// the promise step machine lacked the PROMISE_OVERFLOW_REACTIONS phase its
+// sync twin visits — the 2nd+ `.then()` on a still-pending promise parks its
+// reaction closure and chained `next` promise ONLY in that table, so every
+// full/fallback collection swept them while the promise was pending.
+#[test]
+fn full_cycle_step_scanner_covers_promise_overflow_reactions() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    gc_register_budgeted_mutable_root_scanner_with_source(
+        promise_mutable_root_scanner,
+        crate::promise::scan_promise_roots_mut_step,
+        crate::promise::new_promise_root_scan_state,
+        MutableRootScannerSource::RuntimeMutableScanner,
+    );
+
+    let promise = unsafe { alloc_old_test_promise() };
+    js_shadow_slot_set(0, ptr_bits(promise as usize));
+    let cb1 = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let cb2 = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    // First reaction lands inline in the promise's own fields; the second
+    // goes to PROMISE_OVERFLOW_REACTIONS — the table under test.
+    let _next1 = crate::promise::js_promise_then(promise, cb1, std::ptr::null());
+    let next2 = crate::promise::js_promise_then(promise, cb2, std::ptr::null());
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
+    let mut root_steps = 0usize;
+    while state.phase() == GcCyclePhase::RootScan {
+        state.step(GcWorkBudget::bounded(1));
+        root_steps += 1;
+        assert!(root_steps < 100_000, "root scan did not finish");
+    }
+
+    // Marked during RootScan by the step scanner itself (not via promise
+    // field propagation — cb2/next2 are reachable ONLY through the table).
+    assert_heap_child_marked(cb2 as *const u8, "overflow on_fulfilled closure");
+    assert_heap_child_marked(next2 as *const u8, "overflow next promise");
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
 }

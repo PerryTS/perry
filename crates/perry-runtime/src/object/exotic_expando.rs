@@ -51,6 +51,17 @@ pub(crate) enum ExoticKind {
     /// Temporal, a promise is movable, so its expando entry is rekeyed on GC
     /// move via `exotic_expando_owner_moved`.
     Promise,
+    /// A `Map` is a `MapHeader` cell, NOT an `ObjectHeader` — a plain expando
+    /// write (`memoized.cache.custom = x` on a lodash-memoize Map cache) must
+    /// land in the side table rather than being bit-cast through the
+    /// `ObjectHeader` field path, which overwrote collection-internal fields
+    /// (and enumeration then read those bytes back as a garbage `keys_array`
+    /// pointer → SIGSEGV). Collection DATA stays in the map natives; only
+    /// true expando keys land here. Movable — rekeyed on GC move like
+    /// Promise.
+    Map,
+    /// `Set` analogue of `Map` (a `SetHeader` cell).
+    Set,
 }
 
 /// Classify `addr` as a Date cell, RegExp header, or Error header. Returns
@@ -63,6 +74,8 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
         crate::gc::GC_TYPE_TEMPORAL => Some(ExoticKind::Temporal),
         crate::gc::GC_TYPE_PROMISE => Some(ExoticKind::Promise),
+        crate::gc::GC_TYPE_MAP => Some(ExoticKind::Map),
+        crate::gc::GC_TYPE_SET => Some(ExoticKind::Set),
         crate::gc::GC_TYPE_OBJECT if crate::regex::is_regex_pointer(addr as *const u8) => {
             Some(ExoticKind::RegExp)
         }
@@ -278,6 +291,10 @@ pub(crate) unsafe fn exotic_set_property(
             // generic accessors in the side table, so there is no
             // prototype-accessor setter to consult; store the own expando.
             ExoticKind::Promise => "",
+            // Map/Set prototype members are methods + the `size` accessor,
+            // all served by their native dispatch paths — store the own
+            // expando directly.
+            ExoticKind::Map | ExoticKind::Set => "",
         };
         let proto = if proto_name.is_empty() {
             f64::from_bits(crate::value::TAG_UNDEFINED)

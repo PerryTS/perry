@@ -286,6 +286,15 @@ pub(super) fn copy_only_root_scanner_counts() -> (usize, usize) {
 pub(super) fn registered_root_scanners_block_budgeted_gc() -> bool {
     let has_copy_only = ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty())
         || FFI_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty());
+    if super::gc_incremental_enabled() {
+        // Phase 4 (incremental old-gen, gated): unbudgeted MUTABLE / ffi-mutable
+        // scanners no longer block the cycle — they run synchronously in the
+        // initial root-scan step (see `allow_synchronous_scanners`), a bounded
+        // initial-mark pause. Copy-only scanners still block: they can only
+        // mark, not rewrite, so a moving/incremental cycle can't tolerate them.
+        // (There are ~none in production — only the FFI copy-only API + tests.)
+        return has_copy_only;
+    }
     let has_unbudgeted_mutable = MUTABLE_ROOT_SCANNERS.with(|scanners| {
         scanners
             .borrow()

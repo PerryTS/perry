@@ -468,6 +468,7 @@ fn infers_passthrough_expression_types() {
         infer_expr_type(
             &Expr::PrivateGuard {
                 class_name: "Widget".to_string(),
+                class_id: 0,
                 field_name: "value".to_string(),
                 kind: 0,
                 op: 0,

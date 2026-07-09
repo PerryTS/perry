@@ -562,19 +562,18 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 if ctx.sloppy_implicit_global_ids.contains(&lid) {
                     return Ok(Expr::Bool(true));
                 }
-                // At module top level a bare `x = 1` becomes an ordinary
-                // module-level local indistinguishable from `var x = 1`
-                // (the implicit-global path isn't taken there), so we
-                // can't statically tell a non-configurable `var`/`let`
-                // binding from a configurable implicit global — defer to
-                // the runtime delete (Test262 S11.4.1_A3.2_T1). Inside a
-                // function, an implicit global *does* go through the
-                // sloppy-global set, so a plain local here is a genuine
-                // binding → false.
-                if !ctx.module_level_ids.contains(&lid) {
-                    return Ok(Expr::Bool(false));
-                }
-                // module-level local: fall through to the dynamic path.
+                // Any resolvable binding NOT in the implicit-global set is a
+                // real `var`/`let`/`const`/param declaration — non-configurable,
+                // so `delete <ident>` is `false` (spec 13.5.1.2), at module top
+                // level too. A module-level bare `x = 1` implicit global is
+                // distinguishable: `define_sloppy_implicit_global` records it in
+                // `sloppy_implicit_global_ids` even at scope depth 0, so it took
+                // the `true` arm above (Test262 S11.4.1_A3.2_T1). Reaching here
+                // therefore means a genuine `var x = 1` / `let` / `const`
+                // binding, which must be `false` (Test262 S11.4.1_A3.1) rather
+                // than deferred to a runtime delete that removes it and returns
+                // `true`.
+                return Ok(Expr::Bool(false));
             } else if ctx.lookup_func(name).is_some()
                 || ctx.lookup_class(name).is_some()
                 || ctx.lookup_imported_func(name).is_some()

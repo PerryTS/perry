@@ -1,3 +1,4 @@
+use super::heap_budget::*;
 use super::*;
 
 /// Hard work budget for ordinary automatic GC steps once the collector is
@@ -204,6 +205,24 @@ pub(super) const GC_THRESHOLD_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
 /// which is exactly the bench-RSS scenario this is targeting.
 pub(super) const GC_TRIGGER_ABSOLUTE_CEILING: usize = 128 * 1024 * 1024;
 
+// Device-derived heap budget: see gc/heap_budget.rs (split out for the
+// 2000-line file lint).
+
+/// The arena-bytes trigger as the collector should compare it: the raw
+/// cell while armed (explicit re-arms/bumps may legitimately exceed the
+/// ceiling — headroom floor over a big live set, medium-parse bumps), the
+/// device-derived ceiling while the cell still holds its desktop-default
+/// const initializer.
+pub(super) fn effective_next_arena_trigger() -> usize {
+    if GC_TRIGGER_ARMED.with(|a| a.get()) {
+        GC_NEXT_TRIGGER_BYTES.with(|c| c.get())
+    } else {
+        GC_NEXT_TRIGGER_BYTES
+            .with(|c| c.get())
+            .min(gc_trigger_absolute_ceiling_bytes())
+    }
+}
+
 thread_local! {
     /// Lower bound for the next GC trigger. Bumped after each
     /// `gc_collect_inner` based on collection effectiveness (see the
@@ -225,6 +244,15 @@ thread_local! {
     /// set unboundedly between collections.
     pub(super) static GC_NEXT_TRIGGER_BYTES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(GC_THRESHOLD_INITIAL_BYTES) };
+
+    /// Whether GC_NEXT_TRIGGER_BYTES has been explicitly set on this thread
+    /// (re-arm after a collection, parse bump, tiny-parse lowering). While
+    /// false the cell still holds the desktop-default const initializer and
+    /// `effective_next_arena_trigger` substitutes the device-derived ceiling
+    /// instead — an ARMED trigger above the ceiling is legitimate (big live
+    /// set headroom floor, medium-parse bumps) and must not be clamped.
+    pub(super) static GC_TRIGGER_ARMED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 
     /// Per-program adaptive GC step. Doubles (up to MAX) when sweeps
     /// are mostly-garbage; halves (down to 16MB) when sweeps reclaim
@@ -275,10 +303,10 @@ pub(super) fn gc_bump_arena_trigger_target(
     step: usize,
     is_tiny_parse: bool,
 ) -> usize {
-    let bytes_step = step.min(GC_THRESHOLD_INITIAL_BYTES);
+    let bytes_step = step.min(gc_trigger_absolute_ceiling_bytes());
     let target = bytes_now.saturating_add(bytes_step);
     if is_tiny_parse {
-        target.min(GC_TRIGGER_ABSOLUTE_CEILING)
+        target.min(gc_trigger_absolute_ceiling_bytes())
     } else {
         target
     }
@@ -311,7 +339,129 @@ thread_local! {
         const { std::cell::Cell::new(GC_MALLOC_COUNT_STEP_INITIAL) };
 }
 
+/// #6010: external side-buffer GC pressure. Map entry arrays and Set element
+/// arrays are raw `std::alloc` allocations reachable only through a tiny
+/// arena header — invisible to every trigger input (arena bytes, malloc
+/// object count, old-gen bytes). A workload that churns large Maps/Sets
+/// without arena pressure therefore never collected, and once a dead
+/// header was conservatively pinned across two cycles it tenured into the
+/// old generation, whose reclaim pressure counted only its 16 header bytes
+/// — the multi-megabyte buffer leaked for the life of the process (issue
+/// #6010: 1.4 GB RSS across a benchmark suite whose live heap never left
+/// ~20 MB).
+///
+/// Two counters close the hole:
+/// - ALLOC CHURN (`GC_EXTERNAL_SIDE_ALLOC_PENDING`): every
+///   `GC_EXTERNAL_SIDE_ALLOC_STEP` bytes of fresh external allocation pokes
+///   `gc_check_trigger()`, so collections happen at all in arena-quiet
+///   Map/Set workloads.
+/// - LIVE BYTES (`GC_EXTERNAL_SIDE_LIVE_BYTES`): maintained by the
+///   alloc/realloc sites and the GC finalizers, and added to `old_in_use`
+///   wherever old-reclaim pressure is computed — so tenured-then-dead
+///   collections escalate to the full mark-sweep (whose old-gen sweep runs
+///   the Map/Set side-allocation finalizers) instead of leaking.
+const GC_EXTERNAL_SIDE_ALLOC_STEP: usize = 16 * 1024 * 1024;
+
+thread_local! {
+    static GC_EXTERNAL_SIDE_ALLOC_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GC_EXTERNAL_SIDE_LIVE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Live bytes currently held by external Map/Set side buffers on this thread.
 #[inline]
+pub(super) fn external_side_live_bytes() -> usize {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(Cell::get)
+}
+
+/// Record `bytes` of fresh external side-buffer allocation (Map entries /
+/// Set elements — creation or growth delta) and poke the trigger check when
+/// the accumulated churn window fills. Callers must invoke this only when
+/// the owning collection header is in a consistent state: a triggered cycle
+/// scans conservatively at this call point (`gc_check_trigger`'s direct
+/// arms use `force_full_scan`), which also keeps it non-moving, so raw
+/// header pointers held by the caller stay valid across the call.
+pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
+    let due = GC_EXTERNAL_SIDE_ALLOC_PENDING.with(|c| {
+        let now = c.get().saturating_add(bytes);
+        if now >= GC_EXTERNAL_SIDE_ALLOC_STEP {
+            c.set(0);
+            true
+        } else {
+            c.set(now);
+            false
+        }
+    });
+    if due {
+        gc_check_trigger();
+    }
+}
+
+/// Record that a Map/Set side buffer of `bytes` was freed (GC finalizer).
+pub(crate) fn gc_note_external_side_free(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
+}
+
+#[inline]
+/// The moving (copying) minor at the precise-root event-loop safepoint —
+/// **Perry's default GC.** At the outermost microtask-pump boundary the JS stack
+/// has unwound, so the copying minor runs with precise, rewritable roots and
+/// moves survivors (compacting, O(survivors), no sweep). `PERRY_GC_MOVING_SAFEPOINT=0`
+/// is a kill switch that reverts to the non-moving path (for bisecting a
+/// regression while we harden). Making the moving minor primary INSIDE loops
+/// (back-edge polls + alloc-point deferral) is the separate opt-in
+/// `PERRY_GC_MOVING_LOOP_POLLS` — off by default because the poll defeats loop
+/// vectorization until it is emitted only for allocating loops.
+pub(crate) fn gc_moving_safepoint_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
+/// budgeted stepper). **EXPERIMENTAL — default OFF.** Perry has a full budgeted
+/// mark/sweep stepper but it never runs, because every compiled program
+/// registers unbudgeted mutable root scanners and
+/// `registered_root_scanners_block_budgeted_gc()` blocks the cycle from ever
+/// starting. When this is on, the stepper is allowed to start and runs those
+/// unbudgeted scanners SYNCHRONOUSLY in its initial root-scan step (a bounded
+/// initial-mark pause), then marks/sweeps the old gen incrementally across
+/// safepoints — the standard "initial-mark + incremental-mark" design. Off ⇒
+/// exactly today's non-incremental GC (the whole path is skipped). Independent
+/// of `PERRY_GC_MOVING_SAFEPOINT`; this is the concurrency layer that reduces
+/// old-gen pause time.
+pub(crate) fn gc_incremental_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
+/// Phase 2/3 (opt-in, default OFF): also make the moving minor PRIMARY inside
+/// loops — defer the alloc-point nursery collection to a codegen loop back-edge
+/// poll (`js_gc_loop_safepoint`) instead of collecting non-moving mid-expression.
+/// Off by default because the poll emits a call in every loop, defeating
+/// vectorization; when it's emitted only for allocating loops this can flip on.
+/// Must match the codegen `moving_safepoint_polls_enabled` (same env) so the
+/// deferral and the polls that drain it stay coherent.
+pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
     if GC_TRACE_TEST_FORCE.with(Cell::get) {
@@ -515,7 +665,23 @@ thread_local! {
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
     pub(super) static GC_OLD_RECLAIM_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+    /// Phase 2/3 of the moving-GC project: set when an alloc-point nursery
+    /// trigger fires while moving mode is on, deferring the collection to the
+    /// next precise-root safepoint (event-loop boundary or a codegen loop
+    /// back-edge poll) so the copying minor can MOVE survivors instead of the
+    /// conservative non-moving minor running mid-expression.
+    pub(super) static GC_SAFEPOINT_PENDING: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Hard cap on committed arena bytes before which a nursery trigger may be
+/// deferred to a safepoint (Phase 2/3). Loop back-edge polls drain the pending
+/// flag every iteration, so the arena never grows near this in normal code; the
+/// cap bounds RSS for code that reaches no safepoint before the next trigger —
+/// a synchronous loop on a specialized lowering path that doesn't yet emit the
+/// poll, or a single mega-expression — where the alloc-point non-moving minor
+/// runs as the safety valve. Kept modest so those cases don't balloon under the
+/// default-on moving GC (raise once poll coverage is complete).
+pub(super) const GC_MOVING_DEFER_HARD_CAP_BYTES: usize = 128 * 1024 * 1024;
 
 /// RAII guard that marks a #5476 direct old-gen reclaim in progress so a nested
 /// `gc_check_trigger` can't re-enter it. See `GC_OLD_RECLAIM_IN_PROGRESS`.
@@ -589,8 +755,7 @@ pub(super) fn flush_deferred_gc_request() {
 
 pub fn gc_suppress() {
     if !gen_gc_enabled()
-        && crate::arena::arena_in_use_bytes()
-            >= GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+        && crate::arena::arena_in_use_bytes() >= gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
     {
         crate::arena::arena_start_fresh_general_block();
     }
@@ -631,9 +796,9 @@ pub fn gc_bump_malloc_trigger() {
     if is_tiny_parse {
         let use_gen_gc = gen_gc_enabled();
         let in_use_trigger = if use_gen_gc {
-            GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES
+            gc_tiny_parse_in_use_trigger_dyn_bytes()
         } else {
-            GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+            gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
         };
         if crate::arena::arena_in_use_bytes() < in_use_trigger {
             return;
@@ -647,6 +812,7 @@ pub fn gc_bump_malloc_trigger() {
             GC_NEXT_TRIGGER_BYTES.with(|trigger| {
                 if trigger.get() > bytes_now {
                     trigger.set(bytes_now);
+                    GC_TRIGGER_ARMED.with(|a| a.set(true));
                 }
             });
             gc_check_trigger();
@@ -683,6 +849,7 @@ pub fn gc_collect_pending_suppressed_parse() {
     GC_NEXT_TRIGGER_BYTES.with(|trigger| {
         if trigger.get() > total {
             trigger.set(total);
+            GC_TRIGGER_ARMED.with(|a| a.set(true));
         }
     });
     gc_check_trigger();
@@ -700,7 +867,7 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if !gen_gc_enabled() {
         return;
     }
-    if crate::arena::arena_in_use_bytes() < GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES {
+    if crate::arena::arena_in_use_bytes() < gc_tiny_parse_in_use_trigger_dyn_bytes() {
         return;
     }
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
@@ -708,9 +875,9 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
 
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
-    (old_in_use >= GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
-        && baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES)
-        || old_in_use.saturating_sub(baseline) >= GC_OLD_GEN_RECLAIM_GROWTH_BYTES
+    (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
+        && baseline < gc_old_gen_reclaim_threshold_dyn_bytes())
+        || old_in_use.saturating_sub(baseline) >= gc_old_gen_reclaim_growth_dyn_bytes()
 }
 
 #[inline]
@@ -719,7 +886,7 @@ pub(super) fn copied_minor_promotion_handoff_pressure_due(
     old_in_use: usize,
     baseline: usize,
 ) -> bool {
-    promotable_bytes >= GC_COPY_PROMOTION_HANDOFF_MIN_BYTES
+    promotable_bytes >= gc_copy_promotion_handoff_min_dyn_bytes()
         && old_reclaim_pressure_due(old_in_use.saturating_add(promotable_bytes), baseline)
 }
 
@@ -753,17 +920,25 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
     ) {
         return false;
     }
-    if crate::arena::copying_active_survivor_in_use_bytes() < GC_COPY_PROMOTION_HANDOFF_MIN_BYTES {
+    if crate::arena::copying_active_survivor_in_use_bytes()
+        < gc_copy_promotion_handoff_min_dyn_bytes()
+    {
         return false;
     }
     let promotable = copied_minor_promotable_active_survivor_bytes();
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     copied_minor_promotion_handoff_pressure_due(promotable, old_in_use, baseline)
 }
 
 pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    // #6010: external Map/Set side buffers count toward old-gen pressure —
+    // a tenured-then-dead Map holds its multi-MB buffer until a full
+    // reclaim's old-gen sweep finalizes it, so the buffer bytes must be
+    // able to escalate that reclaim.
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_reclaim_pressure_due(old_in_use, baseline) {
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
@@ -771,7 +946,10 @@ pub(super) fn maybe_schedule_old_reclaim_after_copied_minor() {
 }
 
 pub(super) fn finish_full_old_reclaim_baseline() {
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    // Baseline includes external side-buffer bytes (#6010) so the growth
+    // delta in `old_reclaim_pressure_due` stays unit-consistent.
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
 }
@@ -824,8 +1002,12 @@ pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: us
     // Only raise — never lower — so this can't accidentally trip a
     // pending collection that the existing trigger had already armed.
     GC_NEXT_TRIGGER_BYTES.with(|c| {
-        if bytes_trigger > c.get() {
+        // Compare against the effective (budget-clamped) trigger, not the
+        // raw cell: on a small-budget device the cell's un-armed default
+        // (128 MB) would otherwise swallow every legitimate parse bump.
+        if bytes_trigger > effective_next_arena_trigger() {
             c.set(bytes_trigger);
+            GC_TRIGGER_ARMED.with(|a| a.set(true));
             if !is_tiny_parse {
                 GC_TRIGGER_BUMPED.with(|b| b.set(true));
             }
@@ -950,10 +1132,11 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     // approaches the ceiling doesn't thrash on every fresh
     // allocation.
     let stepped = new_total.saturating_add(step);
-    let capped = stepped.min(GC_TRIGGER_ABSOLUTE_CEILING);
-    let floor = new_total.saturating_add(16 * 1024 * 1024);
+    let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
+    let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
     let next_trigger = std::cmp::max(capped, floor);
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
+    GC_TRIGGER_ARMED.with(|a| a.set(true));
     // Rebaseline the malloc-count trigger only if this collection
     // actually swept malloc objects. Copied-minor arena collections
     // may skip the malloc sweep while count pressure is still below
@@ -1074,10 +1257,10 @@ pub fn gc_check_trigger() {
     // cycles; the 64 MB arena trigger was due after the first ~64 blocks
     // and simply never fired). When the budgeted machinery is structurally
     // unavailable, run the direct synchronous minor the pre-budgeted
-    // block-alloc trigger used to run. `gc_collect_minor_with_trigger`
-    // re-baselines `GC_NEXT_TRIGGER_BYTES` (and, when it sweeps malloc,
-    // the malloc trigger) on completion, and carries its own re-entrancy
-    // guard (GC_FLAG_IN_ALLOC). `force_full_scan` mirrors the OldReclaim
+    // block-alloc trigger used to run, then re-baseline the arming trigger
+    // below (the budgeted finisher never runs on this arm).
+    // `gc_collect_minor_with_trigger` carries its own re-entrancy guard
+    // (GC_FLAG_IN_ALLOC). `force_full_scan` mirrors the OldReclaim
     // arm: at an arbitrary allocation point a value mid-construction may
     // live only in registers, so the conservative native scan retains it —
     // which also makes copied-minor ineligible for THIS cycle, so the
@@ -1089,9 +1272,49 @@ pub fn gc_check_trigger() {
             _ => None,
         };
         if let Some(kind) = direct_kind {
+            // Phase 2/3: with moving mode on, DEFER this alloc-point collection
+            // to the next precise-root safepoint (event-loop boundary or a
+            // codegen loop back-edge poll) so the copying minor MOVES survivors
+            // instead of the conservative non-moving minor running here at a
+            // register-imprecise point. Safety valve: once committed arena bytes
+            // pass the hard cap (a mega-expression that reached no poll), fall
+            // through and collect non-moving here so growth stays bounded.
+            if gc_moving_loop_polls_enabled()
+                && crate::arena::arena_total_bytes() < gc_moving_defer_hard_cap_dyn_bytes()
+            {
+                GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+                return;
+            }
+            let pre_in_use = crate::arena::arena_in_use_bytes();
+            let pre_malloc_count = malloc_object_count();
             let _scan = super::roots::ManualGcScanGuard::force_full_scan();
-            super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind))
-                .emit_after_current();
+            let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
+            // Re-baseline the arming trigger after the direct minor, mirroring
+            // `gc_finish_budgeted_cycle`. This arm is taken whenever
+            // synchronous-only root scanners block the budgeted stepper — i.e.
+            // every compiled program — so it, not the budgeted finisher, is the
+            // completion path for nursery collections there. Emitting the
+            // outcome without re-baselining left `GC_NEXT_TRIGGER_BYTES` /
+            // `GC_NEXT_MALLOC_TRIGGER` at the value that armed THIS collection.
+            // The non-moving minor reclaims dead objects into per-block free
+            // lists but does not lower `arena_total` (committed blocks), so a
+            // workload holding a large live set above the trigger — e.g.
+            // building an object graph that stays reachable while churning
+            // transient allocations — keeps `gc_budgeted_due_trigger` reporting
+            // the same trigger as due, and every fresh block re-arms a whole-
+            // arena mark/sweep. That is one O(arena) collection per block
+            // allocated: O(n^2) in the graph size, a ~100% CPU stall with a
+            // bounded live set that never makes progress. The finish helpers
+            // raise the trigger past the retained set (adapting the step),
+            // exactly as the budgeted and full-GC paths do on completion.
+            match kind {
+                GcTriggerKind::MallocCount => {
+                    gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+                }
+                _ => {
+                    gc_finish_arena_trigger_collection(pre_in_use, outcome);
+                }
+            }
             return;
         }
     }
@@ -1139,7 +1362,7 @@ struct BudgetedGcCycle {
     rebaseline: BudgetedGcRebaseline,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum BudgetedGcTrigger {
     OldReclaim,
     ArenaBytes,
@@ -1171,25 +1394,26 @@ fn gc_budgeted_resume_blocked() -> bool {
 }
 
 pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
-    let trigger = if baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES {
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
+    let trigger = if baseline < gc_old_gen_reclaim_threshold_dyn_bytes() {
+        gc_old_gen_reclaim_threshold_dyn_bytes()
     } else {
-        baseline.saturating_add(GC_OLD_GEN_RECLAIM_GROWTH_BYTES)
+        baseline.saturating_add(gc_old_gen_reclaim_growth_dyn_bytes())
     };
     old_in_use.saturating_sub(trigger) as u64
 }
 
 fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
-    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
+    let old_in_use =
+        crate::arena::old_gen_in_use_bytes().saturating_add(external_side_live_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
         return Some(BudgetedGcTrigger::OldReclaim);
     }
 
     let total = crate::arena::arena_total_bytes();
-    let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
-    if total >= next_arena_trigger {
+    if total >= effective_next_arena_trigger() {
         return Some(BudgetedGcTrigger::ArenaBytes);
     }
 
@@ -1200,6 +1424,70 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     }
 
     None
+}
+
+/// Phase 1 of the moving-GC project: run a copying (moving) minor at a
+/// precise-root safepoint — the outermost microtask-pump boundary, where the
+/// JS stack has fully unwound so no live heap pointer sits in an unspilled
+/// register. Unlike the alloc-point nursery-churn arm, NO `force_full_scan` is
+/// taken: `conservative_stack_scan_decision()` stays `SkipDisabled`, so the
+/// copying minor is eligible with precise, rewritable roots and actually MOVES
+/// (compacting, O(survivors), no sweep) instead of falling back to the
+/// non-moving minor. Trigger detection + re-baseline mirror the nursery-churn
+/// arm; this is purely additive (the alloc-point fallback is untouched) and
+/// gated by `gc_moving_safepoint_enabled` (default off).
+pub(crate) fn gc_safepoint_moving_minor() {
+    // Same start guards the budgeted collector uses, minus the (here
+    // irrelevant) scanner block: never collect mid-allocation, inside a
+    // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
+        || gc_blocked_by_unsafe_zone()
+        || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || gc_budgeted_cycle_active()
+    {
+        // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
+        // retries; do not clear it here.
+        return;
+    }
+    // We are handling this safepoint (collect or find nothing due): clear the
+    // deferral flag set by the alloc-point arm (Phase 2/3).
+    GC_SAFEPOINT_PENDING.with(|p| p.set(false));
+    // Only nursery-pressure triggers take the moving minor here; OldReclaim
+    // stays on its existing full mark-sweep path.
+    let kind = match gc_budgeted_due_trigger() {
+        Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
+        Some(BudgetedGcTrigger::MallocCount) => GcTriggerKind::MallocCount,
+        _ => return,
+    };
+    let pre_in_use = crate::arena::arena_in_use_bytes();
+    let pre_malloc_count = malloc_object_count();
+    // No `force_full_scan`: roots are precise at this safepoint.
+    let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
+    match kind {
+        GcTriggerKind::MallocCount => {
+            gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+        }
+        _ => {
+            gc_finish_arena_trigger_collection(pre_in_use, outcome);
+        }
+    }
+}
+
+/// Phase 2 of the moving-GC project: codegen emits a call to this at loop
+/// back-edges — but ONLY when the compiler was invoked with the moving-safepoint
+/// opt-in, so default binaries carry zero loop overhead. At a back-edge the
+/// loop-body expression has completed, so no heap value lives in an unspilled
+/// register (every live value is a named local on the shadow stack): a
+/// precise-root safepoint. If moving mode is on and an alloc-point nursery
+/// trigger deferred a collection (`GC_SAFEPOINT_PENDING`), drain it here so the
+/// copying minor MOVES survivors. Cheap no-op otherwise (one cached-bool load +
+/// one thread-local read).
+#[no_mangle]
+pub extern "C" fn js_gc_loop_safepoint() {
+    if !gc_moving_loop_polls_enabled() || !GC_SAFEPOINT_PENDING.with(Cell::get) {
+        return;
+    }
+    gc_safepoint_moving_minor();
 }
 
 struct BudgetedGcStepGuard;
