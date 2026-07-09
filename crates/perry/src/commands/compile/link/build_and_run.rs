@@ -660,6 +660,8 @@ pub(crate) fn build_and_run_link(
             .arg("CoreFoundation")
             .arg("-framework")
             .arg("Security")
+            .arg("-framework")
+            .arg("UserNotifications") // UNUserNotificationCenter (perry/system notificationSend/Schedule/OnTap)
             .arg("-lSystem")
             .arg("-lresolv");
         if is_watchos_game_loop {
