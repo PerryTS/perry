@@ -54,6 +54,23 @@ unsafe fn class_ref_has_symbol_member(class_id: u32, sym_f64: f64) -> bool {
     false
 }
 
+/// Is `name` a CanonicalNumericIndexString (ECMA-262 §7.1.21)? True for `"-0"`
+/// and any string that round-trips through `ToString(ToNumber(s))` — `"0"`,
+/// `"100"`, `"-1"`, `"1.5"`, `"NaN"`, `"Infinity"` — but NOT `"00"`, `"1e3"`,
+/// `"0x1"`, `"+1"`, or whitespace-padded forms (`ToNumber` of those does not
+/// stringify back to the original). The typed-array/Buffer `in` path uses this
+/// to short-circuit a canonical numeric index to the IntegerIndexed
+/// [[HasProperty]] result without ever consulting the prototype chain.
+fn is_canonical_numeric_index_string(name: &str) -> bool {
+    if name == "-0" {
+        return true;
+    }
+    match name.parse::<f64>() {
+        Ok(n) => crate::string::js_format_f64(n) == name,
+        Err(_) => false,
+    }
+}
+
 /// Render a value the way V8 does inside the `in`-operator TypeError message.
 /// Only the primitive RHS shapes that reach `throw_in_operator_non_object` need
 /// handling: `null`/`undefined` render literally, a Symbol as `Symbol(desc)`,
@@ -430,14 +447,22 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     ) {
                         return nanbox_true;
                     }
-                    // A canonical numeric-index string (`"0"`, `"2"`, …) is an own
-                    // in-bounds index. The round-trip check rejects non-canonical
-                    // forms (`"00"`, `"1.5"`, `"-1"`, `"0x1"`), which stay ordinary
-                    // string keys.
-                    if let Ok(idx) = name.parse::<u32>() {
-                        if idx.to_string() == name && idx < len as u32 {
-                            return nanbox_true;
+                    // A CanonicalNumericIndexString (`"0"`, `"100"`, `"-1"`,
+                    // `"1.5"`, `"-0"`, `"NaN"`) is resolved ENTIRELY by the
+                    // IntegerIndexed [[HasProperty]] (ECMA-262 §10.4.9.2): present
+                    // iff it is a valid in-bounds integer index, absent otherwise,
+                    // and it NEVER consults the prototype. So an out-of-bounds
+                    // (`"100"` on a length-5 view), negative, or fractional
+                    // canonical index short-circuits to false here rather than
+                    // falling through to the prototype scan below. Non-canonical
+                    // forms (`"00"`, `"1e3"`, `"0x1"`) stay ordinary string keys.
+                    if is_canonical_numeric_index_string(name) {
+                        if let Ok(idx) = name.parse::<u32>() {
+                            if idx.to_string() == name && idx < len as u32 {
+                                return nanbox_true;
+                            }
                         }
+                        return nanbox_false;
                     }
                     // A Buffer / `Uint8Array` is a `%TypedArray%`, so inherited
                     // prototype members (`subarray`, `map`, `join`, `toString`, …)
