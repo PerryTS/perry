@@ -100,7 +100,11 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
         } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
             println!("{}{}", p, n as i64);
         } else {
-            println!("{}{}", p, n);
+            // Match `js_console_error_dynamic` / `js_console_warn_dynamic`: use the
+            // shared JS formatter (shortest round-trip + the 1e21/1e-6 exponential
+            // thresholds), not Rust's `f64` Display — which prints `1e21` as
+            // `1000000000000000000000` instead of Node's `1e+21` (#6127).
+            println!("{}{}", p, format_finite_number_js(n));
         }
     }
 }
