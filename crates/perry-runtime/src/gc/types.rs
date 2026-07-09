@@ -466,16 +466,29 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcRewriteDescriptorKind::Leaf,
         GcLayoutSlotKind::None,
-        // Non-movable: a Date is referenced by a NaN-boxed pointer kept in a
-        // plain f64/DOUBLE local that codegen does NOT shadow-root. The
-        // conservative stack scan keeps it alive; keeping the address stable
-        // means that un-rooted pointer never goes stale across a GC move.
-        false,
+        // Movable (#6186, 2026-07-09 GC audit). Directly analogous to
+        // `GC_TYPE_PROMISE` above: a pointer-free arena object with
+        // address-keyed exotic-expando properties, rekeyed on relocation by
+        // the `ExoticExpandoOwner` move hook. The `movable` flag only gates
+        // OLD-PAGE DEFRAG (`gc_type_is_movable`, oldgen.rs) — the nursery
+        // copied-minor already evacuates eden objects regardless of it — so a
+        // promoted, long-lived Date could pin its old-gen page from defrag.
+        // Safety: old-page defrag runs only inside MOVING collections (the
+        // precise pump-boundary safepoint, where the JS stack is unwound so no
+        // un-shadow-rooted Date f64 local is live), the SAME collections at
+        // which the nursery already evacuates Dates. Any live reference is a
+        // traced heap slot the copy pass rewrites; a Date pointer parked in an
+        // un-shadow-rooted local only exists mid-frame, never at a safepoint —
+        // the identical invariant that already makes movable Promises sound.
+        true,
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::NotApplicable,
         // pointer_free: the single `ts` slot is a raw f64, never a JSValue.
         true,
-        GcMoveHookKind::None,
+        // `d.foo = …` expandos live in `object::exotic_expando` keyed by the
+        // Date address; rekey that entry when the cell relocates (mirrors
+        // Promise). Without this a moved Date loses its expando properties.
+        GcMoveHookKind::ExoticExpandoOwner,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),

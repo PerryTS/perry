@@ -720,3 +720,60 @@ fn test_copying_minor_old_to_malloc_nursery_grandchild_survives() {
          not left dangling in reset from-space"
     );
 }
+
+// #6186 (2026-07-09 GC audit): Date cells are movable. The flag only gates
+// old-page defrag, but any move (incl. copied-minor evacuation) runs the
+// ExoticExpandoOwner hook — so a Date's `d.foo = …` expando properties must
+// migrate with the cell, and the cell's `ts` must survive, exactly like the
+// movable Promise precedent.
+#[test]
+fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
+    // Date cells are movable (#6186). The flag only gates old-page defrag, but
+    // any move (incl. copied-minor evacuation, via `gc_type_after_payload_move`)
+    // runs the ExoticExpandoOwner hook — so a Date's `d.foo = ...` expandos must
+    // migrate with the cell and its `ts` must survive, per the movable-Promise
+    // precedent.
+    assert!(
+        crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_DATE_CELL),
+        "GC_TYPE_DATE_CELL must be movable after #6186"
+    );
+
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let ts = 1_234_567_890.5_f64;
+    let date_addr = (crate::date::alloc_date_cell(ts).to_bits() & POINTER_MASK) as usize;
+    assert!(crate::arena::pointer_in_nursery(date_addr));
+
+    let expando_val = f64::from_bits(crate::value::JSValue::int32(42).bits());
+    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+        date_addr,
+        "tag",
+        expando_val.to_bits(),
+    );
+    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr));
+    js_shadow_slot_set(0, ptr_bits(date_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, 0, "rooted Date must survive the copied minor");
+    assert_ne!(
+        new_addr, date_addr,
+        "the Date cell must have been evacuated (moved)"
+    );
+
+    // ts preserved through the move; still a Date at the new address.
+    let moved_ts = unsafe { (*(new_addr as *const crate::date::DateCell)).ts };
+    assert_eq!(moved_ts, ts, "Date ts must survive evacuation");
+    assert!(crate::date::is_date_cell_addr(new_addr));
+
+    // Expando migrated to the new address (ExoticExpandoOwner move hook fired)
+    // and does not linger at the stale old address.
+    assert!(
+        crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr),
+        "expando must migrate to the evacuated Date's new address"
+    );
+    assert!(
+        !crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr),
+        "expando must not remain at the stale old address"
+    );
+}
