@@ -8,22 +8,11 @@ use std::sync::RwLock;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
-    const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
     }
-    let map = registry.as_mut().unwrap();
-    if parent_class_id == CLASS_ID_OBJECT
-        && map
-            .get(&class_id)
-            .is_some_and(|existing| *existing != 0 && *existing != CLASS_ID_OBJECT)
-    {
-        return;
-    }
-    map.insert(class_id, parent_class_id);
-    drop(registry);
-    refresh_class_decl_prototype_parent(class_id);
+    registry.as_mut().unwrap().insert(class_id, parent_class_id);
 }
 
 /// Public registration entry point used by codegen module init.
@@ -221,14 +210,33 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
 #[no_mangle]
 pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
-    match guard.as_ref().and_then(|m| m.get(&class_id)) {
-        Some(&bits) => f64::from_bits(bits),
-        None => f64::from_bits(TAG_UNDEFINED),
+    {
+        let guard = CLASS_DYNAMIC_PARENT_VALUE.read().unwrap();
+        if let Some(&bits) = guard.as_ref().and_then(|m| m.get(&class_id)) {
+            return f64::from_bits(bits);
+        }
     }
+    // #5957/#806: no dynamic VALUE stashed — fall back to the STATIC
+    // parent-id edge as a ClassRef. An `extends <call>(...)` mixin
+    // materialized by the HIR inline-init can resolve the chain statically
+    // (module init registers `js_register_class_parent(child, parent)`)
+    // while the per-value `js_register_class_parent_dynamic` side effect
+    // lived in a body that never runs; before this fallback the
+    // dynamic-parent super leg dispatched `undefined` and silently no-op'd
+    // — the ancestor ctor never saw the forwarded args (the #806 mixin's
+    // `seed` stayed undefined). A ClassRef routes the caller into the
+    // registered-constructor flat dispatch, which fills user args and
+    // snapshot caps by the signature split.
+    if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
+        if parent_cid != 0 {
+            return f64::from_bits(INT32_TAG | parent_cid as u64);
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// #1789: stamp a freshly-allocated object as a heap "class object" (the
@@ -349,14 +357,73 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if sym_key == 0 {
             return;
         }
-        let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
+        {
+            let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(HashMap::new());
+            }
+            guard.as_mut().unwrap().insert(
+                (class_id, sym_key, is_static != 0),
+                (func_ptr as usize, param_count as u32, has_rest != 0),
+            );
         }
-        guard.as_mut().unwrap().insert(
-            (class_id, sym_key, is_static != 0),
-            (func_ptr as usize, param_count as u32, has_rest != 0),
-        );
+        // A computed key that evaluates to a WELL-KNOWN symbol — e.g. the
+        // minified `[(gm = new WeakMap, Symbol.asyncIterator)]() {…}` comma
+        // form, whose key expression the lowering can't see through
+        // statically — must land in the same synthetic vtable slot the
+        // static `[Symbol.asyncIterator]` lowering uses. Every consumer
+        // (GetIterator(async), the #5128 symbol-read binder,
+        // `js_to_primitive`, the using-block desugar) resolves these by the
+        // synthetic NAME on the class; `CLASS_SYMBOL_METHODS` above is not
+        // consulted for instance dispatch. Without the alias,
+        // `for await (… of instance)` threw `TypeError: value is not
+        // iterable` for the comma-keyed form.
+        if is_static == 0 {
+            let alias = [
+                ("iterator", "@@iterator"),
+                ("asyncIterator", "@@asyncIterator"),
+                ("toPrimitive", "@@toPrimitive"),
+                ("dispose", "__perry_dispose__"),
+                ("asyncDispose", "__perry_async_dispose__"),
+            ]
+            .iter()
+            .find_map(|(wk, method_name)| {
+                let s = crate::symbol::well_known_symbol(wk);
+                if s.is_null() {
+                    return None;
+                }
+                let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
+                if sym_key == crate::symbol::sym_key_from_f64(f) {
+                    Some(*method_name)
+                } else {
+                    None
+                }
+            });
+            if let Some(method_name) = alias {
+                let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
+                if registry.is_none() {
+                    *registry = Some(HashMap::new());
+                }
+                let vtable = registry
+                    .as_mut()
+                    .unwrap()
+                    .entry(class_id)
+                    .or_insert_with(|| ClassVTable {
+                        methods: HashMap::new(),
+                        getters: HashMap::new(),
+                        setters: HashMap::new(),
+                    });
+                vtable.methods.insert(
+                    method_name.to_string(),
+                    VTableMethodEntry {
+                        func_ptr: func_ptr as usize,
+                        param_count: param_count as u32,
+                        has_synthetic_arguments: false,
+                        has_rest: has_rest != 0,
+                    },
+                );
+            }
+        }
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
@@ -554,6 +621,51 @@ pub(crate) fn lookup_class_symbol_method_in_chain(
         }
     }
     None
+}
+
+/// Presence-only check (`[[HasProperty]]`, never `[[Get]]`) for a Symbol-keyed
+/// METHOD or ACCESSOR declared on `class_id` or any ancestor. These computed
+/// members register into `CLASS_SYMBOL_METHODS` / `CLASS_SYMBOL_ACCESSORS`, which
+/// the generic symbol resolver (`js_object_get_symbol_property`) does NOT consult
+/// — so `sym in Class` reported false even though `Class[sym](...)` dispatches
+/// fine through the direct-call path. Walks the parent chain like
+/// `lookup_class_symbol_method_in_chain`, but returns a bool and also covers
+/// accessors so a static/instance `get [sym]()` is detected without invoking the
+/// getter. Refs #6160.
+pub(crate) fn class_has_symbol_member_in_chain(
+    class_id: u32,
+    sym_key: usize,
+    is_static: bool,
+) -> bool {
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while cid != 0 && depth < 32 {
+        let key = (cid, sym_key, is_static);
+        let in_methods = CLASS_SYMBOL_METHODS
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
+            .unwrap_or(false);
+        if in_methods {
+            return true;
+        }
+        let in_accessors = CLASS_SYMBOL_ACCESSORS
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
+            .unwrap_or(false);
+        if in_accessors {
+            return true;
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
 }
 
 pub(crate) fn class_own_symbol_member_keys(class_id: u32, is_static: bool) -> Vec<usize> {

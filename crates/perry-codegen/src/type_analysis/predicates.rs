@@ -202,11 +202,29 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
     match e {
         Expr::LocalGet(id) => match ctx.local_types.get(id)? {
             HirType::Named(name) => Some(name.clone()),
-            // Generic instantiation `Box<number>` — strip the type
-            // args and use the base class name. The codegen erases
-            // type parameters anyway, so the dispatch is identical
-            // to the non-generic Named form.
-            HirType::Generic { base, .. } if ctx.classes.contains_key(base) => Some(base.clone()),
+            // Generic instantiation `SimpleContainer<number>`: prefer the
+            // MONOMORPHIZED specialization `base$mangled` whenever it is
+            // registered. The instance is genuinely a `SimpleContainer$num`
+            // (concrete field types), and — critically — the escape analysis
+            // that authorizes scalar replacement keys off the `new`'s
+            // specialized class name (collect_non_escaping_news). If codegen
+            // resolved to the base `SimpleContainer` instead (whose fields are
+            // still `T`), the scalar-method summary would reject `get()` and a
+            // scalar-replaced receiver would fall through to normal dispatch on
+            // an uninitialized dummy slot (#6040: `(number).get is not a
+            // function`). Resolving to the specialization keeps the two passes
+            // consistent. Fall back to the base template when no specialization
+            // exists (fully-generic code paths), then give up.
+            HirType::Generic { base, type_args } => {
+                let specialized = perry_hir::monomorph::generate_specialized_name(base, type_args);
+                if ctx.classes.contains_key(&specialized) {
+                    Some(specialized)
+                } else if ctx.classes.contains_key(base) {
+                    Some(base.clone())
+                } else {
+                    None
+                }
+            }
             _ => None,
         },
         // `new ClassName(...)` — the receiver class is the constructed class.

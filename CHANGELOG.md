@@ -1,3 +1,78 @@
+## v0.5.1255 — chore(deps): bump crossbeam-epoch 0.9.18 → 0.9.20 (RUSTSEC-2026-0204)
+
+RUSTSEC-2026-0204 (published 2026-07-06) flags crossbeam-epoch < 0.9.20 for an
+invalid pointer dereference in the `fmt::Pointer` impl for `Atomic`/`Shared`
+when the underlying pointer is invalid. crossbeam-epoch is a transitive dep
+(rayon → crossbeam-deque), so this is a `Cargo.lock`-only bump — no manifest
+changes. The advisory was failing the required `security-audit` check on every
+open PR (first seen on #6097/#6098).
+
+## v0.5.1254 — metadata catch-up fold (PRs #6036–#6054)
+
+Consolidated version bump documenting the code-only merges that landed on `main` since v0.5.1240. Each PR carries its own detailed rationale in its description and commit body.
+
+- fix: #5957 — default-derived ctor forwarding part 2 (rest + dynamic-parent mixin) (#6036)
+- fix(hir): #6037 — refresh class-capture snapshot after a forward-captured var is re-bound by destructuring (#6038)
+- fix(codegen): #5982 — module-global captures must not feed the typed-ABI closure specialization (#5466 regression) (#6039)
+- fix(codegen): resolve method dispatch on a monomorphized generic-class receiver (#6041)
+- ci(#9): shard the gap-suite conformance gate across 8 runners + fan-in (#6042)
+- fix(codegen): #6040 — resolve monomorphized-generic receiver to its specialization for scalar method dispatch (#6043)
+- feat(runtime): Temporal Dead Zone for forward-referenced lexical let/const (#6044)
+- fix(hir): #5835 — zero-arg new Function() must not trip the CSP codegen-probe throw (#6045)
+- fix(runtime): AbortSignal parity — accept in events helpers + dynamic method dispatch (#6046)
+- ci: give conformance-smoke shards timeout headroom (40 -> 55 min) for the now-required gap gate (#6047)
+- test(#5951): guard class-capture behavior + pin the shared-mutable split-cell bug (#6048)
+- fix(runtime): Date.prototype.toString brand-check + own-expando method shadow (#6050)
+- fix(link): #6023 — LNK1158 'cannot run mt.exe' on Windows MSVC UI builds (#6051)
+- fix(hir): #5951 — share a mutated class capture via a one-element array box (#6054)
+
+**Notable this window:** the gap-suite conformance check became a **required** PR gate (#6042/#6047 sharded it 8-way; #9), and immediately caught the #5835 `new Function()` regression (#6045). #5951 (shared-mutable class-capture split cell) is fixed by desugaring to a one-element array box.
+
+## v0.5.1240 — metadata catch-up fold (PRs #5996–#6034)
+
+Consolidated version bump documenting the code-only merges that landed on `main` since v0.5.1239 during a rapid parallel-merge window where per-PR metadata folding was deferred. All entries are the merged PRs verbatim (conventional-commit subjects); each PR carries its own detailed rationale in its description and commit body.
+
+- fix(runtime,codegen): #5907 — class X extends Promise subclass support (#5991)
+- fix(intl): canonicalize deprecated Unicode-extension type values (#5992)
+- fix(watchos): make the SwiftUI tree-shell pipeline work end-to-end (#5973)
+- fix(runtime): restore exact BigInt-vs-large-Number equality at 2^1023 boundary (#5993)
+- fix(intl): ToObject primitive options in SupportedLocalesOf (#5995)
+- fix(intl): RelativeTimeFormat.format(0, symbol) is a TypeError (#5996)
+- fix(intl): ListFormat StringListFromIterable stops at first non-string (#5998)
+- fix(runtime,transform): #5941 — eliminate the async-step deadlock class (#5988)
+- fix(runtime): js_dynamic_mod preserves sign of zero (fmod semantics) (#5999)
+- fix(intl): Spanish (es) ListFormat unit list patterns (#6000)
+- fix(runtime): guard URLSearchParams shape probe against non-object receivers (#5997)
+- fix(temporal): PlainDateTime/PlainTime toLocaleString keep sub-second fraction (#6002)
+- fix(runtime): dispatch user-assigned callable methods on exotic receivers (#6004)
+- fix(runtime): proxy [[Get]] forwarding for numeric keys and proxy prototypes (#6005)
+- fix(runtime): enforce preventExtensions/seal on function objects (#6007)
+- fix(runtime): latch array iterator done state after exhaustion (#6008)
+- revert: remove the #5874 payload from main — restore 322 test262 regressions (#6015)
+- fix(runtime): #6006 — content-validate shape transition-cache edges (stale-pointer false match) (#6012)
+- fix(hir,runtime): #5989 — Next.js cacheComponents boot-chain subset (#6014)
+- fix(runtime): fire process.stdin 'end'/'close' listeners on EOF (#6017)
+- fix(build,compile): #5928 — codegen-units alignment + cold-build dedup fix for well-known libs (#5980)
+- fix(compile): #5984 — computed-key static fields leak synthetic name into cross-module externs (#5985)
+- fix(codegen,runtime): super(...spread) dropped spread args and skipped custom iterators (#6018)
+- fix(system): getDeviceModel/getOSVersion return a string, not NaN (#5972) (#6016)
+- fix(hir): bracket access with a string-literal key missed builtin static folds (#6019)
+- fix(compile): #5987 — guard class_canonical_path against ClassId collisions (#6001)
+- fix(hir): delete of a module-level var/let/const binding wrongly returned true (#6020)
+- fix(http): gate reqwest proxy env on NODE_USE_ENV_PROXY to match Node (#5889)
+- fix(hir): class own-name binding is const inside the class body (#6021)
+- fix(runtime): class constructor .caller/.arguments are poison-pill accessors (#6022)
+- fix(runtime): `in` operator throws TypeError on a non-object right operand (#6024)
+- fix(hir): emit computed-key static fields that have no initializer (#6025)
+- fix(runtime): strict arr[i]=v / arr.length=n on a frozen array throws TypeError (#6026)
+- fix(hir): capture forward-refs bound later in the same `let` declaration (#6028)
+- perf(json): #6009 — fast-negative toJSON probe: small-object JSON.stringify ~40x faster (#6027)
+- fix(runtime): test262 built-ins value/throw bugs — primitive brand, valueOf shadow, Math.round, Error.toString, radix coercion (#6030)
+- fix(hir): report dynamic-codegen unavailable to `new Function("")` probes by default (#6031)
+- fix(hir): propertyIsEnumerable on built-in prototypes returned non-boolean (#6032)
+- perf(codegen,runtime): #6011 — packed-f64 range-loop versioning: scalar-bound multi-array loops run inline (#6033)
+- fix(gc): #6010 — Map/Set external buffers exert GC pressure; dead collections finalize everywhere (#6034)
+
 ## v0.5.1239 — stdlib `full` drops external-http-client-pump: ext-http link lockstep restored
 
 #5831 added `external-http-client-pump` to perry-stdlib's `full` feature, but the pump cfg declares externs (`js_ext_http_agent_*`, `js_ext_http_client_*`, `js_http_has_pending`, …) defined only in perry-ext-http — which the compile driver links per-program, never stdlib's own artifacts. `cargo test -p perry-stdlib` could not link (red since 45e67736d) and cache-warm's heavy-crates step failed on every run, blocking the v0.5.1233 smoke variant priming. The feature was never needed in `full`: `optimized_libs/driver.rs` activates the pump exactly when a program imports node:http/https with perry-ext-http in the link surface. Verified via stdlib test link + unit suite + an http client/server round-trip e2e through the driver-activated path.

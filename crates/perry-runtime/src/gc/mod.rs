@@ -38,6 +38,8 @@ pub use types::*;
 mod policy;
 pub(crate) use policy::gc_runtime_safepoint;
 pub use policy::*;
+mod heap_budget;
+pub use heap_budget::*;
 mod telemetry;
 pub use telemetry::*;
 mod malloc;
@@ -72,6 +74,13 @@ pub fn gc_collect_minor() -> u64 {
 }
 
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Barriers-off ⇒ the remembered set is not being maintained, and a
+    // minor's black-leafed old parents would hide live children. Route
+    // every caller (direct arm, moving-safepoint arm, public FFI) to the
+    // full collection instead of trusting an empty RS.
+    if !gen_gc_enabled() {
+        return gc_collect_full_mark_sweep_with_trigger(trigger);
+    }
     // Phase C4b-γ-3: re-entrancy guard. Without this, the evacuation
     // pass's `arena_alloc_gc_old` can trigger `gc_check_trigger` (via
     // `arena.alloc`'s slow-path block-fill) DURING the outer collection
@@ -167,6 +176,17 @@ pub fn gen_gc_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
+        // Generational minors are only sound with runtime write barriers:
+        // minors black-leaf old parents and trust the remembered set for
+        // every old→young/old→malloc edge. `PERRY_WRITE_BARRIERS=0` used
+        // to disable only evacuation gating while minors kept running —
+        // the remembered set stayed empty, so a born-old (>16 KB) parent's
+        // nursery children were swept on the first minor and the
+        // "bisection" mode crashed for reasons unrelated to what was being
+        // bisected. Barriers off now means full mark-sweep only.
+        if !write_barriers_enabled() {
+            return false;
+        }
         !matches!(
             std::env::var("PERRY_GEN_GC").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -230,9 +250,40 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
-#[allow(dead_code)]
 fn gc_collect_emergency_full() -> GcCollectOutcome {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Emergency))
+}
+
+/// Last-ditch recovery for a failed heap allocation (2026-07-09 audit):
+/// run one synchronous full mark-sweep and let the caller retry the
+/// allocation once. Returns false (caller proceeds straight to its panic)
+/// when collecting here would be unsound: re-entrant emergency, inside a
+/// collection/allocation bookkeeping window, or mid-budgeted-cycle.
+///
+/// The workspace builds with `panic = "unwind"`, and these OOM panics
+/// cross `extern "C"` frames into aborts — on a memory-limited process
+/// (cgroup `memory.max`, jetsam) dying without even attempting a
+/// collection wasted the one chance to shed a heap full of garbage.
+///
+/// The conservative stack scan is forced for the same reason the
+/// alloc-point direct arm forces it: this runs at an arbitrary allocation
+/// site where locals of the current call chain may not be spilled to
+/// shadow slots.
+pub(crate) fn gc_try_emergency_reclaim() -> bool {
+    thread_local! {
+        static IN_EMERGENCY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if IN_EMERGENCY.with(|c| c.get()) {
+        return false;
+    }
+    if GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC != 0 || gc_budgeted_cycle_active() {
+        return false;
+    }
+    IN_EMERGENCY.with(|c| c.set(true));
+    let _scan = roots::ManualGcScanGuard::force_full_scan();
+    let _ = gc_collect_emergency_full();
+    IN_EMERGENCY.with(|c| c.set(false));
+    true
 }
 
 #[cfg(test)]

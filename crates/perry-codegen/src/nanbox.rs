@@ -19,6 +19,10 @@ pub const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 /// invariant. Inline `IndexGet` paths emitted by the codegen must select-
 /// rewrite this back to `TAG_UNDEFINED` so user code never sees the sentinel.
 pub const TAG_HOLE: u64 = 0x7FFC_0000_0000_0010;
+/// TDZ (Temporal Dead Zone) sentinel — see `perry-runtime::value::TAG_TDZ`.
+/// A lexical `let`/`const`/`class` box is seeded with this at scope entry;
+/// reading it before the declaration runs throws a spec ReferenceError.
+pub const TAG_TDZ: u64 = 0x7FFC_0000_0000_0011;
 pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
@@ -37,6 +41,7 @@ pub const TAG_NULL_I64: &str = "9222246136947933186";
 pub const TAG_FALSE_I64: &str = "9222246136947933187";
 pub const TAG_TRUE_I64: &str = "9222246136947933188";
 pub const TAG_HOLE_I64: &str = "9222246136947933200";
+pub const TAG_TDZ_I64: &str = "9222246136947933201";
 pub const POINTER_TAG_I64: &str = "9222527611924643840";
 pub const POINTER_MASK_I64: &str = "281474976710655";
 pub const INT32_TAG_I64: &str = "9222809086901354496";

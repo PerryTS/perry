@@ -102,6 +102,9 @@ fn is_headers_method_name(name: &str) -> bool {
 fn is_headers_instance_method(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
     is_headers_method_name(property)
         && matches!(receiver_class_name(ctx, object).as_deref(), Some("Headers"))
+        // #6003: a user-defined `class Headers` owns the receiver type —
+        // its members are ordinary class members, not the native surface.
+        && !ctx.classes.contains_key("Headers")
 }
 
 fn is_classic_stream_method_name(name: &str) -> bool {

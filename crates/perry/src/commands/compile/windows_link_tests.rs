@@ -2,10 +2,12 @@
 //! in v0.5.1019 (file-size CI gate). Brought back in via
 //! `#[cfg(test)] mod windows_link_tests;` in compile.rs.
 
-use super::link::WINDOWS_APP_MANIFEST;
+use super::library_search::newest_mt_dir_under;
+use super::link::{embed_app_manifest, linker_is_msvc_link_exe, WINDOWS_APP_MANIFEST};
 use super::windows_default_output_extension;
 use super::windows_pe_subsystem_flag;
 use super::windows_subsystem_needs_ui;
+use std::process::Command;
 
 // Regression guard for issue #120: without an explicit subsystem flag the
 // MSVC linker historically defaulted to WINDOWS (2), silently detaching
@@ -133,4 +135,101 @@ fn app_manifest_runs_as_invoker() {
         WINDOWS_APP_MANIFEST.contains("level=\"asInvoker\""),
         "manifest must declare the asInvoker execution level"
     );
+}
+
+// Issue #6023: only MSVC link.exe needs the mt.exe reachability treatment —
+// lld-link embeds manifests in-process. The classifier keys on the program's
+// file stem so bare names and vswhere-resolved absolute paths both match.
+#[test]
+fn msvc_link_exe_classification() {
+    assert!(linker_is_msvc_link_exe(&Command::new("link.exe")));
+    assert!(linker_is_msvc_link_exe(&Command::new("LINK.EXE")));
+    assert!(linker_is_msvc_link_exe(&Command::new("link")));
+    // Forward-slash path form keeps the test host-independent; on Windows the
+    // vswhere backslash form resolves through the same Path::file_stem.
+    assert!(linker_is_msvc_link_exe(&Command::new(
+        "C:/VS/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.exe"
+    )));
+    assert!(!linker_is_msvc_link_exe(&Command::new("lld-link.exe")));
+    assert!(!linker_is_msvc_link_exe(&Command::new("lld-link")));
+    assert!(!linker_is_msvc_link_exe(&Command::new("cc")));
+}
+
+// Console-only binaries must stay manifest-free (and thus never depend on
+// mt.exe at all).
+#[test]
+fn console_build_adds_no_manifest_args() {
+    let mut cmd = Command::new("link.exe");
+    embed_app_manifest(&mut cmd, false);
+    assert_eq!(cmd.get_args().count(), 0);
+}
+
+// lld-link needs no mt.exe, so a UI build through it always gets the full
+// /MANIFEST:EMBED argument set regardless of any Windows SDK presence.
+#[test]
+fn ui_build_embeds_manifest_via_lld_link() {
+    let mut cmd = Command::new("lld-link.exe");
+    embed_app_manifest(&mut cmd, true);
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.contains(&"/MANIFEST:EMBED".to_string()));
+    assert!(args.contains(&"/MANIFESTUAC:NO".to_string()));
+    assert!(
+        args.iter().any(|a| a.starts_with("/MANIFESTINPUT:")),
+        "manifest input file must be passed: {args:?}"
+    );
+}
+
+// Issue #6023: the SDK-bin probe picks the newest versioned dir that actually
+// contains mt.exe, preferring x64 over x86.
+#[test]
+fn mt_dir_probe_picks_newest_versioned_sdk() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path();
+    // Older SDK with both arches, newest mt-bearing SDK also with both
+    // arches (x64 must win within it), plus a newer version dir that lacks
+    // mt.exe entirely (must be skipped).
+    for dir in [
+        "10.0.19041.0/x64",
+        "10.0.19041.0/x86",
+        "10.0.22621.0/x64",
+        "10.0.22621.0/x86",
+        "10.0.26100.0/arm64",
+    ] {
+        std::fs::create_dir_all(bin.join(dir)).unwrap();
+    }
+    for mt in [
+        "10.0.19041.0/x64/mt.exe",
+        "10.0.19041.0/x86/mt.exe",
+        "10.0.22621.0/x64/mt.exe",
+        "10.0.22621.0/x86/mt.exe",
+    ] {
+        std::fs::write(bin.join(mt), b"").unwrap();
+    }
+    assert_eq!(
+        newest_mt_dir_under(bin),
+        Some(bin.join("10.0.22621.0").join("x64"))
+    );
+}
+
+// Pre-10.0.15063 SDKs put tools directly under bin\<arch> with no version dir.
+#[test]
+fn mt_dir_probe_falls_back_to_unversioned_layout() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path();
+    std::fs::create_dir_all(bin.join("x86")).unwrap();
+    std::fs::write(bin.join("x86").join("mt.exe"), b"").unwrap();
+    assert_eq!(newest_mt_dir_under(bin), Some(bin.join("x86")));
+}
+
+// No SDK bin root / no mt.exe anywhere → None, which makes embed_app_manifest
+// skip the embed instead of letting link.exe die with LNK1158.
+#[test]
+fn mt_dir_probe_handles_missing_root_and_empty_tree() {
+    let root = tempfile::tempdir().unwrap();
+    assert_eq!(newest_mt_dir_under(&root.path().join("nope")), None);
+    std::fs::create_dir_all(root.path().join("10.0.22621.0").join("x64")).unwrap();
+    assert_eq!(newest_mt_dir_under(root.path()), None);
 }

@@ -238,6 +238,7 @@ pub fn try_lower_namespace_member_call(
         .namespace_member_prefixes
         .get(&(ns_name.clone(), property.clone()))
         .cloned()
+        .or_else(|| ctx.import_function_prefixes.get(property).cloned())
     else {
         return Ok(None);
     };
@@ -269,10 +270,7 @@ pub fn try_lower_namespace_member_call(
         property,
     );
     let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-    if ctx
-        .namespace_member_vars
-        .contains(&(ns_name.clone(), property.clone()))
-    {
+    if ctx.imported_vars.contains(property) {
         // Var-shaped export: fetch closure via zero-arg
         // getter, then closure-call with the user args.
         ctx.pending_declares.push((symbol.clone(), DOUBLE, vec![]));
@@ -299,22 +297,10 @@ pub fn try_lower_namespace_member_call(
     // Function-decl-shaped export: direct call with rest bundling.
     let declared_count = ctx
         .imported_func_param_counts
-        .get(origin_suffix)
-        .or_else(|| ctx.imported_func_param_counts.get(property))
+        .get(property)
         .copied()
-        .unwrap_or_else(|| {
-            // No arity metadata for this re-exported function. When it's a
-            // renamed re-export (origin != property) called with no args, pad a
-            // single `undefined` so a 1-param callee still receives a slot;
-            // otherwise fall back to the actual arg count.
-            if args.is_empty() && origin_suffix != property {
-                1
-            } else {
-                args.len()
-            }
-        });
-    let has_rest = ctx.imported_func_has_rest.contains(origin_suffix)
-        || ctx.imported_func_has_rest.contains(property);
+        .unwrap_or(args.len());
+    let has_rest = ctx.imported_func_has_rest.contains(property);
     let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
     if has_rest {
         let fixed_count = declared_count.saturating_sub(1);

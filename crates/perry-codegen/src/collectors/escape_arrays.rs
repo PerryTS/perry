@@ -130,7 +130,8 @@ fn collect_used_array_indices_in_stmts(
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
-            | Stmt::PreallocateBoxes(_) => {}
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 }

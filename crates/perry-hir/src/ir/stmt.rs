@@ -65,6 +65,14 @@ pub enum Stmt {
     /// forward `let`/`const` bindings whose own `Stmt::Let` would
     /// otherwise lazily allocate the box at source position. Issue #569.
     PreallocateBoxes(Vec<LocalId>),
+    /// Like `PreallocateBoxes`, but seeds each box with the TAG_TDZ sentinel
+    /// (Temporal Dead Zone) instead of `undefined`. Emitted for lexical
+    /// `let`/`const`/`class` bindings that are referenced (directly or via a
+    /// closure) BEFORE their declaration in the same function/module body. A
+    /// read of such a box before its `Stmt::Let` runs throws a spec
+    /// ReferenceError; the `Stmt::Let` (or `let x;` with no init) overwrites
+    /// the sentinel with the real value / `undefined`, ending the dead zone.
+    PreallocateTdzBoxes(Vec<LocalId>),
 }
 
 /// A case in a switch statement

@@ -15,6 +15,18 @@ pub struct PublishArgs {
     #[arg(long)]
     pub libc: Option<String>,
 
+    /// CPU baseline for the produced binaries (#6125): an LLVM CPU name
+    /// (`x86-64-v2`, `x86-64-v3`, …), `native` (tune to the build worker's
+    /// machine — fastest, but the binary only runs on CPUs at least as new),
+    /// or `generic` (the target architecture's portable baseline). Overrides
+    /// the `[build] march` / `[build] native_tuning` perry.toml settings.
+    /// Linux defaults to `x86-64-v2` so published services run on any
+    /// x86-64 CPU from the last ~15 years instead of inheriting the build
+    /// server's instruction set (AVX-512 → SIGILL on Zen2/EPYC and other
+    /// non-AVX-512 hosts).
+    #[arg(long)]
+    pub march: Option<String>,
+
     /// Build server URL
     #[arg(long, default_value = "https://hub.perryts.com")]
     pub server: Option<String>,

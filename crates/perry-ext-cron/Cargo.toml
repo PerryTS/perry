@@ -10,7 +10,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-cron = "0.16"
+cron = "0.17"
 chrono = "0.4"
 
 [dev-dependencies]

@@ -204,7 +204,8 @@ fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, usize>) {
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

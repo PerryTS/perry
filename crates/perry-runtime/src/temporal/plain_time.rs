@@ -197,6 +197,9 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
                 .unwrap_or_default(),
         ),
         "toLocaleString" => {
+            // Include the millisecond-of-second so `fractionalSecondDigits`
+            // renders the real sub-second fraction, not `.000`
+            // (mirrors PlainDateTime toLocaleString).
             let epoch_ms = crate::date::components_to_timestamp(
                 1970,
                 1,
@@ -205,7 +208,8 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
                 t.minute() as u32,
                 t.second() as u32,
             ) as f64
-                * 1000.0;
+                * 1000.0
+                + t.millisecond() as f64;
             crate::intl::temporal_locale_string(
                 epoch_ms,
                 raw_arg(args, 0),

@@ -760,13 +760,28 @@ pub(super) fn incremental_mark_barrier_active() -> bool {
 pub(super) fn heap_word_candidate_addr(bits: u64) -> Option<usize> {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        let ptr = (bits & POINTER_MASK) as usize;
+        let payload = bits & POINTER_MASK;
+        // arm64_32 (ILP32): a real heap pointer fits in 32 bits, so `payload as
+        // usize` is lossless only when the high 16 payload bits are zero. A
+        // mistagged/immediate value with a >32-bit payload would otherwise
+        // truncate to a garbage 32-bit address that the GC marks/derefs,
+        // corrupting unrelated heap memory. Reject it.
+        #[cfg(not(target_pointer_width = "64"))]
+        if payload > 0xFFFF_FFFF {
+            return None;
+        }
+        let ptr = payload as usize;
         return (ptr != 0).then_some(ptr);
     }
     if tag >= 0x7FF8_0000_0000_0000 {
         return None;
     }
     if (0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&bits) {
+        // Same ILP32 guard for the raw-f64 pointer path.
+        #[cfg(not(target_pointer_width = "64"))]
+        if bits > 0xFFFF_FFFF {
+            return None;
+        }
         Some(bits as usize)
     } else {
         None
@@ -984,15 +999,21 @@ pub(super) fn write_barrier_slot_inner(
     child: u64,
     external_slot: bool,
 ) {
-    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
-    incremental_mark_barrier_value(child);
-
-    // Decode child first: primitive stores are the most common skip.
+    // Decode child first: primitive stores are the overwhelmingly common
+    // case (every numeric array/field store) and need NEITHER the
+    // incremental-mark probe (nothing to mark) NOR the remembered set (no
+    // old→young edge) — so they must not pay the incremental barrier's
+    // unconditional thread-local access, which dominated tight numeric store
+    // loops (#6011: `ema[i] = <f64>` spent more time in this preamble than
+    // in the store itself).
     let child_addr = decode_heap_addr(child);
     if child_addr == 0 {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
         return;
     }
+    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
+    incremental_mark_barrier_value(child);
     // Decode the parent — must be a NaN-boxed heap pointer.
     let parent_addr = decode_heap_addr(parent);
     if parent_addr == 0 {
@@ -1006,10 +1027,7 @@ pub(super) fn write_barrier_slot_inner(
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     }
-    if !matches!(
-        crate::arena::classify_heap_generation(child_addr),
-        crate::arena::HeapGeneration::Nursery
-    ) {
+    if !remembered_child_needs_tracking(child_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
         return;
     }
@@ -1023,6 +1041,38 @@ pub(super) fn write_barrier_slot_inner(
     };
     if inserted {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+    }
+}
+
+/// Which stored children must an old parent's slot be remembered for?
+/// Minor GCs sweep BOTH the nursery and the malloc registry, and old
+/// parents are black leaves in minors — so an unremembered old→nursery OR
+/// old→malloc edge leaves the child unmarked: the nursery sweep or the
+/// malloc sweep frees it while live (and a malloc child's own nursery
+/// children die with it, since marked malloc objects are the only path
+/// that traces them). Longlived and old children need no remembering:
+/// longlived is never swept individually and old is reclaimed only by
+/// full cycles that trace everything.
+#[inline]
+pub(super) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
+    match crate::arena::classify_heap_generation(child_addr) {
+        crate::arena::HeapGeneration::Nursery => true,
+        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived => false,
+        crate::arena::HeapGeneration::Unknown => {
+            // Non-arena child: candidate malloc-GC object (RegExp, Symbol,
+            // hook-mode Promise, grown string, large-capture closure).
+            // EXACT malloc-registry membership — deliberately not a header
+            // sniff: barrier child values can be uninitialized slot
+            // contents (array-growth barrier replay passes raw slot bits),
+            // and a plausibility sniff on garbage dirtied pages whose
+            // dirty-scan then treated neighboring garbage slots as movable
+            // young pointers. Band ids and foreign pointers are never in
+            // the registry, so this also needs no pre-deref band guard.
+            child_addr > GC_HEADER_SIZE
+                && super::malloc::gc_malloc_header_is_tracked(
+                    (child_addr - GC_HEADER_SIZE) as *const GcHeader,
+                )
+        }
     }
 }
 
@@ -1065,10 +1115,17 @@ pub(super) fn decode_heap_addr(bits: u64) -> usize {
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
         (bits & POINTER_MASK) as usize
     } else if tag < 0x7FF8_0000_0000_0000 {
-        // Possible raw pointer. Accept only if the arena side metadata
-        // recognizes it as a heap address; ordinary f64 payload bits
-        // miss the metadata table and remain non-pointers.
+        // Possible raw pointer. Cheap shape pre-filter first (#6011): a real
+        // heap address is 48-bit, above the handle band, and 8-aligned — an
+        // ordinary f64 payload (e.g. 100.5 = 0x4059_4000_…) has non-zero
+        // high bits and is rejected here without paying the page-map
+        // classification, which dominated tight numeric store loops. Only
+        // the (rare) subnormal doubles whose bits look address-shaped fall
+        // through to the authoritative arena lookup.
         let addr = bits as usize;
+        if (bits >> 48) != 0 || addr < 0x10000 || addr & 0x7 != 0 {
+            return 0;
+        }
         if matches!(
             crate::arena::classify_heap_generation(addr),
             crate::arena::HeapGeneration::Unknown

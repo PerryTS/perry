@@ -1144,7 +1144,7 @@ fn test_dirty_page_promise_value_slot_marks_child() {
     remembered_set_clear();
 }
 
-fn assert_heap_child_marked(ptr: *const u8, label: &str) {
+pub(super) fn assert_heap_child_marked(ptr: *const u8, label: &str) {
     assert!(!ptr.is_null(), "{label} should not be null");
     unsafe {
         let header = header_from_user_ptr(ptr);
@@ -1785,4 +1785,46 @@ fn test_minor_gc_promotes_after_two_survivals() {
             "tenured stays tenured across subsequent collections"
         );
     }
+}
+
+// Regression (2026-07 GC audit, old→malloc hole): the fallback minor's
+// remembered-set scan used to seed only NURSERY children; a malloc-GC child
+// on a dirty old page stayed unmarked and the minor malloc sweep freed it.
+// Exercises both halves of the fix: the barrier recording the old→malloc
+// edge and `try_mark_young_user_ptr_as_seed` accepting malloc children.
+#[test]
+fn test_remembered_set_scan_marks_malloc_child_of_old_parent() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_remembered_set();
+    clear_marks();
+    activate_malloc_registry_for_tests();
+
+    let malloc_child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(malloc_child);
+    }
+    let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+    unsafe {
+        *elements = ptr_bits(malloc_child as usize);
+    }
+    js_write_barrier_slot(
+        ptr_bits(old_arr as usize),
+        elements as u64,
+        ptr_bits(malloc_child as usize),
+    );
+    assert!(
+        remembered_set_size() > 0,
+        "old→malloc store must dirty the remembered page"
+    );
+
+    let valid_ptrs = build_valid_pointer_set();
+    mark_remembered_set_roots(&valid_ptrs);
+    assert_heap_child_marked(malloc_child as *const u8, "malloc child of old parent");
+
+    reset_remembered_set();
+    clear_marks();
 }

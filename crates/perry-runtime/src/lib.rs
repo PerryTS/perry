@@ -20,8 +20,15 @@
 /// allocation dispatch from ~25-40ns (macOS `malloc`) to ~5-10ns, which is
 /// meaningful because `gc_malloc` is called ~1M+ times/sec in allocation-
 /// heavy workloads (string concat loops, JSON roundtrip, gc_pressure).
+// arm64_32: mimalloc on a 32-bit-pointer (ILP32) tier-3 target is unproven and
+// a corruption suspect; use the system allocator (libsystem_malloc, solid on
+// watchOS) on 32-bit. Keep mimalloc's speed on 64-bit.
+#[cfg(target_pointer_width = "64")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+#[cfg(not(target_pointer_width = "64"))]
+#[global_allocator]
+static GLOBAL: std::alloc::System = std::alloc::System;
 
 pub mod abi_trampoline;
 pub mod app_group;

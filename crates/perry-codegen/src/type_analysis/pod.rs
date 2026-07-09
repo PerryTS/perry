@@ -388,6 +388,13 @@ pub(crate) fn scalar_replaced_array_element_is_raw_f64(
 fn type_has_numeric_pointer_free_array_layout_for_fallback(ty: &HirType) -> bool {
     match ty {
         HirType::Array(elem) => matches!(elem.as_ref(), HirType::Number | HirType::Int32),
+        // #6011: `new Array<number>(n)` carries the generic spelling; its
+        // element reads have the same boxed-fallback hazard as `Array(Number)`
+        // (a hole surfaces `undefined` from the guarded read's boxed fallback,
+        // which must be coerced before raw f64 arithmetic).
+        HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+            matches!(type_args[0], HirType::Number | HirType::Int32)
+        }
         HirType::Tuple(elems) => elems
             .iter()
             .all(|elem| matches!(elem, HirType::Number | HirType::Int32)),

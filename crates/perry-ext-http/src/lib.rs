@@ -231,17 +231,70 @@ pub extern "C" fn js_ext_http_client_inflight() -> i32 {
         .clamp(0, i32::MAX as i64) as i32
 }
 
+/// Pure predicate behind [`node_env_proxy_enabled`]. Node treats its
+/// `NODE_*` boolean env vars as enabled only when the value is exactly `"1"`.
+/// Split out so the policy is unit-testable without mutating process env.
+fn proxy_enabled_from_env_value(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Whether Node's `--use-env-proxy` / `NODE_USE_ENV_PROXY=1` is active.
+///
+/// Node's built-in `fetch` and `node:http`/`node:https` ignore the standard
+/// `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars unless this is set. perry
+/// mirrors that opt-in so its bindings are Node-conformant — reqwest would
+/// otherwise honor the proxy env unconditionally, diverging from Node.
+fn node_env_proxy_enabled() -> bool {
+    proxy_enabled_from_env_value(std::env::var("NODE_USE_ENV_PROXY").ok().as_deref())
+}
+
+/// Apply the Node-conformant proxy policy to a reqwest client builder: honor
+/// the standard proxy env vars only when `NODE_USE_ENV_PROXY=1`, matching Node.
+pub(crate) fn apply_node_proxy_policy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    if node_env_proxy_enabled() {
+        builder
+    } else {
+        builder.no_proxy()
+    }
+}
+
+/// A default reqwest client with the Node-conformant proxy policy applied.
+/// Used as the fallback when a customized builder fails to build.
+pub(crate) fn default_client() -> reqwest::Client {
+    apply_node_proxy_policy(reqwest::Client::builder())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+#[cfg(test)]
+mod proxy_policy_tests {
+    use super::proxy_enabled_from_env_value;
+
+    #[test]
+    fn env_proxy_enabled_only_for_exactly_one() {
+        // Matches Node's NODE_USE_ENV_PROXY parsing: enabled iff "1".
+        assert!(proxy_enabled_from_env_value(Some("1")));
+        assert!(!proxy_enabled_from_env_value(None));
+        assert!(!proxy_enabled_from_env_value(Some("0")));
+        assert!(!proxy_enabled_from_env_value(Some("")));
+        assert!(!proxy_enabled_from_env_value(Some("true")));
+        assert!(!proxy_enabled_from_env_value(Some("2")));
+    }
+}
+
 lazy_static! {
     static ref HTTP_PENDING_EVENTS: Mutex<Vec<PendingHttpEvent>> = Mutex::new(Vec::new());
     /// Shared HTTP client — reuses connection pool, DNS cache, TLS
     /// session cache. Without this each request allocs a fresh
     /// reqwest::Client (~250 KB) and the memory never gets reused.
-    pub(crate) static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .pool_max_idle_per_host(16)
-        .tcp_keepalive(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    pub(crate) static ref HTTP_CLIENT: reqwest::Client = apply_node_proxy_policy(
+        reqwest::Client::builder()
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_max_idle_per_host(16)
+            .tcp_keepalive(std::time::Duration::from_secs(60)),
+    )
+    .build()
+    .unwrap_or_else(|_| default_client());
 }
 
 static HTTP_GC_REGISTERED: Once = Once::new();

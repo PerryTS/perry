@@ -215,3 +215,62 @@ fn test_copying_minor_promotion_handoff_uses_predicted_old_pressure() {
         20 * 1024 * 1024,
     ));
 }
+
+// 2026-07-09 audit (device-blind policy): budget-scaled threshold math.
+#[test]
+fn test_budget_scaled_clamps_only_under_budget() {
+    use super::super::heap_budget::budget_scaled_with;
+    const MB: usize = 1024 * 1024;
+    // Unbudgeted (desktop/server): historical default unchanged.
+    assert_eq!(budget_scaled_with(None, 128 * MB, 1, 4, 2 * MB), 128 * MB);
+    // 64 MB budget (watch-class): quarter-budget trigger.
+    assert_eq!(
+        budget_scaled_with(Some(64 * MB), 128 * MB, 1, 4, 2 * MB),
+        16 * MB
+    );
+    // 256 MB container: still clamped below the default.
+    assert_eq!(
+        budget_scaled_with(Some(256 * MB), 128 * MB, 1, 4, 2 * MB),
+        64 * MB
+    );
+    // Big budget: fraction exceeds the default → default wins.
+    assert_eq!(
+        budget_scaled_with(Some(900 * MB), 128 * MB, 1, 4, 2 * MB),
+        128 * MB
+    );
+    // Degenerate tiny budget: floor holds.
+    assert_eq!(budget_scaled_with(Some(MB), 128 * MB, 1, 4, 2 * MB), 2 * MB);
+}
+
+// The un-armed trigger cell (desktop-default const initializer) reads as
+// the device ceiling; an armed trigger above the ceiling is legitimate
+// (headroom floor over a big live set) and must NOT be clamped.
+#[test]
+fn test_effective_arena_trigger_respects_armed_values() {
+    use super::super::heap_budget::gc_trigger_absolute_ceiling_bytes;
+    use super::super::policy::{
+        effective_next_arena_trigger, GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
+    };
+    let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+    let prev_armed = GC_TRIGGER_ARMED.with(|c| c.get());
+
+    GC_TRIGGER_ARMED.with(|c| c.set(false));
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX / 2));
+    assert_eq!(
+        effective_next_arena_trigger(),
+        gc_trigger_absolute_ceiling_bytes(),
+        "un-armed trigger must clamp to the device ceiling"
+    );
+
+    GC_TRIGGER_ARMED.with(|c| c.set(true));
+    let above_ceiling = gc_trigger_absolute_ceiling_bytes() * 3;
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(above_ceiling));
+    assert_eq!(
+        effective_next_arena_trigger(),
+        above_ceiling,
+        "armed triggers above the ceiling are legitimate and must survive"
+    );
+
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(prev_trigger));
+    GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
+}

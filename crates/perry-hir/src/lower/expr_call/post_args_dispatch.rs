@@ -215,6 +215,48 @@ pub(super) fn try_direct_has_own_call(
     Err(args)
 }
 
+/// `obj.propertyIsEnumerable(key)` → `js_object_property_is_enumerable(obj, key)`.
+///
+/// Mirrors [`try_direct_has_own_call`]. Needed because on built-in prototype
+/// objects (`RegExp.prototype`, `Date.prototype`, …) `propertyIsEnumerable`
+/// is installed as a no-op closure that shadows the real
+/// `native_call_method` dispatch, so `RegExp.prototype.propertyIsEnumerable("global")`
+/// resolved to the closure and returned garbage instead of `false`
+/// (test262 built-ins/RegExp/prototype/{global,ignoreCase,multiline}/S15.10.7.*_A8).
+/// Routing directly to the canonical FFI entry point makes it descriptor-aware
+/// for every receiver, exactly as `hasOwnProperty` already is.
+pub(super) fn try_direct_property_is_enumerable_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> Result<Expr, Vec<Expr>> {
+    if has_spread || args.len() != 1 {
+        return Err(args);
+    }
+    if let ast::Callee::Expr(callee_expr) = &call.callee {
+        if let ast::Expr::Member(member) = callee_expr.as_ref() {
+            if let ast::MemberProp::Ident(prop) = &member.prop {
+                if prop.sym.as_ref() == "propertyIsEnumerable" {
+                    let receiver =
+                        lower_expr(ctx, member.obj.as_ref()).map_err(|_| args.clone())?;
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_object_property_is_enumerable".to_string(),
+                            param_types: Vec::new(),
+                            return_type: Type::Any,
+                        }),
+                        args: vec![receiver, args[0].clone()],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    });
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
 /// `Object.prototype.toString.call(x)` → `js_object_to_string(x)` and
 /// `Object.prototype.hasOwnProperty.call(obj, key)` → `js_object_has_own(obj, key)`.
 ///

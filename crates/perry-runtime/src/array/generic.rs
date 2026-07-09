@@ -1541,39 +1541,44 @@ pub(crate) fn object_sort(recv: f64, cmp_validated: *const ClosureHeader) -> f64
     };
     let len = al_length(recv);
     unsafe {
-        // Rooted temp array: keeps accessor-produced values alive across
-        // comparator calls (a Rust Vec would be invisible to the GC scan).
-        let temp = js_array_alloc_with_length(len.clamp(0, u32::MAX as i64) as u32);
-        let temp_elems = (temp as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        // Root BOTH the receiver value and the collection temp for the whole
+        // protocol: `al_has`/`al_get`/`al_set` fire user accessors (and the
+        // comparator runs inside `sort_rooted_values`) — any of them can
+        // allocate and sweep or move either object, so every raw pointer is
+        // re-derived from its rooted handle after each such call.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let recv_handle = scope.root_nanbox_f64(recv);
+        let temp = super::sort::RootedArrayElems::new(
+            &scope,
+            js_array_alloc_with_length(len.clamp(0, u32::MAX as i64) as u32),
+        );
         let mut count = 0usize;
         let mut undef_count = 0usize;
         for j in 0..len {
-            if al_has(recv, j) {
-                let v = al_get(recv, j);
+            if al_has(recv_handle.get_nanbox_f64(), j) {
+                let v = al_get(recv_handle.get_nanbox_f64(), j);
                 if v.to_bits() == TAG_UNDEFINED {
                     undef_count += 1;
                 } else {
-                    // GC_STORE_AUDIT(BARRIERED): temp collection array rebuilt below.
-                    ptr::write(temp_elems.add(count), v);
+                    temp.set(count, v);
                     count += 1;
                 }
             }
         }
-        (*temp).length = count as u32;
-        rebuild_array_layout(temp);
-        super::sort::sort_rooted_values(temp_elems, count, cmp);
-        rebuild_array_layout(temp);
+        (*temp.arr()).length = count as u32;
+        rebuild_array_layout(temp.arr());
+        let _ = super::sort::sort_rooted_values(temp.arr(), count, cmp);
         for j in 0..count {
-            al_set(recv, j as i64, *temp_elems.add(j));
+            al_set(recv_handle.get_nanbox_f64(), j as i64, temp.get(j));
         }
         for j in count..count + undef_count {
-            al_set(recv, j as i64, undef());
+            al_set(recv_handle.get_nanbox_f64(), j as i64, undef());
         }
         for j in (count + undef_count) as i64..len {
-            al_delete(recv, j);
+            al_delete(recv_handle.get_nanbox_f64(), j);
         }
+        recv_handle.get_nanbox_f64()
     }
-    recv
 }
 
 /// `Array.prototype.concat` over a non-real-array receiver: the receiver is

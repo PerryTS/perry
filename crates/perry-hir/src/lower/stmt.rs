@@ -691,6 +691,15 @@ pub(crate) fn lower_stmt(
                                         ctx.class_expr_aliases
                                             .insert(inner_name.clone(), bind_name.clone());
                                     }
+                                    // The inner (const) binding visible inside the
+                                    // body is the class expression's own source ident
+                                    // (`var cls = class C {...}` -> `C`); feed it so the
+                                    // const-assignment guard uses the user-visible name,
+                                    // not the `bind_name` registration key.
+                                    ctx.pending_class_inner_name = class_expr
+                                        .ident
+                                        .as_ref()
+                                        .map(|i| i.sym.to_string());
                                     // Lower the class with the binding name so
                                     // `new BindName(...)` works unchanged.
                                     let mut lowered_class =
@@ -1147,7 +1156,6 @@ pub(crate) fn lower_stmt(
                 }
                 ast::Decl::TsEnum(enum_decl) => {
                     let en = lower_enum_decl(ctx, enum_decl, false)?;
-                    module.init.push(crate::lower_decl::enum_runtime_let(ctx, &en));
                     module.enums.push(en);
                 }
                 ast::Decl::TsInterface(iface_decl) => {
@@ -1232,6 +1240,15 @@ pub(crate) fn lower_stmt(
                     // This is a destructuring assignment at statement level
                     // We can emit proper Let statements for temporaries
                     let stmts = lower_destructuring_assignment_stmt(ctx, pat, &assign.right)?;
+                    module.init.extend(stmts);
+                    return Ok(());
+                }
+                // #6071: a compound member/index assignment at statement level —
+                // spill the base + computed key into Let temps so each is
+                // evaluated once (the expression path lowers them twice).
+                if let Some(stmts) =
+                    crate::lower::expr_assign::hoist_compound_member_assign(ctx, assign)?
+                {
                     module.init.extend(stmts);
                     return Ok(());
                 }
@@ -1621,6 +1638,13 @@ pub(crate) fn lower_stmt(
             let discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
             let mut cases = Vec::new();
             let switch_scope_mark = ctx.push_block_scope();
+            // Case statement-lists share the switch's block scope without
+            // being a `BlockStmt`, so they don't pass through
+            // `lower_block_stmt` — re-bind their pre-registered
+            // forward-captured lets here (all cases up front: one scope).
+            for case in &switch_stmt.cases {
+                rebind_nested_forward_scope_lets(ctx, &case.cons);
+            }
 
             for case in &switch_stmt.cases {
                 let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;

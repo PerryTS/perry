@@ -562,6 +562,28 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
+    // `[[Get]] ( P, Receiver )` receives an already-computed property key P, but
+    // codegen calls this helper with the raw index value for a computed read on
+    // a statically-known proxy (`proxy[10]` lowers to
+    // `js_proxy_get(proxy, 10.0)`). Apply `ToPropertyKey` so a numeric index is
+    // seen by the trap as the canonical string key (`10` -> `"10"`) and the
+    // forward-to-target path below stringifies consistently. Symbols and
+    // strings pass through unchanged. Without this the get trap received a raw
+    // number and key-equality checks (`key === "10"`) silently failed (test262
+    // Proxy/get/trap-is-{null,undefined}-target-is-proxy `proxy[10]`). A key
+    // that is already a string (the overwhelmingly common `proxy.foo` case) or
+    // a symbol is left untouched, so this only pays `ToPropertyKey` for the
+    // numeric / object-index forms.
+    let key = {
+        let tag = key.to_bits() & 0xFFFF_0000_0000_0000;
+        let is_string_key =
+            tag == crate::value::STRING_TAG || tag == crate::value::SHORT_STRING_TAG;
+        if is_string_key || unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            key
+        } else {
+            unsafe { crate::object::js_to_property_key(key) }
+        }
+    };
     let (target, handler, revoked) = PROXIES.with(|p| {
         p.borrow()
             .get(id as usize)
@@ -949,6 +971,23 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         return None;
     }
     let key_name = key_to_rust_string(key)?;
+    // A typed array keeps its ordinary (non-index) own expando properties and
+    // their descriptors in the typed-array side tables, which the generic
+    // address-keyed lookups below skip (`object_has_descriptors` is
+    // deliberately gated off for typed arrays). Consult that state directly so
+    // a non-writable own data property / setter-less accessor rejects the write
+    // (test262 TypedArray internals/Set key-is-not-numeric-index).
+    if crate::typedarray::lookup_typed_array_kind(obj_ptr).is_some() {
+        return match crate::typedarray_props::typed_array_own_set_descriptor(obj_ptr, &key_name) {
+            Some(crate::typedarray_props::TypedArrayOwnSetDescriptor::Data { writable }) => {
+                Some(OwnSetDescriptor::Data { writable })
+            }
+            Some(crate::typedarray_props::TypedArrayOwnSetDescriptor::Accessor { setter_bits }) => {
+                Some(OwnSetDescriptor::Accessor { setter_bits })
+            }
+            None => None,
+        };
+    }
     // `ACCESSOR_DESCRIPTORS` / `PROPERTY_DESCRIPTORS` are keyed by raw address,
     // so a fresh object reusing a freed address would otherwise read back the
     // previous tenant's stale getter-only accessor / non-writable descriptor and
@@ -961,12 +1000,7 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     // allocation. Closures don't carry the flag, so keep consulting the side
     // tables for them (their `name`/`length` + user `defineProperty` descriptors
     // live there).
-    let array_has_descriptors =
-        unsafe { crate::object::array_has_descriptors(obj_ptr as *const crate::ObjectHeader) };
-    if crate::object::object_has_descriptors(obj_ptr)
-        || array_has_descriptors
-        || crate::closure::is_closure_ptr(obj_ptr)
-    {
+    if crate::object::object_has_descriptors(obj_ptr) || crate::closure::is_closure_ptr(obj_ptr) {
         if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
             return Some(OwnSetDescriptor::Accessor {
                 setter_bits: acc.set,
@@ -1171,8 +1205,16 @@ fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bo
                     return false;
                 }
             }
-            OwnSetDescriptor::Accessor { setter_bits } => {
-                return call_setter_with_receiver(setter_bits, receiver, value);
+            OwnSetDescriptor::Accessor { .. } => {
+                // OrdinarySetWithOwnDescriptor step 2.d.i: reaching here means
+                // the source (target own) descriptor was a data property (or
+                // absent -> CreateDataProperty). A RECEIVER own accessor makes
+                // the algorithm return false WITHOUT invoking the setter -- the
+                // setter only fires when it is the descriptor found by the
+                // OrdinarySet walk itself (the Accessor arm in
+                // ordinary_set_with_receiver), never through this
+                // CreateDataProperty-on-receiver tail.
+                return false;
             }
         }
     } else if crate::closure::is_closure_ptr(extract_pointer(receiver.to_bits()) as usize) {
@@ -1384,6 +1426,25 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     cur_ptr, &name, value, receiver,
                 ) {
                     return true;
+                }
+                // `Object.preventExtensions(fn)` / `Object.seal(fn)` set
+                // NO_EXTEND / SEALED in the closure's GcHeader (functions are
+                // GcHeader-backed closures). A [[Set]] that would ADD a new own
+                // property must fail (OrdinaryDefineOwnProperty returns false,
+                // silent in non-strict, TypeError in strict); an existing own
+                // key can still be updated. (test262
+                // Object/preventExtensions/15.2.3.10-3-{3,13}.)
+                if !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name) {
+                    let non_extensible = unsafe {
+                        let gc = (cur_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                            as *const crate::gc::GcHeader;
+                        (*gc)._reserved
+                            & (crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_SEALED)
+                            != 0
+                    };
+                    if non_extensible {
+                        return false;
+                    }
                 }
             }
             return create_or_update_receiver_property(receiver, key, value);

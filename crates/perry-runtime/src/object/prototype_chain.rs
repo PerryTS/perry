@@ -36,6 +36,11 @@ pub(crate) fn array_static_proto_recorded() -> bool {
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
 static OBJECT_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+/// Latched true by the first recorded `Object.setPrototypeOf`. Lets hot
+/// per-object probes (e.g. JSON.stringify's `toJSON` fast-negative check,
+/// #6009) skip the map mutex entirely in processes that never re-prototype
+/// an object — the overwhelmingly common case.
+static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -63,6 +68,10 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
         }
     }
     let mut slot_addr = 0usize;
+    // Latch BEFORE the insert: a concurrent `object_static_prototype` that
+    // observed the latch after the insert-but-before-the-store window would
+    // skip the mutex and miss an already-recorded prototype.
+    OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
     if let Ok(mut map) = get_object_prototypes().lock() {
         let slot = map.entry(obj_ptr).or_insert(0);
         *slot = proto_bits;
@@ -77,6 +86,9 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
 /// when no explicit prototype has been recorded (the object still has its
 /// default prototype); `Some(TAG_NULL)` when it was explicitly set to `null`.
 pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return None;
+    }
     get_object_prototypes()
         .lock()
         .ok()
@@ -150,10 +162,30 @@ pub(crate) fn visit_object_static_prototype_slot_mut(
     if owner == 0 {
         return;
     }
+    // Take the entry OUT and run the visit with the lock RELEASED: a
+    // copying-minor rewrite visitor can move the prototype object, and
+    // move fixup re-enters `object_static_prototype_owner_moved`, which
+    // takes this same lock — visiting under it self-deadlocks the
+    // collector. Same hazard and fix as the closure static-prototype
+    // visitor in `closure::dynamic_props`.
+    let Some(mut proto_bits) = get_object_prototypes()
+        .lock()
+        .ok()
+        .and_then(|mut map| map.remove(&owner))
+    else {
+        return;
+    };
+    visit(&mut proto_bits as *mut u64);
+    // The visit can forward the owner itself (self-referential
+    // prototype); re-key the entry to the forwarded address.
+    let new_owner = unsafe {
+        crate::value::addr_class::try_read_gc_header(owner)
+            .filter(|h| h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0)
+            .map(|h| crate::gc::forwarding_address(h as *const _) as usize)
+            .unwrap_or(owner)
+    };
     if let Ok(mut map) = get_object_prototypes().lock() {
-        if let Some(proto_bits) = map.get_mut(&owner) {
-            visit(proto_bits as *mut u64);
-        }
+        map.insert(new_owner, proto_bits);
     }
 }
 
@@ -185,6 +217,32 @@ pub(crate) fn resolve_inherited_field(
     };
     if proto_ptr == 0 || proto_ptr == obj_ptr {
         return None;
+    }
+    // A Proxy prototype (`Object.create(proxy).x`) is a small fake pointer in
+    // the proxy id band, which passes the loose `is_valid_obj_ptr` heap-range
+    // check below and would then be dereferenced as an `ObjectHeader` — a
+    // SIGSEGV. Route the inherited read through the proxy's `[[Get]]` (which
+    // fires the get trap or forwards to the target), binding the original
+    // instance as the receiver. (test262
+    // Proxy/get/trap-is-{null,undefined}-target-is-proxy via
+    // `Object.create(proxy)[k]`.)
+    {
+        let proto_val = f64::from_bits(proto_bits);
+        if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+            if key.is_null() {
+                return None;
+            }
+            let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+            let receiver =
+                f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
+            let previous_this = super::js_implicit_this_set(receiver);
+            let v = crate::proxy::js_proxy_get(proto_val, key_val);
+            super::js_implicit_this_set(previous_this);
+            if v.to_bits() == crate::value::TAG_UNDEFINED {
+                return None;
+            }
+            return Some(crate::value::JSValue::from_bits(v.to_bits()));
+        }
     }
     let proto = proto_ptr as *const crate::ObjectHeader;
     if !super::is_valid_obj_ptr(proto as *const u8) {

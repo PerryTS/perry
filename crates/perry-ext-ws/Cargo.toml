@@ -16,6 +16,12 @@ tokio = { workspace = true }
 # handoff; mismatched versions split type identity and the
 # `register_external_ws_stream` re-export silently fails to compile.
 tokio-tungstenite = { workspace = true }
+# #6117: already in the graph via tokio-tungstenite's rustls-tls, so this
+# pulls nothing new — declared so the connect path can install a process-level
+# CryptoProvider (feature unification enables both `ring` and `aws-lc-rs` in
+# the final link, and rustls panics on the first wss:// handshake unless one
+# is installed). Same pattern as perry-ext-net.
+rustls = "0.23"
 futures-util = "0.3"
 lazy_static = "1.5"
 

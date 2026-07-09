@@ -1094,6 +1094,14 @@ fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
         "static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
         "js_typed_feedback_packed_u32_array_loop_guard",
     );
+    // #6011: hole-tolerant range guard (rustfmt wraps the fn-pointer type, so
+    // anchor on the static declaration prefix only).
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD: extern \"C\" fn(",
+        "js_typed_feedback_packed_f64_range_loop_guard",
+    );
 }
 
 #[test]

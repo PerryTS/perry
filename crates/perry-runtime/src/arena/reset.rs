@@ -49,6 +49,13 @@ fn reset_region_to_zero(arena: &mut Arena) -> (usize, usize) {
         block.offset = 0;
         block.dead_cycles = 0;
     }
+    // Delta-maintain the cached old-gen in-use counter. Only Eden and
+    // the survivor semispaces are reset through here today, but this
+    // takes any `&mut Arena` — keep the counter honest if an old-gen
+    // caller ever appears.
+    if arena.generation == HeapGeneration::Old {
+        old_gen_in_use_bytes_sub(reusable_bytes);
+    }
     arena.current = 0;
     (reset_blocks, reusable_bytes)
 }
@@ -1014,6 +1021,7 @@ impl OldArenaReclaimDeadBlocksState {
             }
             block.offset = 0;
             block.dead_cycles = 0;
+            old_gen_in_use_bytes_sub(used);
             self.changed = true;
 
             if local_idx == original_current {
@@ -1103,6 +1111,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
             }
             block.offset = 0;
             block.dead_cycles = 0;
+            old_gen_in_use_bytes_sub(used);
             changed = true;
 
             // Keep the current old allocation target mapped and reusable.
@@ -1204,6 +1213,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
             }
             block.offset = 0;
             block.dead_cycles = 0;
+            old_gen_in_use_bytes_sub(used);
             changed = true;
 
             if i == original_current {

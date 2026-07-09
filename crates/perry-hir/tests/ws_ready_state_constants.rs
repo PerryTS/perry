@@ -53,3 +53,42 @@ fn ws_ready_state_constants_lower_on_default_namespace_and_class_shapes() {
     assert_eq!(let_number(&module, "fromNamespaceClass"), 3.0);
     assert_eq!(let_number(&module, "fromNamedClass"), 0.0);
 }
+
+/// #6117 — the plain named-import shape used inside a function body:
+/// `import { WebSocket } from 'ws'` then `ws.readyState !== WebSocket.OPEN`
+/// in an async loop. The static read must fold to the numeric constant; a
+/// surviving `PropertyGet { .. "OPEN" }` becomes a runtime "Cannot read
+/// properties of undefined (reading 'OPEN')".
+#[test]
+fn ws_ready_state_constants_fold_in_function_bodies_with_named_import() {
+    let module = lower(
+        r#"
+        import { WebSocket } from "ws";
+
+        const ws = new WebSocket("ws://127.0.0.1:9");
+
+        async function main() {
+            while (ws.readyState !== WebSocket.OPEN) {
+                if (ws.readyState === WebSocket.CONNECTING) {
+                    console.log("connecting");
+                }
+            }
+        }
+        "#,
+    );
+
+    let main = module
+        .functions
+        .iter()
+        .find(|f| f.name.contains("main"))
+        .expect("lowered main function");
+    let debug = format!("{:?}", main.body);
+    assert!(
+        !debug.contains("\"OPEN\"") && !debug.contains("\"CONNECTING\""),
+        "WebSocket ready-state statics must fold to numbers, found property reads in: {debug}"
+    );
+    assert!(
+        debug.contains("Number(1.0)"),
+        "expected folded WebSocket.OPEN constant in: {debug}"
+    );
+}

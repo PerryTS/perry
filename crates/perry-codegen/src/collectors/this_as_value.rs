@@ -200,7 +200,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {
                 false
             }
-            Stmt::PreallocateBoxes(_) => false,
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => false,
         };
         if bad {
             return true;

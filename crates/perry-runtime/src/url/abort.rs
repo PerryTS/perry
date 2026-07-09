@@ -362,6 +362,121 @@ pub extern "C" fn js_abort_signal_remove_listener(
     }
 }
 
+/// Bound-method thunk: `signal.addEventListener(type, listener[, options])`
+/// reached through DYNAMIC property dispatch (receiver of unknown static
+/// type). `options` is accepted and ignored — a signal only ever fires
+/// "abort" once, so Node's `{ once: true }` is behaviorally implied.
+extern "C" fn abort_signal_add_event_listener_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+    _options: f64,
+) -> f64 {
+    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let signal =
+        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
+    js_abort_signal_add_listener(signal, event_type, listener);
+    f64::from_bits(TAG_UNDEFINED_AC)
+}
+
+/// Bound-method thunk: `signal.removeEventListener(type, listener[, options])`.
+extern "C" fn abort_signal_remove_event_listener_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+    _options: f64,
+) -> f64 {
+    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let signal =
+        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
+    js_abort_signal_remove_listener(signal, event_type, listener);
+    f64::from_bits(TAG_UNDEFINED_AC)
+}
+
+/// Bound-method thunk: `signal.throwIfAborted()`.
+extern "C" fn abort_signal_throw_if_aborted_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let signal =
+        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
+    js_abort_signal_throw_if_aborted(signal)
+}
+
+/// Dynamic method dispatch for AbortSignal instances (issue class of #5964's
+/// URLSearchParams wall): a DIRECT `signal.addEventListener(...)` on a
+/// statically-known receiver lowers to the native call, but the same method
+/// read through a dynamically-typed receiver (`const s: any = c.signal;
+/// s.addEventListener(...)` — the shape minified SDK code takes) fell through
+/// to the generic property-bag walk, returned `undefined`, and the call threw
+/// `addEventListener is not a function`. Returns a bound-method closure for
+/// the known method names, `None` for everything else. The signal is captured
+/// as its NaN-boxed bits (the `aborted_resolve_listener` idiom) so the GC's
+/// closure scan keeps it alive and relocates it.
+pub(crate) fn abort_signal_method_bind(signal: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
+    let (fp, arity): (*const u8, u32) = match name {
+        b"addEventListener" => (abort_signal_add_event_listener_thunk as *const u8, 3),
+        b"removeEventListener" => (abort_signal_remove_event_listener_thunk as *const u8, 3),
+        b"throwIfAborted" => (abort_signal_throw_if_aborted_thunk as *const u8, 0),
+        _ => return None,
+    };
+    crate::closure::js_register_closure_arity(fp, arity);
+    let closure = crate::closure::js_closure_alloc(fp, 1);
+    let signal_f64 = f64::from_bits(crate::value::js_nanbox_pointer(signal as i64).to_bits());
+    crate::closure::js_closure_set_capture_ptr(closure, 0, signal_f64.to_bits() as i64);
+    Some(f64::from_bits(
+        crate::value::js_nanbox_pointer(closure as i64).to_bits(),
+    ))
+}
+
+/// The signal's lazily-allocated "abort"-listener array (field 2), or `None`
+/// when no listener was ever registered.
+fn abort_listeners_array(signal: *mut ObjectHeader) -> Option<*mut crate::array::ArrayHeader> {
+    if signal.is_null() {
+        return None;
+    }
+    let bits = crate::object::js_object_get_field_f64(signal, 2).to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != POINTER_TAG_AC {
+        return None;
+    }
+    let arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader;
+    (!arr.is_null()).then_some(arr)
+}
+
+/// Number of registered "abort" listeners on `signal` (`0` when none,
+/// including the lazily-unallocated state). `events.listenerCount(signal,
+/// "abort")` parity — a signal only ever tracks "abort" listeners.
+#[no_mangle]
+pub extern "C" fn js_abort_signal_listener_count(signal: *mut ObjectHeader) -> f64 {
+    abort_listeners_array(signal).map_or(0.0, |arr| crate::array::js_array_length(arr) as f64)
+}
+
+/// Fresh array holding `signal`'s registered "abort" listeners (empty when
+/// none). `events.getEventListeners(signal, "abort")` parity — a copy, so the
+/// caller can't mutate the internal listener list through the return value.
+#[no_mangle]
+pub extern "C" fn js_abort_signal_listeners_copy(
+    signal: *mut ObjectHeader,
+) -> *mut crate::array::ArrayHeader {
+    let Some(src) = abort_listeners_array(signal) else {
+        let empty = crate::array::js_array_alloc(0);
+        unsafe {
+            (*empty).length = 0;
+        }
+        return empty;
+    };
+    let len = crate::array::js_array_length(src);
+    let dst = crate::array::js_array_alloc(len);
+    unsafe {
+        (*dst).length = len;
+    }
+    for i in 0..len {
+        let v = crate::array::js_array_get_f64(src, i);
+        crate::array::js_array_set_f64_unchecked(dst, i, v);
+    }
+    dst
+}
+
 /// Build the `TimeoutError` DOMException that `AbortSignal.timeout(ms)` aborts
 /// with when its deadline elapses (Node names it `TimeoutError`, distinct from
 /// the `AbortError` used by `controller.abort()`).

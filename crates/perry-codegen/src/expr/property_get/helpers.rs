@@ -371,6 +371,68 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         return Ok(None);
     };
 
+    // #5093 loop versioning: inside the fast clone of a class-field versioned
+    // loop, a tracked number-context field read on the proven receiver lowers
+    // to a bare slot load on the preheader-cached object pointer — no shape
+    // check, no guard call, no fallback (see stmt/loops.rs). Mirrors the hook
+    // in the generic class-field GET diamond (property_get.rs).
+    let loop_fact_ptr = match object.as_ref() {
+        Expr::LocalGet(recv_id) => crate::expr::class_field_loop_fact_lookup(
+            &ctx.class_field_loop_facts,
+            *recv_id,
+            &class_name,
+            property,
+        )
+        .filter(|(_, loop_idx)| *loop_idx == field_index)
+        .map(|(fact, _)| fact.obj_ptr.clone()),
+        _ => None,
+    };
+    if let Some(obj_ptr) = loop_fact_ptr {
+        let field_idx_str = field_index.to_string();
+        let blk = ctx.block();
+        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+        let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+        let val = blk.load(DOUBLE, &field_ptr);
+        let fast = LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep: NativeRep::F64,
+            llvm_ty: DOUBLE,
+            value: val.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "ClassFieldGet",
+            None,
+            "class_field_get_number.loop_raw_f64_load",
+            &fast,
+            Some(BoundsState::Guarded {
+                guard_id: "class_field_loop_preheader_check".to_string(),
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            None,
+            None,
+            vec![raw_f64_layout_fact(
+                None,
+                "consumed",
+                "class_field_loop_preheader_check",
+                None,
+            )],
+            Vec::new(),
+            false,
+            false,
+            vec![
+                format!("class={}", class_name),
+                format!("field={}", property),
+                format!("field_index={}", field_idx_str),
+                "receiver_proof=loop_preheader_shape_check".to_string(),
+                "field_layout=raw_f64_slot_array".to_string(),
+                "loop_versioning=class_field_fast_clone".to_string(),
+            ],
+        );
+        return Ok(Some(val));
+    }
+
     let recv_box = lower_expr(ctx, object)?;
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);

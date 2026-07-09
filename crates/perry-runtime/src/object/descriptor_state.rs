@@ -101,11 +101,14 @@ pub(crate) fn descriptors_in_use() -> bool {
 /// relaxed load, hoistable out of hot loops) via the
 /// `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` symbol and falls back to the full
 /// `js_typed_feedback_class_field_{get,set}_guard` call whenever it is non-zero.
-/// It flips to 1 the moment either (a) any accessor / property descriptor comes
-/// into use — the guard then has to perform descriptor-aware dispatch the inline
-/// path doesn't model — or (b) typed-feedback tracing is enabled, where the
-/// guard records observations the inline path would silently skip. Both are
-/// monotonic ("in use" never reverts), so the flag is set-only.
+/// It flips to 1 the moment either (a) an accessor / property descriptor is
+/// installed on an object the inline path cannot vet per-receiver — a
+/// registered class prototype or the canonical `Object.prototype` (#5654;
+/// receiver-level descriptors are instead rejected by the emitted
+/// `OBJ_FLAG_HAS_DESCRIPTORS` check, so they don't poison the process) — or
+/// (b) typed-feedback tracing is enabled, where the guard records observations
+/// the inline path would silently skip. Both are monotonic ("in use" never
+/// reverts), so the flag is set-only.
 #[no_mangle]
 pub static PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED: AtomicU8 = AtomicU8::new(0);
 
@@ -118,6 +121,38 @@ pub(crate) fn disable_class_field_inline_guard() {
 /// True when the inline class-field fast path is still permitted.
 pub(crate) fn class_field_inline_guard_enabled() -> bool {
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.load(Ordering::Relaxed) == 0
+}
+
+/// #5654: flip the process-wide inline gate only when the descriptor target can
+/// intercept a `this.field` access that the inline precheck cannot reject on
+/// its own. Receiver-level installs are visible to the precheck via
+/// `OBJ_FLAG_HAS_DESCRIPTORS` in the receiver's GcHeader (set by
+/// [`note_descriptor_target`], checked by the emitted IR), so only
+/// prototype-level targets still need the global disable:
+///   - a class prototype — either the reflective decl-prototype object that
+///     `C.prototype` materializes (`CLASS_DECL_PROTOTYPE_OBJECTS`) or a
+///     synthetic `function Base() {}; Base.prototype = obj` prototype
+///     (`CLASS_PROTOTYPE_OBJECTS`) — intercepts `this.field` on every instance
+///     of that class, which the per-receiver flag cannot see;
+///   - the canonical `Object.prototype` sits at the tail of every instance's
+///     chain.
+/// Any other target (plain object, array, closure, builtin namespace) never
+/// appears in the guard's descriptor checks — those walk the receiver and the
+/// class-registry prototype chain only — so unrelated installs (the builtin
+/// setup that runs during every program's startup, `Object.freeze` on a config
+/// object, …) no longer disable the #5093 fast path process-wide.
+///
+/// The prototype-registry probes scan by value (O(#classes)); descriptor
+/// installs are rare and never on the hot property path, so the scan cost is
+/// acceptable. Finer granularity (flip only when the key collides with a
+/// declared field of that class hierarchy) is possible follow-up work.
+pub(crate) fn disable_class_field_inline_guard_for_target(obj: usize) {
+    if crate::array::object_prototype_addr_matches(obj)
+        || class_registry::is_registered_class_prototype_object(obj)
+        || class_registry::class_id_for_decl_prototype_object(obj).is_some()
+    {
+        disable_class_field_inline_guard();
+    }
 }
 
 /// #5054: a descriptor (any kind) has been installed on the canonical
@@ -301,7 +336,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     note_descriptor_target(obj);
     PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard();
+    disable_class_field_inline_guard_for_target(obj);
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), attrs);
     });
@@ -431,7 +466,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     note_descriptor_target(obj);
     ACCESSORS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard();
+    disable_class_field_inline_guard_for_target(obj);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), acc);
     });

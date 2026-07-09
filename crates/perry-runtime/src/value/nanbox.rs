@@ -308,7 +308,6 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
 /// - string vs non-string → false
 /// - number vs number → IEEE `==` after int32 unboxing (NaN ≠ NaN, -0 == +0,
 ///   int32-boxed 1 == raw 1.0)
-/// - bigint vs bigint → value compare (`js_bigint_eq`); bigint vs other → false
 /// - everything else (undefined/null/bool/pointers) → bit identity
 #[no_mangle]
 pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
@@ -346,17 +345,6 @@ pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
             f64::from_bits(bv.bits())
         };
         return (an == bn) as i32;
-    }
-    // BigInt cases compare by value, not allocation identity, so
-    // `switch (1n + 0n) { case 1n: }` matches — mirrors the Set/Map key and
-    // general `===` paths. A BigInt is never `===` a non-BigInt.
-    let a_big = av.is_bigint();
-    let b_big = bv.is_bigint();
-    if a_big != b_big {
-        return 0;
-    }
-    if a_big {
-        return (crate::bigint::js_bigint_eq(av.as_bigint_ptr(), bv.as_bigint_ptr()) != 0) as i32;
     }
     (a.to_bits() == b.to_bits()) as i32
 }

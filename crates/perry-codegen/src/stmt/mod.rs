@@ -557,89 +557,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // these ids skip the allocation and only `js_box_set` the init
         // value. `LocalGet` / `LocalSet` / `Update` already route through
         // the box because the id is in `ctx.boxed_vars`.
-        Stmt::PreallocateBoxes(ids) => {
-            for id in ids {
-                if ctx.locals.contains_key(id) {
-                    // A previous PreallocateBoxes (or an unusual nesting)
-                    // already set this up — skip to keep the existing slot.
-                    ctx.prealloc_boxes.insert(*id);
-                    ctx.boxed_vars.insert(*id);
-                    continue;
-                }
-                let is_i32_control =
-                    crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
-                let is_i1_control =
-                    crate::expr::is_compiler_private_async_i1_control_local(ctx, *id);
-                let blk = ctx.block();
-                let (box_ptr, cell_note) = if is_i32_control {
-                    (
-                        blk.call(
-                            crate::types::I64,
-                            "js_i32_box_alloc",
-                            &[(crate::types::I32, "0")],
-                        ),
-                        "primitive_i32_control_cell",
-                    )
-                } else if is_i1_control {
-                    (
-                        blk.call(
-                            crate::types::I64,
-                            "js_bool_box_alloc",
-                            &[(crate::types::I32, "0")],
-                        ),
-                        "primitive_i1_control_cell",
-                    )
-                } else {
-                    let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
-                    (
-                        blk.call(
-                            crate::types::I64,
-                            "js_box_alloc_bits",
-                            &[(crate::types::I64, &undef_bits)],
-                        ),
-                        "jsvalue_box_cell",
-                    )
-                };
-                let slot = ctx.func.alloca_entry(crate::types::I64);
-                // perry#4926: PreallocateBoxes can sit nested inside an
-                // If/Try/Labeled body (e.g. the async state-machine
-                // wrapper), so this block's box-pointer store doesn't
-                // necessarily dominate every load of the slot. Entry-init
-                // the slot to TAG_UNDEFINED so paths that bypass this
-                // statement read a defined sentinel instead of `undef`
-                // (see the boxed `Stmt::Let` arm in let_stmt.rs).
-                let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
-                ctx.func
-                    .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
-                ctx.block().store(crate::types::I64, &box_ptr, &slot);
-                record_boxed_slot_js_value_bits(
-                    ctx,
-                    *id,
-                    &box_ptr,
-                    "preallocate_boxes.box_ptr_slot",
-                );
-                if cell_note != "jsvalue_box_cell" {
-                    let lowered = LoweredValue::js_value_bits(&box_ptr);
-                    ctx.record_lowered_value(
-                        "CompilerPrivateAsyncControlCell",
-                        Some(*id),
-                        cell_note,
-                        &lowered,
-                        None,
-                        None,
-                        None,
-                        false,
-                        false,
-                        Vec::new(),
-                    );
-                }
-                ctx.locals.insert(*id, slot);
-                ctx.prealloc_boxes.insert(*id);
-                ctx.boxed_vars.insert(*id);
-                crate::expr::emit_shadow_slot_bind_for_local(ctx, *id);
-            }
-            Ok(())
-        }
+        Stmt::PreallocateBoxes(ids) => emit_preallocate_boxes(ctx, ids, false),
+
+        // Temporal Dead Zone variant: identical to `PreallocateBoxes` but
+        // seeds each JSValue box with the TAG_TDZ sentinel so a
+        // read-before-declaration throws a spec ReferenceError. See the HIR
+        // `Stmt::PreallocateTdzBoxes` doc and the runtime `js_box_get_bits`
+        // choke point.
+        Stmt::PreallocateTdzBoxes(ids) => emit_preallocate_boxes(ctx, ids, true),
 
         // #853: every current `perry_hir::Stmt` variant is matched above.
         // Keep this catch-all so HIR additions land as a clear compile-time
@@ -650,6 +575,99 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             stmt_variant_name(other)
         ),
     }
+}
+
+fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result<()> {
+    for id in ids {
+        if ctx.locals.contains_key(id) {
+            // A previous PreallocateBoxes (or an unusual nesting)
+            // already set this up -- skip to keep the existing slot.
+            ctx.prealloc_boxes.insert(*id);
+            ctx.boxed_vars.insert(*id);
+            if tdz {
+                ctx.tdz_boxes.insert(*id);
+            }
+            continue;
+        }
+        let is_i32_control = crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
+        let is_i1_control = crate::expr::is_compiler_private_async_i1_control_local(ctx, *id);
+        let blk = ctx.block();
+        let (box_ptr, cell_note) = if is_i32_control {
+            (
+                blk.call(
+                    crate::types::I64,
+                    "js_i32_box_alloc",
+                    &[(crate::types::I32, "0")],
+                ),
+                "primitive_i32_control_cell",
+            )
+        } else if is_i1_control {
+            (
+                blk.call(
+                    crate::types::I64,
+                    "js_bool_box_alloc",
+                    &[(crate::types::I32, "0")],
+                ),
+                "primitive_i1_control_cell",
+            )
+        } else {
+            // Seed the JSValue box with TAG_TDZ (Temporal Dead Zone) when
+            // requested -- a read before the declaration runs throws a spec
+            // ReferenceError via the runtime `js_box_get_bits` choke point.
+            // Compiler-private i32/i1 control cells are never TDZ.
+            let seed_bits = if tdz {
+                crate::nanbox::TAG_TDZ_I64.to_string()
+            } else {
+                crate::nanbox::TAG_UNDEFINED_I64.to_string()
+            };
+            (
+                blk.call(
+                    crate::types::I64,
+                    "js_box_alloc_bits",
+                    &[(crate::types::I64, &seed_bits)],
+                ),
+                "jsvalue_box_cell",
+            )
+        };
+        let slot = ctx.func.alloca_entry(crate::types::I64);
+        // perry#4926: PreallocateBoxes can sit nested inside an If/Try/Labeled
+        // body (e.g. the async state-machine wrapper), so this block's
+        // box-pointer store doesn't necessarily dominate every load of the
+        // slot. Entry-init the slot to TAG_UNDEFINED so paths that bypass this
+        // statement read a defined sentinel instead of `undef` (see the boxed
+        // `Stmt::Let` arm in let_stmt.rs). The slot holds a *box pointer*, not
+        // the value, so it is TAG_UNDEFINED-initialized in both the TDZ and
+        // non-TDZ cases -- the TAG_TDZ sentinel lives in the box cell, not the
+        // slot.
+        let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+        ctx.func
+            .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
+        ctx.block().store(crate::types::I64, &box_ptr, &slot);
+        record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
+        if cell_note != "jsvalue_box_cell" {
+            let lowered = LoweredValue::js_value_bits(&box_ptr);
+            ctx.record_lowered_value(
+                "CompilerPrivateAsyncControlCell",
+                Some(*id),
+                cell_note,
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+        }
+        ctx.locals.insert(*id, slot);
+        ctx.prealloc_boxes.insert(*id);
+        ctx.boxed_vars.insert(*id);
+        if tdz {
+            ctx.tdz_boxes.insert(*id);
+        }
+        crate::expr::emit_shadow_slot_bind_for_local(ctx, *id);
+    }
+    Ok(())
 }
 
 fn stmt_variant_name(s: &Stmt) -> &'static str {
@@ -670,6 +688,7 @@ fn stmt_variant_name(s: &Stmt) -> &'static str {
         Stmt::Try { .. } => "Try",
         Stmt::Switch { .. } => "Switch",
         Stmt::PreallocateBoxes(_) => "PreallocateBoxes",
+        Stmt::PreallocateTdzBoxes(_) => "PreallocateTdzBoxes",
     }
 }
 

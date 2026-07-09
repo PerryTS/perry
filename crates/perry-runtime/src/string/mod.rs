@@ -64,7 +64,9 @@ pub use compare::{
 // #1781: SSO-aware key lookup helpers, used to retire the
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape
 // across object/.
-pub(crate) use compare::{js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes};
+pub(crate) use compare::{
+    js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes, utf16_cmp_bytes,
+};
 pub use concat::{
     js_string_concat, js_string_concat_box, js_string_concat_chain, js_string_concat_value,
     js_value_concat_string,

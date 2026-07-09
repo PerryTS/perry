@@ -765,7 +765,10 @@ pub extern "C" fn js_atomics_wait_async(
     };
 
     let deadline = timeout_to_deadline(timeout);
-    let promise = crate::promise::js_promise_new();
+    // Cross-thread variant: referenced only by a raw usize in the pending
+    // results queue until drained — must not live in the copying nursery
+    // (the from-space flip ignores pins that no scanner reaches).
+    let promise = crate::promise::js_promise_new_cross_thread();
     // Pin the promise + keep the event loop alive until the async result lands.
     unsafe {
         crate::thread::pin_promise(promise);

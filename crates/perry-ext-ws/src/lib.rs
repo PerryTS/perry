@@ -51,6 +51,16 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
+/// #6117 — rustls panics resolving the process-level CryptoProvider on the
+/// first `wss://` handshake when both `ring` and `aws-lc-rs` end up
+/// feature-unified into the final link (perry-ext-http-server brings ring;
+/// perry-ext-net brings aws-lc-rs). Install one explicitly before
+/// connecting. Idempotent — `install_default` errors (ignored) if a
+/// provider is already set. Same pattern as perry-ext-net's tls module.
+fn ensure_tls_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -65,6 +75,13 @@ struct WsConnection {
     sender: mpsc::UnboundedSender<WsCommand>,
     messages: Vec<String>,
     is_open: bool,
+    /// #6117 — `close()` was called but the close handshake hasn't finished:
+    /// `readyState` reports CLOSING (2).
+    is_closing: bool,
+    /// #6117 — the connection terminated (close event, IO error, or connect
+    /// failure): `readyState` reports CLOSED (3). Distinguishes a dead entry
+    /// from a pre-open one (CONNECTING, 0) — both have `is_open == false`.
+    is_closed: bool,
 }
 
 enum WsCommand {
@@ -150,6 +167,7 @@ fn push_ws_event(ev: PendingWsEvent) {
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut perry_ffi::Promise {
     ensure_gc_scanner_registered();
+    ensure_tls_crypto_provider();
     let promise = perry_ffi::JsPromise::new();
     let raw = promise.as_raw();
     let Some(url) = read_str(url_ptr) else {
@@ -179,6 +197,7 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
 #[no_mangle]
 pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ensure_gc_scanner_registered();
+    ensure_tls_crypto_provider();
     let bits = url_nanboxed.to_bits();
     let mask = TAG_MASK;
     let string_tag = 0x7FFF_0000_0000_0000u64;
@@ -203,6 +222,8 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
             sender: tx,
             messages: Vec::new(),
             is_open: false,
+            is_closing: false,
+            is_closed: false,
         },
     );
     WS_CLIENT_LISTENERS.lock().unwrap().insert(
@@ -225,6 +246,11 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                     drive_client_io(ws_id, ws_stream, rx);
                 }
                 Err(e) => {
+                    // #6117 — readyState must report CLOSED (3), not
+                    // CONNECTING (0), once the connect has failed.
+                    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+                        c.is_closed = true;
+                    }
                     push_ws_event(PendingWsEvent::Error(
                         ws_id,
                         format!("WebSocket connect error: {}", e),
@@ -252,6 +278,8 @@ fn setup_client_io(
             sender: tx,
             messages: Vec::new(),
             is_open: true,
+            is_closing: false,
+            is_closed: false,
         },
     );
     WS_CLIENT_LISTENERS.lock().unwrap().insert(
@@ -304,6 +332,7 @@ fn drive_client_io<S>(
                                     .unwrap_or((1000u16, String::new()));
                                 if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
                                     c.is_open = false;
+                                    c.is_closed = true;
                                 }
                                 push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
                                 break;
@@ -334,6 +363,7 @@ fn drive_client_io<S>(
             }
             if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
                 c.is_open = false;
+                c.is_closed = true;
             }
         });
     });
@@ -360,6 +390,9 @@ pub extern "C" fn js_ws_close(handle: i64) {
     if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
         let _ = c.sender.send(WsCommand::Close);
         c.is_open = false;
+        // #6117 — readyState reports CLOSING (2) until the IO loop
+        // finishes the close handshake and marks is_closed.
+        c.is_closing = true;
     }
 }
 
@@ -395,6 +428,7 @@ pub extern "C" fn js_ws_close_client_i64(handle: i64) {
     if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
         let _ = c.sender.send(WsCommand::Close);
         c.is_open = false;
+        c.is_closing = true;
     }
 }
 
@@ -465,6 +499,7 @@ pub extern "C" fn js_ws_close_client(handle_f64: f64) {
     if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
         let _ = c.sender.send(WsCommand::Close);
         c.is_open = false;
+        c.is_closing = true;
     }
 }
 
@@ -479,6 +514,22 @@ pub extern "C" fn js_ws_is_open(handle: i64) -> f64 {
         .get(&id)
         .map(|c| if c.is_open { 1.0 } else { 0.0 })
         .unwrap_or(0.0)
+}
+
+/// #6117 — `ws.readyState` per npm-ws semantics: CONNECTING=0, OPEN=1,
+/// CLOSING=2, CLOSED=3. An id with no map entry is CLOSED — either the
+/// entry was cleaned up after close, or the promise-path connect failed
+/// before an entry was ever created.
+#[no_mangle]
+pub extern "C" fn js_ws_ready_state(handle: i64) -> f64 {
+    let id = handle as usize;
+    match WS_CONNECTIONS.lock().unwrap().get(&id) {
+        Some(c) if c.is_closed => 3.0,
+        Some(c) if c.is_closing => 2.0,
+        Some(c) if c.is_open => 1.0,
+        Some(_) => 0.0,
+        None => 3.0,
+    }
 }
 
 #[no_mangle]
@@ -703,6 +754,8 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                             sender: tx,
                                             messages: Vec::new(),
                                             is_open: true,
+                                            is_closing: false,
+                                            is_closed: false,
                                         });
                                         WS_CLIENT_LISTENERS.lock().unwrap().insert(ws_id, WsClientListeners {
                                             listeners: HashMap::new(),
@@ -924,6 +977,7 @@ fn drive_server_client_io<S>(
         }
         if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
             c.is_open = false;
+            c.is_closed = true;
         }
     });
 }
@@ -964,6 +1018,8 @@ where
             sender: tx,
             messages: Vec::new(),
             is_open: true,
+            is_closing: false,
+            is_closed: false,
         },
     );
     WS_CLIENT_LISTENERS.lock().unwrap().insert(
@@ -1342,5 +1398,43 @@ mod tests {
         assert_eq!(extract_port(8080.0), 8080);
         assert_eq!(extract_port(0.0), 0);
         assert_eq!(extract_port(-5.0), 0);
+    }
+
+    /// #6117 — `readyState` walks the npm-ws lifecycle: CONNECTING (0)
+    /// pre-open, OPEN (1), CLOSING (2) after `close()` is requested,
+    /// CLOSED (3) once the IO loop marks the connection dead, and CLOSED
+    /// for ids with no entry (cleaned up, or promise-path connect failed).
+    /// Uses an id far outside anything other tests insert, so no lock.
+    #[test]
+    fn ready_state_reports_npm_ws_lifecycle() {
+        let ws_id = 990_077usize;
+        let (tx, _rx) = mpsc::unbounded_channel::<WsCommand>();
+        WS_CONNECTIONS.lock().unwrap().insert(
+            ws_id,
+            WsConnection {
+                sender: tx,
+                messages: Vec::new(),
+                is_open: false,
+                is_closing: false,
+                is_closed: false,
+            },
+        );
+
+        assert_eq!(js_ws_ready_state(ws_id as i64), 0.0);
+        WS_CONNECTIONS
+            .lock()
+            .unwrap()
+            .get_mut(&ws_id)
+            .unwrap()
+            .is_open = true;
+        assert_eq!(js_ws_ready_state(ws_id as i64), 1.0);
+        js_ws_close(ws_id as i64);
+        assert_eq!(js_ws_ready_state(ws_id as i64), 2.0);
+        if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+            c.is_closed = true;
+        }
+        assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
+        WS_CONNECTIONS.lock().unwrap().remove(&ws_id);
+        assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
     }
 }

@@ -93,7 +93,19 @@ pub(crate) fn text_encoder_string_ptr(value: f64) -> *const StringHeader {
 /// decoder sentinel purely for debuggability.
 #[no_mangle]
 pub extern "C" fn js_text_encoder_new() -> i64 {
-    1
+    TEXT_ENCODER_SENTINEL_ID
+}
+
+/// The stateless `TextEncoder` sentinel handle returned by
+/// `js_text_encoder_new` — see its doc comment.
+pub const TEXT_ENCODER_SENTINEL_ID: i64 = 1;
+
+/// Whether `id` is a live `TextDecoder` registry handle. Used by the
+/// dynamic method-call / property-GET handle arms
+/// (`native_call_method.rs` / `get_field_by_name_tail.rs`) to route
+/// `decode`/`encoding`/… on a type-erased receiver to the text natives.
+pub fn is_known_text_decoder_id(id: i64) -> bool {
+    DECODER_REGISTRY.lock().unwrap().contains_key(&id)
 }
 
 /// `new TextDecoder(label?, { fatal?, ignoreBOM? })` — validates the
@@ -570,3 +582,46 @@ static KEEP_TEXT_DECODER_ENCODING: extern "C" fn(f64) -> *mut StringHeader =
 static KEEP_TEXT_DECODER_FATAL: extern "C" fn(f64) -> f64 = js_text_decoder_fatal;
 #[used]
 static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder_ignore_bom;
+
+/// TextDecoder / TextEncoder registry-handle property surface for VALUE
+/// reads (`K.decode.bind(K)` — the shape a minified SDK's cached decodeText
+/// helper takes; pre-fix the read returned undefined and `.bind` threw
+/// "Bind must be called on a function"). Methods reify as bound methods —
+/// the dynamic-call arm in `native_call_method.rs` executes them on call —
+/// and accessors return their values directly.
+pub(crate) unsafe fn text_handle_property(
+    raw: usize,
+    key_bytes: &[u8],
+    key_ptr: *const u8,
+    key_len: usize,
+) -> Option<crate::value::JSValue> {
+    let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
+    if is_known_text_decoder_id(raw as i64) {
+        match key_bytes {
+            b"decode" => {
+                let result = crate::object::js_class_method_bind(this_f64, key_ptr, key_len);
+                return Some(crate::value::JSValue::from_bits(result.to_bits()));
+            }
+            b"encoding" => {
+                let s = js_text_decoder_encoding(this_f64);
+                return Some(crate::value::JSValue::string_ptr(s));
+            }
+            b"fatal" => {
+                return Some(crate::value::JSValue::from_bits(
+                    js_text_decoder_fatal(this_f64).to_bits(),
+                ));
+            }
+            b"ignoreBOM" => {
+                return Some(crate::value::JSValue::from_bits(
+                    js_text_decoder_ignore_bom(this_f64).to_bits(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    if raw as i64 == TEXT_ENCODER_SENTINEL_ID && matches!(key_bytes, b"encode" | b"encodeInto") {
+        let result = crate::object::js_class_method_bind(this_f64, key_ptr, key_len);
+        return Some(crate::value::JSValue::from_bits(result.to_bits()));
+    }
+    None
+}

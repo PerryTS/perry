@@ -16,27 +16,38 @@ pub(super) unsafe fn call_replace_callback(callback: f64, args: &[f64]) -> Strin
     }
 }
 
+/// Invoke a string-pattern replacer callback with `(matched, offset, whole)`.
+///
+/// `matched` must be an OWNED (or static) Rust string — never a slice of a GC
+/// heap string, because boxing it below allocates and an alloc-point minor
+/// can be MOVING under the evacuation policy. The subject travels as a rooted
+/// handle and is NaN-boxed directly (same string value, CURRENT address) —
+/// no per-call copy, and no borrow of the heap string crosses user code.
 unsafe fn call_string_replace_callback(
     callback: f64,
     matched: &str,
     offset: usize,
-    whole: &str,
+    whole_handle: &crate::gc::RuntimeHandle<'_>,
 ) -> String {
     let scope = crate::gc::RuntimeHandleScope::new();
     let matched_value = js_nanbox_string(js_string_from_str(matched) as i64);
     let matched_handle = scope.root_nanbox_f64(matched_value);
-    let offset_handle = scope.root_nanbox_f64(offset as f64);
-    let whole_value = js_nanbox_string(js_string_from_str(whole) as i64);
-    let whole_handle = scope.root_nanbox_f64(whole_value);
     let args = [
         matched_handle.get_nanbox_f64(),
-        offset_handle.get_nanbox_f64(),
-        whole_handle.get_nanbox_f64(),
+        offset as f64,
+        js_nanbox_string(whole_handle.get_raw_const_ptr::<StringHeader>() as i64),
     ];
     call_replace_callback(callback, &args)
 }
 
 /// string.replace(pattern, replacerFn) for a non-regex string pattern.
+///
+/// GC discipline (2026-07-09 audit, wave 1): the replacer callback is user
+/// code — it can allocate and trigger a minor GC that sweeps the subject
+/// (bare Rust locals are invisible without a conservative stack scan) or
+/// moves it. The subject is rooted in a `RuntimeHandleScope` and the `&str`
+/// view is re-derived from the rooted handle after every callback; the
+/// pattern is copied to an owned Rust string up front.
 #[no_mangle]
 pub extern "C" fn js_string_replace_string_fn(
     s: *const StringHeader,
@@ -47,28 +58,42 @@ pub extern "C" fn js_string_replace_string_fn(
         return js_string_from_str("");
     }
 
-    let str_data = string_as_str(s);
-    let pattern_str = if is_valid_ptr(pattern) {
-        string_as_str(pattern)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    // Root the callback too: a GC it triggers can relocate its own closure
+    // header, and the raw `f64` parameter would keep the pre-move address.
+    let callback_handle = scope.root_nanbox_f64(callback);
+    let cur_str = || string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
+    let pattern_str: String = if is_valid_ptr(pattern) {
+        string_as_str(pattern).to_string()
     } else {
-        ""
+        String::new()
     };
 
     unsafe {
         if pattern_str.is_empty() {
-            let replacement = call_string_replace_callback(callback, "", 0, str_data);
+            let replacement =
+                call_string_replace_callback(callback_handle.get_nanbox_f64(), "", 0, &s_handle);
+            let str_data = cur_str();
             let mut result = String::with_capacity(replacement.len() + str_data.len());
             result.push_str(&replacement);
             result.push_str(str_data);
             return js_string_from_str(&result);
         }
 
-        let Some(byte_idx) = str_data.find(pattern_str) else {
+        let str_data = cur_str();
+        let Some(byte_idx) = str_data.find(pattern_str.as_str()) else {
             return js_string_from_str(str_data);
         };
         let char_offset = str_data[..byte_idx].chars().count();
-        let replacement =
-            call_string_replace_callback(callback, pattern_str, char_offset, str_data);
+        let replacement = call_string_replace_callback(
+            callback_handle.get_nanbox_f64(),
+            &pattern_str,
+            char_offset,
+            &s_handle,
+        );
+        // Re-derive the subject: the callback may have moved it.
+        let str_data = cur_str();
         let mut result = String::with_capacity(str_data.len() + replacement.len());
         result.push_str(&str_data[..byte_idx]);
         result.push_str(&replacement);
@@ -78,6 +103,11 @@ pub extern "C" fn js_string_replace_string_fn(
 }
 
 /// string.replaceAll(pattern, replacerFn) for a non-regex string pattern.
+///
+/// Same GC discipline as [`js_string_replace_string_fn`], plus: match
+/// positions are computed into an owned Vec BEFORE the first callback — the
+/// old code kept a lazy `match_indices` iterator (a live borrow of the heap
+/// string) running WHILE callbacks executed between its steps.
 #[no_mangle]
 pub extern "C" fn js_string_replace_all_string_fn(
     s: *const StringHeader,
@@ -88,45 +118,79 @@ pub extern "C" fn js_string_replace_all_string_fn(
         return js_string_from_str("");
     }
 
-    let str_data = string_as_str(s);
-    let pattern_str = if is_valid_ptr(pattern) {
-        string_as_str(pattern)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    // Root the callback too: a GC it triggers can relocate its own closure
+    // header, and the raw `f64` parameter would keep the pre-move address
+    // for every call after the first.
+    let callback_handle = scope.root_nanbox_f64(callback);
+    let cur_str = || string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
+    let pattern_str: String = if is_valid_ptr(pattern) {
+        string_as_str(pattern).to_string()
     } else {
-        ""
+        String::new()
     };
 
     unsafe {
         if pattern_str.is_empty() {
+            // Owned char snapshot: the old code iterated `str_data.chars()`
+            // while the callback ran between steps — a stale borrow across
+            // user code.
+            let chars: Vec<char> = cur_str().chars().collect();
             let mut result = String::new();
-            result.push_str(&call_string_replace_callback(callback, "", 0, str_data));
+            result.push_str(&call_string_replace_callback(
+                callback_handle.get_nanbox_f64(),
+                "",
+                0,
+                &s_handle,
+            ));
             let mut offset = 0usize;
-            for ch in str_data.chars() {
+            for ch in chars {
                 result.push(ch);
                 offset += 1;
                 result.push_str(&call_string_replace_callback(
-                    callback, "", offset, str_data,
+                    callback_handle.get_nanbox_f64(),
+                    "",
+                    offset,
+                    &s_handle,
                 ));
             }
             return js_string_from_str(&result);
         }
 
+        // Precompute every match position (byte index + char offset) before
+        // the first callback runs.
+        let matches: Vec<(usize, usize)> = {
+            let str_data = cur_str();
+            let mut char_pos = 0usize;
+            let mut last_byte = 0usize;
+            str_data
+                .match_indices(pattern_str.as_str())
+                .map(|(byte_idx, _)| {
+                    char_pos += str_data[last_byte..byte_idx].chars().count();
+                    last_byte = byte_idx;
+                    (byte_idx, char_pos)
+                })
+                .collect()
+        };
+        if matches.is_empty() {
+            return js_string_from_str(cur_str());
+        }
         let mut result = String::new();
         let mut last_end = 0usize;
-        for (byte_idx, matched) in str_data.match_indices(pattern_str) {
-            result.push_str(&str_data[last_end..byte_idx]);
-            let char_offset = str_data[..byte_idx].chars().count();
+        for (byte_idx, char_offset) in matches {
+            // Between-match text is re-sliced from the CURRENT subject
+            // address (the previous callback may have moved it).
+            result.push_str(&cur_str()[last_end..byte_idx]);
             result.push_str(&call_string_replace_callback(
-                callback,
-                matched,
+                callback_handle.get_nanbox_f64(),
+                &pattern_str,
                 char_offset,
-                str_data,
+                &s_handle,
             ));
-            last_end = byte_idx + matched.len();
+            last_end = byte_idx + pattern_str.len();
         }
-        if last_end == 0 {
-            return js_string_from_str(str_data);
-        }
-        result.push_str(&str_data[last_end..]);
+        result.push_str(&cur_str()[last_end..]);
         js_string_from_str(&result)
     }
 }

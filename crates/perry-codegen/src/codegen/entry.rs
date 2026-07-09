@@ -544,6 +544,7 @@ pub(super) fn compile_module_entry(
             .collect();
         let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &[],
             &flat_const_ids,
             &clamp_fn_ids,
             &cross_module.clamp3_functions,
@@ -600,6 +601,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            tdz_boxes: std::collections::HashSet::new(),
             compiler_private_async_i32_control_locals: &cross_module
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
@@ -613,9 +615,6 @@ pub(super) fn compile_module_entry(
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
-            namespace_member_vars: &cross_module.namespace_member_vars,
-            namespace_member_namespace_prefixes: &cross_module.namespace_member_namespace_prefixes,
-            namespace_import_prefixes: &cross_module.namespace_import_prefixes,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
@@ -643,6 +642,7 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             packed_f64_loop_facts: Vec::new(),
+            class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
@@ -1081,6 +1081,7 @@ pub(super) fn compile_module_entry(
             .collect();
         let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &[],
             &flat_const_ids,
             &clamp_fn_ids,
             &cross_module.clamp3_functions,
@@ -1135,6 +1136,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            tdz_boxes: std::collections::HashSet::new(),
             compiler_private_async_i32_control_locals: &cross_module
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
@@ -1148,9 +1150,6 @@ pub(super) fn compile_module_entry(
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
-            namespace_member_vars: &cross_module.namespace_member_vars,
-            namespace_member_namespace_prefixes: &cross_module.namespace_member_namespace_prefixes,
-            namespace_import_prefixes: &cross_module.namespace_import_prefixes,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
@@ -1178,6 +1177,7 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             packed_f64_loop_facts: Vec::new(),
+            class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: init_native_facts.index_used_locals(),

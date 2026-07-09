@@ -105,6 +105,10 @@ impl SH for Stmt {
                 tag(h, 15);
                 ids.hash(h);
             }
+            Stmt::PreallocateTdzBoxes(ids) => {
+                tag(h, 16);
+                ids.hash(h);
+            }
         }
     }
 }

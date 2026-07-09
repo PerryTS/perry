@@ -902,6 +902,53 @@ pub(super) fn validate_windows_subsystem(
     Ok(())
 }
 
+/// #6125: resolve the CPU-baseline knob into the canonical `PERRY_TARGET_CPU`
+/// env var, which codegen (`clang -march`/`-mcpu`), the object/build cache
+/// keys, and the auto-optimize runtime/stdlib rebuild (`-C target-cpu`) all
+/// honor uniformly.
+///
+/// Precedence: `--march` → `PERRY_TARGET_CPU` already in the environment →
+/// perry.toml `[build] march` → `[build] native_tuning` (`false` is shorthand
+/// for `generic`, `true` for `native`). The toml sources are what survive the
+/// `perry publish` worker round-trip, like `[windows] subsystem` above.
+/// Mirrors the `--debug-symbols` → `PERRY_DEBUG_SYMBOLS` promotion: must run
+/// single-threaded, before module codegen spawns rayon workers, so every
+/// layer observes one value.
+pub(super) fn promote_cpu_baseline_env(args: &CompileArgs) {
+    if let Some(march) = args
+        .march
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        std::env::set_var("PERRY_TARGET_CPU", march);
+        return;
+    }
+    if std::env::var_os("PERRY_TARGET_CPU").is_some() {
+        return;
+    }
+    let project_root = find_project_root_for_resources(&args.input, true);
+    let Ok(content) = std::fs::read_to_string(project_root.join("perry.toml")) else {
+        return;
+    };
+    let Ok(doc) = content.parse::<toml::Table>() else {
+        return;
+    };
+    let march = super::app_metadata::toml_string(&doc, "build", "march")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            let tuning = doc
+                .get("build")
+                .and_then(|b| b.get("native_tuning"))
+                .and_then(|v| v.as_bool())?;
+            Some(if tuning { "native" } else { "generic" }.to_string())
+        });
+    if let Some(march) = march {
+        std::env::set_var("PERRY_TARGET_CPU", march);
+    }
+}
+
 /// Run the full post-collect preflight chain (capability / egress /
 /// lockdown / SBOM / geisterhand / windows-version / project_root
 /// recompute / module-count print). All gates collected here so the

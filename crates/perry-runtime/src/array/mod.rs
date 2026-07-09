@@ -57,7 +57,10 @@ pub(crate) use self::generic::{
 pub use self::generic_mutators::{
     js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
 };
-pub(crate) use self::header::{array_has_arguments_object_flag, mark_array_as_arguments_object};
+pub(crate) use self::header::{
+    array_has_arguments_object_flag, mark_array_as_arguments_object,
+    rebuild_array_numeric_raw_f64_allow_holes,
+};
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
     js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
@@ -72,15 +75,16 @@ pub use self::immutable::{
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
     array_prototype_addr, array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
-    note_array_proto_iterator_write, note_object_prototype_index_write, object_prototype_addr,
-    object_prototype_addr_matches, object_prototype_has_index_flag,
+    keys_array_len_capped_to_capacity, note_array_proto_iterator_write,
+    note_object_prototype_index_write, object_prototype_addr, object_prototype_addr_matches,
+    object_prototype_has_index_flag,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,
     js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
-    js_array_set_f64_extend, js_array_set_f64_unchecked, js_array_set_index_or_string,
-    js_array_set_string_key,
+    js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
+    js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -119,7 +123,8 @@ pub(crate) use self::push_pop::guard_writable_length;
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_hole, js_array_push_spread_f64, js_array_set_length,
-    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_unshift_variadic,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
@@ -142,8 +147,8 @@ pub(crate) use self::header::{
     array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
     array_ptr_as_proxy, canonicalize_array_numeric_store_value, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
-    mark_array_layout_unknown, normalize_array_receiver, note_array_slot,
-    note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
+    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
+    note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
     refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
     store_array_slot, transfer_array_numeric_layout, value_bits_to_number, NumericArrayLayout,
     MIN_ARRAY_CAPACITY,

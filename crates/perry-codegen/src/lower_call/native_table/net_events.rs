@@ -47,6 +47,18 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_VOID,
     },
+    // #6117 — `ws.readyState` data getter (CONNECTING=0 / OPEN=1 /
+    // CLOSING=2 / CLOSED=3). Reached as a 0-arg NativeMethodCall via the
+    // bare-member-read reroute in perry-hir's `is_native_dispatch_member`.
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "readyState",
+        class_filter: None,
+        runtime: "js_ws_ready_state",
+        args: &[],
+        ret: NR_F64,
+    },
     // Issue #577 Phase 4 — `("ws", "Client")` instance methods.
     // The wsId delivered to `Server.on('upgrade', (req, wsId, head) => …)`
     // is NaN-boxed POINTER_TAG so unbox_to_i64 (called by the dispatch

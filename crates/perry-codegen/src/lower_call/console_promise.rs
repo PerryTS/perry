@@ -511,14 +511,6 @@ pub fn try_lower_console_call(
     Ok(None)
 }
 
-fn property_get_chain_starts_at_namespace_import(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    let mut current = expr;
-    while let Expr::PropertyGet { object, .. } = current {
-        current = object.as_ref();
-    }
-    matches!(current, Expr::ExternFuncRef { name, .. } if ctx.namespace_imports.contains(name))
-}
-
 pub fn try_lower_promise_static_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -766,7 +758,6 @@ pub fn try_lower_native_method_str_dispatch(
             .is_some_and(|kind| is_collection_method_for_kind(kind, property.as_str()));
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))
-            || property_get_chain_starts_at_namespace_import(ctx, object)
             || (class_name_opt.is_some()
                 && !is_buffer_class
                 && !class_unknown_to_codegen

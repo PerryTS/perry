@@ -156,6 +156,16 @@ static STDIN_READABLE_LISTENERS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::
 // `once()` listeners — fired exactly once then cleared, per EventEmitter.
 static STDIN_DATA_ONCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
 static STDIN_READABLE_ONCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+// `end`/`close` listeners. Node fires `'end'` on stdin EOF; code that reads a
+// prompt via `process.stdin.once('end', …)` (racing a timeout) relies on it.
+// These fire from the main-thread pump once the reader hits EOF and the byte
+// buffer has drained (so `'data'` precedes `'end'`, per Node).
+static STDIN_END_LISTENERS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+static STDIN_END_ONCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+// Set by the reader thread on fd-0 EOF; observed by the main-thread pump.
+static STDIN_EOF_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Set once the `'end'`/`'close'` listeners have fired, so they fire at most once.
+static STDIN_END_FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static STDIN_READER_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -186,7 +196,15 @@ fn ensure_stdin_reader() {
                     break;
                 }
                 match handle.read(&mut byte) {
-                    Ok(0) => break, // EOF
+                    Ok(0) => {
+                        // EOF: record it so the main-thread pump can fire JS
+                        // `'end'`/`'close'` listeners after the buffer drains,
+                        // and wake the loop so a final pump runs even when no
+                        // more bytes arrive (e.g. `< /dev/null`).
+                        STDIN_EOF_SEEN.store(true, std::sync::atomic::Ordering::Release);
+                        crate::event_pump::js_notify_main_thread();
+                        break;
+                    }
                     Ok(_) => {
                         if let Ok(mut q) = STDIN_BUFFER.lock() {
                             q.push(byte[0]);
@@ -247,7 +265,7 @@ fn register_stdin_listener(
     }
     let target = if is_once { once } else { persistent };
     match stdin_event_name(event).as_deref() {
-        Some("data") | Some("readable") => {
+        Some("data") | Some("readable") | Some("end") | Some("close") => {
             if let Ok(mut l) = target.lock() {
                 // EventEmitter allows the same listener registered multiple
                 // times; only `on` callers dedupe in practice, but each
@@ -257,6 +275,7 @@ fn register_stdin_listener(
                     l.push(cb);
                 }
             }
+            // Starting the reader lets it observe EOF, which drives `'end'`.
             ensure_stdin_reader();
         }
         _ => {}
@@ -289,6 +308,13 @@ extern "C" fn process_stdin_on(
                 &STDIN_READABLE_ONCE,
                 false,
             ),
+            Some("end") | Some("close") => register_stdin_listener(
+                event,
+                callback,
+                &STDIN_END_LISTENERS,
+                &STDIN_END_ONCE,
+                false,
+            ),
             _ => {}
         }
     }
@@ -316,6 +342,13 @@ extern "C" fn process_stdin_once(
                 callback,
                 &STDIN_READABLE_LISTENERS,
                 &STDIN_READABLE_ONCE,
+                true,
+            ),
+            Some("end") | Some("close") => register_stdin_listener(
+                event,
+                callback,
+                &STDIN_END_LISTENERS,
+                &STDIN_END_ONCE,
                 true,
             ),
             _ => {}
@@ -362,6 +395,13 @@ extern "C" fn process_stdin_resume(
 /// listeners (ink's flowing path) get the bytes directly; otherwise `readable`
 /// listeners are notified and pull via `read()`.
 pub fn pump_process_stdin() {
+    // Deliver any buffered bytes as `'data'`/`'readable'` first, then — once the
+    // reader has hit EOF and the buffer is empty — dispatch `'end'`/`'close'`.
+    pump_stdin_data_chunks();
+    maybe_fire_stdin_end();
+}
+
+fn pump_stdin_data_chunks() {
     let has_bytes = STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false);
     if !has_bytes {
         return;
@@ -425,6 +465,57 @@ pub fn pump_process_stdin() {
     }
 }
 
+/// Fire `process.stdin` `'end'`/`'close'` listeners once the reader has hit EOF
+/// and all buffered bytes have drained (so `'data'` precedes `'end'`, per Node).
+/// Runs on the main thread from the pump, so calling JS is safe here. Idempotent:
+/// the `STDIN_END_FIRED` latch guarantees at-most-once, and we only latch when
+/// there is at least one listener to fire so a listener attached shortly after
+/// EOF (the prompt-reader race) still runs.
+fn maybe_fire_stdin_end() {
+    use std::sync::atomic::Ordering;
+    if !STDIN_EOF_SEEN.load(Ordering::Acquire) || STDIN_END_FIRED.load(Ordering::Acquire) {
+        return;
+    }
+    // Node emits `'end'` only after the readable side is fully consumed.
+    let has_bytes = STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false);
+    if has_bytes {
+        return;
+    }
+    let mut end_listeners: Vec<i64> = STDIN_END_LISTENERS
+        .lock()
+        .map(|l| l.clone())
+        .unwrap_or_default();
+    let has_once = STDIN_END_ONCE
+        .lock()
+        .map(|l| !l.is_empty())
+        .unwrap_or(false);
+    if end_listeners.is_empty() && !has_once {
+        // No listener yet — leave EOF pending so a slightly-later `once('end')`
+        // (racing the reader) still fires on a subsequent pump.
+        return;
+    }
+    if STDIN_END_FIRED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let end_once: Vec<i64> = STDIN_END_ONCE
+        .lock()
+        .map(|mut l| std::mem::take(&mut *l))
+        .unwrap_or_default();
+    end_listeners.extend(&end_once);
+    let this = stdin_this_value();
+    for cb in end_listeners {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
+        let closure = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+        let prev_this = crate::object::js_implicit_this_set(this);
+        crate::closure::js_closure_call0(closure);
+        crate::object::js_implicit_this_set(prev_this);
+    }
+}
+
 /// Make a native-method closure value with the given arity registered, so the
 /// dispatch path forwards the right number of arguments.
 fn stdin_native_method(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
@@ -459,6 +550,8 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
         &STDIN_READABLE_LISTENERS,
         &STDIN_DATA_ONCE,
         &STDIN_READABLE_ONCE,
+        &STDIN_END_LISTENERS,
+        &STDIN_END_ONCE,
     ] {
         if let Ok(mut listeners) = registry.lock() {
             for cb in listeners.iter_mut() {

@@ -886,7 +886,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Issue #26: record the authoritative root→leaf init chain. `parent_chain`
         // was pushed direct-parent-first, so reverse it (deepest ancestor first),
         // then append the leaf class `c` (with its own fields, init exprs intact).
-        {
+        let chain: Vec<(String, Vec<perry_hir::ClassField>)> = {
             let mut chain: Vec<(String, Vec<perry_hir::ClassField>)> =
                 parent_chain.iter().rev().cloned().collect();
             chain.push((c.name.clone(), c.fields.clone()));
@@ -896,7 +896,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     .entry(alias.clone())
                     .or_insert_with(|| chain.clone());
             }
-        }
+            chain
+        };
         // Refs #486: register self-binding aliases (`_X` from `var X = class _X`)
         // so the inline-alloc fast path at lower_call.rs:2532 finds the keys
         // global when the class is referenced by its inner name. Without this,
@@ -908,7 +909,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .entry(alias.clone())
                 .or_insert_with(|| global_name.clone());
         }
-        let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
+        // Refs #5094: derive the GC raw-f64/pointer masks from the SAME
+        // prefix-disambiguated chain that built `packed_keys` above, so mask
+        // bits stay aligned with the actual slot layout when same-named
+        // cross-module parents exist (the name-keyed `class_typed_layout`
+        // walk picks whichever stub won the bare-name race).
+        let typed_layout = crate::typed_shape::class_typed_layout_from_chain(&chain);
         class_field_counts_map.insert(c.name.clone(), total_field_count);
         for alias in &c.aliases {
             class_field_counts_map
@@ -999,18 +1005,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }
-        let typed_layout = crate::typed_shape::class_typed_layout(&class_table, &c.name);
         class_field_counts_map
             .entry(c.name.clone())
             .or_insert(total_field_count);
         // Issue #26: authoritative root→leaf init chain for the imported class
         // (prefix-disambiguated parents + this stub's own fields as the leaf).
-        {
+        // Refs #5094: the GC raw-f64/pointer masks derive from this same chain
+        // (not the name-keyed `class_typed_layout` walk) so mask bits stay
+        // aligned with the packed-keys slot layout under same-named
+        // cross-module parents.
+        let typed_layout = {
             let mut chain: Vec<(String, Vec<perry_hir::ClassField>)> =
                 parent_chain.iter().rev().cloned().collect();
             chain.push((c.name.clone(), c.fields.clone()));
+            let typed_layout = crate::typed_shape::class_typed_layout_from_chain(&chain);
             class_init_chains_map.entry(c.name.clone()).or_insert(chain);
-        }
+            typed_layout
+        };
         class_keys_init_data.push((
             global_name,
             packed_keys,
@@ -1457,9 +1468,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         namespace_reexport_named_imports: opts.namespace_reexport_named_imports.clone(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
         namespace_member_origin_names: opts.namespace_member_origin_names,
-        namespace_member_vars: opts.namespace_member_vars,
-        namespace_member_namespace_prefixes: opts.namespace_member_namespace_prefixes,
-        namespace_import_prefixes: opts.namespace_import_prefixes,
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
         local_generator_funcs,
@@ -1493,7 +1501,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         symbol: ctor_name,
                         param_count: ic.constructor_param_count,
                         has_own_constructor: ic.has_own_constructor,
-                        uses_new_target: ic.constructor_uses_new_target,
                         has_instance_fields: ic.has_instance_fields,
                         has_rest: ic.constructor_has_rest,
                     },
@@ -1765,6 +1772,37 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // disqualifies every type-directed unboxed access on a boxed slot in
     // one place; consumers fall back to the generic (box-aware) paths.
     module_local_types.retain(|id, _| !module_boxed_vars.contains(id));
+    // #5982 (#5466 regression): a MODULE-GLOBAL captured local is read by a
+    // closure through `@perry_global_*`, NOT the closure's capture array —
+    // `closure.rs` filters module globals OUT of `closure_captures`, so the
+    // closure is `alloc_singleton` with no capture slots. But advertising the
+    // local's type to the typed-ABI closure specialization
+    // (`__typed_f64`/i32/…) made it read `js_closure_get_capture_bits(this,
+    // 0)` — an UNSET slot (0) — while the generic variant correctly loads the
+    // global; the dispatcher picked the typed body, so every closure returned
+    // 0. Repro (bisected to #5466 representation lowering):
+    //   for (let i=0;i<5;i++){ const c=i; fns.push(()=>c); }  // → 0,0,0,0,0
+    // A module-global capture has no capture-slot representation, so — like a
+    // boxed slot — it must not feed the type-directed unboxed *capture* path.
+    //
+    // #6039 originally stripped these ids from `module_local_types` outright,
+    // but that map is ALSO the receiver-type oracle for every function body
+    // (`FnCtx.local_types` → `static_type_of` / `is_array_expr`). Dropping a
+    // module-global's declared type there mis-classified a captured array
+    // receiver as untyped inside a closure, so `arr.every()` (undefined
+    // callbackfn) fell to the generic dynamic dispatch that skips the
+    // `js_validate_array_callback` throw — the test262 harness's
+    // `assert.throws(TypeError, () => arr.every())` then saw no exception
+    // (24 regressions: Array HOF + symbol-strict [[Set]], all via harness
+    // closures). Only the typed-ABI *specialization* decision needs the
+    // module-globals removed, so scope the filter to a dedicated copy and
+    // leave `module_local_types` (the receiver oracle) module-global-inclusive.
+    let typed_abi_local_types: std::collections::HashMap<u32, perry_types::Type> =
+        module_local_types
+            .iter()
+            .filter(|(id, _)| !module_globals.contains_key(id))
+            .map(|(id, ty)| (*id, ty.clone()))
+            .collect();
 
     // Cross-module function declares are emitted lazily by `lower_call`
     // via `FnCtx.pending_declares` (drained back into `llmod` at the
@@ -1796,7 +1834,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     cross_module.typed_string_closure_capture_counts.clear();
     cross_module.typed_i1_closure_param_reps.clear();
     for (func_id, expr) in &closures {
-        match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &module_local_types) {
+        match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
             None => {
                 cross_module.typed_f64_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1825,7 +1864,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             ),
         }
-        match typed_abi::typed_i1_closure_rejection_reason_with_types(expr, &module_local_types) {
+        match typed_abi::typed_i1_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
             None => {
                 cross_module.typed_i1_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1854,7 +1894,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             ),
         }
-        match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &module_local_types) {
+        match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &typed_abi_local_types)
+        {
             None => {
                 cross_module.typed_i32_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1883,8 +1924,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             ),
         }
-        match typed_abi::typed_string_closure_rejection_reason_with_types(expr, &module_local_types)
-        {
+        match typed_abi::typed_string_closure_rejection_reason_with_types(
+            expr,
+            &typed_abi_local_types,
+        ) {
             None => {
                 cross_module.typed_string_closures.insert(*func_id);
                 if let perry_hir::Expr::Closure { params, .. } = expr {
@@ -1895,7 +1938,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     }
                 }
                 let capture_count =
-                    typed_abi::typed_string_closure_capture_reps(expr, &module_local_types)
+                    typed_abi::typed_string_closure_capture_reps(expr, &typed_abi_local_types)
                         .map(|captures| captures.len())
                         .unwrap_or(0);
                 cross_module

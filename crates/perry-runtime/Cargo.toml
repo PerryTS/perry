@@ -167,12 +167,8 @@ resolv-conf = "0.7"
 # (SockRef) for the few std lacks — set_multicast_if and source-specific
 # membership — so those are real rather than silent no-ops.
 socket2 = { version = "0.6", features = ["all"] }
-# Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.
-# macOS `malloc` is ~25-40ns/alloc; mimalloc's per-thread free-list is ~5-10ns.
-# Set as #[global_allocator] in lib.rs, so it covers Rust heap allocations in
-# both the `perry` CLI and the compiled-TypeScript executables linked against
-# libperry_runtime.a.
-mimalloc = { version = "0.1", default-features = false }
+# mimalloc is declared 64-bit-only below (see the target_pointer_width section) —
+# on arm64_32/ILP32 it is neither used nor compiled.
 
 # We'll add GC bindings later
 # For now, use a simple bump allocator or leak memory for MVP
@@ -182,6 +178,16 @@ mimalloc = { version = "0.1", default-features = false }
 # `Win32_System_LibraryLoader` powers `perry_plugin_load` / `perry_plugin_unload`
 # (`LoadLibraryW` / `GetProcAddress` / `FreeLibrary` — the Win32 equivalents of
 # `libc::dlopen` / `dlsym` / `dlclose` that the Unix branch uses).
+# Issue #62: mimalloc replaces the system allocator for gc_malloc/arena/etc.
+# macOS `malloc` is ~25-40ns/alloc; mimalloc's per-thread free-list is ~5-10ns.
+# Set as #[global_allocator] in lib.rs, so it covers Rust heap allocations in
+# both the `perry` CLI and the compiled-TypeScript executables linked against
+# libperry_runtime.a. 64-bit only: on arm64_32 (ILP32) mimalloc is unproven and
+# a corruption suspect, so lib.rs falls back to std::alloc::System there and we
+# avoid compiling mimalloc's C on that target entirely.
+[target.'cfg(target_pointer_width = "64")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_System_Console",

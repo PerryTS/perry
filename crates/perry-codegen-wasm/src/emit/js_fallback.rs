@@ -206,7 +206,7 @@ impl WasmModuleEmitter {
             // Issue #569: PreallocateBoxes is a perry-codegen-only directive
             // — JS hoisting handles forward refs natively, so the wasm/JS
             // backend has no equivalent to emit.
-            Stmt::PreallocateBoxes(_) => {}
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 

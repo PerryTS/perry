@@ -124,6 +124,23 @@ impl LlBlock {
         self.terminated
     }
 
+    /// #5093: true if this block contains a `call` to anything other than an
+    /// `@llvm.*` intrinsic or an inline-asm marker. The class-field versioned
+    /// loop uses this to verify AT COMPILE TIME that its fast clone came out
+    /// call-free (no runtime call ⇒ no allocation ⇒ no GC ⇒ the
+    /// preheader-cached receiver pointer cannot move and the hoisted shape
+    /// check cannot be invalidated mid-loop). Intrinsic/libm-style calls
+    /// never enter the perry runtime, so they cannot trigger a collection.
+    pub fn contains_gc_unsafe_call(&self) -> bool {
+        self.instructions.iter().any(|line| {
+            let Some(pos) = line.find("call ") else {
+                return false;
+            };
+            let callee = &line[pos..];
+            !callee.contains("@llvm.") && !callee.contains(" asm ")
+        })
+    }
+
     /// Allocate a fresh SSA register name in the enclosing function's
     /// virtual register pool (e.g. `"%r42"`). Safe to call between
     /// `gep` / other instructions that may emit sub-registers. Pair with
