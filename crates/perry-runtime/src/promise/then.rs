@@ -117,6 +117,25 @@ pub(crate) fn mark_rejection_handled(promise: *mut Promise) {
     });
 }
 
+/// GC root scanner for `UNHANDLED_REJECTIONS` (#6077). The set stores raw
+/// promise addresses. A regular promise is allocated in the MOVABLE arena
+/// (`js_promise_new_with_parent_impl`), so without this scanner a tracked
+/// promise could be swept or evacuated before the program-end report — making
+/// `js_promise_report_unhandled_rejections`'s `(*pr).state` / `(*pr).reason`
+/// deref a stale/use-after-free read (arena pages stay mapped, so a silent
+/// misreport is likelier than a hard fault). Visiting each address marks the
+/// promise live AND rewrites the stored pointer on evacuation, so the report
+/// always sees a valid promise. Entries are removed (and thus unrooted) as soon
+/// as a reaction is wired (`mark_rejection_handled`) or the promise settles
+/// handled, so this never keeps a genuinely-dead promise alive past its report.
+pub fn scan_unhandled_rejection_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    UNHANDLED_REJECTIONS.with(|m| {
+        for slot in m.borrow_mut().iter_mut() {
+            visitor.visit_usize_slot(slot);
+        }
+    });
+}
+
 /// Program-end hook (emitted by codegen's event-loop exit block, after the
 /// final microtask/timer drain). If any rejection went unhandled, mirror Node:
 /// print to stderr and exit with a non-zero code.

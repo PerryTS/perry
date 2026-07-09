@@ -82,6 +82,7 @@ pub use then::{
     js_promise_mark_internally_handled, js_promise_new, js_promise_new_cross_thread,
     js_promise_reason, js_promise_reject, js_promise_resolve, js_promise_resolve_with_promise,
     js_promise_result, js_promise_state, js_promise_then, js_promise_value,
+    scan_unhandled_rejection_roots_mut,
 };
 
 #[cfg(test)]

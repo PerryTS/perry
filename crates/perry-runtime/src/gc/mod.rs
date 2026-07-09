@@ -474,6 +474,9 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
+    // #6077: keep promises tracked for an unhandled rejection alive + address-
+    // stable until reported, so the program-end report is not a stale/UAF read.
+    gc_register_mutable_root_scanner(crate::promise::scan_unhandled_rejection_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_handle_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
