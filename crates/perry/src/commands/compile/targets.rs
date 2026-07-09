@@ -673,7 +673,25 @@ pub(super) fn compile_for_watchos_widget(
         // the app writes. Only when a widget declares `appGroup`; otherwise
         // the appex stays unsigned (unchanged). Mirrors the watch app path:
         // ad-hoc for the simulator, `[watchos]` identity + profile on device.
-        let widget_app_group = widgets.iter().find_map(|w| w.app_group.as_deref());
+        // One entitlement is emitted per `.appex`, so all widgets bundled in it
+        // must share a single App Group — otherwise the widgets whose group is
+        // dropped silently lose shared-suite access. Reject the conflict.
+        let widget_app_groups = widgets
+            .iter()
+            .filter_map(|w| w.app_group.as_deref())
+            .filter(|group| !group.is_empty())
+            .collect::<std::collections::BTreeSet<_>>();
+        if widget_app_groups.len() > 1 {
+            anyhow::bail!(
+                "watchOS widgets in the same extension must declare the same appGroup; found: {}",
+                widget_app_groups
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        let widget_app_group = widget_app_groups.iter().next().copied();
         if super::apple_info_plist::inject_app_group_entitlement(
             &appex_path,
             widget_app_group,

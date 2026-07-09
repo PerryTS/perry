@@ -105,33 +105,24 @@ pub(super) fn codesign_apple_bundle(
     };
 
     // Device: embed the provisioning profile so codesign can validate the
-    // app-group entitlement against the profile's declared capabilities.
+    // app-group entitlement against the profile's declared capabilities. A
+    // device bundle with App Group entitlements is unusable without it, so
+    // fail loudly rather than emit a "Codesigned" bundle that can't access
+    // the group on-device.
     if !is_sim {
-        if let Some(profile) = cfg
+        let profile = cfg
             .provisioning_profile
             .as_deref()
             .filter(|p| !p.is_empty())
-        {
-            match fs::read(profile) {
-                Ok(bytes) => {
-                    fs::write(bundle.join("embedded.mobileprovision"), bytes)?;
-                }
-                Err(e) => {
-                    if let OutputFormat::Text = format {
-                        println!(
-                            "  Warning: could not read provisioning_profile {}: {} — signing \
-                             without an embedded profile; on-device App Group access will fail.",
-                            profile, e
-                        );
-                    }
-                }
-            }
-        } else if let OutputFormat::Text = format {
-            println!(
-                "  Warning: `[watchos] provisioning_profile` not set — signing without an \
-                 embedded profile; the profile must include the App Group for on-device access."
-            );
-        }
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`[watchos] provisioning_profile` is required to sign a device bundle with \
+                     App Group entitlements (e.g. `perry setup watchos`)"
+                )
+            })?;
+        let bytes = fs::read(profile)
+            .map_err(|e| anyhow::anyhow!("could not read provisioning_profile {profile}: {e}"))?;
+        fs::write(bundle.join("embedded.mobileprovision"), bytes)?;
     }
 
     // Re-sign cleanly: drop any prior signature so codesign doesn't complain
