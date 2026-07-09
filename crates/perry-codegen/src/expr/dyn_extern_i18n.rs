@@ -231,12 +231,18 @@ fn emit_i18n_template(
     {
         let bytes = template.as_bytes();
         let mut i = 0usize;
-        let mut buf = String::new();
+        // Buffer literal fragments as raw bytes and decode once per fragment.
+        // Pushing `b as char` would re-encode each byte as its own Unicode
+        // scalar, mangling any non-ASCII text in a placeholder-containing
+        // template (e.g. `für {name}`). We only ever special-case the ASCII
+        // bytes `{`/`}`, so multi-byte UTF-8 sequences stay intact.
+        let mut buf: Vec<u8> = Vec::new();
+        let flush = |buf: &mut Vec<u8>| String::from_utf8_lossy(&std::mem::take(buf)).into_owned();
         while i < bytes.len() {
             let b = bytes[i];
             if b == b'{' {
                 if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    buf.push('{');
+                    buf.push(b'{');
                     i += 2;
                     continue;
                 }
@@ -248,7 +254,7 @@ fn emit_i18n_template(
                 match end {
                     Some(close) => {
                         if !buf.is_empty() {
-                            plan.push(Part::Lit(std::mem::take(&mut buf)));
+                            plan.push(Part::Lit(flush(&mut buf)));
                         }
                         let name = std::str::from_utf8(&bytes[i + 1..close])
                             .unwrap_or("")
@@ -259,23 +265,20 @@ fn emit_i18n_template(
                     }
                     None => {
                         // Unterminated `{` — treat as literal.
-                        buf.push(b as char);
+                        buf.push(b);
                         i += 1;
                     }
                 }
             } else if b == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
-                buf.push('}');
+                buf.push(b'}');
                 i += 2;
             } else {
-                // Push the byte as-is. UTF-8 multi-byte chars pass
-                // through cleanly because we never split inside one (we
-                // only act on `{` and `}` which are ASCII).
-                buf.push(b as char);
+                buf.push(b);
                 i += 1;
             }
         }
         if !buf.is_empty() {
-            plan.push(Part::Lit(buf));
+            plan.push(Part::Lit(flush(&mut buf)));
         }
     }
 

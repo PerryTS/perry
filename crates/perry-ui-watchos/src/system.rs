@@ -198,6 +198,12 @@ pub extern "C" fn perry_system_keychain_get(key_ptr: i64) -> f64 {
             let bytes: *const u8 = objc2::msg_send![data, bytes];
             let length: usize = objc2::msg_send![data, length];
             let str_ptr = js_string_from_bytes(bytes, length as u32);
+            // SecItemCopyMatching + kSecReturnData follows the Core Foundation
+            // Copy Rule: the returned CFData is +1 and owned by us. Release it
+            // now that its bytes are copied into the JS string (CFData is
+            // toll-free bridged to NSData, so an objc `release` is the
+            // CFRelease equivalent) — otherwise every keychain read leaks it.
+            let _: () = objc2::msg_send![data, release];
             js_nanbox_string(str_ptr as i64)
         } else {
             f64::from_bits(TAG_UNDEFINED)

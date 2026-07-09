@@ -37,7 +37,8 @@ default_locale = "en"
         dir.path().join("locales/en.json"),
         r#"{
   "Day streak: {days}": "Day streak: {days}",
-  "Hello, {name}! You are {age}.": "Hello, {name}! You are {age}."
+  "Hello, {name}! You are {age}.": "Hello, {name}! You are {age}.",
+  "Für {name}!": "Für {name}!"
 }"#,
     )
     .expect("write en.json");
@@ -60,6 +61,9 @@ console.log(t("Day streak: {days}", { days: obj.streak }));
 // Multiple params incl. a string value.
 const user = "Ada";
 console.log(t("Hello, {name}! You are {age}.", { name: user, age: 36 }));
+// Non-ASCII literal fragments around a placeholder must survive intact
+// (the fragment parser buffers bytes and decodes once, not `b as char`).
+console.log(t("Für {name}!", { name: user }));
 "#,
     )
     .expect("write entry");
@@ -96,6 +100,7 @@ console.log(t("Hello, {name}! You are {age}.", { name: user, age: 36 }));
             "Day streak: 6",
             "Day streak: 7",
             "Hello, Ada! You are 36.",
+            "Für Ada!",
         ],
         "t() params must interpolate; raw {{placeholder}} output means the \
          anon-shape params regression is back.\nfull stdout:\n{}",
