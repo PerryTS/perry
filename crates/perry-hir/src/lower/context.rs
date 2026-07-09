@@ -117,6 +117,8 @@ impl LoweringContext {
             with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
             tdz_forward_ids: HashSet::new(),
+            forward_lexical_names: HashSet::new(),
+            forward_lexical_saves: Vec::new(),
             catch_param_scopes: Vec::new(),
             annexb_block_fn_var_ids: HashMap::new(),
             annexb_block_fn_names_all: HashSet::new(),
@@ -1516,6 +1518,13 @@ impl LoweringContext {
 
     pub(crate) fn enter_scope(&mut self) -> (usize, usize, usize) {
         // Function/closure boundary: new locals are no longer module-level.
+        // #6062: a `typeof <name>` inside a nested closure is runtime-timing-
+        // dependent (the closure may run before OR after the outer lexical is
+        // initialized), so the enclosing block's forward-lexical set must not
+        // statically force a throw inside it. Save and clear across the
+        // boundary; the nested body repopulates its own via `lower_stmts_using_aware`.
+        self.forward_lexical_saves
+            .push(std::mem::take(&mut self.forward_lexical_names));
         let local_mark = self.locals.len();
         self.scope_depth += 1;
         self.scope_local_marks.push(local_mark);
@@ -1532,6 +1541,9 @@ impl LoweringContext {
 
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
+        // #6062: restore the enclosing block's forward-lexical set saved in the
+        // matching `enter_scope`.
+        self.forward_lexical_names = self.forward_lexical_saves.pop().unwrap_or_default();
         self.scope_depth = self.scope_depth.saturating_sub(1);
         // Drop any pre-scan param protections registered in a scope deeper than
         // the one we just returned to — their expected consumer (the callback's
