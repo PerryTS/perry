@@ -362,6 +362,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     ) {
                         return nanbox_true;
                     }
+                    // A canonical numeric-index string (`"0"`, `"2"`, …) is an own
+                    // in-bounds index. The round-trip check rejects non-canonical
+                    // forms (`"00"`, `"1.5"`, `"-1"`, `"0x1"`), which are ordinary
+                    // (absent) string keys.
+                    if let Ok(idx) = name.parse::<u32>() {
+                        if idx.to_string() == name && idx < len as u32 {
+                            return nanbox_true;
+                        }
+                    }
                 }
                 return nanbox_false;
             }
