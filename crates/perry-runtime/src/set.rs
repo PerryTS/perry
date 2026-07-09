@@ -1348,13 +1348,28 @@ fn js_set_foreach_impl(
             };
             let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
+            // Root the visited value so the post-callback slot comparison below
+            // stays valid across a GC move during the callback.
+            let value_handle = scope.root_nanbox_f64(value);
             let args = [value, value, set_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
-            i += 1;
+            // Deleting an entry compacts the backing vector (later entries
+            // shift left). If the callback deleted the just-visited entry (or
+            // an earlier one), slot `i` now holds the NEXT unvisited value —
+            // advancing would skip it (react-server-dom's task sweeps delete
+            // while iterating; ECMA-262 visits every not-yet-deleted entry).
+            // Only advance when slot `i` still holds the value just visited.
+            let set = set_handle.get_raw_const_ptr::<SetHeader>();
+            if i < (*set).size as usize {
+                let now = ptr::read(elements_ptr(set).add(i));
+                if now.to_bits() == value_handle.get_nanbox_f64().to_bits() {
+                    i += 1;
+                }
+            }
         }
     }
 }

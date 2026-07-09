@@ -118,6 +118,26 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         );
         return;
     }
+    // #5989: `.forEach` on an unknown-typed receiver is statically fused to
+    // this array entry point, but the receiver may be a native Set/Map —
+    // react-server-dom iterates `request.abortableTasks` (a Set read back off
+    // the request object) exactly this way. Treating a SetHeader as an
+    // ArrayHeader feeds hash-table internals to the callback as elements and
+    // segfaults on the first property read. `forEach` is the ONLY method name
+    // the fused array methods share with Set/Map, so this single reroute —
+    // mirroring the typed-array reroute above — covers the hazard class.
+    {
+        let cb_value = f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        if crate::set::is_registered_set(arr as usize) {
+            crate::set::js_set_foreach(arr as *mut crate::set::SetHeader, cb_value, undef);
+            return;
+        }
+        if crate::map::is_registered_map(arr as usize) {
+            crate::map::js_map_foreach(arr as *mut crate::map::MapHeader, cb_value, undef);
+            return;
+        }
+    }
     unsafe {
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();

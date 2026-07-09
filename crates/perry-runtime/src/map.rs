@@ -1944,6 +1944,9 @@ fn js_map_foreach_impl(
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
+            // Root the visited key so the post-callback slot comparison below
+            // stays valid across a GC move during the callback.
+            let key_handle = scope.root_nanbox_f64(key);
             let args = [value, key, map_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
@@ -1953,7 +1956,19 @@ fn js_map_foreach_impl(
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
-            i += 1;
+            // Deleting an entry compacts the backing vector (later entries
+            // shift left). If the callback deleted the just-visited entry (or
+            // an earlier one), slot `i` now holds the NEXT unvisited entry —
+            // advancing would skip it (ECMA-262 visits every not-yet-deleted
+            // entry; mirrors the `js_set_foreach_impl` fix). Only advance when
+            // slot `i` still holds the key just visited.
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            if i < (*map).size as usize {
+                let now_key = ptr::read(entries_ptr(map).add(i * 2));
+                if now_key.to_bits() == key_handle.get_nanbox_f64().to_bits() {
+                    i += 1;
+                }
+            }
         }
     }
 }
