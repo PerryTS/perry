@@ -10,6 +10,7 @@ pub mod audio_playback;
 pub mod background;
 pub mod drag_drop;
 pub mod media_playback;
+pub mod notifications;
 pub mod state;
 pub mod tree;
 pub mod widgets;
@@ -1371,7 +1372,12 @@ pub extern "C" fn perry_system_keychain_get(_key: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_system_keychain_delete(_key: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_system_notification_send(_title: i64, _body: i64) {}
+pub extern "C" fn perry_system_notification_send(title: i64, body: i64) {
+    notifications::send(title as *const u8, body as *const u8);
+}
+// Remote push (register/receive/background-receive) has no watchOS equivalent —
+// there is no `UIApplication registerForRemoteNotifications` on watchOS — so
+// these stay no-op stubs. Local notifications below are fully implemented.
 #[no_mangle]
 pub extern "C" fn perry_system_notification_register_remote(_callback: f64) {}
 #[no_mangle]
@@ -1380,21 +1386,37 @@ pub extern "C" fn perry_system_notification_on_receive(_callback: f64) {}
 pub extern "C" fn perry_system_notification_on_background_receive(_callback: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_interval(
-    _id_ptr: i64,
-    _title_ptr: i64,
-    _body_ptr: i64,
-    _seconds: f64,
-    _repeats: f64,
+    id_ptr: i64,
+    title_ptr: i64,
+    body_ptr: i64,
+    seconds: f64,
+    repeats: f64,
 ) {
+    notifications::schedule_interval(
+        id_ptr as *const u8,
+        title_ptr as *const u8,
+        body_ptr as *const u8,
+        seconds,
+        repeats,
+    );
 }
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_calendar(
-    _id_ptr: i64,
-    _title_ptr: i64,
-    _body_ptr: i64,
-    _timestamp_ms: f64,
+    id_ptr: i64,
+    title_ptr: i64,
+    body_ptr: i64,
+    timestamp_ms: f64,
 ) {
+    notifications::schedule_calendar(
+        id_ptr as *const u8,
+        title_ptr as *const u8,
+        body_ptr as *const u8,
+        timestamp_ms,
+    );
 }
+// `UNLocationNotificationTrigger` (geofencing) is iOS-only — no CoreLocation
+// region monitoring on watchOS — so location-triggered notifications stay a
+// no-op stub.
 #[no_mangle]
 pub extern "C" fn perry_system_notification_schedule_location(
     _id_ptr: i64,
@@ -1406,9 +1428,13 @@ pub extern "C" fn perry_system_notification_schedule_location(
 ) {
 }
 #[no_mangle]
-pub extern "C" fn perry_system_notification_cancel(_id_ptr: i64) {}
+pub extern "C" fn perry_system_notification_cancel(id_ptr: i64) {
+    notifications::cancel(id_ptr as *const u8);
+}
 #[no_mangle]
-pub extern "C" fn perry_system_notification_on_tap(_callback: f64) {}
+pub extern "C" fn perry_system_notification_on_tap(callback: f64) {
+    notifications::set_on_tap(callback);
+}
 #[no_mangle]
 pub extern "C" fn perry_system_get_locale() -> i64 {
     extern "C" {
