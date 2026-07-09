@@ -28,6 +28,7 @@ fn test_copying_minor_promotes_survivor_on_fourth_survival() {
 
 #[test]
 fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
+    let _defrag = OldDefragTestEnable::new();
     struct ResetGcTestState {
         pinned_header: *mut GcHeader,
     }

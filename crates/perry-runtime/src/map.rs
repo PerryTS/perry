@@ -947,7 +947,15 @@ unsafe fn map_set_string_key_value(
         return map;
     }
 
+    // See js_map_set: ensure_capacity can fire a MOVING minor; root the key
+    // (a heap string, which CAN move) and value across it and re-derive the
+    // `*const StringHeader` before boxing. gh #6206.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
     let grew = ensure_capacity(map);
+    let key = key_handle.get_raw_const_ptr::<StringHeader>();
+    let value = value_handle.get_nanbox_f64();
     let size = (*map).size;
     let entries = entries_ptr_mut(map);
     if grew && size > 0 {
@@ -1014,8 +1022,18 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
             return map;
         }
 
-        // Key doesn't exist, append a new entry
+        // Key doesn't exist, append a new entry. `ensure_capacity` can fire a
+        // MOVING minor (via gc_note_external_side_alloc) — its "conservative +
+        // non-moving" comment is false under evacuation. `key`/`value` are held
+        // only in these native-stack params (a freshly-built, not-yet-inserted
+        // object is reachable via nothing else), which an evacuating minor does
+        // not scan, so root them across the grow and re-derive after. gh #6206.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key_handle = scope.root_nanbox_f64(key);
+        let value_handle = scope.root_nanbox_f64(value);
         let grew = ensure_capacity(map);
+        let key = key_handle.get_nanbox_f64();
+        let value = value_handle.get_nanbox_f64();
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
         if grew && size > 0 {

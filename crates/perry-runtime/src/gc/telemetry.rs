@@ -70,6 +70,11 @@ pub(super) struct OldYoungEdgeMissing {
     pub(super) parent: usize,
     pub(super) slot: usize,
     pub(super) child: usize,
+    // gh #6206: edge-type diagnostics for the verifier panic.
+    pub(super) parent_obj_type: u8,
+    pub(super) child_obj_type: u8,
+    pub(super) parent_is_old_arena: bool,
+    pub(super) parent_marked: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -79,17 +84,49 @@ pub(super) struct OldYoungEdgeVerifyStats {
     pub(super) checked_old_to_young_edges: usize,
     pub(super) missing_edges: usize,
     pub(super) first_missing: Option<OldYoungEdgeMissing>,
+    // gh #6206: per-type histograms of missing edges
+    pub(super) missing_by_parent_type: [u32; 32],
+    pub(super) missing_by_child_type: [u32; 32],
+    pub(super) missing_parent_malloc: u32,
+    pub(super) missing_parent_unmarked: u32,
 }
 
 impl OldYoungEdgeVerifyStats {
     #[inline]
     pub(super) fn record_missing(&mut self, parent: usize, slot: usize, child: usize) {
+        self.record_missing_diag(parent, slot, child, 0, 0, false, false);
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_missing_diag(
+        &mut self,
+        parent: usize,
+        slot: usize,
+        child: usize,
+        parent_obj_type: u8,
+        child_obj_type: u8,
+        parent_is_old_arena: bool,
+        parent_marked: bool,
+    ) {
         self.missing_edges = self.missing_edges.saturating_add(1);
+        self.missing_by_parent_type[(parent_obj_type as usize) & 31] += 1;
+        self.missing_by_child_type[(child_obj_type as usize) & 31] += 1;
+        if !parent_is_old_arena {
+            self.missing_parent_malloc += 1;
+        }
+        if !parent_marked {
+            self.missing_parent_unmarked += 1;
+        }
         if self.first_missing.is_none() {
             self.first_missing = Some(OldYoungEdgeMissing {
                 parent,
                 slot,
                 child,
+                parent_obj_type,
+                child_obj_type,
+                parent_is_old_arena,
+                parent_marked,
             });
         }
     }

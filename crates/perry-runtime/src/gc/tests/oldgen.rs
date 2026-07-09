@@ -689,6 +689,7 @@ fn test_old_page_defrag_skips_non_movable_buffer_and_typed_array() {
 
 #[test]
 fn test_old_page_defrag_re_remembers_young_child_after_collection_clear() {
+    let _defrag = OldDefragTestEnable::new();
     struct ResetGcTestState;
 
     impl Drop for ResetGcTestState {

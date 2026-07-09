@@ -646,7 +646,9 @@ fn test_old_young_edge_verifier_trace_json_shape() {
             parent: 0x1111,
             slot: 0x2222,
             child: 0x3333,
+            ..Default::default()
         }),
+        ..Default::default()
     };
     trace.record_phase("old_young_edge_verify", std::time::Duration::from_micros(7));
 

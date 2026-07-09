@@ -197,7 +197,65 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     selection
 }
 
+/// gh #6206 test hook: the defrag machinery's unit tests exercise the
+/// selection/copy/re-remember mechanics directly and must bypass the
+/// production off-gate below. Thread-local so parallel tests don't race.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// RAII enable for the defrag unit tests: forces the off-gate open on this
+/// thread for the guard's lifetime.
+#[cfg(test)]
+pub(crate) struct OldDefragTestEnable;
+
+#[cfg(test)]
+impl OldDefragTestEnable {
+    pub(crate) fn new() -> Self {
+        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(Some(true)));
+        OldDefragTestEnable
+    }
+}
+
+#[cfg(test)]
+impl Drop for OldDefragTestEnable {
+    fn drop(&mut self) {
+        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(None));
+    }
+}
+
+fn old_page_defrag_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(v) = OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    use std::sync::OnceLock;
+    static OPT_IN: OnceLock<bool> = OnceLock::new();
+    *OPT_IN.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_OLD_DEFRAG").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelection {
+    // gh #6206: old-page defrag evacuation is OFF pending a rewrite-contract
+    // fix. With defrag active, a reader can observe a pre-move address of a
+    // defrag-moved old object long after the cycle (wild-pointer crash /
+    // silently corrupt cached value); the reproducer corrupts 6/6 with defrag
+    // enabled and is clean 6/6 with it disabled, on the same binary, while
+    // every heap-payload slot (arrays in-length, object fields, Map entries)
+    // verifies as correctly rewritten — the stale reference lives on a
+    // non-heap path (address-keyed cache / IC / side table) the defrag
+    // rewrite doesn't reach. Nursery evacuation and tenured promotion (the
+    // reclaim-critical moving paths) are unaffected. Re-enable for
+    // debugging/bisection with PERRY_GC_OLD_DEFRAG=1.
+    if !old_page_defrag_enabled() {
+        return OldPageDefragSelection::default();
+    }
     let snapshot = crate::arena::old_page_meta_snapshot();
     select_old_page_defrag_pages_from_snapshot(&snapshot, force)
 }

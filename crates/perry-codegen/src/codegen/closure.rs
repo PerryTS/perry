@@ -11,7 +11,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
@@ -568,6 +568,25 @@ pub(super) fn compile_closure(
     if typed_public_trampoline.is_some() {
         lf.linkage = "internal".to_string();
     }
+
+    // gh #6206 / #6081: closures/arrows compiled WITHOUT a shadow frame left
+    // their pointer-typed params/locals invisible to the exact-roots copying
+    // minor (production skips the conservative native-stack scan), so an
+    // evacuating GC fired mid-body swept values reachable only from the
+    // closure's own frame — the referrer then read freed-and-reused memory.
+    // Emit the same frame the top-level function path gets (function.rs).
+    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+        let flat_const_ids: std::collections::HashSet<u32> =
+            cross_module.flat_const_arrays.keys().copied().collect();
+        let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
+        lf.enable_shadow_frame(m.len() as u32);
+        m
+    } else {
+        std::collections::HashMap::new()
+    };
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
+
     let _ = lf.create_block("entry");
 
     let mut closure_boxed_vars = module_boxed_vars.clone();
@@ -581,6 +600,12 @@ pub(super) fn compile_closure(
         for p in params {
             let arg_name = format!("%arg{}", p.id);
             let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
+            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                );
+            }
             map.insert(p.id, slot);
         }
         map
@@ -802,8 +827,8 @@ pub(super) fn compile_closure(
         pending_declares: Vec::new(),
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
-        shadow_slot_map: std::collections::HashMap::new(),
-        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
+        shadow_slot_map,
+        shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),

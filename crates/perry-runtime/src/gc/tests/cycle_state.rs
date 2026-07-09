@@ -842,6 +842,7 @@ fn bounded_minor_fallback_preserves_age_and_trace_fields() {
 
 #[test]
 fn budgeted_minor_fallback_ignores_forced_evacuation_and_stays_non_moving() {
+    let _defrag = OldDefragTestEnable::new();
     let _guard = CopyingNurseryTestGuard::new(2);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = EnvVarGuard::set("PERRY_GC_FORCE_EVACUATE", "1");

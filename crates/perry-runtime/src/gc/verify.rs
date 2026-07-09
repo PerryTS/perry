@@ -470,7 +470,28 @@ pub(super) unsafe fn verify_old_young_slot_covered(
     stats.checked_old_to_young_edges = stats.checked_old_to_young_edges.saturating_add(1);
     let parent_addr = parent_header as usize;
     if !old_young_slot_covered(snapshot, parent_addr, slot) {
-        stats.record_missing(parent_addr, slot as usize, child_addr);
+        // gh #6206: record parent/child GC types so the panic below can
+        // print per-type histograms of the dropped edges.
+        let parent_obj_type = (*parent_header).obj_type;
+        let parent_marked = (*parent_header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0;
+        let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        let parent_is_old_arena = matches!(
+            crate::arena::classify_heap_generation(parent_user),
+            crate::arena::HeapGeneration::Old
+        );
+        let child_obj_type = {
+            let ch = (child_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            (*ch).obj_type
+        };
+        stats.record_missing_diag(
+            parent_addr,
+            slot as usize,
+            child_addr,
+            parent_obj_type,
+            child_obj_type,
+            parent_is_old_arena,
+            parent_marked,
+        );
     }
 }
 
@@ -495,19 +516,43 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
 #[cold]
 pub(super) fn panic_old_young_edge_verifier_failed(stats: OldYoungEdgeVerifyStats) -> ! {
     let missing = stats.first_missing.unwrap_or_default();
+    // gh #6206: readable per-type histograms of the missing edges.
+    let type_name = |t: u8| -> &'static str { gc_type_info(t).map_or("?", |i| i.name) };
+    let mut parent_hist = String::new();
+    let mut child_hist = String::new();
+    for t in 0u8..32 {
+        let p = stats.missing_by_parent_type[t as usize];
+        if p != 0 {
+            parent_hist.push_str(&format!(" {}({})={}", type_name(t), t, p));
+        }
+        let c = stats.missing_by_child_type[t as usize];
+        if c != 0 {
+            child_hist.push_str(&format!(" {}({})={}", type_name(t), t, c));
+        }
+    }
     panic!(
-        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} first_missing_parent=0x{:x} first_missing_slot=0x{:x} first_missing_child=0x{:x}",
+        "old-young-edge-verifier failed: checked_old_objects={} checked_remembered_pages={} checked_old_to_young_edges={} missing_edges={} malloc_parents={} unmarked_parents={}\n  first_missing: parent=0x{:x} type={}({}) old_arena={} marked={} slot=0x{:x} child=0x{:x} child_type={}({})\n  missing_by_parent_type:{}\n  missing_by_child_type:{}",
         stats.checked_old_objects,
         stats.checked_remembered_pages,
         stats.checked_old_to_young_edges,
         stats.missing_edges,
+        stats.missing_parent_malloc,
+        stats.missing_parent_unmarked,
         missing.parent,
+        type_name(missing.parent_obj_type),
+        missing.parent_obj_type,
+        missing.parent_is_old_arena,
+        missing.parent_marked,
         missing.slot,
-        missing.child
+        missing.child,
+        type_name(missing.child_obj_type),
+        missing.child_obj_type,
+        parent_hist,
+        child_hist,
     );
 }
 
-pub(super) fn verify_old_to_young_edges_covered() -> OldYoungEdgeVerifyStats {
+pub(super) fn verify_old_to_young_edges_collect() -> OldYoungEdgeVerifyStats {
     let snapshot = remembered_dirty_snapshot();
     let mut stats = OldYoungEdgeVerifyStats {
         checked_remembered_pages: snapshot.dirty_pages.len(),
@@ -524,8 +569,27 @@ pub(super) fn verify_old_to_young_edges_covered() -> OldYoungEdgeVerifyStats {
             }
         }
     });
+    stats
+}
+
+pub(super) fn verify_old_to_young_edges_covered() -> OldYoungEdgeVerifyStats {
+    let stats = verify_old_to_young_edges_collect();
     if stats.missing_edges != 0 {
-        panic_old_young_edge_verifier_failed(stats);
+        // gh #6206: this check runs at AtomicFinalize, AFTER the mark phase
+        // consumed the dirty logs, so its "missing" edges can be a
+        // measurement artifact. PERRY_GC_VERIFY_RS_NONFATAL=1 demotes it to
+        // a warning so the stale-forwarded-refs verifier (which runs later
+        // in the same cycle) can be reached.
+        use std::sync::OnceLock;
+        static NONFATAL: OnceLock<bool> = OnceLock::new();
+        if *NONFATAL.get_or_init(|| std::env::var_os("PERRY_GC_VERIFY_RS_NONFATAL").is_some()) {
+            eprintln!(
+                "[gc-verify] old-young-edge-verifier (non-fatal): missing_edges={}",
+                stats.missing_edges
+            );
+        } else {
+            panic_old_young_edge_verifier_failed(stats);
+        }
     }
     stats
 }

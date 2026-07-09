@@ -170,6 +170,15 @@ pub extern "C" fn js_array_map(
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // Root the callback closure across the iteration. A callback allocated
+        // by a frameless caller (arrow/method — #6081) is reachable ONLY via
+        // this raw param + the native stack, which an evacuating minor does NOT
+        // scan (copied-minor eligibility requires no conservative stack scan).
+        // Closures are non-movable, so an unrooted one is swept in place mid-
+        // loop → the next dispatch calls freed memory ("object is not a
+        // function" / wild-pointer crash). Masked by PERRY_GEN_GC_EVACUATE=0,
+        // whose non-moving minor DOES run the conservative scan. See gh #6206.
+        let cb_handle = scope.root_raw_const_ptr(callback);
         let _tg = DenseThisGuard::bind_undefined();
 
         // ECMA-262 §23.1.3.20 step 5: ArraySpeciesCreate(O, len) runs BEFORE
@@ -204,6 +213,7 @@ pub extern "C" fn js_array_map(
                 }
             };
             // JS .map() callback receives (element, index, array).
+            let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
             let mapped = js_closure_call3(callback, element, i as f64, rooted.receiver());
             if is_plain {
                 let result = result_arr(&result_rooted);
@@ -285,6 +295,8 @@ pub extern "C" fn js_array_filter(
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
+        // Root the callback across the loop — see js_array_map / gh #6206.
+        let cb_handle = scope.root_raw_const_ptr(callback);
         let _tg = DenseThisGuard::bind_undefined();
 
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
@@ -312,6 +324,7 @@ pub extern "C" fn js_array_filter(
                     None => continue,
                 }
             };
+            let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
             let keep = js_closure_call3(callback, element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
