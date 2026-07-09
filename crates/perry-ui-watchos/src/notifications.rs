@@ -223,7 +223,16 @@ pub fn schedule_interval(
     let title = str_from_header(title_ptr);
     let body = str_from_header(body_ptr);
     let repeats_bool = unsafe { js_is_truthy(repeats) != 0 };
-    let interval = if seconds < 0.0 { 0.0 } else { seconds };
+    // UNTimeIntervalNotificationTrigger throws NSInternalInconsistencyException
+    // for a non-positive interval, and for < 60s when repeating. Clamp into the
+    // valid range (also coercing NaN/inf) so a bad caller value can't crash the
+    // app.
+    let interval = if seconds.is_finite() { seconds } else { 0.0 };
+    let interval = if repeats_bool {
+        interval.max(60.0)
+    } else {
+        interval.max(1.0)
+    };
 
     unsafe {
         let Some(content) = build_content(title, body) else {
