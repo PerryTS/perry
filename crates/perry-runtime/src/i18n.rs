@@ -87,7 +87,13 @@ pub extern "C" fn perry_i18n_init(
 /// Detect the system locale from environment or platform APIs.
 fn detect_system_locale() -> Option<String> {
     // 1. Platform-native APIs first (most reliable on GUI apps)
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "watchos",
+        target_os = "tvos",
+        target_os = "visionos"
+    ))]
     {
         if let Some(locale) = detect_apple_locale() {
             return Some(locale);
@@ -173,10 +179,17 @@ fn match_locale(system_locale: &str, locales: &[&str]) -> Option<usize> {
 // Platform-native locale detection
 // ============================================================================
 
-/// Apple platforms (macOS + iOS): use NSBundle.mainBundle.preferredLocalizations
-/// to respect per-app language settings in iOS Settings.
-/// Falls back to CFLocaleCopyCurrent if NSBundle is unavailable.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+/// Apple platforms (macOS, iOS, watchOS, tvOS, visionOS): use
+/// NSBundle.mainBundle.preferredLocalizations to respect per-app language
+/// settings in Settings. Falls back to CFLocaleCopyCurrent if NSBundle is
+/// unavailable. Both APIs exist on every Apple OS.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "watchos",
+    target_os = "tvos",
+    target_os = "visionos"
+))]
 fn detect_apple_locale() -> Option<String> {
     type CFTypeRef = *const std::ffi::c_void;
     type CFStringRef = CFTypeRef;
