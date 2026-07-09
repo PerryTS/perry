@@ -51,9 +51,20 @@ fn alloc_block(min_size: usize) -> ArenaBlock {
         min_size.div_ceil(BLOCK_SIZE) * BLOCK_SIZE
     };
     let layout = Layout::from_size_align(size, 16).unwrap();
-    let data = unsafe { alloc(layout) };
+    let mut data = unsafe { alloc(layout) };
     if data.is_null() {
-        panic!("Failed to allocate arena block of {} bytes", size);
+        // The OS refused memory. Try one emergency full collection —
+        // idle-block dealloc and malloc sweep can return real pages —
+        // then retry once before giving up.
+        if crate::gc::gc_try_emergency_reclaim() {
+            data = unsafe { alloc(layout) };
+        }
+    }
+    if data.is_null() {
+        panic!(
+            "Failed to allocate arena block of {} bytes (heap exhausted after emergency GC)",
+            size
+        );
     }
     ArenaBlock {
         data,

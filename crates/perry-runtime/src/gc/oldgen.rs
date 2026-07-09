@@ -258,7 +258,7 @@ pub(super) fn evacuation_policy_initial_decision(
             ..EvacuationPolicyDecision::default()
         };
     }
-    if rss_bytes >= RSS_PRESSURE_BYTES {
+    if rss_bytes >= gc_rss_pressure_dyn_bytes() {
         return EvacuationPolicyDecision {
             allowed,
             considered: true,
@@ -431,7 +431,7 @@ pub(super) fn evacuation_policy_final_decision(
     // Previously these gates `return`ed before the RSS checks, so a heap of
     // sparsely-pinned blocks could sit above the hard threshold forever with
     // reason `reclaimable_candidate_bytes_below_threshold`.
-    let hard_rss_pressure = snapshot.rss_bytes >= RSS_HARD_PRESSURE_BYTES;
+    let hard_rss_pressure = snapshot.rss_bytes >= gc_rss_hard_pressure_dyn_bytes();
     if hard_rss_pressure {
         decision.enabled = true;
         decision.reason = "rss_hard_pressure";
@@ -468,7 +468,7 @@ pub(super) fn evacuation_policy_final_decision(
     decision.reason = if !object_bytes_pass && block_bytes_pass {
         // Only the granule metric cleared the bar — the new W3 path.
         "releasable_block_bytes"
-    } else if snapshot.rss_bytes >= RSS_PRESSURE_BYTES {
+    } else if snapshot.rss_bytes >= gc_rss_pressure_dyn_bytes() {
         "rss_pressure"
     } else if snapshot.old_page_selected_pages > 0
         && snapshot.tenured_still_in_nursery_bytes < MIN_TENURED_NURSERY_BYTES

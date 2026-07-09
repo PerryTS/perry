@@ -161,9 +161,15 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
     gc_check_trigger();
 
     unsafe {
-        let raw = alloc(layout);
+        let mut raw = alloc(layout);
+        if raw.is_null() && super::gc_try_emergency_reclaim() {
+            raw = alloc(layout);
+        }
         if raw.is_null() {
-            panic!("gc_malloc: failed to allocate {} bytes", total);
+            panic!(
+                "gc_malloc: failed to allocate {} bytes (heap exhausted after emergency GC)",
+                total
+            );
         }
 
         let header = raw as *mut GcHeader;
@@ -211,7 +217,13 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             let layout = Layout::from_size_align(total, 8).unwrap();
             let raw = alloc(layout);
             if raw.is_null() {
-                panic!("gc_malloc_batch: failed to allocate {} bytes", total);
+                // Inside the IN_ALLOC window the emergency reclaim refuses
+                // to run (re-entrancy); batch callers are rare and small,
+                // so just report exhaustion.
+                panic!(
+                    "gc_malloc_batch: failed to allocate {} bytes (heap exhausted)",
+                    total
+                );
             }
             let header = raw as *mut GcHeader;
             (*header).obj_type = obj_type;

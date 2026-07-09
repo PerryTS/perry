@@ -248,9 +248,40 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
-#[allow(dead_code)]
 fn gc_collect_emergency_full() -> GcCollectOutcome {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Emergency))
+}
+
+/// Last-ditch recovery for a failed heap allocation (2026-07-09 audit):
+/// run one synchronous full mark-sweep and let the caller retry the
+/// allocation once. Returns false (caller proceeds straight to its panic)
+/// when collecting here would be unsound: re-entrant emergency, inside a
+/// collection/allocation bookkeeping window, or mid-budgeted-cycle.
+///
+/// The workspace builds with `panic = "unwind"`, and these OOM panics
+/// cross `extern "C"` frames into aborts — on a memory-limited process
+/// (cgroup `memory.max`, jetsam) dying without even attempting a
+/// collection wasted the one chance to shed a heap full of garbage.
+///
+/// The conservative stack scan is forced for the same reason the
+/// alloc-point direct arm forces it: this runs at an arbitrary allocation
+/// site where locals of the current call chain may not be spilled to
+/// shadow slots.
+pub(crate) fn gc_try_emergency_reclaim() -> bool {
+    thread_local! {
+        static IN_EMERGENCY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if IN_EMERGENCY.with(|c| c.get()) {
+        return false;
+    }
+    if GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC != 0 || gc_budgeted_cycle_active() {
+        return false;
+    }
+    IN_EMERGENCY.with(|c| c.set(true));
+    let _scan = roots::ManualGcScanGuard::force_full_scan();
+    let _ = gc_collect_emergency_full();
+    IN_EMERGENCY.with(|c| c.set(false));
+    true
 }
 
 #[cfg(test)]

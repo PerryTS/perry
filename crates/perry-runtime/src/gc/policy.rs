@@ -204,6 +204,209 @@ pub(super) const GC_THRESHOLD_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
 /// which is exactly the bench-RSS scenario this is targeting.
 pub(super) const GC_TRIGGER_ABSOLUTE_CEILING: usize = 128 * 1024 * 1024;
 
+// ─────────────────────────────────────────────────────────────────────────
+// Device-derived heap budget (2026-07-09 GC audit, theme T1 "device-blind
+// policy").
+//
+// Every sizing constant in this collector was tuned on 16-64 GB desktop
+// machines. On a watch-class device (~30-60 MB jetsam budget) or a small
+// container, the 128 MB first trigger alone exceeds the OS-imposed process
+// budget — the process was jetsam/OOM-killed before the collector ever ran
+// once. The budget below derives an upper bound for this process's memory
+// from, in priority order:
+//
+//   1. `PERRY_GC_HEAP_LIMIT` — explicit deployer override, in MB.
+//   2. `os_proc_available_memory()` — Apple embedded (iOS/tvOS/watchOS/
+//      visionOS): bytes left before jetsam, sampled at first GC use.
+//   3. cgroup `memory.max` / `memory.limit_in_bytes` — containers
+//      (via the existing `js_process_constrained_memory` parser).
+//   4. Half of physical RAM (`js_os_totalmem`) — an allowance, not a
+//      claim on the whole machine.
+//
+// Budgets of ≥1 GB clamp nothing (every scaled fraction exceeds its
+// desktop default), and are represented as `None` so all accessors stay on
+// their historical constant path — desktop/server behavior is unchanged.
+// ─────────────────────────────────────────────────────────────────────────
+
+pub(crate) fn gc_heap_budget_bytes() -> Option<usize> {
+    static CACHED: OnceLock<Option<usize>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        if let Ok(v) = std::env::var("PERRY_GC_HEAP_LIMIT") {
+            if let Ok(mb) = v.trim().parse::<u64>() {
+                if mb > 0 {
+                    return Some((mb as usize).saturating_mul(1024 * 1024));
+                }
+            }
+        }
+        let mut budget: Option<usize> = None;
+        let mut consider = |candidate: f64| {
+            if candidate.is_finite() && candidate >= 1024.0 * 1024.0 {
+                let c = candidate as usize;
+                budget = Some(budget.map_or(c, |b| b.min(c)));
+            }
+        };
+        #[cfg(any(
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "visionos"
+        ))]
+        {
+            extern "C" {
+                // libSystem, iOS 13+/watchOS 6+: bytes this process may
+                // still allocate before hitting its jetsam limit.
+                fn os_proc_available_memory() -> usize;
+            }
+            let avail = unsafe { os_proc_available_memory() };
+            if avail > 0 {
+                consider(avail as f64);
+            }
+        }
+        consider(crate::process::js_process_constrained_memory());
+        let total = crate::os::js_os_totalmem();
+        if total.is_finite() && total > 0.0 {
+            consider(total / 2.0);
+        }
+        match budget {
+            Some(b) if b < 1024 * 1024 * 1024 => Some(b),
+            _ => None,
+        }
+    })
+}
+
+/// `default.min(budget/den × num).max(floor)`; the historical default on
+/// unbudgeted (desktop/server) machines.
+fn budget_scaled(default: usize, num: usize, den: usize, floor: usize) -> usize {
+    budget_scaled_with(gc_heap_budget_bytes(), default, num, den, floor)
+}
+
+pub(super) fn budget_scaled_with(
+    budget: Option<usize>,
+    default: usize,
+    num: usize,
+    den: usize,
+    floor: usize,
+) -> usize {
+    match budget {
+        Some(budget) => default.min((budget / den).saturating_mul(num)).max(floor),
+        None => default,
+    }
+}
+
+macro_rules! budget_scaled_accessor {
+    ($(#[$doc:meta])* $name:ident, $default:expr, $num:expr, $den:expr, $floor:expr) => {
+        $(#[$doc])*
+        pub(crate) fn $name() -> usize {
+            static CACHED: OnceLock<usize> = OnceLock::new();
+            *CACHED.get_or_init(|| budget_scaled($default, $num, $den, $floor))
+        }
+    };
+}
+
+budget_scaled_accessor!(
+    /// First-GC / adaptive-trigger ceiling: a quarter of the device budget,
+    /// capped at the historical 128 MB.
+    gc_trigger_absolute_ceiling_bytes,
+    GC_TRIGGER_ABSOLUTE_CEILING,
+    1,
+    4,
+    2 * 1024 * 1024
+);
+budget_scaled_accessor!(
+    /// Post-collection headroom floor (historically 16 MB) — scales down
+    /// with the trigger so a small-budget device doesn't get 16 MB of
+    /// headroom on an 8 MB trigger.
+    gc_trigger_headroom_floor_bytes,
+    16 * 1024 * 1024,
+    1,
+    32,
+    1024 * 1024
+);
+budget_scaled_accessor!(
+    gc_old_gen_reclaim_threshold_dyn_bytes,
+    GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
+    1,
+    8,
+    4 * 1024 * 1024
+);
+budget_scaled_accessor!(
+    gc_old_gen_reclaim_growth_dyn_bytes,
+    GC_OLD_GEN_RECLAIM_GROWTH_BYTES,
+    1,
+    12,
+    2 * 1024 * 1024
+);
+budget_scaled_accessor!(
+    gc_copy_promotion_handoff_min_dyn_bytes,
+    GC_COPY_PROMOTION_HANDOFF_MIN_BYTES,
+    1,
+    16,
+    2 * 1024 * 1024
+);
+budget_scaled_accessor!(
+    gc_moving_defer_hard_cap_dyn_bytes,
+    GC_MOVING_DEFER_HARD_CAP_BYTES,
+    1,
+    4,
+    2 * 1024 * 1024
+);
+budget_scaled_accessor!(
+    gc_tiny_parse_in_use_trigger_dyn_bytes,
+    GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES,
+    1,
+    8,
+    2 * 1024 * 1024
+);
+budget_scaled_accessor!(
+    gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes,
+    GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES,
+    1,
+    16,
+    1024 * 1024
+);
+
+/// The arena-bytes trigger as the collector should compare it: the raw
+/// cell while armed (explicit re-arms/bumps may legitimately exceed the
+/// ceiling — headroom floor over a big live set, medium-parse bumps), the
+/// device-derived ceiling while the cell still holds its desktop-default
+/// const initializer.
+pub(super) fn effective_next_arena_trigger() -> usize {
+    if GC_TRIGGER_ARMED.with(|a| a.get()) {
+        GC_NEXT_TRIGGER_BYTES.with(|c| c.get())
+    } else {
+        GC_NEXT_TRIGGER_BYTES
+            .with(|c| c.get())
+            .min(gc_trigger_absolute_ceiling_bytes())
+    }
+}
+
+/// RSS evacuation-pressure thresholds (historically 192/256 MB — above the
+/// entire process budget of every small device, so the pressure arms never
+/// fired exactly where they matter most).
+pub(crate) fn gc_rss_pressure_dyn_bytes() -> u64 {
+    static CACHED: OnceLock<u64> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        budget_scaled(
+            super::oldgen::RSS_PRESSURE_BYTES as usize,
+            1,
+            2,
+            16 * 1024 * 1024,
+        ) as u64
+    })
+}
+
+pub(crate) fn gc_rss_hard_pressure_dyn_bytes() -> u64 {
+    static CACHED: OnceLock<u64> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        budget_scaled(
+            super::oldgen::RSS_HARD_PRESSURE_BYTES as usize,
+            2,
+            3,
+            24 * 1024 * 1024,
+        ) as u64
+    })
+}
+
 thread_local! {
     /// Lower bound for the next GC trigger. Bumped after each
     /// `gc_collect_inner` based on collection effectiveness (see the
@@ -225,6 +428,15 @@ thread_local! {
     /// set unboundedly between collections.
     pub(super) static GC_NEXT_TRIGGER_BYTES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(GC_THRESHOLD_INITIAL_BYTES) };
+
+    /// Whether GC_NEXT_TRIGGER_BYTES has been explicitly set on this thread
+    /// (re-arm after a collection, parse bump, tiny-parse lowering). While
+    /// false the cell still holds the desktop-default const initializer and
+    /// `effective_next_arena_trigger` substitutes the device-derived ceiling
+    /// instead — an ARMED trigger above the ceiling is legitimate (big live
+    /// set headroom floor, medium-parse bumps) and must not be clamped.
+    pub(super) static GC_TRIGGER_ARMED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 
     /// Per-program adaptive GC step. Doubles (up to MAX) when sweeps
     /// are mostly-garbage; halves (down to 16MB) when sweeps reclaim
@@ -275,10 +487,10 @@ pub(super) fn gc_bump_arena_trigger_target(
     step: usize,
     is_tiny_parse: bool,
 ) -> usize {
-    let bytes_step = step.min(GC_THRESHOLD_INITIAL_BYTES);
+    let bytes_step = step.min(gc_trigger_absolute_ceiling_bytes());
     let target = bytes_now.saturating_add(bytes_step);
     if is_tiny_parse {
-        target.min(GC_TRIGGER_ABSOLUTE_CEILING)
+        target.min(gc_trigger_absolute_ceiling_bytes())
     } else {
         target
     }
@@ -727,8 +939,7 @@ pub(super) fn flush_deferred_gc_request() {
 
 pub fn gc_suppress() {
     if !gen_gc_enabled()
-        && crate::arena::arena_in_use_bytes()
-            >= GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+        && crate::arena::arena_in_use_bytes() >= gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
     {
         crate::arena::arena_start_fresh_general_block();
     }
@@ -769,9 +980,9 @@ pub fn gc_bump_malloc_trigger() {
     if is_tiny_parse {
         let use_gen_gc = gen_gc_enabled();
         let in_use_trigger = if use_gen_gc {
-            GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES
+            gc_tiny_parse_in_use_trigger_dyn_bytes()
         } else {
-            GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+            gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
         };
         if crate::arena::arena_in_use_bytes() < in_use_trigger {
             return;
@@ -785,6 +996,7 @@ pub fn gc_bump_malloc_trigger() {
             GC_NEXT_TRIGGER_BYTES.with(|trigger| {
                 if trigger.get() > bytes_now {
                     trigger.set(bytes_now);
+                    GC_TRIGGER_ARMED.with(|a| a.set(true));
                 }
             });
             gc_check_trigger();
@@ -821,6 +1033,7 @@ pub fn gc_collect_pending_suppressed_parse() {
     GC_NEXT_TRIGGER_BYTES.with(|trigger| {
         if trigger.get() > total {
             trigger.set(total);
+            GC_TRIGGER_ARMED.with(|a| a.set(true));
         }
     });
     gc_check_trigger();
@@ -838,7 +1051,7 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if !gen_gc_enabled() {
         return;
     }
-    if crate::arena::arena_in_use_bytes() < GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES {
+    if crate::arena::arena_in_use_bytes() < gc_tiny_parse_in_use_trigger_dyn_bytes() {
         return;
     }
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
@@ -846,9 +1059,9 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
 
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
-    (old_in_use >= GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
-        && baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES)
-        || old_in_use.saturating_sub(baseline) >= GC_OLD_GEN_RECLAIM_GROWTH_BYTES
+    (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
+        && baseline < gc_old_gen_reclaim_threshold_dyn_bytes())
+        || old_in_use.saturating_sub(baseline) >= gc_old_gen_reclaim_growth_dyn_bytes()
 }
 
 #[inline]
@@ -857,7 +1070,7 @@ pub(super) fn copied_minor_promotion_handoff_pressure_due(
     old_in_use: usize,
     baseline: usize,
 ) -> bool {
-    promotable_bytes >= GC_COPY_PROMOTION_HANDOFF_MIN_BYTES
+    promotable_bytes >= gc_copy_promotion_handoff_min_dyn_bytes()
         && old_reclaim_pressure_due(old_in_use.saturating_add(promotable_bytes), baseline)
 }
 
@@ -891,7 +1104,9 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
     ) {
         return false;
     }
-    if crate::arena::copying_active_survivor_in_use_bytes() < GC_COPY_PROMOTION_HANDOFF_MIN_BYTES {
+    if crate::arena::copying_active_survivor_in_use_bytes()
+        < gc_copy_promotion_handoff_min_dyn_bytes()
+    {
         return false;
     }
     let promotable = copied_minor_promotable_active_survivor_bytes();
@@ -971,8 +1186,12 @@ pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: us
     // Only raise — never lower — so this can't accidentally trip a
     // pending collection that the existing trigger had already armed.
     GC_NEXT_TRIGGER_BYTES.with(|c| {
-        if bytes_trigger > c.get() {
+        // Compare against the effective (budget-clamped) trigger, not the
+        // raw cell: on a small-budget device the cell's un-armed default
+        // (128 MB) would otherwise swallow every legitimate parse bump.
+        if bytes_trigger > effective_next_arena_trigger() {
             c.set(bytes_trigger);
+            GC_TRIGGER_ARMED.with(|a| a.set(true));
             if !is_tiny_parse {
                 GC_TRIGGER_BUMPED.with(|b| b.set(true));
             }
@@ -1097,10 +1316,11 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     // approaches the ceiling doesn't thrash on every fresh
     // allocation.
     let stepped = new_total.saturating_add(step);
-    let capped = stepped.min(GC_TRIGGER_ABSOLUTE_CEILING);
-    let floor = new_total.saturating_add(16 * 1024 * 1024);
+    let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
+    let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
     let next_trigger = std::cmp::max(capped, floor);
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
+    GC_TRIGGER_ARMED.with(|a| a.set(true));
     // Rebaseline the malloc-count trigger only if this collection
     // actually swept malloc objects. Copied-minor arena collections
     // may skip the malloc sweep while count pressure is still below
@@ -1244,7 +1464,7 @@ pub fn gc_check_trigger() {
             // pass the hard cap (a mega-expression that reached no poll), fall
             // through and collect non-moving here so growth stays bounded.
             if gc_moving_loop_polls_enabled()
-                && crate::arena::arena_total_bytes() < GC_MOVING_DEFER_HARD_CAP_BYTES
+                && crate::arena::arena_total_bytes() < gc_moving_defer_hard_cap_dyn_bytes()
             {
                 GC_SAFEPOINT_PENDING.with(|p| p.set(true));
                 return;
@@ -1358,10 +1578,10 @@ fn gc_budgeted_resume_blocked() -> bool {
 }
 
 pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
-    let trigger = if baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES {
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
+    let trigger = if baseline < gc_old_gen_reclaim_threshold_dyn_bytes() {
+        gc_old_gen_reclaim_threshold_dyn_bytes()
     } else {
-        baseline.saturating_add(GC_OLD_GEN_RECLAIM_GROWTH_BYTES)
+        baseline.saturating_add(gc_old_gen_reclaim_growth_dyn_bytes())
     };
     old_in_use.saturating_sub(trigger) as u64
 }
@@ -1377,8 +1597,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     }
 
     let total = crate::arena::arena_total_bytes();
-    let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
-    if total >= next_arena_trigger {
+    if total >= effective_next_arena_trigger() {
         return Some(BudgetedGcTrigger::ArenaBytes);
     }
 
