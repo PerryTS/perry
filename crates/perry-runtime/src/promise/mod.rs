@@ -24,6 +24,7 @@ pub mod checked_dispatch;
 pub mod combinators;
 pub mod microtasks;
 pub mod native_async;
+pub mod reactions;
 pub mod scanners;
 pub mod spec_combinators;
 pub mod subclass;
@@ -61,6 +62,7 @@ pub use native_async::{
     PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK, PERRY_NATIVE_ASYNC_THREAD_MAIN,
     PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
+pub(crate) use reactions::js_promise_attach_settle_listener;
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
 pub use spec_combinators::{
@@ -71,10 +73,9 @@ pub use spec_combinators::{
 pub use subclass::js_promise_subclass_init;
 pub(crate) use subclass::subclass_backing_promise;
 pub(crate) use then::{
-    box_promise_ptr, js_promise_attach_handlers, js_promise_attach_settle_listener,
-    mark_rejection_handled, promise_has_own_constructor, promise_has_own_property,
-    promise_proto_method, promise_prototype_catch_thunk, promise_prototype_finally_thunk,
-    promise_prototype_then_thunk,
+    box_promise_ptr, js_promise_attach_handlers, mark_rejection_handled,
+    promise_has_own_constructor, promise_has_own_property, promise_proto_method,
+    promise_prototype_catch_thunk, promise_prototype_finally_thunk, promise_prototype_then_thunk,
 };
 pub use then::{
     js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free,
@@ -787,8 +788,8 @@ pub(crate) fn clear_promise_context(promise: *mut Promise) {
 /// abandoned pending promise leaked everything it captured forever).
 pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
-    then::remove_settle_listeners_for_dead_promise(promise);
-    then::remove_overflow_reactions_for_dead_promise(promise);
+    reactions::remove_settle_listeners_for_dead_promise(promise);
+    reactions::remove_overflow_reactions_for_dead_promise(promise);
     combinators::remove_all_states_for_dead_promise(promise);
 }
 
@@ -807,7 +808,7 @@ pub(crate) enum CopiedMinorPromiseKeyFate {
 
 /// Classify a promise-address side-table key for the copied-minor cleanup.
 /// Shared by `PROMISE_CONTEXTS`, the settle-listener/overflow-reaction tables
-/// (`then.rs`) and `PROMISE_ALL_STATES` (`combinators.rs`).
+/// (`reactions.rs`) and `PROMISE_ALL_STATES` (`combinators.rs`).
 pub(crate) fn copied_minor_promise_key_fate(key: usize) -> CopiedMinorPromiseKeyFate {
     let space = crate::arena::classify_heap_space(key);
     let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
@@ -850,8 +851,8 @@ pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
             contexts.rekey(old_key, new_key);
         }
     });
-    then::cleanup_copied_minor_settle_listeners_for_gc();
-    then::cleanup_copied_minor_overflow_reactions_for_gc();
+    reactions::cleanup_copied_minor_settle_listeners_for_gc();
+    reactions::cleanup_copied_minor_overflow_reactions_for_gc();
     combinators::cleanup_copied_minor_all_states_for_gc();
 }
 

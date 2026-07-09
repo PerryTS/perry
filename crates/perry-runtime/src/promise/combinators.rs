@@ -97,7 +97,7 @@ pub(super) fn remove_all_states_for_dead_promise(promise: *mut Promise) {
 }
 
 /// Copied-minor from-space cleanup for `PROMISE_ALL_STATES` — see
-/// `cleanup_copied_minor_settle_listeners_for_gc` (`then.rs`).
+/// `cleanup_copied_minor_settle_listeners_for_gc` (`reactions.rs`).
 pub(super) fn cleanup_copied_minor_all_states_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_ALL_STATES.with(|states| {
