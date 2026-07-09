@@ -298,6 +298,51 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             }
             return nanbox_false;
         }
+        // #6148: `Uint8Array` / `Buffer` are backed by a header-less registered
+        // buffer (not `TYPED_ARRAY_REGISTRY`), so the typed-array arm above misses
+        // them. A Buffer is a `Uint8Array`, so `in` consults numeric indices
+        // (bounds) and the own/inherited members property-get can resolve.
+        if crate::buffer::is_registered_buffer(obj_addr as usize) {
+            let buf = obj_addr as *const crate::buffer::BufferHeader;
+            let len = unsafe { crate::buffer::js_buffer_length(buf) };
+            if key_val.is_int32() {
+                let idx = key_val.as_int32();
+                return if idx >= 0 && idx < len {
+                    nanbox_true
+                } else {
+                    nanbox_false
+                };
+            }
+            if key_val.is_number() {
+                let f = f64::from_bits(key_val.bits());
+                let present = f.is_finite()
+                    && f >= 0.0
+                    && f.fract() == 0.0
+                    && f <= i32::MAX as f64
+                    && (f as i32) < len;
+                return if present { nanbox_true } else { nanbox_false };
+            }
+            if key_val.is_any_string() {
+                // Own view slots, always present. Inherited prototype MEMBERS
+                // (`subarray`, `map`, `toString`, …) via `in` on a buffer are a
+                // separate follow-up — the same string-key gap the registered
+                // typed-array arm above has, tied to lazy `%TypedArray%`
+                // prototype population.
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    if matches!(
+                        name,
+                        "length" | "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" | "buffer"
+                    ) {
+                        return nanbox_true;
+                    }
+                }
+                return nanbox_false;
+            }
+            return nanbox_false;
+        }
         let obj_ptr = obj_addr as *mut ObjectHeader;
         unsafe {
             if !obj_ptr.is_null() && (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID {
