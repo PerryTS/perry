@@ -165,8 +165,22 @@ fn active_cycle_gc_check_trigger_calls_pay_bounded_assist_work() {
     }
 }
 
+/// #6180: allocation-side mutator assists must drive the *entire* budgeted
+/// cycle to completion — through `AtomicFinalize`, `Sweep`, and `Reclaim` —
+/// using only the slice of work performed from `gc_check_trigger` (the
+/// allocator), never a host safepoint (`js_gc_step_work_units`).
+///
+/// Before #6180 the assist path bailed at the first non-mark phase, so a pure
+/// compute loop that never reached the event pump would start a cycle, advance
+/// it to `AtomicFinalize`, and park there forever: the incremental mark barrier
+/// stayed enabled and nothing was ever swept, so resident memory grew without
+/// bound. This proves the parking hole is closed — dead malloc churn is
+/// reclaimed and the live root survives, entirely from allocation-side assists.
+///
+/// Host-driven incremental sweep/reclaim *slicing* (partial-progress pauses) is
+/// covered separately in `incremental_sweep_reclaim.rs`.
 #[test]
-fn allocation_assists_stop_before_unsliced_finalize_and_sweep() {
+fn allocation_assists_complete_finalize_sweep_and_reclaim() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -193,132 +207,54 @@ fn allocation_assists_stop_before_unsliced_finalize_and_sweep() {
     let before = gc_collection_count();
     gc_check_trigger();
 
-    let mut status = budgeted_step_until_phase(GcCyclePhase::AtomicFinalize);
-    assert_eq!(status.status, JS_GC_STEP_STATUS_ACTIVE);
-    assert_eq!(status.phase, GcCyclePhase::AtomicFinalize.ffi_code());
-
-    for _ in 0..8 {
-        gc_check_trigger();
-        assert_eq!(js_gc_step_status(&mut status), JS_GC_STEP_STATUS_ACTIVE);
-        assert_eq!(
-            status.phase,
-            GcCyclePhase::AtomicFinalize.ffi_code(),
-            "allocation-side assist must not run atomic finalize"
-        );
-        assert_eq!(
-            gc_collection_count(),
-            before,
-            "allocation-side assist must not complete the cycle"
-        );
-        assert_eq!(
-            tracked_malloc_headers_matching(&churn_headers),
-            churn_headers.len(),
-            "allocation-side assist must not reach malloc sweep through finalize"
-        );
-    }
-
-    let mut host_finalize_steps = 0usize;
-    while status.phase == GcCyclePhase::AtomicFinalize.ffi_code() {
-        assert_eq!(
-            js_gc_step_work_units(1, &mut status),
-            JS_GC_STEP_STATUS_ACTIVE
-        );
-        host_finalize_steps += 1;
-        assert!(
-            host_finalize_steps < 100_000,
-            "host-driven atomic finalize did not finish"
-        );
-        assert!(
-            status.phase == GcCyclePhase::AtomicFinalize.ffi_code()
-                || status.phase == GcCyclePhase::Sweep.ffi_code(),
-            "host-driven finalization should stay in atomic finalize or advance to sweep"
-        );
-    }
-    assert!(
-        host_finalize_steps > 0,
-        "host step should advance through atomic finalize"
-    );
-    assert_eq!(status.phase, GcCyclePhase::Sweep.ffi_code());
-
-    for _ in 0..8 {
-        gc_check_trigger();
-        assert_eq!(js_gc_step_status(&mut status), JS_GC_STEP_STATUS_ACTIVE);
-        assert_eq!(
-            status.phase,
-            GcCyclePhase::Sweep.ffi_code(),
-            "allocation-side assist must not run the unsliced sweep"
-        );
-        assert_eq!(
-            gc_collection_count(),
-            before,
-            "allocation-side assist must not complete the cycle"
-        );
-        assert_eq!(
-            tracked_malloc_headers_matching(&churn_headers),
-            churn_headers.len(),
-            "allocation-side assist must not reclaim malloc churn from sweep"
-        );
-    }
-
-    let mut saw_partial_sweep = false;
+    // Drive the active budgeted cycle using ONLY allocation-side assists: every
+    // `gc_check_trigger()` performs one bounded assist step, and we observe the
+    // phase after each. We never call `js_gc_step_work_units` (the host path).
+    let mut status = JsGcStepResult::default();
+    let mut reached_finalize = false;
+    let mut reached_sweep = false;
+    let mut reached_reclaim = false;
+    let mut completed = false;
     for _ in 0..500_000 {
-        assert_eq!(
-            js_gc_step_work_units(1, &mut status),
-            JS_GC_STEP_STATUS_ACTIVE
-        );
-        if status.phase == GcCyclePhase::Reclaim.ffi_code() {
+        gc_check_trigger();
+        js_gc_step_status(&mut status);
+        if status.phase == GcCyclePhase::AtomicFinalize.ffi_code() {
+            reached_finalize = true;
+        } else if status.phase == GcCyclePhase::Sweep.ffi_code() {
+            reached_sweep = true;
+        } else if status.phase == GcCyclePhase::Reclaim.ffi_code() {
+            reached_reclaim = true;
+        }
+        if gc_collection_count() > before {
+            completed = true;
             break;
         }
-        assert_eq!(status.phase, GcCyclePhase::Sweep.ffi_code());
-        let remaining = tracked_malloc_headers_matching(&churn_headers);
-        if remaining < churn_headers.len() {
-            saw_partial_sweep = true;
-        }
-        assert_eq!(
-            gc_collection_count(),
-            before,
-            "host-driven incremental sweep must not complete the cycle"
-        );
     }
+
     assert!(
-        saw_partial_sweep,
-        "host-driven sweep should pause after reclaiming part of malloc churn"
+        completed,
+        "allocation-side assists alone must drive the budgeted cycle to completion (#6180 parking hole)"
     );
-    assert_eq!(status.phase, GcCyclePhase::Reclaim.ffi_code());
+    assert!(
+        reached_finalize && reached_sweep && reached_reclaim,
+        "assists must advance through atomic finalize, sweep, and reclaim \
+         (finalize={reached_finalize} sweep={reached_sweep} reclaim={reached_reclaim})"
+    );
     assert_eq!(
         tracked_malloc_headers_matching(&churn_headers),
         0,
-        "host-driven sweep should reclaim dead malloc churn before reclaim"
+        "assist-driven sweep must reclaim dead malloc churn"
     );
-
-    for _ in 0..8 {
-        gc_check_trigger();
-        assert_eq!(js_gc_step_status(&mut status), JS_GC_STEP_STATUS_ACTIVE);
-        assert_eq!(
-            status.phase,
-            GcCyclePhase::Reclaim.ffi_code(),
-            "allocation-side assist must not run unsliced reclaim"
-        );
-        assert_eq!(
-            gc_collection_count(),
-            before,
-            "allocation-side assist must not complete the cycle from reclaim"
-        );
-    }
-
-    let completed = complete_budgeted_gc_cycle();
-    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
     assert!(
         malloc_user_ptr_tracked(live_malloc),
-        "live malloc root should survive after host drains the cycle"
+        "live malloc root must survive the assist-driven cycle"
     );
+    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_eq!(
-        tracked_malloc_headers_matching(&churn_headers),
-        0,
-        "host-drained sweep should reclaim dead malloc churn"
+        live_after, live_malloc as usize,
+        "live root must remain reachable via the shadow slot after assists drain the cycle"
     );
 }
-
 fn noop_copy_only_root_scanner(_visit: &mut dyn FnMut(f64)) {}
 
 /// Regression: the direct synchronous minor — taken whenever synchronous-only

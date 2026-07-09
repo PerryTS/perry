@@ -42,17 +42,6 @@ impl GcCyclePhase {
             Self::Complete => 8,
         }
     }
-
-    #[inline]
-    pub(super) const fn mutator_assist_honors_budget(self) -> bool {
-        matches!(
-            self,
-            Self::BuildValidPointerSet
-                | Self::RootScan
-                | Self::MarkPropagation
-                | Self::BlockPersistence
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1758,17 +1758,12 @@ enum BudgetedStepOutcome {
 }
 
 fn gc_budgeted_step_work_units_inner(work_units: usize) -> JsGcStepResult {
-    gc_budgeted_step_work_units_inner_with_progress(
-        work_units,
-        GcProgressKind::NormalIncremental,
-        false,
-    )
+    gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
 }
 
 fn gc_budgeted_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
-    mutator_assist_only: bool,
 ) -> JsGcStepResult {
     if work_units == 0 {
         return gc_budgeted_status_result();
@@ -1804,14 +1799,6 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             return BudgetedStepOutcome::Result(gc_idle_step_result());
         };
 
-        if mutator_assist_only && !cycle.state.phase().mutator_assist_honors_budget() {
-            return BudgetedStepOutcome::Result(gc_cycle_step_result(
-                JS_GC_STEP_STATUS_ACTIVE,
-                cycle,
-                false,
-            ));
-        }
-
         let step = cycle.state.step(GcWorkBudget::bounded(work_units));
         if step.completed {
             BudgetedStepOutcome::Completed(slot.take().expect("active budgeted GC cycle exists"))
@@ -1830,11 +1817,23 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     }
 }
 
+/// Allocation-side mutator assist: a bounded (`GC_MUTATOR_ASSIST_WORK_UNITS`)
+/// slice of GC work performed from the allocator (`gc_check_trigger`) rather
+/// than from a host safepoint. Assists drive **every** resumable phase of the
+/// active budgeted cycle, exactly like a host safepoint — the only difference
+/// is the smaller per-step budget carried in `work_units`. This is what closes
+/// the incremental sweep-parking hole (#6180): a pure compute loop that never
+/// reaches the event pump still finishes the cycle (and disables the mark
+/// barrier / reclaims memory) purely from the allocations it keeps making, so
+/// RSS stays bounded. `AtomicFinalizeSubphase::WeakProcessing` is the one
+/// phase step that is not yet internally sliced, so the assist that lands on it
+/// runs it whole — a single O(live-weak-holders) spike per cycle; slicing it is
+/// a tracked follow-up (pause-quality, not correctness).
 fn gc_mutator_assist_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
 ) -> JsGcStepResult {
-    gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind, true)
+    gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind)
 }
 
 pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
@@ -1842,11 +1841,7 @@ pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
     let Some(work_units) = budget.work_units else {
         return gc_budgeted_status_result();
     };
-    gc_budgeted_step_work_units_inner_with_progress(
-        work_units,
-        GcProgressKind::NormalIncremental,
-        false,
-    )
+    gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
 }
 
 fn write_gc_step_result(out: *mut JsGcStepResult, result: JsGcStepResult) -> u32 {
