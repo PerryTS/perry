@@ -120,7 +120,8 @@ fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => false,
     }
 }
 

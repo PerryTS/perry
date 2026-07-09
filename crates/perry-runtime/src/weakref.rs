@@ -827,6 +827,17 @@ unsafe fn weak_entry_at(entries: *mut ArrayHeader, i: usize) -> *mut ObjectHeade
 pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
 pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 
+/// Sentinel name of the internal slot-0 field that backs a `WeakMap`/`WeakSet`
+/// with its `[k, v]`-pair entry array (`js_weakmap_new` / `js_weakset_new`).
+/// `WeakMap`/`WeakSet` are `GC_TYPE_OBJECT`s, so this is an own enumerable
+/// string key — it must NEVER surface through any enumeration surface
+/// (`Object.keys` / `Object.assign` / spread / `JSON.stringify` / `for…in` /
+/// `hasOwnProperty`). Hidden via `is_internal_runtime_key_bytes`, exactly like
+/// the `class … extends Map/Set` backing key. Internal reads go through
+/// `entries_array` by direct name lookup, so hiding it from enumeration is
+/// safe. Refs #6120.
+pub(crate) const WEAK_ENTRIES_KEY: &[u8] = b"__perry_wk_entries";
+
 /// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
 /// #1757/#1758). `js_native_call_method` calls this for any heap object;
 /// it returns `Some(result)` only when `obj` carries the reserved

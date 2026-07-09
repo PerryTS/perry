@@ -34,6 +34,7 @@ pub fn start() -> i64 {
     unsafe {
         let session_cls = match AnyClass::get(c"AVAudioSession") {
             Some(cls) => cls,
+            // AVFAudio not linked / class not registered.
             None => return 0,
         };
         let session: *mut AnyObject = msg_send![session_cls, sharedInstance];
@@ -46,22 +47,48 @@ pub fn start() -> i64 {
         let mode = objc2_foundation::NSString::from_str("AVAudioSessionModeMeasurement");
         let options: usize = 0; // NSUInteger
         let mut error: *mut AnyObject = std::ptr::null_mut();
-        let _: bool = msg_send![session, setCategory: &*category
+        let _set_cat: bool = msg_send![session, setCategory: &*category
                                          mode: &*mode
                                          options: options
                                          error: &mut error];
 
-        let _: bool = msg_send![session, setActive: true error: &mut error];
+        error = std::ptr::null_mut();
+        let _set_active: bool = msg_send![session, setActive: true error: &mut error];
 
-        // recordPermission returns NSUInteger (usize on this platform)
-        let record_permission: usize = msg_send![session, recordPermission];
-        if record_permission == 1 {
+        // AVAudio{Session,Application}RecordPermission is a FourCC-coded
+        // NSInteger, NOT 0/1/2:
+        //   undetermined = 'undt' (0x756E_6474 = 1970168948)
+        //   denied       = 'deny' (0x6465_6E79 = 1684369017)
+        //   granted      = 'grnt' (0x6772_6E74 = 1735552628)
+        // The old `== 1`/`== 0` checks never matched these FourCC values, so the
+        // request was never issued (no system prompt) and the engine started
+        // without mic access → the meter sat at silence. Use the correct
+        // constants, and prefer the modern `AVAudioApplication` API which is
+        // what actually drives the permission prompt on watchOS 10+/26
+        // (AVAudioSession.requestRecordPermission is deprecated there).
+        const PERM_GRANTED: usize = 0x6772_6E74; // 'grnt' — bytes g,r,n,t
+        const PERM_DENIED: usize = 0x6465_6E79; // 'deny'
+
+        let record_permission: usize;
+        if let Some(app_cls) = AnyClass::get(c"AVAudioApplication") {
+            let app: *mut AnyObject = msg_send![app_cls, sharedInstance];
+            record_permission = msg_send![app, recordPermission];
+            if record_permission != PERM_GRANTED && record_permission != PERM_DENIED {
+                let block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+                let _: () =
+                    msg_send![app_cls, requestRecordPermissionWithCompletionHandler: &*block];
+            }
+        } else {
+            record_permission = msg_send![session, recordPermission];
+            if record_permission != PERM_GRANTED && record_permission != PERM_DENIED {
+                let block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+                let _: () = msg_send![session, requestRecordPermission: &*block];
+            }
+        }
+        // Not yet granted: bail so the caller retries. Undetermined means the
+        // system prompt is being shown; the next tick will pick up the grant.
+        if record_permission != PERM_GRANTED {
             return 0;
-        } // denied
-        if record_permission == 0 {
-            let permission_block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
-            let _: () = msg_send![session, requestRecordPermission: &*permission_block];
-            return 0; // retry after grant
         }
 
         let engine_cls = match AnyClass::get(c"AVAudioEngine") {

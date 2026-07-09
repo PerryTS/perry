@@ -186,8 +186,19 @@ pub(crate) fn register_native_fetch_and_streams(
         // Also handle Response.json(...) and Response.redirect(...) static factories.
         if let ast::Expr::New(new_expr) = init_expr.as_ref() {
             if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
+                // #6003: a user class/function/binding that happens to share a
+                // Web-API constructor name (`class Headers { ... }`) lexically
+                // shadows the global — `new Headers()` constructs the USER
+                // class, so tagging the binding as a native instance here
+                // would reroute every method call (`h.set(...)`) through the
+                // native FFI and silently skip the user's methods. Same
+                // shadowing rule as #5912's `new URL()` fix. The alias arm
+                // below checks the RESOLVED name instead: the alias local
+                // (`const B = Blob`) is itself a binding, but the name that
+                // must be unshadowed is the underlying constructor.
+                let ctor_shadowed = ctx.shadows_unqualified_global(class_ident.sym.as_ref());
                 match class_ident.sym.as_ref() {
-                    "Response" => {
+                    "Response" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "fetch".to_string(),
@@ -195,7 +206,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         );
                         ctx.uses_fetch = true;
                     }
-                    "Headers" => {
+                    "Headers" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "Headers".to_string(),
@@ -203,7 +214,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         );
                         ctx.uses_fetch = true;
                     }
-                    "Request" => {
+                    "Request" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "Request".to_string(),
@@ -211,7 +222,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         );
                         ctx.uses_fetch = true;
                     }
-                    "FormData" => {
+                    "FormData" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "FormData".to_string(),
@@ -225,7 +236,7 @@ pub(crate) fn register_native_fetch_and_streams(
                     // `.lastModified` regardless of class tag, so File
                     // tracks as a Blob instance with the class tag
                     // available for future File-only property checks.
-                    "Blob" => {
+                    "Blob" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "blob".to_string(),
@@ -233,7 +244,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         );
                         ctx.uses_fetch = true;
                     }
-                    "File" => {
+                    "File" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "blob".to_string(),
@@ -245,7 +256,10 @@ pub(crate) fn register_native_fetch_and_streams(
                         if ctx
                             .resolve_class_alias(other)
                             .as_deref()
-                            .is_some_and(|resolved| matches!(resolved, "Blob" | "File")) =>
+                            .is_some_and(|resolved| {
+                                matches!(resolved, "Blob" | "File")
+                                    && !ctx.shadows_unqualified_global(resolved)
+                            }) =>
                     {
                         let resolved = ctx.resolve_class_alias(other).unwrap();
                         ctx.register_native_instance(
@@ -256,7 +270,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         ctx.uses_fetch = true;
                     }
                     // Issue #237: Web Streams API constructors.
-                    "ReadableStream" => {
+                    "ReadableStream" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "readable_stream".to_string(),
@@ -267,7 +281,7 @@ pub(crate) fn register_native_fetch_and_streams(
                     // #4915: `new ReadableStreamBYOBReader(stream)` —
                     // the handle is a reader, same module tag as
                     // `stream.getReader({ mode: "byob" })`.
-                    "ReadableStreamBYOBReader" => {
+                    "ReadableStreamBYOBReader" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "readable_stream_reader".to_string(),
@@ -275,7 +289,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         );
                         ctx.uses_fetch = true;
                     }
-                    "WritableStream" => {
+                    "WritableStream" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "writable_stream".to_string(),
@@ -283,7 +297,7 @@ pub(crate) fn register_native_fetch_and_streams(
                         );
                         ctx.uses_fetch = true;
                     }
-                    "TransformStream" => {
+                    "TransformStream" if !ctor_shadowed => {
                         ctx.register_native_instance(
                             name.to_string(),
                             "transform_stream".to_string(),

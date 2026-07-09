@@ -771,14 +771,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I64, &handle), (DOUBLE, &key)],
                 ));
             }
-            let value = lower_uint8array_get_i32(ctx, array, index)?;
-            let reason = buffer_access_materialization_reason(ctx, array);
-            Ok(materialize_js_value(ctx, value, reason))
+            // #6088: a proven non-negative integer key whose value is NOT
+            // proven in bounds (the inline load above bailed). The native i32
+            // accessor returns the `0` byte-sentinel for an out-of-range read;
+            // a JS-value `u8[i]` must instead read `undefined` (ECMAScript
+            // IntegerIndexedExotic `[[Get]]`). In-range reads still return the
+            // byte as a number.
+            let a = lower_expr(ctx, array)?;
+            let idx_i32 = lower_index_i32(ctx, index)?;
+            let blk = ctx.block();
+            let handle = unbox_to_i64(blk, &a);
+            Ok(blk.call(
+                DOUBLE,
+                "js_uint8array_index_get_value",
+                &[(I64, &handle), (I32, &idx_i32)],
+            ))
         }
         Expr::BufferIndexGet { buffer, index } => {
-            let value = lower_buffer_index_get_i32(ctx, buffer, index)?;
-            let reason = buffer_access_materialization_reason(ctx, buffer);
-            Ok(materialize_js_value(ctx, value, reason))
+            // Proven-bounds inline load keeps the native fast path.
+            if let Some(value) =
+                lower_buffer_load(ctx, buffer, index, BufferAccessSpec::buffer_index_get())?
+            {
+                let reason = buffer_access_materialization_reason(ctx, buffer);
+                return Ok(materialize_js_value(ctx, value, reason));
+            }
+            // #6088: out-of-range → `undefined`, not the `0` byte-sentinel the
+            // native `js_buffer_get` accessor is forced to return.
+            let a = lower_expr(ctx, buffer)?;
+            let idx_i32 = lower_index_i32(ctx, index)?;
+            let blk = ctx.block();
+            let handle = unbox_to_i64(blk, &a);
+            Ok(blk.call(
+                DOUBLE,
+                "js_buffer_index_get_value",
+                &[(I64, &handle), (I32, &idx_i32)],
+            ))
         }
         Expr::Uint8ArraySet {
             array,

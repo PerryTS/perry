@@ -27,33 +27,17 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    if !key.is_null() {
-        let obj_bits = obj as u64;
-        let tagged = f64::from_bits(obj_bits);
-        let tagged_value = crate::value::JSValue::from_bits(obj_bits);
-        let string_ptr = if tagged_value.is_any_string() {
-            crate::value::js_get_string_pointer_unified(tagged) as *const crate::StringHeader
-        } else if obj_bits >= crate::gc::GC_HEADER_SIZE as u64
-            && crate::value::addr_class::is_valid_obj_ptr(obj as *const u8)
-        {
-            let gc_hdr = unsafe {
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
-            };
-            if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_STRING {
-                obj as *const crate::StringHeader
-            } else {
-                std::ptr::null()
-            }
-        } else {
-            std::ptr::null()
-        };
-        if crate::string::is_valid_string_ptr(string_ptr) {
-            let key_value = crate::value::js_nanbox_string(key as i64);
-            let indexed = crate::string::js_string_index_get(string_ptr, key_value);
-            if indexed.to_bits() != crate::value::TAG_UNDEFINED {
-                return JSValue::from_bits(indexed.to_bits());
-            }
-        }
+    // #5972: a null key reaches here when the property-key expression didn't
+    // yield a usable string handle — e.g. `js_get_string_pointer_unified`
+    // returned 0 for a NaN/number key that fell through its coercion branches.
+    // Several arms below deref `(*key).byte_len` without a null check, so a
+    // null key would SIGSEGV at offset 4 (KERN_INVALID_ADDRESS at 0x4). Per JS
+    // semantics such a lookup simply misses → undefined. Same defensive shape
+    // as the #2128 invalid-key guard further down. Every in-runtime caller
+    // passes an interned non-null key, so this only affects the codegen
+    // computed-access path.
+    if key.is_null() {
+        return JSValue::undefined();
     }
     // #2846: the receiver may be a Proxy value that arrived through a generic
     // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
@@ -459,6 +443,13 @@ pub extern "C" fn js_object_get_field_by_name(
                         let result = super::super::js_class_method_bind(this_f64, key_ptr, key_len);
                         return JSValue::from_bits(result.to_bits());
                     }
+                    // TextDecoder/TextEncoder registry handles — see
+                    // `text_handle_property` (text.rs).
+                    if let Some(v) =
+                        crate::text::text_handle_property(raw, key_bytes, key_ptr, key_len)
+                    {
+                        return v;
+                    }
                     if key_bytes == b"constructor" {
                         let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                         return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
@@ -848,6 +839,20 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                         }
                     }
+                    // No own static / inherited entry resolved the name. A class
+                    // constructor is a function, so a bare read of `.caller` or
+                    // `.arguments` hits the poison-pill %ThrowTypeError% accessor
+                    // on `Function.prototype` — strict-mode throws (Perry only
+                    // compiles strict code). Placed last so any own static field,
+                    // accessor, or `defineProperty`-installed data prop of that
+                    // name takes precedence. Prototype-refs (`C.prototype`) are
+                    // plain objects and are excluded.
+                    if !is_prototype_ref && matches!(name, "caller" | "arguments") {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                 }
             }
             return JSValue::undefined();
@@ -941,14 +946,31 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
-    // SSO property access for keys not handled by the unified string fast path
-    // above. `.length` and canonical indices are centralized there; remaining
-    // unknown properties on untyped string locals resolve to undefined here
-    // rather than falling through to the object-deref path with an inline-string
-    // payload.
+    // SSO property access (v0.5.213 Step 1 gate). The codegen inline
+    // `.length` path routes SHORT_STRING_TAG receivers here because
+    // it doesn't yet know about the SSO tag. Handle `.length` by
+    // reading the length byte directly from the NaN-box payload.
+    // Other property accesses on an SSO string (e.g. `.charAt` via
+    // `[0]`, `.slice`) aren't yet routed here — handled by the
+    // string method dispatch in a future migration step; today they
+    // fall through to "undefined" which matches the behavior for
+    // string-valued property access on untyped locals in general.
     {
         let obj_bits = obj as u64;
         if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"length" {
+                        let len = (obj_bits & crate::value::SHORT_STRING_LEN_MASK)
+                            >> crate::value::SHORT_STRING_LEN_SHIFT;
+                        return JSValue::number(len as f64);
+                    }
+                }
+            }
             return JSValue::undefined();
         }
     }
@@ -1026,4 +1048,33 @@ pub extern "C" fn js_object_get_field_by_name(
         }
     }
     get_field_by_name_object_tail(obj, key)
+}
+
+#[cfg(test)]
+mod null_key_guard_5972 {
+    use super::*;
+
+    /// #5972 part 2: a null key (produced when a NaN/number property-key
+    /// coerces to no usable string handle) must miss → `undefined`, never
+    /// SIGSEGV by dereferencing `(*key).byte_len` at offset 4.
+    #[test]
+    fn null_key_returns_undefined_not_segfault() {
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            let key = crate::string::js_string_from_bytes(b"present".as_ptr(), 7);
+            crate::object::js_object_set_field_by_name(obj, key, 42.0);
+
+            // Sanity: the real key resolves.
+            let hit = js_object_get_field_by_name(obj, key);
+            assert_eq!(f64::from_bits(hit.bits()), 42.0);
+
+            // The regression: a null key must not crash and must read undefined.
+            let miss = js_object_get_field_by_name(obj, std::ptr::null());
+            assert_eq!(
+                miss.bits(),
+                crate::value::TAG_UNDEFINED,
+                "null key should miss → undefined"
+            );
+        }
+    }
 }

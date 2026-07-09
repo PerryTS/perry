@@ -51,6 +51,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Extending variant: returns a possibly-realloc'd pointer that the
     // caller must write back to the local slot.
     module.declare_function("js_array_set_f64_extend", I64, &[I64, I32, DOUBLE]);
+    module.declare_function("js_array_set_f64_extend_strict", I64, &[I64, I32, DOUBLE]);
     module.declare_function("js_array_fill_f64_const_extend", I64, &[I64, I32, DOUBLE]);
     module.declare_function("js_array_fill_f64_iota_extend", I64, &[I64, I32]);
     module.declare_function("js_array_fill_f64_const_len_extend", I64, &[I64, DOUBLE]);
@@ -86,6 +87,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
     module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
     module.declare_function("js_gc_write_barriers_emitted", VOID, &[I32]);
+    // Phase 2 of the moving-GC project: emitted at loop back-edges (only when
+    // compiled with the moving-safepoint opt-in) so a deferred nursery
+    // collection can run at a precise-root safepoint. No-op at runtime unless
+    // moving mode is on and a collection is pending.
+    module.declare_function("js_gc_loop_safepoint", VOID, &[]);
 
     // Write barrier for the generational GC (Phase C per the
     // gen-GC plan). Called by codegen-emitted heap-store sites
@@ -135,6 +141,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_delete", I32, &[I64, I32]);
     // Closes #304: `arr.length = N` truncate / extend.
     module.declare_function("js_array_set_length", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_array_set_length_strict", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
     // #2773: Array.from(source) — throws TypeError for nullish sources, keeps

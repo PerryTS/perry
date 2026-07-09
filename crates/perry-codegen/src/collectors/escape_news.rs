@@ -166,7 +166,7 @@ fn collect_used_new_fields_in_stmts(
                 );
             }
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-            Stmt::PreallocateBoxes(_) => {}
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 }

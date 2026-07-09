@@ -54,13 +54,6 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
 
-    if a_jsval.is_bigint() && b_jsval.is_bigint() {
-        if crate::bigint::js_bigint_eq(a_jsval.as_bigint_ptr(), b_jsval.as_bigint_ptr()) != 0 {
-            return f64::from_bits(TAG_TRUE);
-        }
-        return f64::from_bits(TAG_FALSE);
-    }
-
     // For everything else, bit-pattern equality
     if a_bits == b_bits {
         f64::from_bits(TAG_TRUE)
@@ -196,9 +189,11 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                                     ptr as *mut crate::error::ErrorHeader,
                                     key,
                                 ),
-                                ExoticKind::Date | ExoticKind::Temporal | ExoticKind::Promise => {
-                                    false
-                                }
+                                ExoticKind::Date
+                                | ExoticKind::Temporal
+                                | ExoticKind::Promise
+                                | ExoticKind::Map
+                                | ExoticKind::Set => false,
                             }
                     })
                     .unwrap_or(false);
@@ -328,11 +323,6 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
-                    if super::super::is_inherited_object_proto_shim_on_builtin_prototype(obj, key) {
-                        return f64::from_bits(TAG_FALSE);
-                    }
-                }
                 let present = super::super::has_own_helpers::array_own_key_present(
                     obj as *const crate::array::ArrayHeader,
                     key_str,
@@ -363,17 +353,6 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
                 if key.starts_with('#') || super::super::field_get_set::is_internal_runtime_key(key)
                 {
-                    return f64::from_bits(TAG_FALSE);
-                }
-                if super::super::is_inherited_object_proto_shim_on_builtin_prototype(obj, key) {
-                    return f64::from_bits(TAG_FALSE);
-                }
-            }
-        }
-
-        if (*obj).class_id == 0 {
-            if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
-                if super::super::is_inherited_object_proto_shim_on_builtin_prototype(obj, key) {
                     return f64::from_bits(TAG_FALSE);
                 }
             }
@@ -586,9 +565,6 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             return result;
         }
         if !is_valid_obj_ptr(obj as *const u8) {
-            return f64::from_bits(TAG_FALSE);
-        }
-        if super::super::is_inherited_object_proto_shim_on_builtin_prototype(obj, key_name) {
             return f64::from_bits(TAG_FALSE);
         }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {

@@ -235,10 +235,10 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
 
 /// `instanceof` kind-probe for fetch handles (registered with the runtime at
 /// init via `js_register_fetch_handle_kind_probe`). Returns 0 = none,
-/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob, 5 = File. Lets
-/// `x instanceof Response` (etc.) resolve for the pointer-tagged small-integer
-/// handles these types use instead of heap objects. Lives here (not `mod.rs`)
-/// to keep that file under the 2,000-line lint gate.
+/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob. Lets `x instanceof
+/// Response` (etc.) resolve for the pointer-tagged small-integer handles these
+/// types use instead of heap objects. Lives here (not `mod.rs`) to keep that
+/// file under the 2,000-line lint gate.
 #[no_mangle]
 pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
     if FETCH_RESPONSES.lock().unwrap().contains_key(&id) {
@@ -250,8 +250,8 @@ pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
     if HEADERS_REGISTRY.lock().unwrap().contains_key(&id) {
         return 3;
     }
-    if let Some(blob) = BLOB_REGISTRY.lock().unwrap().get(&id) {
-        return if blob.file_name.is_some() { 5 } else { 4 };
+    if BLOB_REGISTRY.lock().unwrap().contains_key(&id) {
+        return 4;
     }
     0
 }
@@ -809,17 +809,6 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
         });
     }
     let bits = match prop {
-        "constructor" => {
-            let ctor_name = if blob.file_name.is_some() {
-                "File"
-            } else {
-                "Blob"
-            };
-            return Some(perry_runtime::object::js_get_global_this_builtin_value(
-                ctor_name.as_ptr(),
-                ctor_name.len(),
-            ));
-        }
         "size" => return Some(blob.body.len() as f64),
         "type" => {
             let p =

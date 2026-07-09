@@ -13,7 +13,7 @@ crate-type = ["rlib", "staticlib"]
 # wasmi: pure-Rust WebAssembly interpreter. Default-features off so we don't pull
 # the std-only "string-interner" extras that bloat binary size — the issue
 # measured ~1.1 MB delta with default-features=false.
-wasmi = { version = "0.51", default-features = false }
+wasmi = { version = "1.1", default-features = false }
 
 [features]
 default = []

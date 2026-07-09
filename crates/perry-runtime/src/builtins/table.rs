@@ -54,7 +54,7 @@ fn format_table_cell(value: f64) -> String {
                 }
             } else if is_negative_zero(n) {
                 "-0".to_string()
-            } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+            } else if n.fract() == 0.0 && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
                 (n as i64).to_string()
             } else {
                 format_finite_number_js(n)

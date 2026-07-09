@@ -270,13 +270,7 @@ pub(crate) fn emit_module_globals(
                 // semantically wrong (it'd return the closure value instead
                 // of invoking it).
                 let is_function_alias = hir.exported_functions.iter().any(|(exp, _)| exp == name);
-                let is_exported_alias_source = hir.exports.iter().any(|export| {
-                    matches!(export, perry_hir::Export::Named { local, .. } if local == name)
-                });
-                if (is_exported || is_exported_alias_source)
-                    && !is_also_function
-                    && !is_function_alias
-                {
+                if is_exported && !is_also_function && !is_function_alias {
                     let fn_name = format!("perry_fn_{}__{}", module_prefix, sanitize(name),);
                     let getter = llmod.define_function(&fn_name, DOUBLE, vec![]);
                     let _ = getter.create_block("entry");

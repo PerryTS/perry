@@ -72,7 +72,6 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "DataView" => 0xFFFF002B,
         "WeakMap" => 0xFFFF002C,
         "WeakSet" => 0xFFFF002D,
-        "URL" => 0xFFFF002F,
         "Promise" => 0xFFFF0027,
         "Number" => 0xFFFF00D0,
         "String" => 0xFFFF00D1,
@@ -360,7 +359,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .get(ty)
                 .map(|source| source.strip_prefix("node:").unwrap_or(source) == "net")
                 .unwrap_or(false);
+            // #6003: a user-defined class lexically shadows a same-named
+            // built-in (`class Headers {}` vs the fetch global), so the
+            // bare-identifier RHS must resolve to the USER class id before
+            // the reserved built-in mapping below. `class_ids` holds only
+            // user classes (local `hir.classes` + cross-module imported
+            // user classes); plain built-in names never appear in it, so
+            // unshadowed built-ins keep their reserved ids.
+            let user_cid = ctx.class_ids.get(ty).copied();
             let cid = match ty.as_str() {
+                _ if user_cid.is_some() => user_cid.unwrap(),
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
                 "RangeError" => 0xFFFF0011u32,
@@ -420,10 +428,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
-                // `File` — Blob-registry handles with File metadata. The
-                // runtime also treats File handles as Blob instances.
-                "File" => 0xFFFF002Eu32,
-                "URL" => 0xFFFF002Fu32,
                 // `Promise` — runtime detects via GC_TYPE_PROMISE because
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.

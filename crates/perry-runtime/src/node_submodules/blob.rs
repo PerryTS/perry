@@ -25,9 +25,7 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(not(unix))]
 use std::time::UNIX_EPOCH;
 
-pub(crate) const CLASS_ID_BLOB: u32 = 0xFFFF0026;
-/// `File extends Blob`; shares this module as its canonical class-id home.
-pub(crate) const CLASS_ID_FILE: u32 = 0xFFFF002E;
+const CLASS_ID_BLOB: u32 = 0xFFFF0026;
 
 #[derive(Clone)]
 struct FileBlobState {

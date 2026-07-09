@@ -22,9 +22,6 @@ fn empty_opts() -> CompileOptions {
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
         namespace_member_origin_names: std::collections::HashMap::new(),
-        namespace_member_vars: std::collections::HashSet::new(),
-        namespace_member_namespace_prefixes: std::collections::HashMap::new(),
-        namespace_import_prefixes: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
         disable_buffer_fast_path: false,
@@ -1350,8 +1347,7 @@ fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
 
     let ir = compile_ir("pod_dynamic_materialized_read_coerce.ts", body);
     assert!(
-        ir.contains("call double @js_number_coerce")
-            || ir.contains("call double @js_object_get_field_by_name_f64"),
+        ir.contains("call double @js_number_coerce"),
         "POD field reads after dynamic materialization must not feed boxed JSValue fallbacks into raw numeric arithmetic:\n{ir}"
     );
 }

@@ -1040,37 +1040,38 @@ pub fn lower_module_full(
     module.uses_webassembly = ctx.uses_webassembly;
     module.extern_funcs = ctx.extern_func_types.clone();
 
+    // Pre-pass (#5951): a class capture that is MUTATED and shared between the
+    // declaring function and a lifted field-init/method closure cannot ride the
+    // value-based `__perry_cap_*` snapshot (each side gets its own copy). Desugar
+    // those captures to a one-element array box first — the array is captured by
+    // pointer, so all sides share the same `[0]` cell. Runs before the boxing
+    // pass so the rewritten capture is seen as a by-reference array.
+    shared_mutable_capture::desugar_shared_mutable_captures(&mut module);
+
     // Post-pass: widen `mutable_captures` across sibling closures. When two
     // closures in the same scope share a capture and one of them assigns to
     // it, the variable must be boxed; every closure that captures it must
     // also go through the box so they observe each other's writes. Without
     // this pass, a `get: () => value` sibling of `inc: () => value++` captures
     // the raw initial value instead of the shared boxed binding.
-    preallocate_forward_captured_lets_stmts(&mut module.init);
     widen_mutable_captures_stmts(&mut module.init);
     for func in &mut module.functions {
-        preallocate_forward_captured_lets_stmts(&mut func.body);
         widen_mutable_captures_stmts(&mut func.body);
     }
     for class in &mut module.classes {
         for method in &mut class.methods {
-            preallocate_forward_captured_lets_stmts(&mut method.body);
             widen_mutable_captures_stmts(&mut method.body);
         }
         for (_, getter) in &mut class.getters {
-            preallocate_forward_captured_lets_stmts(&mut getter.body);
             widen_mutable_captures_stmts(&mut getter.body);
         }
         for (_, setter) in &mut class.setters {
-            preallocate_forward_captured_lets_stmts(&mut setter.body);
             widen_mutable_captures_stmts(&mut setter.body);
         }
         for static_method in &mut class.static_methods {
-            preallocate_forward_captured_lets_stmts(&mut static_method.body);
             widen_mutable_captures_stmts(&mut static_method.body);
         }
         if let Some(ref mut ctor) = class.constructor {
-            preallocate_forward_captured_lets_stmts(&mut ctor.body);
             widen_mutable_captures_stmts(&mut ctor.body);
         }
     }

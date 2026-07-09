@@ -44,8 +44,6 @@ pub use self::search_params::{
 // a URLSearchParams (a plain class_id-0 ObjectHeader) and pull its entries.
 pub(crate) use self::search_params::try_read_as_search_params;
 pub(crate) use self::url_class::is_url_object_shape;
-/// Canonical class-id for `URL` instances (see instanceof / branding paths).
-pub(crate) const CLASS_ID_URL: u32 = 0xFFFF002F;
 pub use self::url_class::{
     js_url_can_parse, js_url_can_parse_with_base, js_url_get_hash, js_url_get_host,
     js_url_get_hostname, js_url_get_href, js_url_get_origin, js_url_get_pathname, js_url_get_port,
@@ -129,9 +127,9 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
 pub(crate) fn object_from_f64(value: f64) -> Option<*mut ObjectHeader> {
     let bits = value.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) == 0x7FFD_0000_0000_0000 {
-        let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if crate::value::addr_class::is_plausible_heap_addr(addr) {
-            return Some(addr as *mut ObjectHeader);
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        if !ptr.is_null() {
+            return Some(ptr);
         }
     }
     None

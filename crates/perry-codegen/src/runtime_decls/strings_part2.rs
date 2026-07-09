@@ -111,6 +111,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         &[I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_uint8array_get", I32, &[I64, I32]);
+    module.declare_function("js_uint8array_index_get_value", DOUBLE, &[I64, I32]);
     module.declare_function("js_uint8array_set", VOID, &[I64, I32, I32]);
     module.declare_function("js_native_arena_alloc", I64, &[I64]);
     module.declare_function("js_native_arena_view", I64, &[I64, I32, I64, I64]);
@@ -800,6 +801,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_buffer_from_arraybuffer_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_buffer_length", I32, &[I64]);
     module.declare_function("js_buffer_get", I32, &[I64, I32]);
+    module.declare_function("js_buffer_index_get_value", DOUBLE, &[I64, I32]);
     module.declare_function("js_native_buffer_data_ptr", PTR, &[DOUBLE]);
     module.declare_function("js_native_buffer_byte_len", I64, &[DOUBLE]);
     // console.time/count runtime functions.

@@ -286,6 +286,12 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // Register arrow function parameters with known native types as native instances
     for param in &params {
         if let Type::Named(type_name) = &param.ty {
+            // #6003: a param typed with a USER class that shares a native
+            // name (`class Headers { ... }; (h: Headers) => ...`) must
+            // dispatch through the user class, not the native FFI.
+            if ctx.lookup_class(type_name).is_some() {
+                continue;
+            }
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
@@ -893,6 +899,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                     // snapshot of the empty slot.
                                     ctx.var_hoisted_ids.insert(id);
                                     hoisted_id_set.insert(id);
+                                    // Lexical let/const forward-decl: TDZ-eligible.
+                                    // A read before the declaration runs throws.
+                                    ctx.tdz_forward_ids.insert(id);
                                     ctx.lexical_forward_decls.insert(ident.id.span.lo.0, id);
                                 }
                             }
@@ -1063,12 +1072,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     .entry(cname.clone())
                     .and_modify(|d| *d = (*d).min(fn_body_scope_depth))
                     .or_insert(fn_body_scope_depth);
-                ctx.forward_class_names.insert(cname.clone());
-                if class_decl.class.super_class.is_some()
-                    && ctx.lookup_local_in_current_scope(&cname).is_none()
-                {
-                    ctx.define_local(cname, Type::Any);
-                }
+                ctx.forward_class_names.insert(cname);
             }
         }
     }
@@ -1120,9 +1124,25 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     }
                 }
                 prealloc.sort();
-                if !prealloc.is_empty() {
-                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
-                    with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
+                // Split TDZ-seeded lexical `let`/`const` boxes from ordinary
+                // boxes (see block.rs Phase 5 for the rationale).
+                let mut tdz_prealloc: Vec<LocalId> = Vec::new();
+                let mut plain_prealloc: Vec<LocalId> = Vec::new();
+                for id in prealloc {
+                    if ctx.tdz_forward_ids.contains(&id) {
+                        tdz_prealloc.push(id);
+                    } else {
+                        plain_prealloc.push(id);
+                    }
+                }
+                if !plain_prealloc.is_empty() || !tdz_prealloc.is_empty() {
+                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 2);
+                    if !plain_prealloc.is_empty() {
+                        with_prealloc.push(Stmt::PreallocateBoxes(plain_prealloc));
+                    }
+                    if !tdz_prealloc.is_empty() {
+                        with_prealloc.push(Stmt::PreallocateTdzBoxes(tdz_prealloc));
+                    }
                     with_prealloc.extend(combined);
                     combined = with_prealloc;
                 }
@@ -1478,6 +1498,27 @@ pub(crate) fn insert_class_capture_refresh_after_assignments(
         // collector) assign any watched capture?
         let mut assigned = Vec::new();
         collect_assigned_locals_stmt(&stmts[i], &mut assigned);
+        // #6037: a forward-captured `var`/`let` re-bound later in the same body
+        // — including a DESTRUCTURING leaf (`var { t: dSq } = f()`) — lowers to
+        // a `Stmt::Let` that REUSES the pre-registered forward-decl id (see the
+        // `lexical_forward_decls` / `PreallocateBoxes` machinery). Such a Let
+        // IS an assignment of the captured value, but `collect_assigned_locals_
+        // stmt` classifies every `Let` as a fresh binding and skips it, so the
+        // decl-site snapshot (taken while the forward-decl still held
+        // `undefined`) was never refreshed and the class method read the
+        // capture as undefined (semver's `Comparator` reading `dSq.COMPARATOR`).
+        // A non-`undefined` init re-binding a watched id triggers the refresh;
+        // the `undefined` forward-decl init itself is skipped (it snapshots the
+        // same pre-assignment value the decl-site `RegisterClassCaptures`
+        // already recorded).
+        if let Stmt::Let {
+            id, init: Some(v), ..
+        } = &stmts[i]
+        {
+            if !matches!(v, Expr::Undefined) {
+                assigned.push(*id);
+            }
+        }
         if !assigned.is_empty() {
             let mut inserts: Vec<Stmt> = Vec::new();
             for (re_reg, capset) in regs {

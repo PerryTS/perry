@@ -790,7 +790,12 @@ pub(crate) unsafe fn canonicalize_array_numeric_store_bits(
     arr: *mut ArrayHeader,
     value_bits: u64,
 ) -> u64 {
-    if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
+    // #6011: the raw-f64-or-holes invariant needs numeric stores canonicalized
+    // exactly like the dense layout — an INT32-boxed store left verbatim would
+    // read as NaN payload through the guard's raw-f64 loads.
+    if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64)
+        || array_has_raw_f64_holes_flag(arr)
+    {
         if let Some(number) = value_bits_to_number(value_bits) {
             return number.to_bits();
         }
@@ -858,12 +863,41 @@ unsafe fn set_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
 #[inline]
 unsafe fn clear_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
     if let Some(header) = array_gc_header(arr) {
-        let had_raw_layout = (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0;
-        (*header)._reserved &= !crate::gc::GC_ARRAY_RAW_F64_LAYOUT;
+        let raw_bits = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+        let had_raw_layout = (*header)._reserved & raw_bits != 0;
+        (*header)._reserved &= !raw_bits;
         if had_raw_layout {
             crate::typed_feedback::invalidate_representation_change(arr as usize);
         }
     }
+}
+
+/// #6011: hole-tolerant sibling of the dense raw-f64 flag — see
+/// [`crate::gc::GC_ARRAY_RAW_F64_HOLES`]. Queried by the packed-f64
+/// range-loop guard's verify pass; cleared alongside the dense flag by the
+/// same `clear_array_numeric_layout` choke point.
+#[inline]
+unsafe fn array_has_raw_f64_holes_flag(arr: *const ArrayHeader) -> bool {
+    array_gc_header(arr)
+        .is_some_and(|header| (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_HOLES != 0)
+}
+
+#[inline]
+unsafe fn set_array_raw_f64_holes_flag(arr: *const ArrayHeader) {
+    if let Some(header) = array_gc_header(arr) {
+        (*header)._reserved |= crate::gc::GC_ARRAY_RAW_F64_HOLES;
+    }
+}
+
+/// #6011: mark a freshly hole-initialized user-facing array (`new Array(n)`):
+/// every slot in `[0, length)` is `TAG_HOLE`, so the raw-f64-or-holes
+/// invariant holds by construction. Callers must guarantee no slot has been
+/// written since the hole fill. Internal scratch arrays that direct-write
+/// slots afterwards (shape keys arrays, sort temporaries, …) must NOT be
+/// marked — they bypass the layout-noting store helpers by contract.
+#[inline]
+pub(crate) unsafe fn mark_array_raw_f64_holes_fresh(arr: *const ArrayHeader) {
+    set_array_raw_f64_holes_flag(arr);
 }
 
 pub(crate) unsafe fn mark_array_as_arguments_object(arr: *const ArrayHeader) {
@@ -899,15 +933,97 @@ unsafe fn rebuild_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool {
     let elements = array_elements_ptr(arr);
     for i in 0..length {
         let slot_bits = array_slot_bits(arr, i);
+        if slot_bits == crate::value::TAG_HOLE {
+            // #6011: a hole disproves the DENSE raw-f64 layout, but leaves
+            // the raw-f64-or-holes invariant intact — the dense flag cannot
+            // be set here (dense-flagged arrays have no holes), so there is
+            // nothing to clear, and clearing would wrongly drop the holes
+            // flag a fresh `new Array(n)` carries.
+            return false;
+        }
         let Some(number) = value_bits_to_number(slot_bits) else {
             clear_array_numeric_layout(arr);
             return false;
         };
-        // GC_STORE_AUDIT(POINTER_FREE): raw-f64 layout rewrite stores numeric payloads only.
-        std::ptr::write(elements.add(i) as *mut f64, number);
+        // #6011: skip the write-back when the slot already holds the raw-f64
+        // bits (the overwhelmingly common case when a packed loop produced
+        // the values). Halves the memory traffic of the first layout probe
+        // of a large freshly-filled array.
+        if number.to_bits() != slot_bits {
+            // GC_STORE_AUDIT(POINTER_FREE): raw-f64 layout rewrite stores numeric payloads only.
+            std::ptr::write(elements.add(i) as *mut f64, number);
+        }
     }
 
     set_array_raw_f64_layout_flag(arr);
+    crate::gc::layout_init_pointer_free(arr as *mut u8);
+    true
+}
+
+/// #6011: hole-tolerant variant of [`rebuild_array_numeric_raw_f64`] for the
+/// packed-f64 *range* loop guard. Every non-hole slot is rewritten to a raw
+/// f64 (INT32-boxed integers included); `TAG_HOLE` slots are left in place —
+/// they never contain a heap pointer, and the guarded loop's inline loads
+/// hole-check each slot before use. A slot that is neither numeric nor a hole
+/// (string / object / bool / …) clears the layout flag and fails the guard.
+///
+/// When no holes were seen the array is uniformly numeric, so the RawF64
+/// layout flag is set exactly like the strict rebuild. When holes remain the
+/// dense flag stays clear but `GC_ARRAY_RAW_F64_HOLES` records the verified
+/// raw-f64-or-holes invariant (also pre-set by `new Array(n)` allocation), so
+/// later guard entries — and the guard on a fresh hole-filled array — skip
+/// the walk entirely. Either way the array is pointer-free and the GC layout
+/// note reflects it.
+pub(crate) unsafe fn rebuild_array_numeric_raw_f64_allow_holes(arr: *mut ArrayHeader) -> bool {
+    if arr.is_null() {
+        return false;
+    }
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    if length > capacity || length > 16_000_000 {
+        clear_array_numeric_layout(arr);
+        return false;
+    }
+    if array_has_raw_f64_layout_flag(arr) {
+        // Already proven dense raw-f64 numeric — nothing to rewrite.
+        return true;
+    }
+    if array_has_raw_f64_holes_flag(arr) {
+        // #6011: invariant flag — every slot in `[0, length)` is already raw
+        // f64 bits or TAG_HOLE (established at `new Array(n)` allocation or by
+        // a previous verify walk; every non-numeric store clears the flag via
+        // `clear_array_numeric_layout`, and numeric stores canonicalize to raw
+        // bits via `canonicalize_array_numeric_store_bits`). Nothing to verify
+        // or rewrite — this turns the per-loop-entry guard walk over a fresh
+        // 100k-slot EMA output array into an O(1) flag test.
+        return true;
+    }
+
+    let elements = array_elements_ptr(arr);
+    let mut saw_hole = false;
+    for i in 0..length {
+        let slot_bits = array_slot_bits(arr, i);
+        if slot_bits == crate::value::TAG_HOLE {
+            saw_hole = true;
+            continue;
+        }
+        let Some(number) = value_bits_to_number(slot_bits) else {
+            clear_array_numeric_layout(arr);
+            return false;
+        };
+        if number.to_bits() != slot_bits {
+            // GC_STORE_AUDIT(POINTER_FREE): raw-f64 layout rewrite stores numeric payloads only.
+            std::ptr::write(elements.add(i) as *mut f64, number);
+        }
+    }
+
+    if !saw_hole {
+        set_array_raw_f64_layout_flag(arr);
+    } else {
+        // Holes remain, but every non-hole slot is now canonical raw f64 —
+        // record the verified invariant so re-entering the loop skips the walk.
+        set_array_raw_f64_holes_flag(arr);
+    }
     crate::gc::layout_init_pointer_free(arr as *mut u8);
     true
 }
@@ -949,6 +1065,11 @@ pub(crate) fn transfer_array_numeric_layout(old_user: usize, new_user: usize) {
     unsafe {
         if array_has_raw_f64_layout_flag(old_user as *const ArrayHeader) {
             set_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
+        } else if array_has_raw_f64_holes_flag(old_user as *const ArrayHeader) {
+            // #6011: relocation copies slot bits verbatim, so the verified
+            // raw-f64-or-holes invariant carries over to the new backing.
+            clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
+            set_array_raw_f64_holes_flag(new_user as *const ArrayHeader);
         } else {
             clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
         }
@@ -1139,11 +1260,32 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
         if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
             return 1;
         }
-        if array_slots_are_numeric(arr) {
-            rebuild_array_numeric_raw_f64(arr as *mut ArrayHeader);
+        // #6011 follow-up: a holes-flagged array (`new Array(n)` mid-fill)
+        // cannot be DENSE raw-f64, and answering that per store via the
+        // verify walk below made a sequential fill loop O(N²) — the walk
+        // reads the already-filled prefix on every store before hitting the
+        // next hole (the fmr benchmark hang). While the LAST slot is still a
+        // hole the array is provably not dense: answer 0 in O(1). Once the
+        // last slot is written (a completed sequential fill), fall through so
+        // the single walk below can upgrade the array to the dense flag.
+        if array_has_raw_f64_holes_flag(arr) {
+            let length = (*arr).length as usize;
+            if length > 0 && array_slot_bits(arr, length - 1) == crate::value::TAG_HOLE {
+                return 0;
+            }
+        }
+        // #6011: single combined verify+rewrite pass. The old shape
+        // (`array_slots_are_numeric` scan, THEN `rebuild_array_numeric_raw_
+        // f64` rewrite) walked every slot twice on the first numeric-layout
+        // probe of a large array — 2×100k slot reads per call for an
+        // EMA-style `new Array(100_000)` filled by a loop. The rebuild
+        // already fails cleanly on the first non-numeric slot (clearing the
+        // layout flag); slots converted before such a failure were genuinely
+        // numeric, and INT32-box → raw-f64 canonicalization is value-
+        // preserving for every reader, so stopping mid-way is unobservable.
+        if rebuild_array_numeric_raw_f64(arr as *mut ArrayHeader) {
             return 1;
         }
-        clear_array_numeric_layout(arr);
     }
     0
 }

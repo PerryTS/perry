@@ -836,25 +836,6 @@ fn collect_module_one(
                         ));
                         return;
                     }
-                    if let Some(unresolved) = set.iter().find(|p| {
-                        cached_resolve_import_with_lexical_base(p, entry_path, &canonical, ctx)
-                            .is_none()
-                    }) {
-                        let line =
-                            perry_hir::current_module_line_at(*byte_offset).filter(|&l| l != 0);
-                        let loc = match line {
-                            Some(l) => format!("{}:{}", source_file_path, l),
-                            None => source_file_path.clone(),
-                        };
-                        let msg = format!(
-                            "dynamic import() of registry value {:?} cannot be resolved in an \
-                             ahead-of-time compiled binary ({loc})",
-                            unresolved
-                        );
-                        perry_hir::record_deferred_aot_site("import(...)", loc);
-                        dynamic_path_sets.push(DynImportOutcome::Deferred(msg));
-                        return;
-                    }
                     for p in &set {
                         if !new_dyn_imports.contains(p) {
                             new_dyn_imports.push(p.clone());

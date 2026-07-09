@@ -859,6 +859,7 @@ impl GcCycleTrace {
             "reclaimable_candidate_bytes": self.evacuation_policy.snapshot.reclaimable_candidate_bytes,
             "reclaimable_candidate_objects": self.evacuation_policy.snapshot.reclaimable_candidate_objects,
             "reclaimable_candidate_ratio_pct": self.evacuation_policy.snapshot.reclaimable_candidate_ratio_pct(),
+            "releasable_block_bytes": self.evacuation_policy.snapshot.releasable_block_bytes,
             "old_page_candidate_pages": self.evacuation_policy.snapshot.old_page_candidate_pages,
             "old_page_selected_pages": self.evacuation_policy.snapshot.old_page_selected_pages,
             "old_page_selected_live_bytes": self.evacuation_policy.snapshot.old_page_selected_live_bytes,

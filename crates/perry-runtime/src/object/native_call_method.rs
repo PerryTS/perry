@@ -30,27 +30,6 @@ pub(crate) use proto_dispatch::{
 };
 pub(super) use typed_array::dispatch_typed_array_method;
 
-fn interned_default_method_key(method_name: &str) -> *mut crate::string::StringHeader {
-    use std::sync::OnceLock;
-
-    static TO_STRING: OnceLock<usize> = OnceLock::new();
-    static TO_LOCALE_STRING: OnceLock<usize> = OnceLock::new();
-    static VALUE_OF: OnceLock<usize> = OnceLock::new();
-
-    let slot = match method_name {
-        "toString" => &TO_STRING,
-        "toLocaleString" => &TO_LOCALE_STRING,
-        "valueOf" => &VALUE_OF,
-        _ => return std::ptr::null_mut(),
-    };
-    *slot.get_or_init(|| {
-        crate::string::js_string_from_bytes_longlived(
-            method_name.as_ptr(),
-            method_name.len() as u32,
-        ) as usize
-    }) as *mut crate::string::StringHeader
-}
-
 unsafe fn call_primitive_closure_value(
     receiver: f64,
     value: JSValue,
@@ -738,6 +717,46 @@ pub unsafe extern "C" fn js_native_call_method(
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object, want_async);
     }
+    // TextDecoder / TextEncoder registry handles on a type-erased receiver —
+    // same wall class as the URLSearchParams / AbortSignal blocks below: the
+    // statically-typed `td.decode(buf)` lowers straight to
+    // `js_text_decoder_decode_llvm`, but a fused dynamic call (through an
+    // untyped local, or via the bound method the VALUE read in
+    // `get_field_by_name_tail.rs` reifies for `K.decode.bind(K)` — the shape
+    // a minified SDK's cached decodeText helper takes) lands here, and the
+    // generic field-scan would miss and throw "is not a function".
+    if matches!(method_name, "decode" | "encode" | "encodeInto") && jsval.is_pointer() {
+        let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::value::addr_class::is_small_handle(raw) {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let arg0 = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            if method_name == "decode" && crate::text::is_known_text_decoder_id(raw as i64) {
+                let sp = crate::text::js_text_decoder_decode_llvm(object, arg0);
+                return f64::from_bits(
+                    JSValue::string_ptr(sp as *mut crate::string::StringHeader).bits(),
+                );
+            }
+            if raw as i64 == crate::text::TEXT_ENCODER_SENTINEL_ID {
+                if method_name == "encode" {
+                    let bp = crate::text::js_text_encoder_encode_llvm(arg0);
+                    return crate::value::js_nanbox_pointer(bp);
+                }
+                if method_name == "encodeInto" {
+                    let arg1 = if args_len > 1 && !args_ptr.is_null() {
+                        *args_ptr.add(1)
+                    } else {
+                        undef
+                    };
+                    let rp = crate::text::js_text_encoder_encode_into_llvm(arg0, arg1);
+                    return crate::value::js_nanbox_pointer(rp);
+                }
+            }
+        }
+    }
     // #5961: native URLSearchParams is an ordinary object (class_id == 0,
     // leading `_entries` slot) whose method surface normally resolves via
     // static type-directed lowering. A fused dynamic call on a type-erased
@@ -757,6 +776,47 @@ pub unsafe extern "C" fn js_native_call_method(
             ) {
                 return result;
             }
+        }
+    }
+    // AbortSignal on a type-erased receiver — same wall class as the
+    // URLSearchParams block above (#5961/#5964): the statically-typed receiver
+    // form lowers to the native call, but a fused dynamic method call lands
+    // here, and the generic field-scan would miss and throw
+    // `addEventListener is not a function` (the shape minified SDK code takes
+    // when it stores a signal in an untyped local). `options` (arg 2) is
+    // accepted and ignored — a signal only ever fires "abort" once, so
+    // `{ once: true }` is behaviorally implied.
+    if matches!(
+        method_name,
+        "addEventListener" | "removeEventListener" | "throwIfAborted"
+    ) && jsval.is_pointer()
+    {
+        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+        // Skip native handles (nanbox-pointer-tagged small integer ids in the
+        // low handle band) — dereferencing one as an `ObjectHeader` to read
+        // `class_id` would fault.
+        if !recv_ptr.is_null()
+            && !crate::value::addr_class::is_small_handle(recv_ptr as usize)
+            && (*recv_ptr).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID
+        {
+            let arg = |i: usize| {
+                if i < args_len && !args_ptr.is_null() {
+                    *args_ptr.add(i)
+                } else {
+                    f64::from_bits(JSValue::undefined().bits())
+                }
+            };
+            return match method_name {
+                "addEventListener" => {
+                    crate::url::js_abort_signal_add_listener(recv_ptr, arg(0), arg(1));
+                    f64::from_bits(JSValue::undefined().bits())
+                }
+                "removeEventListener" => {
+                    crate::url::js_abort_signal_remove_listener(recv_ptr, arg(0), arg(1));
+                    f64::from_bits(JSValue::undefined().bits())
+                }
+                _ => crate::url::js_abort_signal_throw_if_aborted(recv_ptr),
+            };
         }
     }
     // Generic `Array.prototype` mutators borrowed onto a plain array-like
@@ -1307,27 +1367,6 @@ pub unsafe extern "C" fn js_native_call_method(
                 }
             }
         }
-
-        if matches!(method_name, "toString" | "toLocaleString" | "valueOf") {
-            let method_key = interned_default_method_key(method_name);
-            if !method_key.is_null() {
-                let method = super::js_object_get_field_by_name(obj, method_key);
-                if !method.is_undefined() && !method.is_null() {
-                    let bound = crate::closure::clone_closure_rebind_this(
-                        method.bits(),
-                        f64::from_bits(jsval.bits()),
-                    );
-                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(jsval.bits()));
-                    let result = crate::closure::js_native_call_value(
-                        f64::from_bits(bound),
-                        args_ptr,
-                        args_len,
-                    );
-                    IMPLICIT_THIS.with(|c| c.set(prev_this));
-                    return result;
-                }
-            }
-        }
     }
 
     // Issue #510: throw `TypeError: <expr> is not a function` when
@@ -1561,6 +1600,31 @@ pub unsafe extern "C" fn js_native_call_method(
                     args.as_ptr(),
                     args.len(),
                 );
+            }
+        }
+    }
+
+    // Exotic receivers (RegExp / Date / Error) with a user-assigned own
+    // property that is a callable: `var r = /x/; r.f = function(){...}; r.f()`
+    // and `String.prototype.toLowerCase.call`-style borrows like
+    // `reg.toLowerCase = String.prototype.toLowerCase; reg.toLowerCase()`
+    // (test262 String/prototype/{toLowerCase,toUpperCase,...}/*_A1_T14). These
+    // objects store dynamic props in the exotic-expando side table, not the
+    // ObjectHeader field map, so the field/vtable/prototype dispatch above
+    // never sees them. Look the name up there; if it is a callable, invoke it
+    // with the receiver bound as `this` (via IMPLICIT_THIS, matching the
+    // closure-field dispatch path above).
+    if jsval.is_pointer() {
+        if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(object) {
+            if let Some(bits) = super::exotic_expando::value_lookup(kind, addr, method_name) {
+                let candidate = f64::from_bits(bits);
+                if crate::collection_iter::is_callable(candidate) {
+                    let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                    let result =
+                        crate::closure::js_native_call_value(candidate, args_ptr, args_len);
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return result;
+                }
             }
         }
     }

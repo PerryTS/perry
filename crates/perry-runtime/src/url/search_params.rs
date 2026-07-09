@@ -819,11 +819,43 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         return false;
     }
     unsafe {
+        // The receiver may be *any* pointer-tagged value -- a Date/Temporal
+        // cell, buffer, closure, small handle, etc. -- because callers reach
+        // this probe on a type-erased receiver before validating the object
+        // kind (#5964's dynamic-toString arm in js_native_call_method faults on
+        // a Date cell otherwise: date.toString() twice segfaulted while reading
+        // a Date cell's bytes at ObjectHeader offsets). Only ordinary objects
+        // carry the ObjectHeader layout, so classify the address and gate on the
+        // GC header type first -- a Date cell is GC_TYPE_DATE_CELL, an array
+        // GC_TYPE_ARRAY, and so on. `try_read_gc_header` also rejects small
+        // handles / slab buffers that would otherwise deref a fake header.
+        match crate::value::addr_class::try_read_gc_header(obj as usize) {
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            _ => return false,
+        }
         if (*obj).class_id != 0 {
             return false;
         }
         let keys_arr = (*obj).keys_array;
-        if keys_arr.is_null() || (*keys_arr).length == 0 {
+        if keys_arr.is_null() {
+            return false;
+        }
+        // #5989: `keys_array` itself must be validated before deref — a
+        // GC_TYPE_OBJECT receiver reached mid-transition (or with a typed
+        // layout) can carry a non-heap word here; reading `(*keys_arr).length`
+        // on it SIGSEGV'd during Next.js request handling (config.js method
+        // dispatch probing an arbitrary receiver through this shape check).
+        // Same try_read_gc_header gate as the receiver above. Require the
+        // EAGER `GC_TYPE_ARRAY` layout specifically: an object's own key list
+        // is always eager, and `(*keys_arr).length` / `js_array_get_f64` below
+        // read the eager `ArrayHeader` fields — a `GC_TYPE_LAZY_ARRAY` doesn't
+        // share that layout, so reject it (a real URLSearchParams shape never
+        // has a lazy keys_array; returning false is correct).
+        match crate::value::addr_class::try_read_gc_header(keys_arr as usize) {
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            _ => return false,
+        }
+        if (*keys_arr).length == 0 {
             return false;
         }
         let key0 = crate::array::js_array_get_f64(keys_arr, 0);

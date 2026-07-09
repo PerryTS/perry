@@ -32,12 +32,13 @@ pub(crate) fn wrap_private_guard(
     field_name: &str,
     op: u8,
 ) -> Box<Expr> {
-    if let Some((class_name, member)) = ctx.resolve_private(field_name) {
+    if let Some((class_name, class_id, member)) = ctx.resolve_private(field_name) {
         // Static members get a static brand (op + 2); instance members the
         // ordinary op code.
         let op = if member.is_static { op + 2 } else { op };
         return Box::new(Expr::PrivateGuard {
             class_name,
+            class_id,
             field_name: field_name.to_string(),
             kind: member.kind as u8,
             op,

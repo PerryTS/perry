@@ -13,14 +13,6 @@ unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
     (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
 }
 
-pub(crate) unsafe fn array_has_descriptors(obj: *const ObjectHeader) -> bool {
-    if !is_array_object(obj) {
-        return false;
-    }
-    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-}
-
 /// Apply `Object.freeze` / `Object.seal` to an array's OWN index + named data
 /// properties. The generic `mark_all_keys` walks `(*obj).keys_array`, but an
 /// array's indices live in the dense element store and its named props in the

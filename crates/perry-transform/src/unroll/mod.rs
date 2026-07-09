@@ -508,7 +508,7 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
                             .all(|s| stmt_is_unrollable(s, iv_id, loop_depth + 1))
                 })
         }
-        Stmt::PreallocateBoxes(_) => true,
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
     }
 }
 
@@ -647,7 +647,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
             substitute_localget_with_int_in_stmt(body, iv_id, value);
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 
@@ -825,7 +825,7 @@ fn refresh_in_stmt(
         }
         Stmt::Labeled { body, .. } => refresh_in_stmt(body, remap, next_id, next_func_id),
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(ids) => {
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
             for id in ids.iter_mut() {
                 alloc_fresh(remap, next_id, id);
             }

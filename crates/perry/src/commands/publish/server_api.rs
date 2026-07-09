@@ -157,6 +157,16 @@ pub(super) struct BuildManifest {
     /// `perry compile --target linux[-musl]` selection. #4826.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_libc: Option<String>,
+    /// CPU baseline for the produced binaries (#6125): an LLVM CPU name
+    /// (`x86-64-v2`, …), `native`, or `generic`. Drives the worker's
+    /// `perry compile --march <value>`. The client defaults linux builds to
+    /// `x86-64-v2` — the hub worker compiles linux-on-linux natively, and
+    /// without a pinned baseline the binary inherits the build box's full
+    /// ISA (AVX-512) and SIGILLs on older x86-64 CPUs (Zen2/EPYC-Rome,
+    /// pre-Skylake Xeons). `[build] native_tuning = true` /
+    /// `--march native` opts back into build-machine tuning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) build_march: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) release_notes: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

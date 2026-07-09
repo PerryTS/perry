@@ -79,6 +79,26 @@ pub(crate) fn unwrap_transparent(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
+/// The property name of a member access as a source-visible STATIC string, for
+/// EITHER a dot access (`obj.name`) or a bracket access with a string-literal
+/// key (`obj[\"name\"]`). Per spec these are equivalent for string keys, so the
+/// builtin constant-fold / reified-static-value paths that key off a dot
+/// property name must fire for the string-literal computed form too — otherwise
+/// `Number[\"POSITIVE_INFINITY\"]` / `Math[\"E\"]` / `Array[\"prototype\"]` fall
+/// through the static resolution and collapse to a bare `globalThis.<key>` read
+/// (undefined). Returns `None` for a dynamic (non-string-literal) computed key,
+/// which must keep the runtime index path. (Test262 property-accessors.)
+pub(crate) fn static_member_prop_name(prop: &ast::MemberProp) -> Option<String> {
+    match prop {
+        ast::MemberProp::Ident(p) => Some(p.sym.to_string()),
+        ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+            ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(|v| v.to_string()),
+            _ => None,
+        },
+        ast::MemberProp::PrivateName(_) => None,
+    }
+}
+
 pub(super) fn lower_member(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Result<Expr> {
     // #1723: when THIS access is the auditable `ns[dynamicKey].staticMember`
     // shape — a dynamic stdlib SUB-namespace selection (`path.win32` /
@@ -738,8 +758,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // Check for Math constants (e.g., Math.PI, Math.E)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         if obj_ident.sym.as_ref() == "Math" {
-            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                let val = match prop_ident.sym.as_ref() {
+            if let Some(prop_name) = static_member_prop_name(&member.prop) {
+                let val = match prop_name.as_str() {
                     "PI" => Some(std::f64::consts::PI),
                     "E" => Some(std::f64::consts::E),
                     "LN2" => Some(std::f64::consts::LN_2),
@@ -760,8 +780,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // Check for Number constants (e.g., Number.MAX_SAFE_INTEGER)
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         if obj_ident.sym.as_ref() == "Number" {
-            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                let val = match prop_ident.sym.as_ref() {
+            if let Some(prop_name) = static_member_prop_name(&member.prop) {
+                let val = match prop_name.as_str() {
                     "MAX_SAFE_INTEGER" => Some(9007199254740991.0),
                     "MIN_SAFE_INTEGER" => Some(-9007199254740991.0),
                     "MAX_VALUE" => Some(f64::MAX),

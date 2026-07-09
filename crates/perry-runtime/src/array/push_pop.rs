@@ -380,6 +380,32 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// JSValue). The JS ArraySetLength path coerces it with `Number(...)`, then
 /// rejects NaN, negative, fractional, infinite, and >uint32 lengths with
 /// `RangeError: Invalid array length`.
+/// `arr.length = v` as the user-visible assignment — `Set(O, "length", v, true)`
+/// (PutValue with `Throw = true`, ECMA-262 §13.15.2). A frozen array's `length`
+/// is a non-writable data property, so the write must throw a **TypeError**
+/// rather than silently no-op — even when `v` equals the current length or is an
+/// invalid length (V8 rejects the non-writable write before coercing the value,
+/// so a frozen `arr.length = -1` is a TypeError, not a RangeError; hence the
+/// guard precedes `array_length_from_property_value_or_throw`).
+///
+/// This throwing variant is separate from `js_array_set_length` so the *internal*
+/// callers of the latter (`Object.defineProperty(arr, "length", …)`,
+/// array-object length coercion, stream/url bookkeeping) keep their silent,
+/// non-throwing `[[DefineOwnProperty]]`/no-Throw contract. Only the assignment
+/// codegen paths (`field_set_by_name` / `property_set` / proxy `PutValue`) route
+/// here. test262 built-ins/Array length-write-on-frozen.
+#[no_mangle]
+pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: f64) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    if unsafe { array_object_flags(arr) } & crate::gc::OBJ_FLAG_FROZEN != 0 {
+        throw_non_writable_length();
+    }
+    js_array_set_length(arr, new_length);
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     let arr = clean_arr_ptr_mut(arr);

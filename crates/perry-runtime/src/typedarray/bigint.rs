@@ -78,7 +78,7 @@ pub(super) fn bigint_slot_bits(value: f64) -> u64 {
 /// `ToBigInt`), or a plain numeric f64 (via `ToNumber`) for every other kind.
 /// Used by the array/array-like construction and `set()` paths so a bigint view
 /// keeps real BigInt elements instead of `jsvalue_to_f64`-mangling them to NaN.
-pub(super) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
+pub(crate) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
     if dst_kind == KIND_BIGINT64 || dst_kind == KIND_BIGUINT64 {
         to_bigint_for_store(raw)
     } else {

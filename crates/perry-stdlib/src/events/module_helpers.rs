@@ -83,6 +83,16 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
     target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
+    // AbortSignal is an EventTarget in Node, but Perry represents it as its
+    // own native object (url/abort.rs) that `event_helper_target` doesn't
+    // recognize. A signal only ever tracks "abort" listeners.
+    let signal_ptr = perry_runtime::url::abort::js_abort_signal_resolve_ptr(target_value);
+    if !signal_ptr.is_null() {
+        if string_from_header(event_name_ptr).as_deref() == Some("abort") {
+            return perry_runtime::url::abort::js_abort_signal_listeners_copy(signal_ptr);
+        }
+        return js_array_alloc(0);
+    }
     match event_helper_target(target_value).unwrap_or_else(|| {
         throw_invalid_arg_type(&invalid_instance_arg_message(
             "emitter",
@@ -110,6 +120,14 @@ pub unsafe extern "C" fn js_events_listener_count(
     target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> f64 {
+    // AbortSignal: see `js_events_get_event_listeners`.
+    let signal_ptr = perry_runtime::url::abort::js_abort_signal_resolve_ptr(target_value);
+    if !signal_ptr.is_null() {
+        if string_from_header(event_name_ptr).as_deref() == Some("abort") {
+            return perry_runtime::url::abort::js_abort_signal_listener_count(signal_ptr);
+        }
+        return 0.0;
+    }
     match event_helper_target(target_value).unwrap_or_else(|| {
         throw_invalid_arg_type(&invalid_instance_arg_message(
             "emitter",
@@ -133,6 +151,12 @@ pub unsafe extern "C" fn js_events_listener_count(
 /// `events.getMaxListeners(emitter)` — alias.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
+    // AbortSignal: Node's default EventTarget listener cap. Perry stores no
+    // per-signal override (`setMaxListeners` below is an accepted no-op), so
+    // the default is always reported.
+    if !perry_runtime::url::abort::js_abort_signal_resolve_ptr(target_value).is_null() {
+        return 10.0;
+    }
     match event_helper_target(target_value).unwrap_or_else(|| {
         throw_invalid_arg_type(&invalid_instance_arg_message(
             "emitter",
@@ -163,6 +187,18 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
         let len = js_array_length(handles_ptr);
         for i in 0..len {
             let value = perry_runtime::array::js_array_get_f64(handles_ptr, i);
+            // AbortSignal is an EventTarget in Node — SDKs routinely call
+            // `events.setMaxListeners(n, controller.signal)` to raise the
+            // MaxListenersExceededWarning threshold on a shared signal. Perry
+            // represents signals as their own native object that
+            // `event_helper_target` doesn't recognize, so this threw
+            // ERR_INVALID_ARG_TYPE and rejected the caller's whole request
+            // path. Accept the signal; the warning threshold is the call's
+            // only Node-observable effect and Perry never emits that warning
+            // for signals, so accepting is a faithful no-op.
+            if !perry_runtime::url::abort::js_abort_signal_resolve_ptr(value).is_null() {
+                continue;
+            }
             match event_helper_target(value).unwrap_or_else(|| {
                 throw_invalid_arg_type(&invalid_instance_arg_message(
                     "eventTargets",

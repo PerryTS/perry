@@ -512,6 +512,10 @@ pub(crate) fn lower_pattern_binding_into(
 
             // Collect statically-known keys for rest exclusion tracking.
             let mut static_keys: Vec<String> = Vec::new();
+            // Temps holding the once-evaluated value of each COMPUTED destructured
+            // key (`{ [expr]: t }`). ObjectRest can only exclude statically-named
+            // keys, so these are deleted from the fresh rest object below (#6153).
+            let mut computed_key_temps: Vec<LocalId> = Vec::new();
 
             for prop in &obj_pat.props {
                 match prop {
@@ -572,12 +576,24 @@ pub(crate) fn lower_pattern_binding_into(
                                 }
                             }
                             ast::PropName::Computed(computed) => {
-                                // Computed key: const { [prop]: target } = obj
-                                // Lower to IndexGet with the computed expression
+                                // Computed key: const { [prop]: target } = obj.
+                                // Evaluate the key ONCE into a temp so the same
+                                // value drives both this property read and the
+                                // `...rest` exclusion below (#6153) — computed keys
+                                // are spec'd to evaluate once.
                                 let index_expr = lower_expr(ctx, &computed.expr)?;
+                                let (key_id, key_name) = fresh_destruct_local(ctx, Type::Any);
+                                result.push(Stmt::Let {
+                                    id: key_id,
+                                    name: key_name,
+                                    ty: Type::Any,
+                                    mutable: false,
+                                    init: Some(index_expr),
+                                });
+                                computed_key_temps.push(key_id);
                                 Expr::IndexGet {
                                     object: Box::new(Expr::LocalGet(tmp_id)),
-                                    index: Box::new(index_expr),
+                                    index: Box::new(Expr::LocalGet(key_id)),
                                 }
                             }
                             ast::PropName::BigInt(_) => continue,
@@ -694,20 +710,50 @@ pub(crate) fn lower_pattern_binding_into(
                         });
                     }
                     ast::ObjectPatProp::Rest(rest) => {
-                        // { ...rest } — collect remaining statically-known keys
-                        // and use ObjectRest to clone the object without them.
+                        // { ...rest } — clone the object without the destructured
+                        // keys. ObjectRest excludes the statically-named ones.
                         let rest_source = Expr::ObjectRest {
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             exclude_keys: static_keys.clone(),
                         };
-                        lower_pattern_binding_into(
-                            ctx,
-                            &rest.arg,
-                            rest_source,
-                            mutable,
-                            is_var_decl,
-                            result,
-                        )?;
+                        if computed_key_temps.is_empty() {
+                            lower_pattern_binding_into(
+                                ctx,
+                                &rest.arg,
+                                rest_source,
+                                mutable,
+                                is_var_decl,
+                                result,
+                            )?;
+                        } else {
+                            // Computed keys can't be excluded statically, so spill
+                            // the fresh rest object to a temp and `delete` each
+                            // once-evaluated computed key from it (#6153). Deleting
+                            // from the freshly-cloned rest object never touches the
+                            // source.
+                            let (rest_id, rest_name) = fresh_destruct_local(ctx, Type::Any);
+                            result.push(Stmt::Let {
+                                id: rest_id,
+                                name: rest_name,
+                                ty: Type::Any,
+                                mutable: false,
+                                init: Some(rest_source),
+                            });
+                            for key_id in &computed_key_temps {
+                                result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
+                                    object: Box::new(Expr::LocalGet(rest_id)),
+                                    index: Box::new(Expr::LocalGet(*key_id)),
+                                }))));
+                            }
+                            lower_pattern_binding_into(
+                                ctx,
+                                &rest.arg,
+                                Expr::LocalGet(rest_id),
+                                mutable,
+                                is_var_decl,
+                                result,
+                            )?;
+                        }
                         break; // Rest must be last
                     }
                 }

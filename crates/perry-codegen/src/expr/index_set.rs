@@ -189,16 +189,49 @@ fn packed_f64_loop_fact(ctx: &FnCtx<'_>, arr_id: u32, idx_id: u32) -> Option<Pac
         .cloned()
 }
 
+/// #6011: fact lookup for `(arr, index-expr)` where the index may be
+/// `i` or `i ± c`. Non-zero offsets only match hole-tolerant (range-guarded)
+/// facts — see the twin helper in `index_get.rs`.
+fn packed_f64_loop_fact_for_index(
+    ctx: &FnCtx<'_>,
+    arr_id: u32,
+    index: &Expr,
+) -> Option<(PackedF64LoopFact, u32, i32)> {
+    let (idx_id, offset) = super::packed_f64_loop_index_parts(index)?;
+    let fact = packed_f64_loop_fact(ctx, arr_id, idx_id)?;
+    if offset != 0 && !fact.allow_holes {
+        return None;
+    }
+    Some((fact, idx_id, offset))
+}
+
+fn load_packed_loop_index_i32(ctx: &mut FnCtx<'_>, i32_slot: &str, offset: i32) -> String {
+    let idx_i32 = ctx.block().load(I32, i32_slot);
+    match offset.cmp(&0) {
+        std::cmp::Ordering::Equal => idx_i32,
+        std::cmp::Ordering::Greater => ctx.block().add(I32, &idx_i32, &offset.to_string()),
+        std::cmp::Ordering::Less => ctx.block().sub(I32, &idx_i32, &(-offset).to_string()),
+    }
+}
+
 fn numeric_index_has_loop_array_index_proof(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
-    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object, index) else {
+    let Expr::LocalGet(arr_id) = object else {
         return false;
     };
-    ctx.i32_counter_slots.contains_key(idx_id)
-        && (packed_f64_loop_fact(ctx, *arr_id, *idx_id).is_some()
-            || ctx
-                .bounded_index_pairs
-                .iter()
-                .any(|fact| fact.array_local_id == *arr_id && fact.index_local_id == *idx_id))
+    let Some((idx_id, offset)) = super::packed_f64_loop_index_parts(index) else {
+        return false;
+    };
+    if !ctx.i32_counter_slots.contains_key(&idx_id) {
+        return false;
+    }
+    if packed_f64_loop_fact_for_index(ctx, *arr_id, index).is_some() {
+        return true;
+    }
+    offset == 0
+        && ctx
+            .bounded_index_pairs
+            .iter()
+            .any(|fact| fact.array_local_id == *arr_id && fact.index_local_id == idx_id)
 }
 
 fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
@@ -329,6 +362,146 @@ fn lower_packed_numeric_loop_store_value(
     }
 }
 
+/// #6011: inline store for the hole-tolerant *range-guarded* packed-f64 loop.
+///
+/// The range guard already proved at loop entry that every index this loop
+/// can touch is in bounds, that the receiver is a plain, mutable (not
+/// frozen/sealed), descriptor-free array, and that its slots are raw-f64
+/// numbers or `TAG_HOLE` — and the matcher proved the body cannot invalidate
+/// any of that mid-loop (no calls/closures/awaits, stores only through this
+/// path). The only per-iteration check left is on the RHS *value*: a NaN-boxed
+/// non-double (string/object/undefined/INT32-boxed int/…) side-exits to the
+/// slow loop, which re-executes the current iteration through the generic
+/// store (the side exit fires before the store, so nothing double-applies).
+/// The store itself is a raw f64 write; overwriting `TAG_HOLE` with a number
+/// is exactly JS element definition on an in-bounds index, and a number never
+/// carries a heap edge, so no barrier / layout note is needed (the guard
+/// (re)asserted the pointer-free GC layout).
+fn lower_packed_f64_range_loop_index_set(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    idx_i32: &str,
+    value: &Expr,
+    guard_id: &str,
+    side_exit_label: &str,
+) -> Result<String> {
+    let (val_double, rhs_notes) = lower_packed_f64_loop_store_value(ctx, arr_id, value)?;
+
+    let fast_idx = ctx.new_block("packed_f64_range_store.fast");
+    let exit_idx = ctx.new_block("packed_f64_range_store.side_exit");
+    let fast_label = ctx.block_label(fast_idx);
+    let exit_label = ctx.block_label(exit_idx);
+
+    // Numeric-bits check: (bits >> 48) - 0x7FF9 <u 7 detects every NaN-box tag
+    // (0x7FF9..=0x7FFF: BigInt/short-string/singletons/pointer/INT32/string).
+    // Genuine doubles — including canonical NaN (0x7FF8) and negative NaNs
+    // (0xFFF8+) — pass and are stored raw. INT32-boxed integers side-exit
+    // rather than being converted inline: the slow loop stores them correctly
+    // and the shapes this matcher admits (raw loads + float arithmetic)
+    // produce plain doubles.
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&val_double);
+        let upper = blk.lshr(I64, &bits, "48");
+        let rel = blk.sub(I64, &upper, "32761"); // 0x7FF9
+        let is_boxed = blk.icmp_ult(I64, &rel, "7");
+        blk.cond_br(&is_boxed, &exit_label, &fast_label);
+    }
+
+    ctx.current_block = exit_idx;
+    {
+        ctx.block().br(side_exit_label);
+        let fallback = LoweredValue {
+            semantic: SemanticKind::JsValue,
+            rep: NativeRep::JsValue,
+            llvm_ty: DOUBLE,
+            value: val_double.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "PackedF64RangeLoopStore",
+            Some(arr_id),
+            "packed_f64_range_loop_store_side_exit",
+            &fallback,
+            Some(BoundsState::Unknown),
+            None,
+            Some(BufferAccessMode::DynamicFallback),
+            Some(MaterializationReason::RuntimeApi),
+            None,
+            None,
+            Vec::new(),
+            vec![raw_f64_layout_fact(
+                Some(arr_id),
+                "rejected",
+                "packed_f64_range_loop_store_value_check",
+                Some(MaterializationReason::RuntimeApi),
+            )],
+            false,
+            false,
+            vec![
+                "rhs_numeric_guard=inline_nanbox_tag_check".to_string(),
+                "store_guard_failure=side_exit_slow_restart".to_string(),
+            ],
+        );
+    }
+
+    ctx.current_block = fast_idx;
+    {
+        let arr_expr = Expr::LocalGet(arr_id);
+        let arr_box = lower_expr(ctx, &arr_expr)?;
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+        let idx_i64 = blk.zext(I32, idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(POINTER_FREE): range-guarded packed numeric element
+        // store — the inline tag check above proved `val_double` is a genuine
+        // (unboxed) double, never a heap pointer, so the slot carries no edge.
+        blk.store(DOUBLE, &val_double, &element_ptr);
+    }
+    let stored = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::F64,
+        llvm_ty: DOUBLE,
+        value: val_double.clone(),
+    };
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "PackedF64RangeLoopStore",
+        Some(arr_id),
+        "packed_f64_range_loop_store",
+        &stored,
+        Some(BoundsState::Guarded {
+            guard_id: guard_id.to_string(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![
+            array_kind_fact(Some(arr_id), "consumed", "packed_f64", None),
+            raw_f64_layout_fact(Some(arr_id), "consumed", guard_id, None),
+        ],
+        Vec::new(),
+        false,
+        false,
+        {
+            let mut notes = vec![
+                "rhs_numeric_guard=inline_nanbox_tag_check".to_string(),
+                "store_guard_failure=side_exit_slow_restart".to_string(),
+                "index_range=range_guarded_i32_window".to_string(),
+                "storage_layout=raw_f64_or_hole_slots".to_string(),
+            ];
+            notes.extend(rhs_notes);
+            notes
+        },
+    );
+    Ok(val_double)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn lower_packed_numeric_loop_index_set(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
@@ -337,7 +510,18 @@ fn lower_packed_numeric_loop_index_set(
     guard_id: &str,
     side_exit_label: &str,
     array_kind: PackedNumericLoopKind,
+    allow_holes: bool,
 ) -> Result<String> {
+    if allow_holes && matches!(array_kind, PackedNumericLoopKind::F64) {
+        return lower_packed_f64_range_loop_index_set(
+            ctx,
+            arr_id,
+            idx_i32,
+            value,
+            guard_id,
+            side_exit_label,
+        );
+    }
     let (val_double, native_value, rhs_notes) =
         lower_packed_numeric_loop_store_value(ctx, arr_id, value, array_kind)?;
     let arr_expr = Expr::LocalGet(arr_id);
@@ -863,17 +1047,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // for-loop already proved `i < arr.length` and the
                 // body provably can't change `arr.length`, so the
                 // IndexSet at `arr[i]` is statically inbounds.
-                if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
-                    (object.as_ref(), index.as_ref())
-                {
-                    if let Some(fact) = packed_f64_loop_fact(ctx, *arr_id, *idx_id) {
+                if let Expr::LocalGet(arr_id) = object.as_ref() {
+                    if let Some((fact, idx_id, offset)) =
+                        packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
+                    {
                         // Packed-U32 typed-slot stores are not implemented; rather
                         // than abort codegen, let U32 facts fall through to the
                         // generic/bounded array-store path below (correct, just
                         // not the packed fast path).
                         if !matches!(fact.array_kind, PackedNumericLoopKind::U32) {
-                            if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
-                                let idx_i32 = ctx.block().load(I32, &i32_slot);
+                            if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
+                                let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                                 return lower_packed_numeric_loop_index_set(
                                     ctx,
                                     *arr_id,
@@ -882,10 +1066,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &fact.guard_id,
                                     &fact.store_side_exit_label,
                                     fact.array_kind,
+                                    fact.allow_holes,
                                 );
                             }
                         }
                     }
+                }
+                if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
+                    (object.as_ref(), index.as_ref())
+                {
                     if ctx.bounded_index_pairs.iter().any(|fact| {
                         fact.index_local_id == *idx_id && fact.array_local_id == *arr_id
                     }) {

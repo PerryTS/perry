@@ -119,6 +119,28 @@ pub(crate) fn format_finite_number_js(value: f64) -> String {
     }
 }
 
+/// 2^53 — the largest magnitude below which every integer is exactly
+/// representable as an `f64`. `console.log` / inspect / `util.format('%d')` fast
+/// paths print a whole number via a direct `as i64` cast for speed, but that is
+/// only the shortest-round-trip decimal *below* this bound. At/above it several
+/// integers map to one double, and the exact integer carries more significant
+/// digits than V8's shortest decimal (`2**58` → `288230376151711740`, not
+/// `…744`); such values must go through `format_finite_number_js`, whose Rust
+/// `{}` is shortest-round-trip. Refs #6127.
+pub(crate) const INT_EXACT_FASTPATH_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// Format a finite, integer-valued `f64` as V8 would: the fast `as i64` cast
+/// below 2^53, else the shortest-round-trip formatter. Callers that have already
+/// established `value.fract() == 0.0` (or truncated) use this to avoid the exact
+/// vs. shortest divergence at large magnitudes. Refs #6127.
+pub(crate) fn format_integral_f64(value: f64) -> String {
+    if value.abs() < INT_EXACT_FASTPATH_LIMIT {
+        (value as i64).to_string()
+    } else {
+        format_finite_number_js(value)
+    }
+}
+
 fn format_util_number(value: f64) -> String {
     if value.is_nan() {
         "NaN".to_string()
@@ -1055,7 +1077,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 }
             } else if is_negative_zero(n) {
                 "-0".to_string()
-            } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+            } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
                 (n as i64).to_string()
             } else {
                 format_finite_number_js(n)
@@ -1716,7 +1738,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 }
             } else if is_negative_zero(n) {
                 "-0".to_string()
-            } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+            } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
                 (n as i64).to_string()
             } else {
                 format_finite_number_js(n)

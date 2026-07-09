@@ -216,10 +216,6 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         const TAG_NULL_U64: u64 = 0x7FFC_0000_0000_0002;
         const TAG_UNDEFINED_U64: u64 = 0x7FFC_0000_0000_0001;
         let advance = |bits: u64| -> u64 {
-            let current_js = crate::value::JSValue::from_bits(bits);
-            if current_js.is_null() || current_js.is_undefined() {
-                return TAG_NULL_U64;
-            }
             let val = f64::from_bits(bits);
             // OrdinarySetPrototypeOf step 7.b.ii.1: if `p`'s [[GetPrototypeOf]]
             // is not the ordinary internal method (a Proxy's is exotic — it may

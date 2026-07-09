@@ -70,8 +70,9 @@ use nested_namespace::{
     try_web_crypto_subtle,
 };
 use post_args_dispatch::{
-    try_array_static_alias_call, try_direct_has_own_call, try_object_has_own_call,
-    try_object_prototype_call, try_object_static_alias_call, try_proxy_call,
+    try_array_static_alias_call, try_direct_has_own_call, try_direct_property_is_enumerable_call,
+    try_object_has_own_call, try_object_prototype_call, try_object_static_alias_call,
+    try_proxy_call,
 };
 use prescans::run_call_prescans;
 use regex_string::try_regex_string_methods;
@@ -324,6 +325,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         Err(args) => args,
     };
     args = match try_direct_has_own_call(ctx, call, args, has_spread) {
+        Ok(expr) => return Ok(expr),
+        Err(args) => args,
+    };
+    args = match try_direct_property_is_enumerable_call(ctx, call, args, has_spread) {
         Ok(expr) => return Ok(expr),
         Err(args) => args,
     };

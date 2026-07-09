@@ -205,10 +205,27 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
     if owner == 0 {
         return;
     }
+    // Take the entry OUT and run the visit with the lock RELEASED: a
+    // copying-minor rewrite visitor can move the prototype closure, and
+    // move fixup re-enters `closure_dynamic_props_owner_moved`, which
+    // takes this same lock — visiting under it self-deadlocks the
+    // collector (the geisterhand+reviver GC test wedged CI's cargo-test
+    // at the 3h job timeout). Same remove → visit → merge-back pattern
+    // as `visit_closure_dynamic_prop_values_mut` above and the roots
+    // scanner below.
+    let Some(mut proto_bits) = get_closure_prototypes()
+        .lock()
+        .ok()
+        .and_then(|mut prototypes| prototypes.remove(&owner))
+    else {
+        return;
+    };
+    visit(&mut proto_bits as *mut u64);
+    // The visit can forward the owner itself (self-referential
+    // prototype); re-key like the roots scanner does.
+    let new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
     if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        if let Some(proto_bits) = prototypes.get_mut(&owner) {
-            visit(proto_bits as *mut u64);
-        }
+        prototypes.insert(new_owner, proto_bits);
     }
 }
 

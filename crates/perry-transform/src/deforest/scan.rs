@@ -261,7 +261,8 @@ fn scan_stmt_for_closures(
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => {}
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 
@@ -431,7 +432,8 @@ impl StmtRefAllWalker<'_> {
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
             | Stmt::LabeledContinue(_)
-            | Stmt::PreallocateBoxes(_) => {}
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 

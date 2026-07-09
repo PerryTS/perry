@@ -430,3 +430,78 @@ fn test_lower_accepts_chain_under_limit() {
         );
     });
 }
+
+/// A `class A extends Base` whose parent Ident is an in-scope LEXICAL LOCAL
+/// (a `let`/`const`/param), not a class, must be lowered with NO static
+/// `extends_name` — the parent is resolved purely dynamically via
+/// `extends_expr`. Retaining a static `extends_name` lets the codegen
+/// parent-chain walks (packed-keys field layout, `js_register_class_parent`
+/// edge, inherited-method / vtable install, type-facts) re-resolve the bare
+/// name through the module-wide name→class map to an UNRELATED same-named class
+/// — e.g. a function-local `class Base` that leaked into that map — corrupting
+/// the subclass's field layout and inheritance. (Regression: a large minified
+/// program's zod `let Y=_?.Parent??Object; class A extends Y{}` wrongly
+/// inherited a captured iterator class `Y`'s private `#q`, throwing "Cannot
+/// access private member from an object whose class did not declare it".)
+#[test]
+fn test_lexically_shadowed_heritage_drops_static_extends_name() {
+    let source = r#"
+        function make(spec) {
+            let Base = (spec && spec.Parent) || Object;
+            class A extends Base {}
+            return A;
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let a = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "A")
+        .expect("class A is lowered");
+    assert!(
+        a.heritage_lexically_shadowed,
+        "`Base` is a lexical local, so `class A extends Base` is lexically shadowed"
+    );
+    assert_eq!(
+        a.extends_name, None,
+        "a lexically-shadowed heritage must NOT retain a static extends_name — \
+         it would re-resolve to an unrelated same-named class"
+    );
+    assert_eq!(
+        a.extends, None,
+        "no static parent class id for a dynamically-resolved parent"
+    );
+    assert!(
+        a.extends_expr.is_some(),
+        "the parent is resolved dynamically via extends_expr"
+    );
+}
+
+/// A normal subclass whose parent is a CLASS DECLARATION (not a local) is
+/// unaffected by the shadowed-heritage handling: class declarations are not in
+/// `ctx.locals`, so the heritage is NOT lexically shadowed and static parent
+/// resolution (field/method inheritance) is preserved.
+#[test]
+fn test_plain_class_to_class_heritage_keeps_static_extends_name() {
+    let source = r#"
+        class Base { x = 1; }
+        class Sub extends Base { y = 2; }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let sub = hir
+        .classes
+        .iter()
+        .find(|c| c.name == "Sub")
+        .expect("class Sub is lowered");
+    assert!(
+        !sub.heritage_lexically_shadowed,
+        "a class-declaration parent is not a lexical local"
+    );
+    assert_eq!(
+        sub.extends_name.as_deref(),
+        Some("Base"),
+        "static class-to-class heritage keeps its extends_name"
+    );
+}

@@ -317,6 +317,13 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE],
     );
+    // #6011: range-preguarded packed-f64 loop — validates a whole
+    // [min_idx, max_idx_exclusive) index window (hole-tolerant) at loop entry.
+    module.declare_function(
+        "js_typed_feedback_packed_f64_range_loop_guard",
+        I32,
+        &[I64, DOUBLE, I32, I32],
+    );
     module.declare_function(
         "js_typed_feedback_packed_u32_array_loop_guard",
         I32,
