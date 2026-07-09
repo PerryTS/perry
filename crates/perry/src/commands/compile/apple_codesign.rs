@@ -107,7 +107,11 @@ pub(super) fn codesign_apple_bundle(
     // Device: embed the provisioning profile so codesign can validate the
     // app-group entitlement against the profile's declared capabilities.
     if !is_sim {
-        if let Some(profile) = cfg.provisioning_profile.as_deref().filter(|p| !p.is_empty()) {
+        if let Some(profile) = cfg
+            .provisioning_profile
+            .as_deref()
+            .filter(|p| !p.is_empty())
+        {
             match fs::read(profile) {
                 Ok(bytes) => {
                     fs::write(bundle.join("embedded.mobileprovision"), bytes)?;
