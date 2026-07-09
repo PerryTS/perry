@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1951 entries across 114 modules
+// Coverage: 1952 entries across 114 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2635,6 +2635,8 @@ declare module "perry/system" {
   export function getOSVersion(...args: any[]): any;
   /** stdlib */
   export function getSafeAreaInsets(...args: any[]): any;
+  /** stdlib */
+  export function hapticPlay(type: string): void;
   /** stdlib */
   export function imagePickerPick(...args: any[]): any;
   /** stdlib */
