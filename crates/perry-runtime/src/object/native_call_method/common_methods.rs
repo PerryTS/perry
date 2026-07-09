@@ -155,7 +155,9 @@ pub(super) unsafe fn dispatch_common(
                                     ),
                                     ExoticKind::Date
                                     | ExoticKind::Temporal
-                                    | ExoticKind::Promise => false,
+                                    | ExoticKind::Promise
+                                    | ExoticKind::Map
+                                    | ExoticKind::Set => false,
                                 }
                         })
                         .unwrap_or(false);

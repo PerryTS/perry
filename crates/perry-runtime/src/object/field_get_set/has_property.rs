@@ -271,7 +271,13 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             // Temporal built-in fields (year/month/calendar/…) are prototype
             // getters, not own data properties (like Date). Promise's
             // then/catch/finally are prototype methods, not own props.
-            ExoticKind::Date | ExoticKind::Temporal | ExoticKind::Promise => false,
+            // Map/Set entries are internal slots; `size` and methods are
+            // prototype members, not own props.
+            ExoticKind::Date
+            | ExoticKind::Temporal
+            | ExoticKind::Promise
+            | ExoticKind::Map
+            | ExoticKind::Set => false,
         };
         if builtin_own {
             return nanbox_true;

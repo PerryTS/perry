@@ -474,6 +474,20 @@ pub(crate) fn get_field_by_name_object_tail(
                     let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
                     return JSValue::from_bits(result.to_bits());
                 }
+                // User expando keys (`s.tag = x`) live in the exotic side
+                // table (`ExoticKind::Set`); see the Map/Set arm below.
+                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                    let receiver =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    if let Some(v) = crate::object::exotic_expando::exotic_get_own_property(
+                        obj as usize,
+                        crate::object::exotic_expando::ExoticKind::Set,
+                        name,
+                        receiver,
+                    ) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
             }
             return JSValue::undefined();
         }
@@ -1043,33 +1057,14 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Maps: handle `.size` for `obj.m.size` style access where m is
-        // a Map field stored in a plain object literal. Without this
-        // the dynamic property dispatch returns undefined.
-        if gc_type == crate::gc::GC_TYPE_MAP {
-            if !key.is_null() {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"size" {
-                    let m = obj as *const crate::map::MapHeader;
-                    return JSValue::number(crate::map::js_map_size(m) as f64);
-                }
-                // Inherited `Map.prototype` members read off a Map *instance*
-                // (`m.set`, `m.get`, `m.constructor`, …) resolve through the
-                // prototype chain. The MapHeader isn't a plain object, so walk
-                // to `%Map.prototype%` and return its own data field — this is
-                // what makes `m.set.call(m, k, v)` (reflective dispatch) and
-                // `(new Map()).constructor === Map` work.
-                let proto = crate::object::builtin_prototype_value("Map");
-                let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
-                if !proto_ptr.is_null() {
-                    if let Some(v) = own_data_field_by_name(proto_ptr, key) {
-                        return v;
-                    }
-                }
-            }
-            return JSValue::undefined();
+        // Maps/Sets: `.size`, expando keys, and prototype member values —
+        // see `map_set_receiver.rs` (extracted for the file-size gate).
+        if gc_type == crate::gc::GC_TYPE_MAP || gc_type == crate::gc::GC_TYPE_SET {
+            return super::map_set_receiver::map_set_instance_property(
+                obj,
+                key,
+                gc_type == crate::gc::GC_TYPE_MAP,
+            );
         }
         // RegExp: RegExpHeader is allocated via GC_TYPE_OBJECT but tracked
         // in REGEX_POINTERS. Detect and route `.source`, `.flags`,

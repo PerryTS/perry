@@ -117,6 +117,7 @@ mod get_field_by_name;
 mod get_field_by_name_tail;
 mod has_property;
 mod ic_miss;
+mod map_set_receiver;
 
 // Explicit named re-exports so existing `crate::object::…` / `super::…`
 // paths keep resolving (a glob re-export does not reliably propagate through
