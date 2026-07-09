@@ -102,3 +102,78 @@ console.log(t("Hello, {name}! You are {age}.", { name: user, age: 36 }));
         stdout
     );
 }
+
+/// Multi-locale build: keys whose translations differ between locales select
+/// the row at RUNTIME (perry_i18n_locale_index_for + per-locale branch in the
+/// I18nString lowering). The host machine's language is not ours to pin, so
+/// the assertion accepts either locale's row — what it locks in is that the
+/// runtime-switch codegen compiles, runs, and interpolates params inside
+/// whichever branch was taken (the pre-fix failure modes were a clang error
+/// on an undeclared runtime symbol and raw `{days}` output).
+#[test]
+fn t_multi_locale_runtime_selection_interpolates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("locales")).expect("mkdir locales");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir src");
+
+    std::fs::write(
+        dir.path().join("perry.toml"),
+        r#"
+[i18n]
+locales = ["en", "de"]
+default_locale = "en"
+"#,
+    )
+    .expect("write perry.toml");
+    std::fs::write(
+        dir.path().join("locales/en.json"),
+        r#"{ "Day streak: {days}": "Day streak: {days}" }"#,
+    )
+    .expect("write en.json");
+    std::fs::write(
+        dir.path().join("locales/de.json"),
+        r#"{ "Day streak: {days}": "Serie: {days} Tage" }"#,
+    )
+    .expect("write de.json");
+
+    let entry = dir.path().join("src/main.ts");
+    let output = dir.path().join("main_bin");
+    std::fs::write(
+        &entry,
+        r#"
+import { t } from "perry/i18n";
+console.log(t("Day streak: {days}", { days: 9 }));
+"#,
+    )
+    .expect("write entry");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let line = stdout.lines().next().unwrap_or("");
+    assert!(
+        line == "Day streak: 9" || line == "Serie: 9 Tage",
+        "expected the en or de row with {{days}} interpolated, got: {:?}",
+        line
+    );
+}
