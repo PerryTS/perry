@@ -140,9 +140,10 @@ const PROMISE_SCAN_ASYNC_STEP_GUARD: u8 = 6;
 const PROMISE_SCAN_CONTEXTS: u8 = 7;
 const PROMISE_SCAN_ALL_STATES: u8 = 8;
 const PROMISE_SCAN_SETTLE_LISTENERS: u8 = 9;
-const PROMISE_SCAN_PREV_CONTEXTS: u8 = 10;
-const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 11;
-const PROMISE_SCAN_DONE: u8 = 12;
+const PROMISE_SCAN_OVERFLOW_REACTIONS: u8 = 10;
+const PROMISE_SCAN_PREV_CONTEXTS: u8 = 11;
+const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 12;
+const PROMISE_SCAN_DONE: u8 = 13;
 
 #[derive(Default)]
 pub(crate) struct PromiseRootScanState {
@@ -202,6 +203,9 @@ pub(crate) fn scan_promise_roots_mut_step(
             PROMISE_SCAN_ALL_STATES => scan_promise_all_states_step(visitor, state, remaining),
             PROMISE_SCAN_SETTLE_LISTENERS => {
                 scan_promise_settle_listeners_step(visitor, state, remaining)
+            }
+            PROMISE_SCAN_OVERFLOW_REACTIONS => {
+                scan_promise_overflow_reactions_step(visitor, state, remaining)
             }
             PROMISE_SCAN_PREV_CONTEXTS => scan_prev_contexts_step(visitor, state, remaining),
             PROMISE_SCAN_SCHEDULED_RESOLVES => {
@@ -606,6 +610,50 @@ fn scan_promise_settle_listeners_step(
     })
 }
 
+// Step twin of `scan_promise_overflow_reactions_mut` (then.rs). The 2nd+
+// `.then()`/`.catch()`/`.finally()` on a still-pending promise parks its
+// reaction ONLY in PROMISE_OVERFLOW_REACTIONS — cycle-based collections run
+// exclusively the step scanner, so a missing phase here meant those reaction
+// closures and their chained `next` promises were swept while the promise
+// was pending, and never rewritten on a moving cycle.
+fn scan_promise_overflow_reactions_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut PromiseRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    super::then::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        let mut reactions = reactions.borrow_mut();
+        while state.index < reactions.len() {
+            while state.slot < 4 {
+                if !consume_root_work(remaining) {
+                    return false;
+                }
+                let (key, reaction) = &mut reactions[state.index];
+                match state.slot {
+                    0 => visitor.visit_metadata_usize_slot(key),
+                    1 => visitor.visit_raw_const_ptr_slot(&mut reaction.on_fulfilled),
+                    2 => visitor.visit_raw_const_ptr_slot(&mut reaction.on_rejected),
+                    3 => visitor.visit_raw_mut_ptr_slot(&mut reaction.next),
+                    _ => false,
+                };
+                state.slot += 1;
+            }
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut reactions[state.index].1.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.index += 1;
+            state.finish_context_item();
+        }
+        true
+    })
+}
+
 fn scan_prev_contexts_step(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     state: &mut PromiseRootScanState,
@@ -866,6 +914,7 @@ pub(crate) fn test_clear_promise_scanner_roots() {
     });
     super::combinators::SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
     super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
+    super::then::PROMISE_OVERFLOW_REACTIONS.with(|reactions| reactions.borrow_mut().clear());
 }
 
 #[cfg(test)]

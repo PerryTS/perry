@@ -73,7 +73,6 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
 /// IS registered, so user_params computes to 0 and `seed` never receives
 /// "alpha". Needs the signature cap-param count registered alongside the
 /// ctor (see the follow-up to #806).
-#[ignore = "part 2: capless-signature ctor vs snapshot subtraction in the class-object construct dispatch"]
 #[test]
 fn default_derived_forwards_through_capturing_mixin() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -210,7 +209,6 @@ console.log(factory("K"));
 /// args — the mixin test above hits that variant too, beneath its
 /// dispatch-layer failure.) Fix is the spec `(...args)` synthesis via
 /// `SuperCallSpread` (see the follow-up to #806).
-#[ignore = "part 2: HIR default-ctor synthesis mints fixed arity instead of (...args) — rest ancestors truncate"]
 #[test]
 fn walk_into_rest_param_capturing_ctor() {
     let dir = tempfile::tempdir().expect("tempdir");

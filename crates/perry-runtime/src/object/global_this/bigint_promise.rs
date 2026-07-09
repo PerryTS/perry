@@ -409,6 +409,24 @@ pub(crate) extern "C" fn reflect_apply_thunk(
     crate::proxy::js_reflect_apply(target, this_arg, args)
 }
 
+/// #5989: the reified `Reflect.construct` VALUE was a no-op stub, so any
+/// call through a captured binding — Next.js 16's cacheComponents Date
+/// extension does `const construct = Reflect.construct; ...
+/// construct(OriginalDate, arguments, new.target)` inside its installed
+/// wrapper — silently returned `undefined` and the construction result
+/// fell back to the unbranded implicit `this` ("Invalid Date" instances
+/// everywhere once the wrapper installs). Route to the real
+/// `js_reflect_construct`; a missing third argument arrives as
+/// `undefined`, which it already resolves to `target` per spec.
+pub(crate) extern "C" fn reflect_construct_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    target: f64,
+    args_like: f64,
+    new_target: f64,
+) -> f64 {
+    crate::proxy::js_reflect_construct(target, args_like, new_target)
+}
+
 pub(crate) extern "C" fn symbol_for_thunk(
     _closure: *const crate::closure::ClosureHeader,
     key: f64,

@@ -273,6 +273,22 @@ pub(super) fn try_static_method_and_instance(
                         // Fall through — let the regular method-call
                         // dispatch further down handle the user-class
                         // method.
+                    } else if static_call_has_spread {
+                        // A spread argument (`recv.method(...arr)`) cannot be
+                        // represented in `NativeMethodCall`'s positional `args`:
+                        // the pre-lowered `args` already collapsed the spread
+                        // SOURCE into a single element, and the codegen
+                        // `NA_VARARGS` packer then pushes that array as ONE
+                        // argument instead of flattening it. The static-method
+                        // arms above already guard on `static_call_has_spread`
+                        // for the same reason; the instance arm was missing it.
+                        // Concretely, `AsyncLocalStorage.run(store, cb, ...args)`
+                        // handed the callback a single array instead of its
+                        // forwarded arguments. Fall through to the generic
+                        // `CallSpread` path (function tail `Ok(Err(args))`),
+                        // which materialises + flattens the spread via
+                        // `js_array_concat` before dispatching the native method
+                        // by name.
                     } else {
                         // Get the object expression (the instance variable)
                         let object_expr = lower_expr(ctx, &member.obj)?;

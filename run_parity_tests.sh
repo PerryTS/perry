@@ -31,6 +31,12 @@ TEST_FILTER=""
 # without requiring test_parity_* names.
 TEST_SUITE="all"
 MODULE_FILTER=""
+# Optional round-robin sharding (N/M, 1-based). Splits the post-filter test
+# set evenly across M parallel runners so a big suite (the gap suite is the
+# motivating case — conformance-smoke fans out over 8 shards) can be run in
+# ~1/M the wall-time. Empty = run the whole set (default; unchanged behavior
+# for release parity, local runs, and node-suite-guard).
+SHARD_SPEC=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --filter) TEST_FILTER="$2"; shift 2 ;;
@@ -39,9 +45,29 @@ while [[ $# -gt 0 ]]; do
         --suite=*) TEST_SUITE="${1#--suite=}"; shift ;;
         --module) MODULE_FILTER="$2"; shift 2 ;;
         --module=*) MODULE_FILTER="${1#--module=}"; shift ;;
+        --shard) SHARD_SPEC="$2"; shift 2 ;;
+        --shard=*) SHARD_SPEC="${1#--shard=}"; shift ;;
         *) shift ;;
     esac
 done
+
+# Parse/validate the optional shard spec into 1-based index + total. Kept as a
+# hard input check: a malformed shard (e.g. "3/0" or "9/8") that silently ran
+# the whole set — or nothing — would make a required conformance gate lie.
+SHARD_INDEX=0
+SHARD_TOTAL=0
+if [[ -n "$SHARD_SPEC" ]]; then
+    if [[ ! "$SHARD_SPEC" =~ ^[0-9]+/[0-9]+$ ]]; then
+        echo -e "\033[0;31mInvalid --shard '$SHARD_SPEC' (want N/M, 1-based, e.g. 3/8)\033[0m" >&2
+        exit 1
+    fi
+    SHARD_INDEX="${SHARD_SPEC%/*}"
+    SHARD_TOTAL="${SHARD_SPEC#*/}"
+    if (( SHARD_INDEX < 1 || SHARD_TOTAL < 1 || SHARD_INDEX > SHARD_TOTAL )); then
+        echo -e "\033[0;31mInvalid --shard bounds '$SHARD_SPEC' (need 1 <= N <= M)\033[0m" >&2
+        exit 1
+    fi
+fi
 
 case "$TEST_SUITE" in
     all|parity|smoke|node-suite) ;;
@@ -545,6 +571,7 @@ if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
 fi
 
 # Run each test
+SHARD_COUNTER=0
 for test_file in "${TEST_FILES[@]}"; do
     # Skip directories (multi/ folder)
     [[ -d "$test_file" ]] && continue
@@ -561,6 +588,19 @@ for test_file in "${TEST_FILES[@]}"; do
     # contains it.
     if [[ -n "$TEST_FILTER" ]] && [[ "$test_name" != *"$TEST_FILTER"* ]] && [[ "$test_id" != *"$TEST_FILTER"* ]]; then
         continue
+    fi
+
+    # Round-robin sharding over the POST-filter set (opt-in via --shard N/M).
+    # Counting only tests that survive the filter keeps the split even for a
+    # narrow filter like `test_gap_`; the counter advances for every surviving
+    # test so shard i keeps exactly indices where (k % M) == i-1, and the M
+    # shards partition the set with no overlap and no gaps.
+    if (( SHARD_TOTAL > 0 )); then
+        this_idx=$SHARD_COUNTER
+        SHARD_COUNTER=$((SHARD_COUNTER + 1))
+        if (( this_idx % SHARD_TOTAL != SHARD_INDEX - 1 )); then
+            continue
+        fi
     fi
 
     safe_test_id="${test_id//\//__}"

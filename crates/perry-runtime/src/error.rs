@@ -926,6 +926,31 @@ fn throw_reference_error_message(message: &'static [u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Temporal Dead Zone ReferenceError. Thrown when a lexical `let`/`const`/
+/// `class` binding is read, `typeof`-d, or compound-assigned before its
+/// declaration has been evaluated — i.e. while its box still holds the
+/// `TAG_TDZ` sentinel. `name` is the NaN-boxed binding name (or `undefined`
+/// when codegen could not thread a name through, e.g. a captured box read).
+/// Message matches V8/Node byte-for-byte: `Cannot access x before
+/// initialization`.
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_tdz(name: f64) -> f64 {
+    let name = value_to_lossy_string(name);
+    let msg = if name.is_empty() {
+        "Cannot access uninitialized variable before initialization".to_string()
+    } else {
+        format!("Cannot access {} before initialization", name)
+    };
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_referenceerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code-
+/// and runtime-only callee).
+#[used]
+static KEEP_JS_THROW_REFERENCE_ERROR_TDZ: extern "C" fn(f64) -> f64 = js_throw_reference_error_tdz;
+
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
     throw_reference_error_message(b"identifier is not defined")
@@ -1032,6 +1057,59 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
     } else {
         numeric
     }
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code
+///-only callee; see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_GLOBAL_ASSIGN_EXISTING_OR_THROW: extern "C" fn(f64, f64) -> f64 =
+    js_global_assign_existing_or_throw;
+
+/// Strict-mode assignment to an identifier with no lexical binding
+/// (#5989). Per spec (PutValue on an unresolvable-in-strict reference),
+/// the name must first resolve against the global object: an EXISTING
+/// global property is a normal property write — Next.js 16's
+/// `cacheComponents` node-environment extensions do exactly this
+/// (`Date = createDate(Date)` in strict CJS to install the dynamic-IO
+/// clock interceptor, likewise `crypto`/`Math.random` wrappers) — and
+/// only a genuinely absent binding throws the ReferenceError. The old
+/// lowering threw unconditionally, so the extension install failed at
+/// boot ("Failed to install `Date` class extension") and the dynamic
+/// prerender-abort chain never armed. Presence probing + write-back
+/// mirror `js_global_update` (the `++x`-on-global sibling). Sloppy mode
+/// never reaches this helper — it lowers to a globalThis property set
+/// that may CREATE the binding.
+#[no_mangle]
+pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64) -> f64 {
+    let g = crate::object::js_get_global_this();
+    let gj = crate::value::JSValue::from_bits(g.to_bits());
+    let key = crate::builtins::js_string_coerce(name_value);
+    let mut present = false;
+    if gj.is_pointer() && !key.is_null() {
+        let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+        if !gptr.is_null() {
+            let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+            if !v.is_undefined()
+                || unsafe {
+                    crate::object::js_object_has_own(g, name_value).to_bits()
+                        == crate::value::TAG_TRUE
+                }
+            {
+                present = true;
+            }
+        }
+    }
+    if !present {
+        let name = value_to_lossy_string(name_value);
+        let msg = format!("{} is not defined", name);
+        let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = js_referenceerror_new(msg_str);
+        return crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+    }
+    let gptr = (gj.bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+    crate::object::js_object_set_field_by_name(gptr, key, value);
+    // An assignment expression evaluates to its RHS.
+    value
 }
 
 /// Non-throwing variant of [`js_global_get_or_throw_unresolved`] for

@@ -1358,12 +1358,17 @@ fn malloc_backed_large_closure_capture_in_old_container_survives_copied_minor() 
     assert!(crate::arena::pointer_in_nursery(captured_after));
     assert_eq!(trace.copying_nursery.copied_objects, 1);
     assert_eq!(trace.copying_nursery.copied_bytes, child_total);
-    assert_eq!(trace.remembered_set.dirty_pages_before, 1);
-    assert_eq!(trace.remembered_set.dirty_pages_scanned, 1);
-    assert_eq!(trace.remembered_set.dirty_objects_scanned, 1);
+    // Two remembered entries since the old→malloc fix: the external
+    // capture-page entry (closure→young child) AND the old array's element
+    // page (old→malloc edge). The latter is what keeps this malloc-backed
+    // closure alive across minor malloc sweeps when the old container is
+    // its only referrer.
+    assert_eq!(trace.remembered_set.dirty_pages_before, 2);
+    assert_eq!(trace.remembered_set.dirty_pages_scanned, 2);
+    assert_eq!(trace.remembered_set.dirty_objects_scanned, 2);
     assert!(
-        (1..=512).contains(&trace.remembered_set.dirty_slots_scanned),
-        "one dirty closure-capture page should bound copied-minor scanning"
+        (1..=1024).contains(&trace.remembered_set.dirty_slots_scanned),
+        "two dirty pages (capture page + old element page) should bound copied-minor scanning"
     );
     assert!(
         remembered_set_size() > 0,
@@ -1375,10 +1380,18 @@ fn malloc_backed_large_closure_capture_in_old_container_survives_copied_minor() 
     }
     let promoted = unsafe { (*capture_slot & POINTER_MASK) as usize };
     assert!(crate::arena::pointer_in_old_gen(promoted));
+    // The capture's external entry clears once the capture points old, but
+    // the old array's element page stays remembered: its old→malloc edge
+    // must keep protecting the closure from minor malloc sweeps.
+    assert!(
+        malloc_user_ptr_tracked(closure as *mut u8),
+        "malloc-backed closure must remain tracked while its old container lives"
+    );
     assert_eq!(
         remembered_set_size(),
-        0,
-        "external dirty tracking should clear once the capture no longer points to young gen"
+        1,
+        "only the old→malloc element page should remain remembered once the \
+         capture no longer points to young gen"
     );
 }
 

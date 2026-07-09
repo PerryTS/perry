@@ -48,6 +48,14 @@ pub(crate) fn get_field_by_name_object_tail(
                                 super::super::js_class_method_bind(this_f64, key_ptr, key_len);
                             return JSValue::from_bits(result.to_bits());
                         }
+                        if let Some(v) = crate::text::text_handle_property(
+                            raw as usize,
+                            key_bytes,
+                            key_ptr,
+                            key_len,
+                        ) {
+                            return v;
+                        }
                     }
                     // Drizzle-sqlite blocker: synth `data.constructor` for
                     // small-handle native instances so drizzle's
@@ -112,6 +120,11 @@ pub(crate) fn get_field_by_name_object_tail(
                         f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                     let result = super::super::js_class_method_bind(this_f64, key_ptr, key_len);
                     return JSValue::from_bits(result.to_bits());
+                }
+                if let Some(v) =
+                    crate::text::text_handle_property(obj as usize, key_bytes, key_ptr, key_len)
+                {
+                    return v;
                 }
             }
             if let Some(dispatch) = handle_property_dispatch() {
@@ -460,6 +473,20 @@ pub(crate) fn get_field_by_name_object_tail(
                         f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                     let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
                     return JSValue::from_bits(result.to_bits());
+                }
+                // User expando keys (`s.tag = x`) live in the exotic side
+                // table (`ExoticKind::Set`); see the Map/Set arm below.
+                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                    let receiver =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    if let Some(v) = crate::object::exotic_expando::exotic_get_own_property(
+                        obj as usize,
+                        crate::object::exotic_expando::ExoticKind::Set,
+                        name,
+                        receiver,
+                    ) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
                 }
             }
             return JSValue::undefined();
@@ -1030,33 +1057,14 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Maps: handle `.size` for `obj.m.size` style access where m is
-        // a Map field stored in a plain object literal. Without this
-        // the dynamic property dispatch returns undefined.
-        if gc_type == crate::gc::GC_TYPE_MAP {
-            if !key.is_null() {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"size" {
-                    let m = obj as *const crate::map::MapHeader;
-                    return JSValue::number(crate::map::js_map_size(m) as f64);
-                }
-                // Inherited `Map.prototype` members read off a Map *instance*
-                // (`m.set`, `m.get`, `m.constructor`, …) resolve through the
-                // prototype chain. The MapHeader isn't a plain object, so walk
-                // to `%Map.prototype%` and return its own data field — this is
-                // what makes `m.set.call(m, k, v)` (reflective dispatch) and
-                // `(new Map()).constructor === Map` work.
-                let proto = crate::object::builtin_prototype_value("Map");
-                let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
-                if !proto_ptr.is_null() {
-                    if let Some(v) = own_data_field_by_name(proto_ptr, key) {
-                        return v;
-                    }
-                }
-            }
-            return JSValue::undefined();
+        // Maps/Sets: `.size`, expando keys, and prototype member values —
+        // see `map_set_receiver.rs` (extracted for the file-size gate).
+        if gc_type == crate::gc::GC_TYPE_MAP || gc_type == crate::gc::GC_TYPE_SET {
+            return super::map_set_receiver::map_set_instance_property(
+                obj,
+                key,
+                gc_type == crate::gc::GC_TYPE_MAP,
+            );
         }
         // RegExp: RegExpHeader is allocated via GC_TYPE_OBJECT but tracked
         // in REGEX_POINTERS. Detect and route `.source`, `.flags`,
@@ -1255,6 +1263,23 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // AbortSignal method read through a DYNAMICALLY-typed receiver
+        // (`const s: any = c.signal; s.addEventListener` / `typeof
+        // s.addEventListener`). The static receiver form lowers to the native
+        // call, but this generic walk found no method property and returned
+        // undefined (the #5964 URLSearchParams dynamic-dispatch class).
+        // Returns a bound-method closure for the known signal methods.
+        if (*obj).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID && !key.is_null() {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if let Some(bound) =
+                crate::url::abort::abort_signal_method_bind(obj as *mut ObjectHeader, key_bytes)
+            {
+                return JSValue::from_bits(bound.to_bits());
+            }
+        }
+
         // Refs #420 / #618 followup: `instance.constructor` returns the
         // class ref. Pre-fix this fell through to the keys_array lookup
         // which never finds "constructor" (the class itself isn't stored
@@ -1351,17 +1376,6 @@ pub(crate) fn get_field_by_name_object_tail(
                     let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
                     return JSValue::from_bits(v.to_bits());
                 }
-                if class_id != 0 {
-                    let receiver =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    if let Some(v) =
-                        super::super::class_registry::resolve_proto_chain_field_with_receiver(
-                            class_id, key, receiver,
-                        )
-                    {
-                        return v;
-                    }
-                }
                 if let Some(func_value) =
                     super::super::class_registry::function_value_for_class_id(class_id)
                 {
@@ -1370,10 +1384,6 @@ pub(crate) fn get_field_by_name_object_tail(
                 if class_id != 0 && is_class_id_registered(class_id) {
                     let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
                     return JSValue::from_bits(bits);
-                }
-                if crate::url::url_class::is_url_object_shape(obj as *mut crate::ObjectHeader) {
-                    let v = js_get_global_this_builtin_value(b"URL".as_ptr(), 3);
-                    return JSValue::from_bits(v.to_bits());
                 }
                 // class_id == 0 fallback: plain ObjectHeader allocated
                 // without an HIR shape (Object.create(null) hybrids, raw
@@ -1572,7 +1582,11 @@ pub(crate) fn get_field_by_name_object_tail(
         };
         let keys_id = keys as usize;
 
-        let key_count = crate::array::js_array_length(keys) as usize;
+        // Clamp the keys length to capacity so a bogus/oversized length can't
+        // drive the wide-key map build or the linear scan below into unbounded
+        // work (see `keys_array_len_capped_to_capacity`). No-op for well-formed
+        // arrays.
+        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
 
         // Thread-local inline cache: fixed-size direct-mapped cache (no allocation, no HashMap)
         // Each entry stores (keys_ptr, key_hash, field_index). Copied-minor

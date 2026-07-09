@@ -356,9 +356,20 @@ pub(crate) fn read_thread_cpu_micros() -> (f64, f64) {
     (0.0, 0.0)
 }
 
-/// Get resident set size (RSS) in bytes using platform-specific APIs
+/// Get resident set size (RSS) in bytes using platform-specific APIs.
+///
+/// 2026-07-09 audit: the mach `task_info` path is identical on every Apple
+/// OS, but was cfg-gated to macOS only — so RSS read 0 on iOS/tvOS/watchOS/
+/// visionOS and every RSS-pressure GC heuristic was silently dead exactly
+/// where memory is scarcest. Android reads the same procfs file as Linux.
 pub(crate) fn get_rss_bytes() -> u64 {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos"
+    ))]
     {
         use std::mem;
         extern "C" {
@@ -397,14 +408,23 @@ pub(crate) fn get_rss_bytes() -> u64 {
             0
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        // Read /proc/self/statm - second field is RSS in pages
+        // Read /proc/self/statm - second field is RSS in pages.
+        // Page size must be queried: 16 K (many Android/Asahi kernels) and
+        // 64 K (some aarch64 distros) pages under-reported RSS 4-16× with
+        // the old hardcoded 4096, inflating every RSS threshold to match.
         if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
             let parts: Vec<&str> = statm.split_whitespace().collect();
             if parts.len() >= 2 {
                 if let Ok(pages) = parts[1].parse::<u64>() {
-                    return pages * 4096; // page size is typically 4KB
+                    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+                    let page_size = if page_size > 0 {
+                        page_size as u64
+                    } else {
+                        4096
+                    };
+                    return pages * page_size;
                 }
             }
         }
@@ -443,7 +463,16 @@ pub(crate) fn get_rss_bytes() -> u64 {
             }
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "windows"
+    )))]
     {
         0
     }

@@ -105,6 +105,22 @@ pub extern "C" fn js_typed_array_at(ta: *const TypedArrayHeader, index: f64) -> 
     }
 }
 
+/// Would `ToNumber`/`ToBigInt` on this NaN-boxed value have an OBSERVABLE
+/// effect (a user coercion hook or a thrown TypeError)? Plain numbers (double
+/// or INT32), booleans, `null`, `undefined`, and strings all coerce with no
+/// side effect, so an out-of-bounds typed-array write of one of those can skip
+/// the coercion entirely and stay on the fast path. A POINTER-tagged object
+/// (has a `valueOf`/`Symbol.toPrimitive`), a Symbol, or a BigInt is the only
+/// case where the spec-required coercion is observable.
+#[inline]
+fn value_needs_coercion_side_effect(value: f64) -> bool {
+    let top16 = value.to_bits() >> 48;
+    // BIGINT_TAG (0x7FFA) or POINTER_TAG (0x7FFD, covers objects + symbols).
+    // Everything else (plain doubles, INT32 0x7FFE, strings 0x7FFF, the 0x7FFC
+    // singleton block) has a pure conversion.
+    top16 == 0x7FFA || top16 == 0x7FFD
+}
+
 /// `ta[i] = value`.
 #[no_mangle]
 pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, value: f64) {
@@ -118,10 +134,26 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
                 crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
             );
         }
+        let kind = (*ta).kind;
         if index < 0 || index as u32 >= (*ta).length {
+            // TypedArraySetElement (§10.4.5.16) runs `ToNumber`/`ToBigInt` on
+            // the value BEFORE the IsValidIntegerIndex bounds check, then drops
+            // the store for an invalid index. The coercion is only observable
+            // for a value whose conversion has a side effect or throws — an
+            // object (`valueOf`/`Symbol.toPrimitive` hook), a Symbol / BigInt
+            // into a numeric view, or a Number into a BigInt view. Gate the
+            // out-of-bounds coercion on a non-plain-number value so the hot
+            // in-bounds and primitive-value paths are untouched (test262
+            // Set/tonumber-value-throws, key-is-out-of-bounds-*).
+            if value_needs_coercion_side_effect(value) {
+                if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+                    let _ = bigint::to_bigint_for_store(value);
+                } else {
+                    let _ = jsvalue_to_f64(value);
+                }
+            }
             return;
         }
-        let kind = (*ta).kind;
         if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
             // IntegerIndexedElementSet on a bigint view performs `ToBigInt` —
             // a Number throws `TypeError`. Pass the NaN-boxed BigInt straight
@@ -421,6 +453,43 @@ pub extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32)
         0
     }
 }
+
+/// `uint8array[i]` / `buffer[i]` read as a JS value. Mirrors the dispatch of
+/// the native i32 accessor `js_uint8array_get` (a real Uint8Array
+/// `TypedArrayHeader`, or a Buffer-backed registered buffer), but an
+/// out-of-range canonical integer index reads `undefined` — the ECMAScript
+/// IntegerIndexedExotic `[[Get]]` semantics — NOT the `0` byte-sentinel the
+/// i32 accessor is forced to return (#6088). `js_typed_array_get` and
+/// `js_buffer_index_get_value` both already yield `undefined` for out-of-range,
+/// so each arm forwards directly.
+#[no_mangle]
+pub extern "C" fn js_uint8array_index_get_value(
+    target: *const TypedArrayHeader,
+    index: i32,
+) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let addr = strip_nanbox(target as u64);
+    if addr < 0x1000 || index < 0 {
+        return undefined;
+    }
+    if let Some(kind) = lookup_typed_array_kind(addr) {
+        if !matches!(kind, KIND_UINT8 | KIND_UINT8_CLAMPED) {
+            return undefined;
+        }
+        js_typed_array_get(addr as *const TypedArrayHeader, index)
+    } else if crate::buffer::is_registered_buffer(addr) {
+        crate::buffer::js_buffer_index_get_value(addr as *const crate::buffer::BufferHeader, index)
+    } else {
+        undefined
+    }
+}
+
+// #6088: force-keep the JS-value Uint8Array index getter under LTO /
+// auto-optimize — it has zero internal Rust callers (codegen emits the only
+// call), so a whole-program bitcode link is otherwise free to dead-strip it.
+#[used]
+static KEEP_JS_UINT8ARRAY_INDEX_GET_VALUE: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
+    js_uint8array_index_get_value;
 
 #[no_mangle]
 pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, value: i32) {

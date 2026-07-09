@@ -62,10 +62,36 @@ pub(crate) fn class_typed_layout(
     }
     chain.reverse();
 
+    typed_layout_from_fields(chain.iter().flat_map(|class| class.fields.iter()))
+}
+
+/// Issue #26 / #321 (refs #5094): typed layout from an authoritative,
+/// source-prefix-disambiguated root→leaf chain (`class_init_chains`). The
+/// name-keyed walk in [`class_typed_layout`] mis-resolves same-named
+/// cross-module parents (effect's `Type` in SchemaAST.ts vs ParseResult.ts),
+/// which misaligns every mask bit after the wrong parent's field count. The
+/// GC scanner reads these masks per slot, so a misaligned mask is only kept
+/// from corrupting memory by the install-time backstop in
+/// `js_gc_init_typed_shape_layout` (each raw-f64 slot is validated to hold a
+/// plain double before the descriptor is promoted) — which also means
+/// dup-named classes silently never get a typed descriptor, so the #5093
+/// class-field fast path never engages for them. The chain is built in
+/// `compile_module` by the SAME walk that emits the packed-keys global and
+/// field count, so masks derived from it are consistent with the slot layout
+/// instances actually get.
+pub(crate) fn class_typed_layout_from_chain(
+    chain: &[(String, Vec<perry_hir::ClassField>)],
+) -> TypedShapeLayout {
+    typed_layout_from_fields(chain.iter().flat_map(|(_, fields)| fields.iter()))
+}
+
+fn typed_layout_from_fields<'a>(
+    fields: impl Iterator<Item = &'a perry_hir::ClassField>,
+) -> TypedShapeLayout {
     let mut raw_f64_mask_words = Vec::new();
     let mut pointer_mask_words = Vec::new();
     let mut slot_count = 0u32;
-    for field in chain.iter().flat_map(|class| class.fields.iter()) {
+    for field in fields {
         if field.key_expr.is_some() {
             continue;
         }

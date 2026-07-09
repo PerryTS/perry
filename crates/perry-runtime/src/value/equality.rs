@@ -412,7 +412,9 @@ pub extern "C" fn js_jsvalue_compare(a: f64, b: f64) -> i32 {
                 unsafe {
                     let a_bytes = std::slice::from_raw_parts(a_ptr, a_len as usize);
                     let b_bytes = std::slice::from_raw_parts(b_ptr, b_len as usize);
-                    return match a_bytes.cmp(b_bytes) {
+                    // ECMAScript compares strings by UTF-16 code unit, not raw
+                    // UTF-8 byte / code-point order (differs for astral chars).
+                    return match crate::string::utf16_cmp_bytes(a_bytes, b_bytes) {
                         std::cmp::Ordering::Less => -1,
                         std::cmp::Ordering::Equal => 0,
                         std::cmp::Ordering::Greater => 1,

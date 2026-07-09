@@ -67,14 +67,41 @@ pub fn longlived_in_use_bytes() -> usize {
     })
 }
 
-/// Bytes currently allocated in the old-gen arena (gen-GC Phase B).
-/// Diagnostic-only — empty in Phase B; populated by Phase C's
-/// nursery→old promotion path.
+/// Bytes currently allocated in the old-gen arena (gen-GC Phase C).
+/// Read by `gc_budgeted_due_trigger()` on every `gc_check_trigger` —
+/// i.e. on every `gc_malloc` and every nursery block fill — so this
+/// returns the delta-maintained cache (`OLD_GEN_IN_USE_BYTES`) instead
+/// of recomputing an O(old-blocks) sum each time. Debug builds
+/// cross-check the cache against the recompute so a missed mutation
+/// site fails tests instead of silently skewing the OldReclaim trigger.
 pub fn old_gen_in_use_bytes() -> usize {
+    let cached = OLD_GEN_IN_USE_BYTES.with(|c| c.get());
+    debug_assert_eq!(
+        cached,
+        old_gen_in_use_bytes_recomputed(),
+        "OLD_GEN_IN_USE_BYTES cache drifted from the per-block recompute — \
+         an old-arena offset mutation site is missing its delta update \
+         (see the mutation-site inventory on OLD_GEN_IN_USE_BYTES in arena/block.rs)"
+    );
+    cached
+}
+
+/// O(blocks) recompute of the old-gen in-use total — the cross-check /
+/// resync source of truth for the delta-maintained cache. Not for hot
+/// paths.
+pub(crate) fn old_gen_in_use_bytes_recomputed() -> usize {
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
         arena.blocks.iter().map(|b| b.offset).sum()
     })
+}
+
+/// Test-only: force the cache back in sync after a test hand-mutates
+/// old-arena block offsets without going through the tracked paths.
+#[cfg(test)]
+pub(crate) fn old_gen_in_use_bytes_resync() {
+    let recomputed = old_gen_in_use_bytes_recomputed();
+    OLD_GEN_IN_USE_BYTES.with(|c| c.set(recomputed));
 }
 
 #[inline]

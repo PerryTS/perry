@@ -639,7 +639,7 @@ pub fn has_simple_control_flow(stmts: &[Stmt]) -> bool {
             | Stmt::LabeledContinue(_) => {
                 return false;
             }
-            Stmt::PreallocateBoxes(_) => {}
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
     true
@@ -811,7 +811,7 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
                 }
             }
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-            Stmt::PreallocateBoxes(ids) => {
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
                     *max_id = (*max_id).max(*id);
                 }

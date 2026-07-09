@@ -92,7 +92,7 @@ fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSe
     use perry_hir::Stmt;
     for s in stmts {
         match s {
-            Stmt::PreallocateBoxes(ids) => {
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 for id in ids {
                     out.insert(*id);
                 }

@@ -293,10 +293,27 @@ pub(crate) fn lower_let(
     // no initializer (`var x;`) keeps the prior value, matching JS.
     if ctx.locals.contains_key(&id) {
         if let Some(init_expr) = init {
+            // The binding's OWN declaration ends its Temporal Dead Zone: the
+            // reused-slot write below (plain, unchecked) overwrites any TAG_TDZ
+            // sentinel with the real value.
+            ctx.tdz_boxes.remove(&id);
             crate::expr::lower_expr(
                 ctx,
                 &perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone())),
             )?;
+        } else if ctx.tdz_boxes.remove(&id) {
+            // No-init reuse (`let x;`) of a TDZ-seeded box must still end the
+            // dead zone by clearing the sentinel to `undefined`; otherwise a
+            // later legitimate read of `x` would wrongly throw.
+            if let Some(slot) = ctx.locals.get(&id).cloned() {
+                let blk = ctx.block();
+                let bptr = blk.load(crate::types::I64, &slot);
+                let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+                blk.call_void(
+                    "js_box_set_bits",
+                    &[(crate::types::I64, &bptr), (crate::types::I64, &undef_bits)],
+                );
+            }
         }
         return Ok(());
     }
@@ -881,6 +898,19 @@ pub(crate) fn lower_let(
                         &[(crate::types::I64, &bptr), (I64, &init_bits)],
                     );
                 }
+            } else if ctx.tdz_boxes.contains(&id) {
+                // TDZ box with a no-init declaration (`let x;`): the box was
+                // seeded with TAG_TDZ at scope entry; running the declaration
+                // ends the dead zone by initializing the binding to
+                // `undefined`. Without this the sentinel would survive and a
+                // later legitimate read of `x` would wrongly throw.
+                let slot_clone = ctx.locals[&id].clone();
+                let bptr = ctx.block().load(I64, &slot_clone);
+                let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+                ctx.block().call_void(
+                    "js_box_set_bits",
+                    &[(crate::types::I64, &bptr), (I64, &undef_bits)],
+                );
             }
             return Ok(());
         }

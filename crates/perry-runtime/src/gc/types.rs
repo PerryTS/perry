@@ -865,6 +865,16 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
 pub(crate) const GC_ARRAY_ARGUMENTS_OBJECT: u16 = 0x200;
+/// #6011: every element slot in `[0, length)` holds either canonical raw-f64
+/// number bits or `TAG_HOLE` — the hole-tolerant sibling of
+/// `GC_ARRAY_RAW_F64_LAYOUT`. Set when `new Array(n)` hole-initializes a
+/// user-facing array (and by the range-loop guard after a hole-seeing verify
+/// pass); cleared alongside the dense flag by `clear_array_numeric_layout`,
+/// which every non-numeric store path already funnels through. Lets the
+/// packed-f64 range-loop guard skip its whole-array verify walk. Bit 12 —
+/// bits 12..13 were the last free `_reserved` bits (see the bit map above).
+/// Only meaningful for `GC_TYPE_ARRAY`.
+pub(crate) const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
 
 pub(super) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(super) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;

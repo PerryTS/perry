@@ -29,10 +29,10 @@ fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
 }
 
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
-/// static type. Issue #514. Strings use canonical string-index/property
-/// handling; objects stringify numeric keys (`obj[0]` is `obj["0"]`), while
-/// arrays/buffers keep numeric element reads. LAZY_ARRAY / FORWARDED arrays
-/// route through `js_array_get_f64` to chase the materialized chain.
+/// static type. Issue #514. Strings → js_string_char_at; objects stringify
+/// numeric keys (`obj[0]` is `obj["0"]`), while arrays/buffers keep numeric
+/// element reads. LAZY_ARRAY / FORWARDED arrays route through
+/// `js_array_get_f64` to chase the materialized chain.
 #[no_mangle]
 pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     let bits = value.to_bits();
@@ -42,24 +42,6 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // codegen-side guard on the by-name fallback in index_get.rs.
     if bits == TAG_UNDEFINED || bits == TAG_NULL {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
-    }
-    // A raw string pointer (a module-level string stored as raw I64, top16 == 0)
-    // routes through string indexing. Validate the GcHeader (obj_type == STRING)
-    // rather than a bare `>= 0x1000` range check: a plain `number` whose f64 bits
-    // look like a low pointer — e.g. the denormal ~1.7e-314 (bits 0x8_0000_0000)
-    // effect's fiber loop produces — also has top16 == 0, and dereferencing it as
-    // a StringHeader SIGBUSes. `try_read_gc_header` rejects non-heap addresses
-    // WITHOUT touching memory, so a denormal-bits number falls through to the
-    // number path below and correctly yields `undefined`. #63 / #321.
-    if (bits >> 48) == 0 {
-        if let Some(hdr) = unsafe { crate::value::addr_class::try_read_gc_header(bits as usize) } {
-            if hdr.obj_type == crate::gc::GC_TYPE_STRING {
-                return crate::string::js_string_index_get(
-                    bits as *const crate::StringHeader,
-                    index,
-                );
-            }
-        }
     }
     let jsval = JSValue::from_bits(bits);
     // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
@@ -86,10 +68,17 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         }
     }
     if jsval.is_string() || jsval.is_short_string() {
+        // Spec: string INDEXING `s[i]` returns `undefined` for a non-canonical
+        // or out-of-bounds index — unlike `s.charAt(i)`, which returns "".
+        // Route through the canonical-index helper (`js_string_index_get`,
+        // #3987) so an OOB read here is `undefined`. Calling `js_string_char_at`
+        // directly (charAt semantics) returned "" for OOB, which every
+        // generator/async LOCAL string read hit: the CPS box pass erases the
+        // local's static type, so `line[i]` reaches this dyn path instead of the
+        // `is_string_expr` static path — the `yaml` lexer's `parseDocument`
+        // `switch (line[n])` then never observed `undefined` at line-ends and
+        // its `*lex` state machine spun forever (#6067).
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
-        if s_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
         return crate::string::js_string_index_get(s_ptr, index);
     }
     // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key]` where `C` is a

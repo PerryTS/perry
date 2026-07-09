@@ -629,3 +629,94 @@ fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
         (*child_header).gc_flags &= !GC_FLAG_PINNED;
     }
 }
+
+// Regression (2026-07 GC audit, old→malloc hole): minors sweep the malloc
+// registry, old parents are black leaves, and the barrier used to remember
+// only old→NURSERY children — a malloc-GC child (RegExp, hook-mode Promise,
+// Symbol, large-capture closure) whose sole referrer was a clean old parent
+// was freed while live on the next MallocCount/ArenaBytes minor.
+#[test]
+fn test_copying_minor_old_to_malloc_child_survives_sweep() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    activate_malloc_registry_for_tests();
+
+    let malloc_child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(malloc_child);
+    }
+    let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+    unsafe {
+        *elements = ptr_bits(malloc_child as usize);
+    }
+    js_write_barrier_slot(
+        ptr_bits(old_arr as usize),
+        elements as u64,
+        ptr_bits(malloc_child as usize),
+    );
+    assert!(
+        remembered_set_size() > 0,
+        "old→malloc store must dirty the remembered page"
+    );
+
+    trigger_guard.make_malloc_sweep_due();
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::ArenaBytes,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+
+    assert!(
+        malloc_user_ptr_tracked(malloc_child),
+        "malloc child referenced only by a clean old parent must survive \
+         the minor malloc sweep via the remembered old→malloc edge"
+    );
+}
+
+// Same hole, scenario B: the nursery GRANDCHILD behind an unmarked malloc
+// parent needs no malloc sweep to die — the malloc parent was never marked
+// in a minor, so its nursery child was unmarked and the nursery reset freed
+// it on the very next minor.
+#[test]
+fn test_copying_minor_old_to_malloc_nursery_grandchild_survives() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    activate_malloc_registry_for_tests();
+
+    let grandchild = young_leaf();
+    let malloc_child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>() + 8,
+        GC_TYPE_CLOSURE,
+    );
+    let capture_slot =
+        unsafe { init_test_closure_with_one_capture(malloc_child, ptr_bits(grandchild)) };
+    let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+    unsafe {
+        *elements = ptr_bits(malloc_child as usize);
+    }
+    js_write_barrier_slot(
+        ptr_bits(old_arr as usize),
+        elements as u64,
+        ptr_bits(malloc_child as usize),
+    );
+
+    trigger_guard.make_malloc_sweep_due();
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::ArenaBytes,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+
+    assert!(
+        malloc_user_ptr_tracked(malloc_child),
+        "malloc parent must survive the minor via the remembered edge"
+    );
+    let grandchild_after = unsafe { (*capture_slot & POINTER_MASK) as usize };
+    assert!(
+        crate::arena::pointer_in_nursery(grandchild_after)
+            || crate::arena::pointer_in_old_gen(grandchild_after),
+        "nursery grandchild behind a malloc parent must be evacuated/kept, \
+         not left dangling in reset from-space"
+    );
+}

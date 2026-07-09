@@ -319,19 +319,32 @@ pub fn eval_override_enabled() -> bool {
     env_flag("PERRY_ALLOW_EVAL")
 }
 
-/// Whether trivial dynamic-codegen capability probes should report unavailable.
-/// A no-op `new Function("")` / `Function("")` is commonly used as an
-/// `unsafe-eval` feature-test. Perry is ahead-of-time compiled, so the default
-/// is to throw at construction for that probe shape and let callers select their
-/// non-codegen fallback. Set `PERRY_EVAL_CSP=0` to opt back into const-folding
-/// the empty function. Real literal bodies (`new Function("return 42")`, the
-/// `return this` globalThis polyfill) still fold.
+/// Whether to present runtime dynamic-code generation as *unavailable* to
+/// capability probes. A trivial no-op `new Function("")` / `Function("")` is the
+/// canonical dynamic-codegen feature-test (`try { new Function(""), true } catch
+/// { false }` — the same shape a CSP `unsafe-eval` policy blocks). When this is
+/// on, that probe throws at *construction* instead of const-folding to a no-op
+/// function, so feature-detecting libraries (e.g. zod 4's object-validator JIT)
+/// take their non-codegen interpreter fallback, which perry compiles normally.
+///
+/// **Default ON.** Perry is ahead-of-time compiled and can NEVER honor a runtime
+/// `new Function(<string built at runtime>)` — such a call throws at
+/// construction (`js_function_ctor_from_strings`). Folding the empty-body probe
+/// to a working no-op makes the capability probe *lie*: a JIT then enables its
+/// codegen path and throws on the first real dynamic body (uncaught, this rejects
+/// the surrounding async work). Reporting the capability honestly as unavailable
+/// is both more correct for an AOT binary and lets such libraries run. Opt out —
+/// restoring the spec-literal empty-function fold (Node returns an empty
+/// function) — with `PERRY_EVAL_CSP=0` (also `off`/`false`/`no`). Only the
+/// trivial no-op probe is affected: real literal bodies (`new Function("return
+/// 42")`, the `return this` globalThis polyfill) still fold, so those idioms are
+/// unaffected.
 pub fn eval_csp_probe_unavailable() -> bool {
     match std::env::var("PERRY_EVAL_CSP") {
-        Ok(v) => {
-            let v = v.trim().to_ascii_lowercase();
-            !matches!(v.as_str(), "" | "0" | "off" | "false" | "no")
-        }
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false" | "no"
+        ),
         Err(_) => true,
     }
 }

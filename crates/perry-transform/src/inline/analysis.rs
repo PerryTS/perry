@@ -481,7 +481,7 @@ pub fn construction_stmt_can_affect_method_lookup(
             getter_names,
             setter_names,
         ),
-        Stmt::PreallocateBoxes(_) => false,
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => false,
         Stmt::While { .. }
         | Stmt::DoWhile { .. }
         | Stmt::For { .. }

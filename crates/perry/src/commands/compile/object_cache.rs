@@ -230,17 +230,21 @@ fn stable_type_key(ty: &perry_types::Type) -> String {
 /// at compile time but that aren't part of `CompileOptions`:
 /// `PERRY_DEBUG_INIT`, `PERRY_DEBUG_SYMBOLS`, `PERRY_LLVM_CLANG`,
 /// `PERRY_WRITE_BARRIERS`, `PERRY_SHADOW_STACK`,
-/// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`, and
-/// `PERRY_UNBOXED_OBJECT_FIELDS`. See the env-var block at the bottom of
-/// this function for the rationale.
+/// `PERRY_DISABLE_BUFFER_FAST_PATH`, `PERRY_VERIFY_NATIVE_REGIONS`,
+/// `PERRY_UNBOXED_OBJECT_FIELDS`, and `PERRY_TARGET_CPU`. See the env-var
+/// block at the bottom of this function for the rationale.
 ///
-/// NOT captured in the key: the host CPU. `compile_ll_to_object` passes
-/// `-mcpu=native`/`-march=native` to clang, so the emitted `.o` bakes in
-/// whatever instruction set the build machine supports. The cache is
-/// consequently **machine-local** — the default `node_modules/.cache/perry`
+/// NOT captured in the key: the host CPU. By default (`PERRY_TARGET_CPU`
+/// unset) `compile_ll_to_object` passes `-mcpu=native`/`-march=native` to
+/// clang for host builds, so the emitted `.o` bakes in whatever instruction
+/// set the build machine supports. The cache is consequently
+/// **machine-local** — the default `node_modules/.cache/perry`
 /// is inside the already-gitignored `node_modules/` for this reason.
 /// Sharing across machines with different CPUs (rsync,
-/// NFS, Docker bind-mount) can produce SIGILL at runtime.
+/// NFS, Docker bind-mount) can produce SIGILL at runtime. Pinning an
+/// explicit baseline (`--march x86-64-v2` / `[build] march`, #6125) removes
+/// the machine dependence — the chosen baseline IS keyed, via the
+/// `PERRY_TARGET_CPU` env field.
 ///
 /// Cross-platform non-determinism (Mach-O LC_UUID, PE TimeDateStamp,
 /// codesigning) affects the *linked binary*, not the object file — so
@@ -537,8 +541,8 @@ fn compute_object_cache_key_with_env(
             .join(",");
         h.field("namespace_member_prefixes", &s);
     }
-    // Issue #680 / #5924: per-namespace origin-name resolution. Same rationale
-    // as `namespace_member_prefixes` above — not reflected in the consumer
+    // Issue #5924: per-namespace origin-name resolution. Same rationale as
+    // `namespace_member_prefixes` above — not reflected in the consumer
     // module's HIR, but changes the symbol suffix a namespace member
     // call/property access targets.
     {
@@ -551,37 +555,6 @@ fn compute_object_cache_key_with_env(
             .collect::<Vec<_>>()
             .join(",");
         h.field("namespace_member_origin_names", &s);
-    }
-    {
-        let mut v: Vec<&(String, String)> = opts.namespace_member_vars.iter().collect();
-        v.sort();
-        let s: String = v
-            .iter()
-            .map(|(ns, member)| format!("{}:{}", ns, member))
-            .collect::<Vec<_>>()
-            .join(",");
-        h.field("namespace_member_vars", &s);
-    }
-    {
-        let mut v: Vec<(&(String, String), &String)> =
-            opts.namespace_member_namespace_prefixes.iter().collect();
-        v.sort_by(|a, b| a.0.cmp(b.0));
-        let s: String = v
-            .iter()
-            .map(|((ns, member), prefix)| format!("{}:{}={}", ns, member, prefix))
-            .collect::<Vec<_>>()
-            .join(",");
-        h.field("namespace_member_namespace_prefixes", &s);
-    }
-    {
-        let mut v: Vec<(&String, &String)> = opts.namespace_import_prefixes.iter().collect();
-        v.sort_by(|a, b| a.0.cmp(b.0));
-        let s: String = v
-            .iter()
-            .map(|(local, prefix)| format!("{}={}", local, prefix))
-            .collect::<Vec<_>>()
-            .join(",");
-        h.field("namespace_import_prefixes", &s);
     }
 
     // Imported classes — sort by name. Serialize every field that codegen
@@ -597,12 +570,11 @@ fn compute_object_cache_key_with_env(
         let mut buf = String::new();
         for c in v {
             buf.push_str(&format!(
-                "{}@{}:ctor={}:own_ctor={}:ctor_new_target={}:instance_fields={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
+                "{}@{}:ctor={}:own_ctor={}:instance_fields={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
                 c.name,
                 c.source_prefix,
                 c.constructor_param_count,
                 if c.has_own_constructor { "1" } else { "0" },
-                if c.constructor_uses_new_target { "1" } else { "0" },
                 if c.has_instance_fields { "1" } else { "0" },
                 c.parent_name.as_deref().unwrap_or(""),
                 c.local_alias.as_deref().unwrap_or(""),
@@ -797,6 +769,11 @@ fn compute_object_cache_key_with_env(
     //     not be bypassed by a stale cache hit.
     //   - PERRY_UNBOXED_OBJECT_FIELDS=1 changes object-literal layout
     //     lowering for exact typed object shapes.
+    //   - PERRY_TARGET_CPU (#6125, set directly or promoted from `--march` /
+    //     perry.toml `[build] march`/`native_tuning`) changes the clang
+    //     `-march`/`-mcpu` tuning flag, i.e. which instruction-set baseline
+    //     the .o bytes assume. Serving a host-native-tuned object to a
+    //     pinned-baseline build would silently ship AVX-512 again.
     // Hashing the values (not just presence) means a persistent override
     // like PERRY_LLVM_CLANG=/opt/homebrew/opt/llvm/bin/clang in a shell rc
     // still gets cache reuse across runs, while flipping a debug flag on
@@ -838,6 +815,10 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_UNBOXED_OBJECT_FIELDS")
             .as_deref()
             .unwrap_or(""),
+    );
+    h.field(
+        "env_target_cpu",
+        env_var("PERRY_TARGET_CPU").as_deref().unwrap_or(""),
     );
 
     h.finish()
@@ -1079,9 +1060,6 @@ mod object_cache_tests {
             namespace_v8_specifiers: std::collections::HashMap::new(),
             namespace_member_prefixes: std::collections::HashMap::new(),
             namespace_member_origin_names: std::collections::HashMap::new(),
-            namespace_member_vars: std::collections::HashSet::new(),
-            namespace_member_namespace_prefixes: std::collections::HashMap::new(),
-            namespace_import_prefixes: std::collections::HashMap::new(),
             emit_ir_only: false,
             verify_native_regions: false,
             disable_buffer_fast_path: false,
@@ -1406,7 +1384,6 @@ mod object_cache_tests {
             source_prefix: "feature_ts".into(),
             constructor_param_count: 0,
             has_own_constructor: false,
-            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec![],
@@ -1442,7 +1419,6 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
-            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
@@ -1463,7 +1439,6 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 2, // different arity
             has_own_constructor: true,
-            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
@@ -1492,7 +1467,6 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
-            constructor_uses_new_target: false,
             constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
@@ -1555,33 +1529,6 @@ mod object_cache_tests {
             .insert(("ns".into(), "make".into()), "src_a".into());
         b.namespace_member_prefixes
             .insert(("ns".into(), "make".into()), "src_b".into());
-        assert_ne!(
-            compute_object_cache_key(&a, 1, "0.5.156"),
-            compute_object_cache_key(&b, 1, "0.5.156")
-        );
-
-        let mut a = empty_opts();
-        let mut b = empty_opts();
-        b.namespace_member_origin_names
-            .insert(("ns".into(), "string".into()), "stringType".into());
-        assert_ne!(
-            compute_object_cache_key(&a, 1, "0.5.156"),
-            compute_object_cache_key(&b, 1, "0.5.156")
-        );
-
-        let mut a = empty_opts();
-        let mut b = empty_opts();
-        b.namespace_member_vars
-            .insert(("ns".into(), "string".into()));
-        assert_ne!(
-            compute_object_cache_key(&a, 1, "0.5.156"),
-            compute_object_cache_key(&b, 1, "0.5.156")
-        );
-
-        let mut a = empty_opts();
-        let mut b = empty_opts();
-        b.namespace_import_prefixes
-            .insert("ns".into(), "source_prefix".into());
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")
@@ -1675,6 +1622,7 @@ mod object_cache_tests {
             "PERRY_DISABLE_BUFFER_FAST_PATH",
             "PERRY_VERIFY_NATIVE_REGIONS",
             "PERRY_UNBOXED_OBJECT_FIELDS",
+            "PERRY_TARGET_CPU",
         ] {
             // Sample state without the var, with the var, and with a different
             // value — all three keys must be distinct.

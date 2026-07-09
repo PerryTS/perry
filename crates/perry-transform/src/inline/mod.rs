@@ -215,7 +215,7 @@ pub fn inline_functions(
                     }
                 }
                 Stmt::Labeled { body, .. } => walk_stmt_exprs(body.as_ref(), f),
-                Stmt::PreallocateBoxes(_) => {}
+                Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
             }
         }
 

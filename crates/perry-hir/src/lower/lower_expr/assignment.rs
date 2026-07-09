@@ -4,7 +4,7 @@
 use super::*;
 use crate::lower::*;
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use perry_types::LocalId;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
@@ -42,12 +42,11 @@ pub(crate) fn lower_expr_assignment(
                 Ok(*value)
             } else {
                 if ctx.current_strict {
-                    return Ok(Expr::Sequence(vec![
-                        *value,
-                        throw_reference_error_expr(
-                            "js_throw_reference_error_unresolved_assignment",
-                        ),
-                    ]));
+                    // #5989: strict-mode assignment to an existing global
+                    // builtin is a property write, not a ReferenceError. See
+                    // `strict_global_assign_existing_or_throw` for the full
+                    // rationale (shared with the sibling arm in expr_assign.rs).
+                    return Ok(strict_global_assign_existing_or_throw(name, value));
                 }
                 eprintln!(
                     "  Warning: Assignment to undeclared variable '{}', creating sloppy global",

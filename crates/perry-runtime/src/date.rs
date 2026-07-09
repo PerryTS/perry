@@ -1449,10 +1449,13 @@ pub extern "C" fn js_number_to_locale_string(n: f64) -> *mut crate::StringHeader
     // `Number.prototype.toLocaleString()` shows up to 3 fraction digits
     // (Intl.NumberFormat default `maximumFractionDigits`), trailing
     // zeros stripped.
-    let int_part = abs.trunc() as u64;
     let frac = abs - abs.trunc();
-    // Format integer part with comma every 3 digits (en-US).
-    let int_str = int_part.to_string();
+    // Format integer part with comma every 3 digits (en-US). #6127: derive the
+    // digits from the f64's shortest round-trip (Rust `{}` is always positional,
+    // never scientific) rather than an exact `as u64` cast — the cast both
+    // overflows past ~1.8e19 and, in [2^53, 2^64), prints more digits than the
+    // shortest decimal V8 groups (`2**60` → `…847,000`, not `…846,976`).
+    let int_str = format!("{}", abs.trunc());
     let mut grouped = String::new();
     let bytes = int_str.as_bytes();
     let len = bytes.len();

@@ -662,6 +662,17 @@ pub(crate) fn build_and_run_link(
             .arg("Security")
             .arg("-framework")
             .arg("UserNotifications") // UNUserNotificationCenter (perry/system notificationSend/Schedule/OnTap)
+            // AVFAudio: AVAudioEngine / AVAudioSession / AVAudioApplication for
+            // microphone capture + the record-permission API (perry/system
+            // audioStart, getLevel, recording). Without this the audio classes
+            // aren't registered in the objc runtime, so `AnyClass::get` returns
+            // nil and audio silently no-ops on device — e.g. a watchOS dB meter
+            // shows no levels and never prompts for mic permission. (The iOS
+            // branch already links these; watchOS was missing them.)
+            .arg("-framework")
+            .arg("AVFAudio")
+            .arg("-framework")
+            .arg("AVFoundation")
             .arg("-lSystem")
             .arg("-lresolv");
         if is_watchos_game_loop {
@@ -986,211 +997,49 @@ pub(crate) fn build_and_run_link(
                 // closures call perry-stdlib's js_stdlib_process_pending /
                 // js_promise_run_microtasks. When ctx.needs_stdlib is false
                 // (bare UI program), stdlib isn't linked via the earlier
-                // path. Force-link it here with --whole-archive so every
-                // object is pulled unconditionally. --allow-multiple-definition
-                // above lets it coexist with the runtime stub at
-                // perry-runtime/src/stdlib_stubs.rs. The async-runtime
-                // feature is force-enabled for UI builds (see
+                // path — add it here, AFTER the UI lib, so ld pulls the
+                // real pump implementations for exactly those references.
+                // --allow-multiple-definition above lets its bundled
+                // perry-runtime copy coexist with libperry_runtime.a. The
+                // async-runtime feature is force-enabled for UI builds (see
                 // build_optimized_libs), so the real js_stdlib_process_pending
-                // is guaranteed present in libperry_stdlib.a.
+                // is guaranteed present in libperry_stdlib.a. (When
+                // ctx.needs_stdlib is true, stdlib already sits BEFORE the
+                // UI lib on the link line; this second occurrence resolves
+                // the UI trampoline references that weren't yet undefined
+                // during the first left-to-right archive scan.)
+                //
+                // Demand-driven (plain archive) linking, NOT
+                // `--whole-archive` (#6029): the prebuilt full stdlib
+                // bundles its Rust deps' native C archives (aws-lc via
+                // reqwest/rustls, sqlite, brotli, …), and force-including
+                // every member also pulls objects nothing references.
+                // aws-lc's `hrss.o` calls `poly_Rq_mul`, whose defining
+                // assembly object (`hrss/asm/poly_rq_mul.S`) is missing
+                // from aws-lc-sys's cc-builder file list on linux x86_64,
+                // so `--whole-archive` turned that latent upstream gap into
+                // a hard `undefined reference to aws_lc_0_41_0_poly_Rq_mul`
+                // for every GUI app linked against the prebuilt stdlib —
+                // and, pre-#5983, likewise dragged in the stdlib's
+                // `js_ext_http_*` references with perry-ext-http nowhere on
+                // the link line. Demand-driven pulling never loads those
+                // members. It is sound for the pumps because the runtime
+                // archive linked earlier had its no-op stdlib stubs
+                // localized (see force_stdlib_for_linux_ui / #5000): the
+                // UI lib's pump references stay undefined until this
+                // archive is scanned, so ld takes them from perry-stdlib.
+                // (That localization was load-bearing under --whole-archive
+                // too — with first-definition-wins, a force-included copy
+                // never outranked an unlocalized runtime stub.)
                 let linux_stdlib_for_ui =
                     stdlib_lib.clone().or_else(|| find_stdlib_library(target));
                 if let Some(ref stdlib) = linux_stdlib_for_ui {
-                    cmd.arg("-Wl,--whole-archive")
-                        .arg(stdlib)
-                        .arg("-Wl,--no-whole-archive");
+                    cmd.arg(stdlib);
                 }
-                // GTK4 libraries via pkg-config. The fallback fires in two
-                // distinct cases: pkg-config not installed (spawn fails), OR
-                // installed but `gtk4.pc` not on the search path (exit != 0
-                // — happens e.g. on Ubuntu hosts where libgtk-4-dev is split
-                // across packages, or when PKG_CONFIG_PATH is locked down).
-                // Pre-fix the second case silently emitted no GTK link flags
-                // and the link bombed with hundreds of `g_object_unref` /
-                // `gtk_widget_*` undefined references (#181).
-                let mut got_gtk_libs = false;
-                let pc_out = Command::new("pkg-config").args(["--libs", "gtk4"]).output();
-                if let Ok(ref output) = pc_out {
-                    if output.status.success() {
-                        let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.split_whitespace() {
-                            cmd.arg(flag);
-                        }
-                        got_gtk_libs = true;
-                    }
-                }
-                if !got_gtk_libs {
-                    // Mirrors what `pkg-config --libs gtk4` returns on a
-                    // standard libgtk-4-dev install. Pre-fix only listed the
-                    // glib/gio core, which left pango/cairo/gdk_pixbuf
-                    // undefined.
-                    eprintln!(
-                        "Warning: `pkg-config --libs gtk4` did not return GTK4 \
-                         linker flags ({}). Falling back to a hardcoded GTK4 \
-                         link set — install `libgtk-4-dev` (Debian/Ubuntu) or \
-                         `gtk4-devel` (Fedora/RHEL) and ensure pkg-config can \
-                         find `gtk4.pc` to silence this warning.",
-                        match &pc_out {
-                            Err(e) => format!("pkg-config not runnable: {e}"),
-                            Ok(o) if !o.status.success() => format!(
-                                "pkg-config exited {}: {}",
-                                o.status.code().unwrap_or(-1),
-                                String::from_utf8_lossy(&o.stderr).trim()
-                            ),
-                            Ok(_) => "no output".to_string(),
-                        }
-                    );
-                    for lib in [
-                        "-lgtk-4",
-                        "-lgio-2.0",
-                        "-lgobject-2.0",
-                        "-lglib-2.0",
-                        "-lpangocairo-1.0",
-                        "-lpango-1.0",
-                        "-lharfbuzz",
-                        "-lgdk_pixbuf-2.0",
-                        "-lcairo-gobject",
-                        "-lcairo",
-                        "-lgraphene-1.0",
-                    ] {
-                        cmd.arg(lib);
-                    }
-                }
-                // PulseAudio for audio capture (only needed with UI)
-                cmd.arg("-lpulse-simple").arg("-lpulse");
-                // GStreamer libs — pulled in by perry-ui-gtk4's gstreamer-rs
-                // dep (added in v0.5.440 for the perry/media playbin backend).
-                // GTK4's pkg-config doesn't transitively reference the
-                // gstreamer-1.0 sonames, so the `-lgstreamer-1.0` (and the
-                // base/app/video/audio sublibs that gstreamer-rs's playbin
-                // path touches) have to land on the link line explicitly or ld
-                // fails with `undefined reference to gst_message_parse_buffering`
-                // + `DSO missing from command line` (#423). Same pkg-config →
-                // hardcoded-fallback shape as the GTK4 block above.
-                let mut got_gst_libs = false;
-                let gst_pc_out = Command::new("pkg-config")
-                    .args([
-                        "--libs",
-                        "gstreamer-1.0",
-                        "gstreamer-base-1.0",
-                        "gstreamer-app-1.0",
-                        "gstreamer-video-1.0",
-                        "gstreamer-audio-1.0",
-                    ])
-                    .output();
-                if let Ok(ref output) = gst_pc_out {
-                    if output.status.success() {
-                        let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.split_whitespace() {
-                            cmd.arg(flag);
-                        }
-                        got_gst_libs = true;
-                    }
-                }
-                if !got_gst_libs {
-                    eprintln!(
-                        "Warning: `pkg-config --libs gstreamer-1.0 ...` did not \
-                         return GStreamer linker flags ({}). Falling back to a \
-                         hardcoded GStreamer link set — install \
-                         `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev` \
-                         (Debian/Ubuntu) or `gstreamer1-devel \
-                         gstreamer1-plugins-base-devel` (Fedora/RHEL) to silence \
-                         this warning.",
-                        match &gst_pc_out {
-                            Err(e) => format!("pkg-config not runnable: {e}"),
-                            Ok(o) if !o.status.success() => format!(
-                                "pkg-config exited {}: {}",
-                                o.status.code().unwrap_or(-1),
-                                String::from_utf8_lossy(&o.stderr).trim()
-                            ),
-                            Ok(_) => "no output".to_string(),
-                        }
-                    );
-                    for lib in [
-                        "-lgstreamer-1.0",
-                        "-lgstbase-1.0",
-                        "-lgstapp-1.0",
-                        "-lgstvideo-1.0",
-                        "-lgstaudio-1.0",
-                    ] {
-                        cmd.arg(lib);
-                    }
-                }
-                // libshumate — GNOME's GTK4 vector-tile map widget for the
-                // perry/ui MapView (#517). Same pkg-config → hardcoded
-                // fallback shape as GTK4 / GStreamer above.
-                let mut got_shumate_libs = false;
-                let shumate_pc_out = Command::new("pkg-config")
-                    .args(["--libs", "shumate-1.0"])
-                    .output();
-                if let Ok(ref output) = shumate_pc_out {
-                    if output.status.success() {
-                        let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.split_whitespace() {
-                            cmd.arg(flag);
-                        }
-                        got_shumate_libs = true;
-                    }
-                }
-                if !got_shumate_libs {
-                    eprintln!(
-                        "Warning: `pkg-config --libs shumate-1.0` did not return \
-                         libshumate linker flags ({}). Falling back to \
-                         `-lshumate-1.0` — install `libshumate-dev` \
-                         (Debian/Ubuntu) or `libshumate-devel` (Fedora/RHEL) to \
-                         silence this warning.",
-                        match &shumate_pc_out {
-                            Err(e) => format!("pkg-config not runnable: {e}"),
-                            Ok(o) if !o.status.success() => format!(
-                                "pkg-config exited {}: {}",
-                                o.status.code().unwrap_or(-1),
-                                String::from_utf8_lossy(&o.stderr).trim()
-                            ),
-                            Ok(_) => "no output".to_string(),
-                        }
-                    );
-                    cmd.arg("-lshumate-1.0");
-                }
-                // WebKitGTK 6.0 + libsoup-3.0 — perry/ui WebView (#658, v0.5.864).
-                // perry-ui-gtk4's webkit6/soup3 deps reference symbols like
-                // `soup_check_version` from libsoup-3.0 transitively; without
-                // explicit `-lsoup-3.0` ld errors with `DSO missing from
-                // command line`. Same pkg-config → hardcoded-fallback shape
-                // as GTK4 / GStreamer / shumate above.
-                let mut got_webkit_libs = false;
-                let webkit_pc_out = Command::new("pkg-config")
-                    .args(["--libs", "webkitgtk-6.0", "libsoup-3.0"])
-                    .output();
-                if let Ok(ref output) = webkit_pc_out {
-                    if output.status.success() {
-                        let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.split_whitespace() {
-                            cmd.arg(flag);
-                        }
-                        got_webkit_libs = true;
-                    }
-                }
-                if !got_webkit_libs {
-                    eprintln!(
-                        "Warning: `pkg-config --libs webkitgtk-6.0 libsoup-3.0` \
-                         did not return WebKitGTK linker flags ({}). Falling \
-                         back to a hardcoded set — install `libwebkitgtk-6.0-dev` \
-                         (Debian/Ubuntu) which pulls libsoup-3.0-dev + \
-                         libjavascriptcoregtk-6.0-dev to silence this warning.",
-                        match &webkit_pc_out {
-                            Err(e) => format!("pkg-config not runnable: {e}"),
-                            Ok(o) if !o.status.success() => format!(
-                                "pkg-config exited {}: {}",
-                                o.status.code().unwrap_or(-1),
-                                String::from_utf8_lossy(&o.stderr).trim()
-                            ),
-                            Ok(_) => "no output".to_string(),
-                        }
-                    );
-                    for lib in ["-lwebkitgtk-6.0", "-ljavascriptcoregtk-6.0", "-lsoup-3.0"] {
-                        cmd.arg(lib);
-                    }
-                }
+                // GTK4 / PulseAudio / GStreamer / libshumate / WebKitGTK
+                // system libs, each via pkg-config with a hardcoded fallback
+                // (#181, #423, #517, #658) — see linux_ui_libs.rs.
+                linux_ui_libs::add_linux_ui_system_libs(&mut cmd);
             } else if is_windows {
                 // Win32 system libs already linked above
             } else {
