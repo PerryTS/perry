@@ -40,6 +40,8 @@ pub(crate) use policy::gc_runtime_safepoint;
 pub use policy::*;
 mod heap_budget;
 pub use heap_budget::*;
+mod pressure;
+pub use pressure::*;
 mod telemetry;
 pub use telemetry::*;
 mod malloc;
