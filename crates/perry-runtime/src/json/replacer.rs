@@ -358,8 +358,14 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
 
-    // Use keys_len as the iteration count since field_count may include pre-allocated slots.
-    let actual_fields = std::cmp::min(num_fields, keys_len);
+    // #5989 (mirrors the plain-stringify #307 fix): iterate up to keys_len, not
+    // min(num_fields, keys_len). Objects with ≥9 fields cap field_count at the
+    // inline alloc limit and store the overflow values in OVERFLOW_FIELDS, so
+    // num_fields can be smaller than keys_len — the min() silently DROPPED
+    // every overflow property from replacer serialization (react-server-dom's
+    // flight props objects routinely exceed 8 keys).
+    let alloc_limit = std::cmp::max(num_fields, 8);
+    let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
     // A function replacer only sees own ENUMERABLE keys (EnumerableOwnProperty
@@ -400,8 +406,14 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         };
 
         // Get the field value (invoking an own getter, as spec [[Get]] does),
-        // resolve toJSON, then apply the replacer.
-        let mut field_val = *fields_ptr.add(f as usize);
+        // resolve toJSON, then apply the replacer. Overflow slots (f >=
+        // alloc_limit) route through js_object_get_field's OVERFLOW_FIELDS
+        // lookup.
+        let mut field_val = if f < alloc_limit {
+            *fields_ptr.add(f as usize)
+        } else {
+            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+        };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
                 crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
@@ -822,7 +834,10 @@ pub(crate) unsafe fn stringify_object_pretty(
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-    let actual_fields = std::cmp::min(num_fields, keys_len);
+    // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
+    // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
+    let alloc_limit = std::cmp::max(num_fields, 8);
+    let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     let filter_non_enum = crate::object::descriptors_in_use();
 
@@ -837,7 +852,11 @@ pub(crate) unsafe fn stringify_object_pretty(
         {
             continue;
         }
-        let mut field_val = *fields_ptr.add(f as usize);
+        let mut field_val = if f < alloc_limit {
+            *fields_ptr.add(f as usize)
+        } else {
+            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+        };
         // Own accessor properties: serialize the getter's return value.
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
@@ -968,7 +987,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-    let actual_fields = std::cmp::min(num_fields, keys_len);
+    // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
+    // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
+    let alloc_limit = std::cmp::max(num_fields, 8);
+    let actual_fields = keys_len;
 
     // Build a map of key_name -> field_value for the object. An own accessor
     // (`get key()`) holds no value in its raw slot, so resolve it through the
@@ -977,7 +999,11 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     let filter_non_enum = crate::object::descriptors_in_use();
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
-        let mut field_val = *fields_ptr.add(f as usize);
+        let mut field_val = if f < alloc_limit {
+            *fields_ptr.add(f as usize)
+        } else {
+            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+        };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
                 crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))

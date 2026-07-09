@@ -48,3 +48,22 @@ console.log(JSON.stringify({ a: [1, , 3] }, ["a"] as any));
 
 // (7) real NaN still round-trips as "$NaN" through the same replacer
 console.log(JSON.stringify([NaN, , 2], flightReplacer));
+
+// (8) objects with >8 properties: overflow fields must reach the replacer
+// (field_count caps at the inline slot limit; overflow values live in a side
+// table — the walk previously dropped every property past the 8th).
+const big: any = {
+  p1: 1, p2: 2, p3: 3, p4: 4, p5: 5, p6: 6, p7: 7, p8: 8, p9: 9, p10: 10,
+  p11: 11, p12: 12, p13: 13, notFound: undefined, forbidden: undefined, unauthorized: undefined,
+};
+console.log(JSON.stringify(big, flightReplacer));
+
+// (9) exactly 9 props (first overflow slot), last one undefined-valued
+const nine: any = { a1: 1, a2: 2, a3: 3, a4: 4, a5: 5, a6: 6, a7: 7, a8: 8, a9: undefined };
+console.log(JSON.stringify(nine, flightReplacer));
+
+// (10) overflow props through the sorted/pretty walk
+console.log(JSON.stringify(big, flightReplacer, 1).split("\n").length);
+
+// (11) overflow props through the allowed-keys form
+console.log(JSON.stringify(big, ["p9", "p13", "forbidden"] as any));
