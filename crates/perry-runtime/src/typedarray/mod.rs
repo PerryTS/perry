@@ -9,7 +9,7 @@
 //! Pointers are NaN-boxed with POINTER_TAG (0x7FFD) and tracked in
 //! TYPED_ARRAY_REGISTRY for `instanceof` and console.log formatting.
 
-use std::alloc::{alloc, Layout};
+use std::alloc::Layout;
 use std::cell::RefCell;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -700,46 +700,69 @@ fn typed_array_gc_total_size(capacity: u32, elem_size: usize) -> usize {
 pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
     let elem_size = elem_size_for_kind(kind);
     let capacity = length.max(1);
-    if crate::gc::is_large_object_total_size(typed_array_gc_total_size(capacity, elem_size)) {
-        let p = crate::arena::arena_alloc_gc_old(
-            typed_array_payload_size(capacity, elem_size),
-            8,
-            crate::gc::GC_TYPE_TYPED_ARRAY,
-        ) as *mut TypedArrayHeader;
-        unsafe {
-            let header = (p as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
-            (*p).length = length;
-            (*p).capacity = capacity;
-            (*p).kind = kind;
-            (*p).elem_size = elem_size as u8;
-            (*p)._pad = [0; 6];
-            let data = data_ptr_mut(p);
-            ptr::write_bytes(data, 0, (capacity as usize) * elem_size);
-        }
-        register_typed_array(p, kind);
-        return p;
-    }
-    let layout = ta_layout(capacity, elem_size);
+    // 2026-07-09 audit: small typed arrays were raw-`alloc`'d with NO
+    // GcHeader and never freed — invisible to every GC trigger, unbounded
+    // RSS on churn. Every typed array now takes the old-arena GC path
+    // (non-movable space: raw data pointers are handed out), reclaimed by
+    // full-cycle block resets + the post-trace registry pruning below. The
+    // bytes now also count toward `arena_total_bytes` trigger pressure.
+    let p = crate::arena::arena_alloc_gc_old(
+        typed_array_payload_size(capacity, elem_size),
+        8,
+        crate::gc::GC_TYPE_TYPED_ARRAY,
+    ) as *mut TypedArrayHeader;
     unsafe {
-        let raw = alloc(layout);
-        if raw.is_null() {
-            // #5067 — surface a catchable `RangeError` (Node's
-            // `Array buffer allocation failed`) instead of aborting.
-            throw_range_error(b"Array buffer allocation failed");
-        }
-        let p = raw as *mut TypedArrayHeader;
+        let header = (p as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*p).length = length;
         (*p).capacity = capacity;
         (*p).kind = kind;
         (*p).elem_size = elem_size as u8;
         (*p)._pad = [0; 6];
-        // Zero data region
         let data = data_ptr_mut(p);
         ptr::write_bytes(data, 0, (capacity as usize) * elem_size);
-        register_typed_array(p, kind);
-        p
     }
+    register_typed_array(p, kind);
+    p
+}
+
+/// Post-trace registry pruning (mirrors the #6010 Map/Set pattern and the
+/// buffer variant): registered typed arrays whose header is genuinely dead.
+/// All GC-heap typed arrays are TENURED old-arena residents — deadness is
+/// trustworthy only after a FULL trace. Native-arena views (different
+/// obj_type) are filtered out; their own finalizers unregister them.
+pub(crate) fn collect_dead_registered_typed_arrays_post_trace(full_trace: bool) -> Vec<usize> {
+    if !full_trace {
+        return Vec::new();
+    }
+    TYPED_ARRAY_REGISTRY.with(|r| {
+        r.borrow()
+            .keys()
+            .copied()
+            .filter(|&addr| unsafe { registered_typed_array_is_dead_post_trace(addr) })
+            .collect()
+    })
+}
+
+unsafe fn registered_typed_array_is_dead_post_trace(addr: usize) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_TYPED_ARRAY {
+        return false;
+    }
+    header.gc_flags
+        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
+        == 0
+}
+
+/// Finalize one collected-dead typed array: `unregister_typed_array` clears
+/// the registry entry, the global kind-cache slot, and the own-props /
+/// no-extend side tables — closing both the leak and the address-reuse
+/// (kind-cache ABA) hazard for ordinary typed arrays.
+pub(crate) fn finalize_collected_dead_typed_array(addr: usize) {
+    unregister_typed_array(addr as *const TypedArrayHeader);
+    crate::buffer::view::remove_entries_for_dead_buffer(addr);
 }
 
 /// Convert an f64 (NaN-boxed JS value) to the numeric value to store. Strings

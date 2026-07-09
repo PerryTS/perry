@@ -1060,6 +1060,8 @@ pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
     dead_maps: Vec<usize>,
     dead_sets: Vec<usize>,
+    dead_buffers: Vec<usize>,
+    dead_typed_arrays: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
     cleanup: Option<ArenaSweepCleanupState>,
@@ -1079,6 +1081,8 @@ impl IncrementalSweepState {
             subphase: SweepCycleSubphase::Malloc,
             dead_maps: Vec::new(),
             dead_sets: Vec::new(),
+            dead_buffers: Vec::new(),
+            dead_typed_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(do_age_bump, reclaim_dead_old_blocks),
             cleanup: None,
@@ -1091,10 +1095,20 @@ impl IncrementalSweepState {
     /// #6010: collect the dead registered Maps/Sets NOW (marks are fresh at
     /// sweep entry) and finalize their external buffers budget-chunked as the
     /// first sweep subphase. See `SweepCycleSubphase::CollectionSideBuffers`.
+    /// 2026-07-09 audit: buffers and typed arrays joined the same pattern —
+    /// their registry/side-table entries are pruned when the owner is
+    /// genuinely dead (full traces only; they are all tenured old residents).
     pub(super) fn with_dead_collection_finalize(mut self, full_trace: bool) -> Self {
         self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
-        if !self.dead_maps.is_empty() || !self.dead_sets.is_empty() {
+        self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
+        self.dead_typed_arrays =
+            crate::typedarray::collect_dead_registered_typed_arrays_post_trace(full_trace);
+        if !self.dead_maps.is_empty()
+            || !self.dead_sets.is_empty()
+            || !self.dead_buffers.is_empty()
+            || !self.dead_typed_arrays.is_empty()
+        {
             self.subphase = SweepCycleSubphase::CollectionSideBuffers;
         }
         self
@@ -1109,13 +1123,21 @@ impl IncrementalSweepState {
                         crate::map::finalize_collected_dead_map(addr);
                     } else if let Some(addr) = self.dead_sets.pop() {
                         crate::set::finalize_collected_dead_set(addr);
+                    } else if let Some(addr) = self.dead_buffers.pop() {
+                        crate::buffer::finalize_collected_dead_buffer(addr);
+                    } else if let Some(addr) = self.dead_typed_arrays.pop() {
+                        crate::typedarray::finalize_collected_dead_typed_array(addr);
                     } else {
                         self.subphase = SweepCycleSubphase::Malloc;
                         break;
                     }
                     spent += 1;
                 }
-                if self.dead_maps.is_empty() && self.dead_sets.is_empty() {
+                if self.dead_maps.is_empty()
+                    && self.dead_sets.is_empty()
+                    && self.dead_buffers.is_empty()
+                    && self.dead_typed_arrays.is_empty()
+                {
                     self.subphase = SweepCycleSubphase::Malloc;
                 }
                 false
