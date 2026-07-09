@@ -667,6 +667,30 @@ pub(super) fn compile_for_watchos_widget(
             format,
         )?;
         built_binary = Some(appex_path.clone());
+
+        // #675 — sign the widget `.appex` with the App Group entitlement so
+        // the WidgetKit extension can read the shared `NSUserDefaults` suite
+        // the app writes. Only when a widget declares `appGroup`; otherwise
+        // the appex stays unsigned (unchanged). Mirrors the watch app path:
+        // ad-hoc for the simulator, `[watchos]` identity + profile on device.
+        let widget_app_group = widgets.iter().find_map(|w| w.app_group.as_deref());
+        if super::apple_info_plist::inject_app_group_entitlement(
+            &appex_path,
+            widget_app_group,
+            format,
+        )
+        .is_some()
+        {
+            let signing_cfg = super::apple_codesign::read_watch_signing_config(&args.input);
+            super::apple_codesign::codesign_apple_bundle(
+                &appex_path,
+                &appex_path.join("app.entitlements"),
+                is_simulator,
+                &signing_cfg,
+                format,
+            )?;
+        }
+
         match format {
             OutputFormat::Text => {
                 println!("watchOS complication built: {}", appex_path.display());

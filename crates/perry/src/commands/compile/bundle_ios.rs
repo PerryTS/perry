@@ -17,7 +17,7 @@ use anyhow::Result;
 use crate::OutputFormat;
 
 use super::apple_info_plist::{
-    inject_ads_info_plist, inject_google_auth_info_plist, inject_ios_app_group_entitlement,
+    inject_ads_info_plist, inject_app_group_entitlement, inject_google_auth_info_plist,
     inject_ios_deeplinks, inject_ios_push_entitlement,
 };
 use super::resources::stage_native_library_artifacts;
@@ -445,7 +445,7 @@ pub(super) fn build_ios_app_bundle(
     // deeplinks pass above — it only adds our key, leaving any
     // existing entitlements (associated-domains, hand-written
     // entries) intact.
-    inject_ios_app_group_entitlement(&app_dir, ctx.app_metadata.app_group.as_deref(), format);
+    inject_app_group_entitlement(&app_dir, ctx.app_metadata.app_group.as_deref(), format);
 
     // #5074 — emit the `aps-environment` entitlement when
     // `[ios] push_notifications = true` is set in perry.toml. Without it

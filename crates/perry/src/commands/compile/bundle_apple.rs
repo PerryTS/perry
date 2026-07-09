@@ -13,6 +13,8 @@ use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::apple_codesign::{codesign_apple_bundle, read_watch_signing_config};
+use super::apple_info_plist::inject_app_group_entitlement;
 use super::i18n_emit::write_lproj_localized_strings;
 use super::resources::{
     copy_bundle_resource_dirs, find_project_root_for_resources, stage_native_library_artifacts,
@@ -319,6 +321,26 @@ pub(super) fn bundle_for_watchos(
 
     compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
     stage_native_library_artifacts(ctx, &app_dir, format)?;
+
+    // #675 — App Group entitlement + codesign. Only when `[watchos]
+    // app_group` is set: `inject_app_group_entitlement` writes
+    // `<app>.app/app.entitlements` (shared with the iOS bundler) and
+    // returns `Some(())`; a plain watch app has no app_group, so nothing is
+    // written and the bundle stays unsigned exactly as before. This must be
+    // the last mutation of the bundle — codesign seals its contents.
+    let is_watch_sim = target == Some("watchos-simulator");
+    if inject_app_group_entitlement(&app_dir, ctx.app_metadata.app_group.as_deref(), format)
+        .is_some()
+    {
+        let signing_cfg = read_watch_signing_config(input);
+        codesign_apple_bundle(
+            &app_dir,
+            &app_dir.join("app.entitlements"),
+            is_watch_sim,
+            &signing_cfg,
+            format,
+        )?;
+    }
 
     match format {
         OutputFormat::Text => {

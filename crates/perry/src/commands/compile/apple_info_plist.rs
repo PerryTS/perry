@@ -273,18 +273,19 @@ pub(super) fn inject_ads_info_plist(
     ))
 }
 
-/// #1178 — write (or augment) `app.entitlements` with the
-/// `com.apple.security.application-groups` array when
-/// `[ios] app_group` is configured in perry.toml.
+/// #1178 / #675 — write (or augment) `app.entitlements` with the
+/// `com.apple.security.application-groups` array when `app_group` is
+/// configured in perry.toml (`[ios]` / `[watchos]` — the entitlement XML
+/// is identical across Apple platforms, so both bundlers share this).
 ///
 /// Idempotent with `inject_ios_deeplinks`: if the deeplinks pass
 /// already wrote an entitlements file (e.g. associated-domains for
 /// `applinks:`), we splice our `<key>...</key><array>...</array>`
 /// before the closing `</dict>` instead of clobbering it. Otherwise
-/// we emit the full plist wrapper. Either way the user's signing
-/// pipeline picks up a single `app.entitlements` file at codesign
-/// time.
-pub(super) fn inject_ios_app_group_entitlement(
+/// we emit the full plist wrapper. Either way the signing pipeline
+/// (iOS resign / watchOS `codesign_apple_bundle`) picks up a single
+/// `app.entitlements` file at codesign time.
+pub(super) fn inject_app_group_entitlement(
     app_dir: &std::path::Path,
     app_group: Option<&str>,
     format: OutputFormat,
@@ -345,7 +346,7 @@ pub(super) fn inject_ios_app_group_entitlement(
 /// builds. Any value other than `production` (including a typo) resolves to
 /// `development`, the safe default for on-device debugging.
 ///
-/// Idempotent with `inject_ios_deeplinks` / `inject_ios_app_group_entitlement`:
+/// Idempotent with `inject_ios_deeplinks` / `inject_app_group_entitlement`:
 /// if an entitlements file already exists we splice our `<key>...</key>` before
 /// the closing `</dict>` (and leave any hand-written `aps-environment` alone);
 /// otherwise we emit the full plist wrapper. Either way the user's signing

@@ -15,6 +15,7 @@ use crate::OutputFormat;
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
 mod app_metadata;
+mod apple_codesign;
 mod apple_info_plist;
 mod audit_manifest;
 mod bootstrap;
