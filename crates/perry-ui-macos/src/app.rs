@@ -1281,7 +1281,14 @@ define_class!(
         #[unsafe(method(pump:))]
         fn pump(&self, _sender: &AnyObject) {
             crate::catch_callback_panic("pump", std::panic::AssertUnwindSafe(|| {
-                extern "C" { fn js_run_stdlib_pump(); }
+                extern "C" {
+                    fn js_run_stdlib_pump();
+                    // perry-runtime's embedder GC stepper: spends up to
+                    // `budget_us` advancing an ACTIVE budgeted collection
+                    // in bounded work units; a cheap status probe when no
+                    // cycle is active (out=null is allowed).
+                    fn js_gc_step_us(budget_us: u64, out: *mut u8) -> u32;
+                }
                 unsafe {
                     js_callback_timer_tick();
                     js_interval_timer_tick();
@@ -1293,6 +1300,14 @@ define_class!(
                     // Process deferred promise resolutions from perry-stdlib tokio workers.
                     // No-op if perry-stdlib is not linked (function pointer not registered).
                     js_run_stdlib_pump();
+                    // #6183 (2026-07-09 GC audit): spend a bounded idle
+                    // budget on any active budgeted GC cycle at the pump
+                    // boundary — the JS stack is fully unwound here, so
+                    // this is a precise-root safepoint. 2 ms of the ~8 ms
+                    // tick drains collection debt in slices instead of
+                    // letting an alloc-point collection land unbounded on
+                    // this (main/UI) thread mid-gesture.
+                    js_gc_step_us(2_000, std::ptr::null_mut());
                     #[cfg(feature = "geisterhand")]
                     {
                         extern "C" { fn perry_geisterhand_pump(); }
