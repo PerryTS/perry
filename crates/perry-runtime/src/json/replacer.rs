@@ -505,6 +505,18 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
             }
         }
         let elem = *elements.add(i as usize);
+        // #5989: a sparse-array HOLE slot must surface to toJSON / the replacer
+        // as `undefined` (spec: Get() on a missing index yields undefined),
+        // never as the raw TAG_HOLE sentinel — the sentinel is an unrecognized
+        // quiet-NaN bit pattern, so user code saw a number-NaN and e.g.
+        // react-server-dom's flight encoder serialized "$NaN" where node emits
+        // "$undefined" (Next.js sparse flightRouterState tuples:
+        // `seg[4] = flags` on a length-2 array).
+        let elem = if elem.to_bits() == crate::value::TAG_HOLE {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            elem
+        };
 
         // Index key as a string for toJSON / replacer.
         let idx_str = i.to_string();
@@ -908,7 +920,8 @@ pub(crate) unsafe fn stringify_array_pretty(
         }
         let elem = *elements.add(i as usize);
         let elem_bits = elem.to_bits();
-        if elem_bits == TAG_UNDEFINED {
+        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
+        if elem_bits == TAG_UNDEFINED || elem_bits == crate::value::TAG_HOLE {
             buf.push_str("null");
         } else {
             stringify_value_pretty(elem, TYPE_UNKNOWN, buf, indent, inner_indent_count);
@@ -1147,7 +1160,11 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
         }
         let elem = *elements.add(i as usize);
         let elem_bits = elem.to_bits();
-        if elem_bits == TAG_UNDEFINED || is_closure_value(elem_bits) {
+        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
+        if elem_bits == TAG_UNDEFINED
+            || elem_bits == crate::value::TAG_HOLE
+            || is_closure_value(elem_bits)
+        {
             buf.push_str("null");
         } else {
             stringify_value_with_array_replacer(
