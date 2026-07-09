@@ -181,23 +181,29 @@ unsafe fn make_pair_array(a: f64, b: f64) -> f64 {
 
 /// Compute the entries-array index to read next, self-correcting for a
 /// mid-iteration delete. `cursor` = index just past the last-returned entry;
-/// `last_seen` = collection size at the previous `next()` (`< 0` ⇒ not started);
-/// `size` = current size; `find_last` locates the last-returned key's current
-/// index (or `< 0` if it was deleted).
+/// `last_key_in_place` = the previously-read key is still at `cursor-1`;
+/// `find_last` locates the last-returned key's current index (or `< 0` if it was
+/// deleted).
 ///
 /// Deleting an entry compacts the backing array (entries after the hole shift
 /// down one slot, #2831), so a delete at index ≤ cursor would move an unvisited
-/// entry below the cursor and skip it. Normal / append-only iteration keeps the
-/// fast cursor path (no lookup); only a size DROP re-derives from the last key —
-/// so object-keyed maps (whose key lookup is a linear scan) pay nothing unless a
-/// delete actually happened. If the last key itself was deleted, the entry that
-/// followed it now sits in the vacated slot (`cursor - 1`). (#6075)
-fn next_read_index(cursor: u32, last_seen: f64, size: u32, find_last: impl FnOnce() -> i32) -> u32 {
-    if last_seen < 0.0 || (size as f64) >= last_seen {
+/// entry below the cursor and skip it. If the last-returned key is still sitting
+/// at `cursor-1`, no such shift happened and the plain cursor is correct — so
+/// normal / append-only iteration keeps the fast path and object-keyed maps pay
+/// no lookup. Otherwise re-derive from the last key: locate it (`+1` after it),
+/// or, if it was itself deleted, read the entry that shifted into its slot
+/// (`cursor-1`). Comparing the key (rather than the size) also catches a delete
+/// balanced by an add in the same turn. (#6075 / #6165)
+fn next_read_index(cursor: u32, last_key_in_place: bool, find_last: impl FnOnce() -> i32) -> u32 {
+    if cursor == 0 || last_key_in_place {
         return cursor;
     }
     let j = find_last();
-    if j >= 0 {
+    // A delete only shifts entries DOWN, so a last key that merely shifted is now
+    // below the cursor (`j < cursor`) → resume after it. Otherwise it was deleted
+    // (`j < 0`) or deleted-then-re-added at the end (`j >= cursor`) — either way
+    // the entry that shifted into its old slot sits at `cursor-1`.
+    if j >= 0 && (j as u32) < cursor {
         (j as u32) + 1
     } else {
         cursor.saturating_sub(1)
@@ -215,22 +221,26 @@ pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_n
                 return make_iter_result(JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
-            let last_seen = f64::from_bits(js_object_get_field(iter_obj, 3).bits());
             let last_key = js_object_get_field(iter_obj, 4);
             let size = crate::map::js_map_size(map);
-            let idx = next_read_index(cursor, last_seen, size, || {
+            // Is the last-returned key still at cursor-1? (SameValueZero, so a
+            // NaN key matches itself.) If so, no delete shifted an entry at/below
+            // the cursor.
+            let in_place = cursor > 0 && {
+                let prev = crate::map::js_map_entry_key_at(map, cursor - 1);
+                crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_key.bits())) != 0
+            };
+            let idx = next_read_index(cursor, in_place, || {
                 crate::map::find_key_index(map, f64::from_bits(last_key.bits()))
             });
             if idx >= size {
                 js_object_set_field(iter_obj, 1, JSValue::number(size as f64));
-                js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
                 return make_iter_result(JSValue::undefined(), true);
             }
 
             let entry_key = crate::map::js_map_entry_key_at(map, idx);
             // Record state for the next re-derive BEFORE any allocation below.
             js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
-            js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
             js_object_set_field(iter_obj, 4, JSValue::from_bits(entry_key.to_bits()));
 
             let value = match kind {
@@ -262,21 +272,22 @@ pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_n
                 return make_iter_result(JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
-            let last_seen = f64::from_bits(js_object_get_field(iter_obj, 3).bits());
             let last_val = js_object_get_field(iter_obj, 4);
             let size = crate::set::js_set_size(set);
-            let idx = next_read_index(cursor, last_seen, size, || {
+            let in_place = cursor > 0 && {
+                let prev = crate::set::js_set_value_at(set, cursor - 1);
+                crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_val.bits())) != 0
+            };
+            let idx = next_read_index(cursor, in_place, || {
                 crate::set::find_value_index(set, f64::from_bits(last_val.bits()))
             });
             if idx >= size {
                 js_object_set_field(iter_obj, 1, JSValue::number(size as f64));
-                js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
                 return make_iter_result(JSValue::undefined(), true);
             }
 
             let elem = crate::set::js_set_value_at(set, idx);
             js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
-            js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
             js_object_set_field(iter_obj, 4, JSValue::from_bits(elem.to_bits()));
 
             let value = match kind {
