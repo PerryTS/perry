@@ -884,8 +884,7 @@ pub unsafe extern "C" fn js_ws_wait_for_message(
                         // used POINTER_TAG, so the awaited value was a
                         // string-like *object* (`typeof === "object"`).
                         queue_deferred_resolution(promise_ptr, true, move || {
-                            let result_str =
-                                js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                            let result_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
                             JSValue::string_ptr(result_str).bits()
                         });
                         return;

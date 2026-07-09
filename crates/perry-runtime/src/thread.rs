@@ -901,8 +901,7 @@ unsafe fn single_thread_map(
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
 
     for i in 0..len {
-        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
-            as *const u8)
+        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as *const u8)
             .add(std::mem::size_of::<crate::array::ArrayHeader>())
             as *const f64;
         let arg = *elements_ptr.add(i);
@@ -1111,8 +1110,7 @@ unsafe fn single_thread_filter(
     let mut count = 0u32;
 
     for i in 0..len {
-        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>()
-            as *const u8)
+        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as *const u8)
             .add(std::mem::size_of::<crate::array::ArrayHeader>())
             as *const f64;
         let arg = *elements_ptr.add(i);
