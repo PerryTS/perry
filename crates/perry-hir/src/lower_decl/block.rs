@@ -1686,6 +1686,16 @@ fn register_block_forward_lexicals(ctx: &mut LoweringContext, stmts: &[ast::Stmt
             ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
                 names.push(class_decl.ident.sym.to_string());
             }
+            // `using` / `await using` are block-scoped bindings with the same
+            // TDZ semantics as `let`/`const` (a read before the declarator
+            // throws), so `typeof <forward using>` must throw too.
+            ast::Stmt::Decl(ast::Decl::Using(using_decl)) => {
+                for decl in &using_decl.decls {
+                    let mut idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut idents);
+                    names.extend(idents.into_iter().map(|(n, _)| n));
+                }
+            }
             _ => {}
         }
     }
