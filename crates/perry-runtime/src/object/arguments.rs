@@ -21,10 +21,19 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     let mut moved = Vec::new();
     ARGUMENTS_OBJECTS.with(|m| {
         let mut map = m.borrow_mut();
-        for (&owner, _) in map.iter() {
+        for (&owner, meta) in map.iter_mut() {
             let mut new_owner = owner;
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
+            }
+            // 2026-07-09 GC audit wave 2: the mapped-arguments capture BOXES
+            // are real heap references (`js_arguments_object_map_index`
+            // stores raw `Box` pointers) and were never visited — a moving
+            // GC could sweep or relocate a box out from under the next
+            // `arguments[i]` read/write. Visit them STRONGLY so they stay
+            // live and get rewritten to their post-move addresses.
+            for box_ptr in meta.mapped.values_mut() {
+                visitor.visit_usize_slot(box_ptr);
             }
         }
         for (old_owner, new_owner) in moved.drain(..) {
@@ -35,9 +44,37 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     });
 }
 
+/// Death pruning (2026-07-09 GC audit wave 2): one entry was inserted per
+/// CALL of any function referencing `arguments` and never removed, so the
+/// table grew at call rate and `is_arguments_object` misfired on a fresh
+/// object at a recycled address. `is_dead_owner` is one of the GC's
+/// deadness predicates (`gc::dead_owner`).
+pub(crate) fn prune_dead_arguments_object_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
+    ARGUMENTS_OBJECTS.with(|m| {
+        let mut map = m.borrow_mut();
+        if !map.is_empty() {
+            map.retain(|owner, _| !is_dead_owner(*owner));
+        }
+    });
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_arguments_object_roots() {
     ARGUMENTS_OBJECTS.with(|m| m.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn test_arguments_object_registered(addr: usize) -> bool {
+    ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&addr))
+}
+
+#[cfg(test)]
+pub(crate) fn test_arguments_mapped_box(addr: usize, index: u32) -> Option<usize> {
+    ARGUMENTS_OBJECTS.with(|m| {
+        m.borrow()
+            .get(&addr)
+            .and_then(|meta| meta.mapped.get(&index).copied())
+    })
 }
 
 fn key_name(key: *const crate::StringHeader) -> Option<String> {

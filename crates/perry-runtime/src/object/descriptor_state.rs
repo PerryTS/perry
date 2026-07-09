@@ -580,6 +580,35 @@ pub(crate) unsafe fn mark_all_keys(
     }
 }
 
+/// Death pruning for the two descriptor side tables (2026-07-09 GC audit
+/// wave 2). Entries are keyed by `(owner_addr, key)` and were never removed
+/// when the owner died: `Object.freeze(perRequestObj)` leaked one entry per
+/// key per request, accessor closures were immortalized by the root scanner
+/// below, and a fresh object at a recycled address inherited the dead
+/// owner's descriptors (stale "read only property" throws). `is_dead_owner`
+/// is one of the GC's post-trace / copied-minor deadness predicates
+/// (`gc::dead_owner`); each distinct owner is probed once.
+pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let mut verdicts: HashMap<usize, bool> = HashMap::new();
+    let mut is_dead = |owner: usize| -> bool {
+        *verdicts
+            .entry(owner)
+            .or_insert_with(|| is_dead_owner(owner))
+    };
+    PROPERTY_DESCRIPTORS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.is_empty() {
+            m.retain(|(owner, _), _| !is_dead(*owner));
+        }
+    });
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        let mut m = m.borrow_mut();
+        if !m.is_empty() {
+            m.retain(|(owner, _), _| !is_dead(*owner));
+        }
+    });
+}
+
 /// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
 /// phase (evacuation moved the owning object), mirroring the symbol-keyed
 /// twin tables' owner rekey (`symbol/gc_roots.rs`). Outside that phase the

@@ -147,6 +147,67 @@ fn forwarded_heap_owner(owner: usize) -> Option<usize> {
     }
 }
 
+/// Dead-payload sweep arm (2026-07-09 GC audit wave 2): remove every side
+/// table entry owned by the DEAD closure at `ptr`, exactly like
+/// `object::clear_overflow_for_ptr` does for object overflow fields. Called
+/// from `gc_type_clear_dead_payload_side_tables` when the sweep reclaims a
+/// `GC_TYPE_CLOSURE` header — previously an explicit no-op, so one entry per
+/// closure INSTANCE that ever got `fn.prop = …` / `setPrototypeOf(fn, …)`
+/// (memoization wrappers, effect `Context.Tag`) leaked forever and a new
+/// closure at the recycled address inherited the dead one's props.
+pub(crate) fn clear_closure_side_tables_for_dead_ptr(ptr: usize) {
+    if ptr == 0 {
+        return;
+    }
+    if let Ok(mut props) = get_closure_props().lock() {
+        props.remove(&ptr);
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        prototypes.remove(&ptr);
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        deleted.remove(&ptr);
+    }
+}
+
+/// Cheap sweep gate: true when any of the three closure side tables has
+/// entries, so the per-dead-object `clear_dead_payload` dispatch can be
+/// skipped entirely on the (overwhelmingly common) runs that never attach
+/// props to closures. Mirrors `object::overflow_fields_is_empty`.
+pub(crate) fn closure_dynamic_side_tables_nonempty() -> bool {
+    get_closure_props().lock().is_ok_and(|m| !m.is_empty())
+        || get_closure_prototypes().lock().is_ok_and(|m| !m.is_empty())
+        || get_closure_deleted_keys()
+            .lock()
+            .is_ok_and(|m| !m.is_empty())
+}
+
+/// Death pruning for tenured/uncollected-by-sweep closures (2026-07-09 GC
+/// audit wave 2): the sweep's dead-payload arm above only fires for headers
+/// the ordinary sweep reclaims; closures dying in the ACTIVE nursery block,
+/// in bulk block resets, or in copied-minor from-space never reach it. This
+/// registry-style pass walks the three tables with one of the GC's deadness
+/// predicates (`gc::dead_owner`, narrowed to `GC_TYPE_CLOSURE`). The tables
+/// are process-global: foreign threads' closure addresses don't attribute
+/// and are skipped (documented residual).
+pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usize) -> bool) {
+    let mut verdicts: HashMap<usize, bool> = HashMap::new();
+    let mut is_dead = |owner: usize| -> bool {
+        *verdicts
+            .entry(owner)
+            .or_insert_with(|| is_dead_closure(owner))
+    };
+    if let Ok(mut props) = get_closure_props().lock() {
+        props.retain(|owner, _| !is_dead(*owner));
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        prototypes.retain(|owner, _| !is_dead(*owner));
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        deleted.retain(|owner, _| !is_dead(*owner));
+    }
+}
+
 pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;

@@ -157,10 +157,10 @@ pub(crate) use descriptor_state::{
     descriptors_in_use, disable_class_field_inline_guard, get_accessor_descriptor,
     get_property_attrs, json_object_getter_value, mark_all_keys, note_descriptor_target,
     object_has_descriptors, object_proto_descriptors_in_use, object_proto_may_intercept_key,
-    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
-    ACCESSORS_IN_USE, ACCESSOR_DESCRIPTORS, GLOBAL_DESCRIPTORS_IN_USE, PROPERTY_ATTRS_IN_USE,
-    PROPERTY_DESCRIPTORS,
+    prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
+    set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
+    AccessorDescriptor, PropertyAttrs, ACCESSORS_IN_USE, ACCESSOR_DESCRIPTORS,
+    GLOBAL_DESCRIPTORS_IN_USE, PROPERTY_ATTRS_IN_USE, PROPERTY_DESCRIPTORS,
 };
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,

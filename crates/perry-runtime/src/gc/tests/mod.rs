@@ -4,6 +4,7 @@ mod budgeted_step_api;
 mod contract;
 mod copying;
 mod cycle_state;
+mod dead_owner_side_tables;
 mod debt_pacer;
 mod error_side_tables;
 mod evacuation;

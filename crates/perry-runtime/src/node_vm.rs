@@ -1942,6 +1942,46 @@ pub fn scan_vm_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     }
 }
 
+/// Death pruning (2026-07-09 GC audit wave 2): `VM_CONTEXTS` / `VM_SCRIPTS`
+/// / `VM_FUNCTIONS` retained one entry — including the FULL SOURCE TEXT for
+/// scripts/functions — per `node:vm` API call forever (move-rekey only, no
+/// death hook on the owning objects). Prune entries whose owner object is
+/// provably dead. `is_dead_owner` is one of the GC's deadness predicates
+/// (`gc::dead_owner`); the tables are process-global, so foreign threads'
+/// owners don't attribute and are skipped (documented residual).
+pub(crate) fn prune_dead_vm_owner_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
+    if let Some(contexts) = VM_CONTEXTS.get() {
+        if let Ok(mut guard) = contexts.lock() {
+            guard.retain(|owner| !is_dead_owner(*owner));
+        }
+    }
+    if let Some(scripts) = VM_SCRIPTS.get() {
+        if let Ok(mut guard) = scripts.lock() {
+            guard.retain(|owner, _| !is_dead_owner(*owner));
+        }
+    }
+    if let Some(functions) = VM_FUNCTIONS.get() {
+        if let Ok(mut guard) = functions.lock() {
+            guard.retain(|owner, _| !is_dead_owner(*owner));
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_vm_script_entry(owner: usize, source: &str) {
+    scripts().lock().unwrap().insert(
+        owner,
+        ScriptMetadata {
+            source: source.to_string(),
+        },
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn test_vm_script_entry_exists(owner: usize) -> bool {
+    scripts().lock().unwrap().contains_key(&owner)
+}
+
 pub extern "C" fn js_vm_module_call() -> f64 {
     throw_type_error_no_code("Class constructor Module cannot be invoked without 'new'")
 }
