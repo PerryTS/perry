@@ -11,6 +11,7 @@ pub mod background;
 pub mod drag_drop;
 pub mod media_playback;
 pub mod state;
+pub mod system;
 pub mod tree;
 pub mod widgets;
 
@@ -1356,20 +1357,9 @@ pub extern "C" fn perry_system_audio_stop_recording() {
 pub extern "C" fn perry_system_is_dark_mode() -> i64 {
     0
 }
-#[no_mangle]
-pub extern "C" fn perry_system_preferences_set(_key: i64, _value: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_system_preferences_get(_key: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
-}
-#[no_mangle]
-pub extern "C" fn perry_system_keychain_save(_key: i64, _value: i64) {}
-#[no_mangle]
-pub extern "C" fn perry_system_keychain_get(_key: i64) -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
-}
-#[no_mangle]
-pub extern "C" fn perry_system_keychain_delete(_key: i64) {}
+// perry_system_preferences_* / perry_system_keychain_* /
+// perry_system_get_locale live in `system.rs` (real NSUserDefaults /
+// SecItem / NSLocale implementations, ported from iOS).
 #[no_mangle]
 pub extern "C" fn perry_system_notification_send(_title: i64, _body: i64) {}
 #[no_mangle]
@@ -1409,14 +1399,6 @@ pub extern "C" fn perry_system_notification_schedule_location(
 pub extern "C" fn perry_system_notification_cancel(_id_ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_system_notification_on_tap(_callback: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_system_get_locale() -> i64 {
-    extern "C" {
-        fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
-    }
-    let fallback = b"en";
-    unsafe { js_string_from_bytes(fallback.as_ptr(), 2) }
-}
 #[no_mangle]
 pub extern "C" fn perry_get_screen_width() -> f64 {
     198.0
