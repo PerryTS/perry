@@ -272,8 +272,11 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                             if t == 0.0 && f.is_sign_negative() {
                                 out.push_str("-0");
                             } else {
-                                // Integer-truncated, matching Node.
-                                out.push_str(&(t as i64).to_string());
+                                // Integer-truncated, matching Node. Format the
+                                // whole value shortest-round-trip so large
+                                // magnitudes (`%d` of `2**58`) print V8's
+                                // `…740`, not the exact `…744` (#6127).
+                                out.push_str(&super::format_integral_f64(t));
                             }
                         }
                     }

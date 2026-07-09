@@ -97,9 +97,11 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     if value.is_nan() || value.is_infinite() {
         // JSON has no NaN/Infinity literal; the spec serializes them as null.
         buf.push_str("null");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+    } else if value.fract() == 0.0 && value.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
         // Fast path for in-range integers (the overwhelming majority of JSON
-        // numbers); identical to ECMAScript NumberToString over this range.
+        // numbers); identical to ECMAScript NumberToString below 2^53. Above it
+        // the exact integer can carry more digits than the shortest round-trip
+        // (`2**58`), so those fall through to `js_format_f64` in the else (#6127).
         let mut itoa_buf = itoa::Buffer::new();
         buf.push_str(itoa_buf.format(value as i64));
     } else {

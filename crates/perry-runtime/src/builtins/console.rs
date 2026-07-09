@@ -24,7 +24,7 @@ pub extern "C" fn js_console_log(value: JSValue) {
         // Match Node/V8 console.log semantics: distinguish -0 from 0
         if is_negative_zero(n) {
             println!("-0");
-        } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+        } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
             // Print integers without decimal point
             println!("{}", n as i64);
         } else {
@@ -97,7 +97,7 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
             }
         } else if is_negative_zero(n) {
             println!("{}-0", p);
-        } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+        } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
             println!("{}{}", p, n as i64);
         } else {
             println!("{}{}", p, n);
@@ -228,7 +228,7 @@ pub extern "C" fn js_console_log_number(value: f64) {
         } else {
             println!("-Infinity");
         }
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+    } else if value.fract() == 0.0 && value.abs() < INT_EXACT_FASTPATH_LIMIT {
         println!("{}", value as i64);
     } else {
         println!("{}", format_finite_number_js(value));
@@ -274,7 +274,7 @@ pub extern "C" fn js_console_error_dynamic(value: f64) {
             }
         } else if is_negative_zero(n) {
             eprintln!("-0");
-        } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+        } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
             eprintln!("{}", n as i64);
         } else {
             eprintln!("{}", format_finite_number_js(n));
@@ -287,7 +287,7 @@ pub extern "C" fn js_console_error_dynamic(value: f64) {
 pub extern "C" fn js_console_error_number(value: f64) {
     if is_negative_zero(value) {
         eprintln!("-0");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+    } else if value.fract() == 0.0 && value.abs() < INT_EXACT_FASTPATH_LIMIT {
         eprintln!("{}", value as i64);
     } else {
         eprintln!("{}", format_finite_number_js(value));
@@ -333,7 +333,7 @@ pub extern "C" fn js_console_warn_dynamic(value: f64) {
             }
         } else if is_negative_zero(n) {
             eprintln!("-0");
-        } else if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+        } else if n.fract() == 0.0 && n.abs() < INT_EXACT_FASTPATH_LIMIT {
             eprintln!("{}", n as i64);
         } else {
             eprintln!("{}", format_finite_number_js(n));
@@ -346,7 +346,7 @@ pub extern "C" fn js_console_warn_dynamic(value: f64) {
 pub extern "C" fn js_console_warn_number(value: f64) {
     if is_negative_zero(value) {
         eprintln!("-0");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+    } else if value.fract() == 0.0 && value.abs() < INT_EXACT_FASTPATH_LIMIT {
         eprintln!("{}", value as i64);
     } else {
         eprintln!("{}", format_finite_number_js(value));

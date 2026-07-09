@@ -209,11 +209,13 @@ pub unsafe extern "C" fn js_json_stringify_number(value: f64) -> *mut StringHead
     if value.is_nan() || value.is_infinite() {
         return js_string_from_bytes(b"null".as_ptr(), 4);
     }
-    if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+    if value.fract() == 0.0 && value.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
         let mut itoa_buf = itoa::Buffer::new();
         let s = itoa_buf.format(value as i64);
         return js_string_from_bytes(s.as_ptr(), s.len() as u32);
     }
+    // #6127: at/above 2^53 the exact integer can carry more digits than the
+    // shortest round-trip (`2**58`), so defer to the shortest-round-trip formatter.
     let s = crate::string::js_format_f64(value);
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
