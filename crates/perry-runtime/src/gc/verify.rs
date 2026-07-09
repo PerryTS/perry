@@ -286,6 +286,7 @@ pub(super) struct OldToYoungRememberedRebuildState {
     arena_cursor: Option<crate::arena::ArenaObjectCursor>,
     arena_done: bool,
     malloc_index: usize,
+    objects_scanned: usize,
     done: bool,
 }
 
@@ -299,8 +300,16 @@ impl OldToYoungRememberedRebuildState {
             )),
             arena_done: false,
             malloc_index: 0,
+            objects_scanned: 0,
             done: false,
         }
+    }
+
+    /// Number of heap objects this whole-heap rebuild walk has visited. Used
+    /// by the GC trace to prove that minors do NOT run this O(all-objects)
+    /// walk (#6181): full cycles report the walked object count, minors 0.
+    pub(super) fn objects_scanned(&self) -> usize {
+        self.objects_scanned
     }
 
     pub(super) fn step(&mut self, budget: usize) -> bool {
@@ -320,6 +329,7 @@ impl OldToYoungRememberedRebuildState {
                 break;
             };
             remaining -= 1;
+            self.objects_scanned += 1;
             let header = header_ptr as *mut GcHeader;
             unsafe {
                 remember_retained_old_to_young_slots(&mut self.sticky, header, self.require_marked);
@@ -337,6 +347,7 @@ impl OldToYoungRememberedRebuildState {
             };
             self.malloc_index += 1;
             remaining -= 1;
+            self.objects_scanned += 1;
             unsafe {
                 remember_retained_old_to_young_slots(&mut self.sticky, header, self.require_marked);
             }

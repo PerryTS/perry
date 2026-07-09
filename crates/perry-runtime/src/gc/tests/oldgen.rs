@@ -1017,3 +1017,168 @@ fn test_old_gen_in_use_bytes_delta_matches_recompute_across_alloc_and_reclaim() 
     clear_marks();
     remembered_set_clear();
 }
+
+/// #6181 (2026-07-09 GC audit): a minor collection must NOT run the
+/// whole-heap old→young remembered-set rebuild. A minor's old→young RS is
+/// maintained by the write barriers plus this cycle's `evacuation_sticky`
+/// and reclaim's `restore_surviving_dirty_coverage`, so the from-scratch
+/// O(all-objects) walk is skipped. A FULL cycle still runs it. Proven via
+/// the trace's `remembered_set.rebuild_objects_scanned` object-visit counter,
+/// which scales with the heap for a full cycle and is 0 for a minor.
+#[test]
+fn test_minor_skips_whole_heap_old_to_young_rebuild() {
+    let _isolation = copying_nursery_isolation_lock();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    // A substantial old-gen live set (pinned so it survives and is not
+    // finalized). If a minor walked the old gen for the RS rebuild, the
+    // object-visit counter would scale with this set.
+    const OLD_OBJECTS: usize = 64;
+    let mut old_headers = Vec::with_capacity(OLD_OBJECTS);
+    for _ in 0..OLD_OBJECTS {
+        let (obj, _fields) = unsafe { alloc_old_test_object(2) };
+        let header = unsafe { header_from_user_ptr(obj as *const u8) };
+        unsafe {
+            (*header).gc_flags |= GC_FLAG_PINNED;
+        }
+        old_headers.push(header);
+    }
+    // A little nursery churn so the minor has real young work.
+    for _ in 0..8 {
+        let _ = unsafe { alloc_nursery_test_object(1) };
+    }
+
+    let minor_trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_eq!(
+        minor_trace.old_to_young_rebuild_objects_scanned, 0,
+        "a minor must not run the whole-heap old→young RS rebuild"
+    );
+    let minor_event = minor_trace.into_json(GcStepSnapshot::current());
+    assert_eq!(
+        minor_event["remembered_set"]["rebuild_objects_scanned"].as_u64(),
+        Some(0),
+        "minor RS rebuild object-visit count must be 0 in the trace JSON"
+    );
+
+    // A full cycle DOES run the rebuild — the counter proves it is wired and
+    // scales with the (now-large) heap, so the minor's 0 is a genuine skip
+    // rather than the counter being dead.
+    let full_outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::Direct,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+    let full_trace = full_outcome.trace.expect("full GC trace requested");
+    assert!(
+        full_trace.old_to_young_rebuild_objects_scanned >= OLD_OBJECTS,
+        "a full cycle must walk the whole heap for the RS rebuild (got {}, expected >= {OLD_OBJECTS})",
+        full_trace.old_to_young_rebuild_objects_scanned,
+    );
+
+    for header in old_headers {
+        unsafe {
+            (*header).gc_flags &= !GC_FLAG_PINNED;
+        }
+    }
+    clear_marks();
+    remembered_set_clear();
+}
+
+/// #6181: an old→young edge recorded before a minor must survive the minor
+/// (young child kept via the remembered set) across repeated minors, even
+/// though the minor no longer rebuilds the RS from a whole-heap walk. The
+/// edge is carried entirely by the write barrier → reclaim's
+/// `restore_surviving_dirty_coverage`. This is the under-remembering
+/// (use-after-free) guard for Fix 2: if any minor dropped the edge, the
+/// child would be swept and the RS root mark below would not reach it.
+#[test]
+fn test_minor_preserves_old_to_young_edge_across_minors() {
+    let _isolation = copying_nursery_isolation_lock();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    // Pinned old parent (stable address, always kept) holding a young child
+    // reachable ONLY through the parent's field.
+    let (parent, fields) = unsafe { alloc_old_test_object(1) };
+    let parent_user = parent as usize;
+    let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };
+    unsafe {
+        (*parent_header).gc_flags |= GC_FLAG_PINNED;
+    }
+    // Unrelated large old-gen set with no young children (makes the old gen
+    // big enough that a whole-heap rebuild would be visibly costly).
+    let mut other_old = Vec::new();
+    for _ in 0..48 {
+        let (obj, _f) = unsafe { alloc_old_test_object(1) };
+        let h = unsafe { header_from_user_ptr(obj as *const u8) };
+        unsafe {
+            (*h).gc_flags |= GC_FLAG_PINNED;
+        }
+        other_old.push(h);
+    }
+
+    let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let child_header = unsafe { header_from_user_ptr(child as *const u8) };
+    assert!(crate::arena::pointer_in_nursery(child));
+    unsafe {
+        *fields = ptr_bits(child);
+        layout_note_slot(parent_user, 0, ptr_bits(child));
+    }
+    js_write_barrier_slot(ptr_bits(parent_user), fields as u64, ptr_bits(child));
+    assert!(
+        remembered_set_size() > 0,
+        "barrier must record the old→young edge"
+    );
+
+    for cycle in 0..4 {
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert_eq!(
+            trace.old_to_young_rebuild_objects_scanned, 0,
+            "cycle {cycle}: minor must skip the whole-heap RS rebuild"
+        );
+        // The child (reachable only via the old parent) must still be covered
+        // by the remembered set: RS root marking reaches and marks it.
+        assert!(
+            remembered_set_size() > 0,
+            "cycle {cycle}: old→young edge must survive the minor"
+        );
+        assert_eq!(
+            unsafe { *fields },
+            ptr_bits(child),
+            "cycle {cycle}: non-moving minor must leave the parent's slot intact"
+        );
+        clear_marks();
+        let valid_ptrs = build_valid_pointer_set();
+        let stats = mark_remembered_set_roots(&valid_ptrs);
+        assert!(
+            stats.newly_marked > 0,
+            "cycle {cycle}: RS root marking must reach the child"
+        );
+        unsafe {
+            assert_ne!(
+                (*child_header).gc_flags & GC_FLAG_MARKED,
+                0,
+                "cycle {cycle}: young child must be markable via the surviving RS edge"
+            );
+            // Clear the child's mark so the next minor re-derives its coverage
+            // from the remembered set alone (not a stale mark).
+            (*child_header).gc_flags &= !GC_FLAG_MARKED;
+        }
+    }
+
+    unsafe {
+        (*parent_header).gc_flags &= !GC_FLAG_PINNED;
+        for h in other_old {
+            (*h).gc_flags &= !GC_FLAG_PINNED;
+        }
+    }
+    clear_marks();
+    remembered_set_clear();
+}

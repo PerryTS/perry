@@ -614,6 +614,11 @@ pub(super) struct GcCycleTrace {
     pub(super) malloc_before: usize,
     pub(super) remembered_set_before: usize,
     pub(super) remembered_set: RememberedSetTraceStats,
+    /// Objects visited by the whole-heap old→young remembered-set rebuild
+    /// (#6181). Full cycles walk every arena+malloc object here; minors skip
+    /// the walk entirely (0) — their RS is maintained by the barriers plus
+    /// evacuation_sticky + restore_surviving_dirty_coverage.
+    pub(super) old_to_young_rebuild_objects_scanned: usize,
     pub(super) old_young_edge_verifier: OldYoungEdgeVerifyStats,
     pub(super) old_pages: crate::arena::OldPageSummary,
     pub(super) conservative_root_count: usize,
@@ -674,6 +679,7 @@ impl GcCycleTrace {
             malloc_before: malloc_object_count(),
             remembered_set_before: remembered_set_size(),
             remembered_set: RememberedSetTraceStats::default(),
+            old_to_young_rebuild_objects_scanned: 0,
             old_young_edge_verifier: OldYoungEdgeVerifyStats::default(),
             old_pages: crate::arena::OldPageSummary::default(),
             conservative_root_count: 0,
@@ -794,6 +800,7 @@ impl GcCycleTrace {
             "dirty_slot_pages_considered": self.remembered_set.dirty_slot_pages_considered,
             "dirty_slot_ranges_scanned": self.remembered_set.dirty_slot_ranges_scanned,
             "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
+            "rebuild_objects_scanned": self.old_to_young_rebuild_objects_scanned,
         });
         let old_pages_json = serde_json::json!({
             "pages": self.old_pages.pages,

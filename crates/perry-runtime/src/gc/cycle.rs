@@ -1245,14 +1245,29 @@ impl GcCycleState {
                 }
             }
             AtomicFinalizeSubphase::RememberedSetRebuild => {
-                let require_marked = self.minor.is_none();
+                // Fix 2 (#6181): only FULL cycles rebuild the old→young
+                // remembered set from a whole-heap walk. A minor's old→young
+                // RS is maintained incrementally by the write barriers during
+                // mutation, plus this cycle's `evacuation_sticky` (edges the
+                // evacuation created — built in `atomic_finalize_minor_prelude`)
+                // and reclaim's `restore_surviving_dirty_coverage` snapshot
+                // repair (#5029). The from-scratch O(all-objects) walk is
+                // redundant for a minor — and, with `require_marked=false`, it
+                // even resurrects dead-but-unswept old parents. Skip it and
+                // leave `live_old_to_young_sticky` None; reclaim then restores
+                // only `evacuation_sticky` + the pre-clear dirty snapshot.
+                if self.minor.is_some() {
+                    self.atomic_finalize = None;
+                    self.phase = GcCyclePhase::Sweep;
+                    return;
+                }
                 let done = {
                     let state = self
                         .atomic_finalize
                         .as_mut()
                         .expect("atomic finalize state exists");
                     let rebuild = state.remembered_rebuild.get_or_insert_with(|| {
-                        OldToYoungRememberedRebuildState::new(require_marked)
+                        OldToYoungRememberedRebuildState::new(/* require_marked = */ true)
                     });
                     rebuild.step(budget)
                 };
@@ -1264,16 +1279,14 @@ impl GcCycleState {
                         .remembered_rebuild
                         .take()
                         .expect("remembered rebuild state exists");
-                    self.live_old_to_young_sticky = Some(rebuild.finish());
-                    if self.minor.is_some() {
-                        self.atomic_finalize = None;
-                        self.phase = GcCyclePhase::Sweep;
-                    } else {
-                        self.atomic_finalize
-                            .as_mut()
-                            .expect("atomic finalize state exists")
-                            .subphase = AtomicFinalizeSubphase::WeakProcessing;
+                    if let Some(trace) = self.trace.as_mut() {
+                        trace.old_to_young_rebuild_objects_scanned = rebuild.objects_scanned();
                     }
+                    self.live_old_to_young_sticky = Some(rebuild.finish());
+                    self.atomic_finalize
+                        .as_mut()
+                        .expect("atomic finalize state exists")
+                        .subphase = AtomicFinalizeSubphase::WeakProcessing;
                 }
             }
             AtomicFinalizeSubphase::DisableBarrier => {
