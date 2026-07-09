@@ -875,18 +875,19 @@ pub(crate) unsafe fn instance_private_key_hidden(
         .unwrap_or(false)
 }
 
-/// True for perry's hidden runtime-internal own keys — currently exactly the
+/// True for perry's hidden runtime-internal own keys — the
 /// `__perry_collection_backing__` field stashed on a `class … extends Map/Set`
-/// instance. This physically lives in the instance keys_array but must NEVER
+/// instance, and the `__perry_wk_entries` field backing a `WeakMap`/`WeakSet`
+/// (#6120). These physically live in the object's keys_array but must NEVER
 /// surface to `Object.keys` / `for…in` / `Object.getOwnPropertyNames` /
 /// `JSON.stringify` / `Object.hasOwn` / `hasOwnProperty` / `propertyIsEnumerable`.
 ///
-/// Matches the backing key EXACTLY (an allowlist), not a broad `__perry_*`
-/// prefix — a prefix test would wrongly hide legitimate user properties whose
-/// name happens to begin with `__perry_` (e.g. `this.__perry_user = 1`).
+/// Matches each key EXACTLY (an allowlist), not a broad `__perry_*` prefix — a
+/// prefix test would wrongly hide legitimate user properties whose name happens
+/// to begin with `__perry_` (e.g. `this.__perry_user = 1`).
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
-    b == crate::object::map_set_subclass::BACKING_KEY
+    b == crate::object::map_set_subclass::BACKING_KEY || b == crate::weakref::WEAK_ENTRIES_KEY
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].
