@@ -251,3 +251,152 @@ pub(crate) fn guard_for_in_body(
         else_branch: None,
     }]
 }
+
+/// Build the delete-safe control for the Map/Set `for-of` fast path (#6075).
+///
+/// The fast path iterates the backing entries array by index (`arr_id` holds the
+/// collection, `idx_id` the cursor). But `delete` compacts that array (entries
+/// after the hole shift down), so deleting an entry at index ≤ the cursor moves
+/// an unvisited entry below the cursor and skips it. This re-derives the read
+/// index each iteration from the last-returned key, so a shift can't skip.
+///
+/// Returns `(init_lets, condition, body_prefix)`:
+/// - `init_lets` — declare the state temps; push BEFORE the `for`.
+/// - `condition` — replaces `idx < size`. Overwrites `idx_id` with the corrected
+///   read index (fast cursor path when no delete shrank the collection; else
+///   locate the last key — `+1` after it, or into its vacated slot if it was
+///   itself deleted) and yields whether that index is in range.
+/// - `body_prefix` — prepend to the loop body (runs after the in-range check):
+///   records the visited key + the size just observed for the next iteration.
+///
+/// `find` is O(1) for numeric/string keys and only called when the collection
+/// shrank, so normal / append-only iteration keeps the plain cursor path.
+pub(crate) fn map_set_delete_safe_for_of(
+    ctx: &mut LoweringContext,
+    arr_id: LocalId,
+    idx_id: LocalId,
+    is_set: bool,
+) -> (Vec<Stmt>, Expr, Vec<Stmt>) {
+    let ls_id = ctx.fresh_local(); // size observed at the previous iteration (-1 = not started)
+    let lk_id = ctx.fresh_local(); // last-returned key
+    let sz_id = ctx.fresh_local(); // current size (spilled once per iteration)
+    let fk_id = ctx.fresh_local(); // find() result
+
+    // `.size` on a Map/Set-typed receiver is codegen-recognized and lowered to
+    // js_map_size / js_set_size (the raw `MapSize`/`SetSize` nodes are not
+    // codegen expressions), matching the original loop bound.
+    let size_of = |a: Expr| -> Expr {
+        Expr::PropertyGet {
+            object: Box::new(a),
+            property: "size".to_string(),
+        }
+    };
+    let key_at = |a: Expr, i: Expr| -> Expr {
+        if is_set {
+            Expr::SetValueAt {
+                set: Box::new(a),
+                idx: Box::new(i),
+            }
+        } else {
+            Expr::MapEntryKeyAt {
+                map: Box::new(a),
+                idx: Box::new(i),
+            }
+        }
+    };
+    let find_fn = if is_set {
+        "js_set_find_value_index"
+    } else {
+        "js_map_find_key_index"
+    };
+    let find_call = |args: Vec<Expr>| -> Expr {
+        Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: find_fn.to_string(),
+                param_types: Vec::new(),
+                return_type: Type::Number,
+            }),
+            args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }
+    };
+    let cmp = |op: CompareOp, l: Expr, r: Expr| -> Expr {
+        Expr::Compare {
+            op,
+            left: Box::new(l),
+            right: Box::new(r),
+        }
+    };
+
+    // read_idx = (not started || size >= last_seen) ? cursor
+    //            : (j = find(coll, last_key)) >= 0 ? j + 1 : cursor - 1
+    let rederive = Expr::Conditional {
+        condition: Box::new(cmp(CompareOp::Lt, Expr::LocalGet(ls_id), Expr::Number(0.0))),
+        then_expr: Box::new(Expr::LocalGet(idx_id)),
+        else_expr: Box::new(Expr::Conditional {
+            condition: Box::new(cmp(
+                CompareOp::Ge,
+                Expr::LocalGet(sz_id),
+                Expr::LocalGet(ls_id),
+            )),
+            then_expr: Box::new(Expr::LocalGet(idx_id)),
+            else_expr: Box::new(Expr::Sequence(vec![
+                Expr::LocalSet(
+                    fk_id,
+                    Box::new(find_call(vec![
+                        Expr::LocalGet(arr_id),
+                        Expr::LocalGet(lk_id),
+                    ])),
+                ),
+                Expr::Conditional {
+                    condition: Box::new(cmp(
+                        CompareOp::Ge,
+                        Expr::LocalGet(fk_id),
+                        Expr::Number(0.0),
+                    )),
+                    then_expr: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(fk_id)),
+                        right: Box::new(Expr::Number(1.0)),
+                    }),
+                    else_expr: Box::new(Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::LocalGet(idx_id)),
+                        right: Box::new(Expr::Number(1.0)),
+                    }),
+                },
+            ])),
+        }),
+    };
+
+    let condition = Expr::Sequence(vec![
+        Expr::LocalSet(sz_id, Box::new(size_of(Expr::LocalGet(arr_id)))),
+        Expr::LocalSet(idx_id, Box::new(rederive)),
+        cmp(CompareOp::Lt, Expr::LocalGet(idx_id), Expr::LocalGet(sz_id)),
+    ]);
+
+    let body_prefix = vec![
+        Stmt::Expr(Expr::LocalSet(
+            lk_id,
+            Box::new(key_at(Expr::LocalGet(arr_id), Expr::LocalGet(idx_id))),
+        )),
+        Stmt::Expr(Expr::LocalSet(ls_id, Box::new(Expr::LocalGet(sz_id)))),
+    ];
+
+    let mk_let = |id: LocalId, tag: &str, ty: Type, init: Expr| Stmt::Let {
+        id,
+        name: format!("__miter_{}_{}", tag, id),
+        ty,
+        mutable: true,
+        init: Some(init),
+    };
+    let init_lets = vec![
+        mk_let(ls_id, "ls", Type::Number, Expr::Number(-1.0)),
+        mk_let(lk_id, "lk", Type::Any, Expr::Undefined),
+        mk_let(sz_id, "sz", Type::Number, Expr::Number(0.0)),
+        mk_let(fk_id, "fk", Type::Number, Expr::Number(0.0)),
+    ];
+
+    (init_lets, condition, body_prefix)
+}

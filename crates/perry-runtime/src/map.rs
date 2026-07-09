@@ -747,7 +747,22 @@ pub extern "C" fn js_map_size(map: *const MapHeader) -> u32 {
 /// the perf-comprehensive sync-heavy benchmarks.
 const SIDE_TABLE_THRESHOLD: u32 = 8;
 
-unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
+/// C-ABI: current entries-array index of `key` (SameValueZero), or `-1.0` if
+/// absent. Used by the delete-safe `for-of` fast path (#6075) to re-derive the
+/// cursor after a mid-iteration delete compacts the entries array. Only invoked
+/// from generated IR, so `#[used]` keeps it linked on the default compile path.
+#[no_mangle]
+pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
+    let map = clean_map_ptr(crate::value::js_nanbox_get_pointer(map_boxed) as *const MapHeader);
+    if map.is_null() {
+        return -1.0;
+    }
+    unsafe { find_key_index(map, normalize_zero(key)) as f64 }
+}
+#[used]
+static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
+
+pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     let size = (*map).size;
     let key_bits = key.to_bits();
 

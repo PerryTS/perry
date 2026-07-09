@@ -1766,17 +1766,25 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 loop_body.insert(i, stmt);
             }
 
-            // Loop bound: Map/Set fast paths use `.size` (codegen-recognized,
-            // lowered to js_map_size / js_set_size), regular path uses .length.
-            let bound_expr = if map_kv_fastpath || set_fastpath {
-                Expr::PropertyGet {
-                    object: Box::new(Expr::LocalGet(arr_id)),
-                    property: "size".to_string(),
-                }
+            // Map/Set fast path re-derives the cursor each iteration so a mid-loop
+            // `delete` (which compacts the entries array) can't skip an entry
+            // (#6075). Array/String/iterator paths keep `idx < length`.
+            let condition = if map_kv_fastpath || set_fastpath {
+                let (init_lets, cond, prefix) =
+                    crate::lower::map_set_delete_safe_for_of(ctx, arr_id, idx_id, set_fastpath);
+                result.extend(init_lets);
+                let mut body = prefix;
+                body.append(&mut loop_body);
+                loop_body = body;
+                cond
             } else {
-                Expr::PropertyGet {
-                    object: Box::new(Expr::LocalGet(arr_id)),
-                    property: "length".to_string(),
+                Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(idx_id)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(arr_id)),
+                        property: "length".to_string(),
+                    }),
                 }
             };
             // Create the for loop
@@ -1788,11 +1796,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     mutable: true,
                     init: Some(Expr::Number(0.0)),
                 })),
-                condition: Some(Expr::Compare {
-                    op: CompareOp::Lt,
-                    left: Box::new(Expr::LocalGet(idx_id)),
-                    right: Box::new(bound_expr),
-                }),
+                condition: Some(condition),
                 update: Some(Expr::Update {
                     id: idx_id,
                     op: UpdateOp::Increment,

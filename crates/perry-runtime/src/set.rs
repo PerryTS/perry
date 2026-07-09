@@ -580,7 +580,21 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
 
 /// Find the index of a value in the set, or -1 if not found.
 /// Uses the O(1) hash index side-table.
-unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
+/// C-ABI: current elements-array index of `value` (SameValueZero), or `-1.0` if
+/// absent. Companion to `js_map_find_key_index` for the delete-safe Set `for-of`
+/// fast path (#6075). Only invoked from generated IR, so `#[used]` keeps it.
+#[no_mangle]
+pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
+    let set = clean_set_ptr(crate::value::js_nanbox_get_pointer(set_boxed) as *const SetHeader);
+    if set.is_null() {
+        return -1.0;
+    }
+    unsafe { find_value_index(set, normalize_zero(value)) as f64 }
+}
+#[used]
+static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_value_index;
+
+pub(crate) unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
     SET_INDEX.with(|idx| {
         let idx = idx.borrow();
         if let Some(map) = idx.get(&(set as usize)) {

@@ -58,13 +58,21 @@ fn iterator_class_id(addr: usize) -> Option<u32> {
 }
 
 unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
-    let obj = js_object_alloc(class_id, 3);
+    let obj = js_object_alloc(class_id, 5);
     // Field 0: backing collection (NaN-boxed pointer so the GC scanner keeps it).
     js_object_set_field(obj, 0, JSValue::from_bits(coll_nanboxed.to_bits()));
-    // Field 1: cursor index, starts at 0.
+    // Field 1: cursor index (index just past the last-returned entry), starts at 0.
     js_object_set_field(obj, 1, JSValue::number(0.0));
     // Field 2: iterator kind.
     js_object_set_field(obj, 2, JSValue::number(kind as f64));
+    // Field 3: collection size observed at the last `next()`. `-1` sentinel means
+    // "not started" (no entry returned yet). Used to detect a mid-iteration
+    // delete (which compacts the entries array, shifting live entries below the
+    // cursor) so the cursor can be re-derived from the last key (#6075).
+    js_object_set_field(obj, 3, JSValue::number(-1.0));
+    // Field 4: the KEY of the last-returned entry (a Map key / Set value), used
+    // to re-derive the cursor after a delete-shift. Undefined until started.
+    js_object_set_field(obj, 4, JSValue::undefined());
     // Link `[[Prototype]]` to the shared `%MapIteratorPrototype%` /
     // `%SetIteratorPrototype%` singleton so `Object.getPrototypeOf(it)` and the
     // inherited `.next` read resolve.
@@ -171,33 +179,68 @@ unsafe fn make_pair_array(a: f64, b: f64) -> f64 {
     js_nanbox_pointer(pair as i64)
 }
 
+/// Compute the entries-array index to read next, self-correcting for a
+/// mid-iteration delete. `cursor` = index just past the last-returned entry;
+/// `last_seen` = collection size at the previous `next()` (`< 0` ⇒ not started);
+/// `size` = current size; `find_last` locates the last-returned key's current
+/// index (or `< 0` if it was deleted).
+///
+/// Deleting an entry compacts the backing array (entries after the hole shift
+/// down one slot, #2831), so a delete at index ≤ cursor would move an unvisited
+/// entry below the cursor and skip it. Normal / append-only iteration keeps the
+/// fast cursor path (no lookup); only a size DROP re-derives from the last key —
+/// so object-keyed maps (whose key lookup is a linear scan) pay nothing unless a
+/// delete actually happened. If the last key itself was deleted, the entry that
+/// followed it now sits in the vacated slot (`cursor - 1`). (#6075)
+fn next_read_index(cursor: u32, last_seen: f64, size: u32, find_last: impl FnOnce() -> i32) -> u32 {
+    if last_seen < 0.0 || (size as f64) >= last_seen {
+        return cursor;
+    }
+    let j = find_last();
+    if j >= 0 {
+        (j as u32) + 1
+    } else {
+        cursor.saturating_sub(1)
+    }
+}
+
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Map iterator object.
 pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
     match method_name {
         "next" => {
             let backing = f64::from_bits(js_object_get_field(iter_obj, 0).bits());
             let map = js_nanbox_get_pointer(backing) as *const MapHeader;
-            let idx = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
             let kind = f64::from_bits(js_object_get_field(iter_obj, 2).bits()) as i32;
-
-            let size = crate::map::js_map_size(map);
-            if map.is_null() || idx >= size {
+            if map.is_null() {
                 return make_iter_result(JSValue::undefined(), true);
             }
-            // Advance the cursor before computing the value.
+            let cursor = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
+            let last_seen = f64::from_bits(js_object_get_field(iter_obj, 3).bits());
+            let last_key = js_object_get_field(iter_obj, 4);
+            let size = crate::map::js_map_size(map);
+            let idx = next_read_index(cursor, last_seen, size, || {
+                crate::map::find_key_index(map, f64::from_bits(last_key.bits()))
+            });
+            if idx >= size {
+                js_object_set_field(iter_obj, 1, JSValue::number(size as f64));
+                js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
+                return make_iter_result(JSValue::undefined(), true);
+            }
+
+            let entry_key = crate::map::js_map_entry_key_at(map, idx);
+            // Record state for the next re-derive BEFORE any allocation below.
             js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
+            js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
+            js_object_set_field(iter_obj, 4, JSValue::from_bits(entry_key.to_bits()));
 
             let value = match kind {
-                KIND_KEYS => {
-                    JSValue::from_bits(crate::map::js_map_entry_key_at(map, idx).to_bits())
-                }
+                KIND_KEYS => JSValue::from_bits(entry_key.to_bits()),
                 KIND_VALUES => {
                     JSValue::from_bits(crate::map::js_map_entry_value_at(map, idx).to_bits())
                 }
                 _ => {
-                    let key = crate::map::js_map_entry_key_at(map, idx);
                     let val = crate::map::js_map_entry_value_at(map, idx);
-                    JSValue::from_bits(make_pair_array(key, val).to_bits())
+                    JSValue::from_bits(make_pair_array(entry_key, val).to_bits())
                 }
             };
             make_iter_result(value, false)
@@ -214,16 +257,28 @@ pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_n
         "next" => {
             let backing = f64::from_bits(js_object_get_field(iter_obj, 0).bits());
             let set = js_nanbox_get_pointer(backing) as *const SetHeader;
-            let idx = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
             let kind = f64::from_bits(js_object_get_field(iter_obj, 2).bits()) as i32;
-
-            let size = crate::set::js_set_size(set);
-            if set.is_null() || idx >= size {
+            if set.is_null() {
                 return make_iter_result(JSValue::undefined(), true);
             }
-            js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
+            let cursor = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
+            let last_seen = f64::from_bits(js_object_get_field(iter_obj, 3).bits());
+            let last_val = js_object_get_field(iter_obj, 4);
+            let size = crate::set::js_set_size(set);
+            let idx = next_read_index(cursor, last_seen, size, || {
+                crate::set::find_value_index(set, f64::from_bits(last_val.bits()))
+            });
+            if idx >= size {
+                js_object_set_field(iter_obj, 1, JSValue::number(size as f64));
+                js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
+                return make_iter_result(JSValue::undefined(), true);
+            }
 
             let elem = crate::set::js_set_value_at(set, idx);
+            js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
+            js_object_set_field(iter_obj, 3, JSValue::number(size as f64));
+            js_object_set_field(iter_obj, 4, JSValue::from_bits(elem.to_bits()));
+
             let value = match kind {
                 // For Sets, keys === values; entries yields [v, v] pairs.
                 KIND_ENTRIES => JSValue::from_bits(make_pair_array(elem, elem).to_bits()),
