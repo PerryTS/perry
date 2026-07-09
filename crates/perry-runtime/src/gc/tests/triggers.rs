@@ -219,7 +219,7 @@ fn test_copying_minor_promotion_handoff_uses_predicted_old_pressure() {
 // 2026-07-09 audit (device-blind policy): budget-scaled threshold math.
 #[test]
 fn test_budget_scaled_clamps_only_under_budget() {
-    use super::super::policy::budget_scaled_with;
+    use super::super::heap_budget::budget_scaled_with;
     const MB: usize = 1024 * 1024;
     // Unbudgeted (desktop/server): historical default unchanged.
     assert_eq!(budget_scaled_with(None, 128 * MB, 1, 4, 2 * MB), 128 * MB);
@@ -247,9 +247,9 @@ fn test_budget_scaled_clamps_only_under_budget() {
 // (headroom floor over a big live set) and must NOT be clamped.
 #[test]
 fn test_effective_arena_trigger_respects_armed_values() {
+    use super::super::heap_budget::gc_trigger_absolute_ceiling_bytes;
     use super::super::policy::{
-        effective_next_arena_trigger, gc_trigger_absolute_ceiling_bytes, GC_NEXT_TRIGGER_BYTES,
-        GC_TRIGGER_ARMED,
+        effective_next_arena_trigger, GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED,
     };
     let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
     let prev_armed = GC_TRIGGER_ARMED.with(|c| c.get());
