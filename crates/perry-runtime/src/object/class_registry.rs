@@ -51,7 +51,7 @@ mod state;
 pub(crate) use state::{
     class_decl_prototype_object, class_decl_prototype_object_root_store,
     class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
-    class_delete_own_dynamic_prop, class_dynamic_prop_root_store,
+    class_delete_own_dynamic_prop, class_dynamic_prop_root_store, class_has_own_dynamic_prop,
     class_id_for_decl_prototype_object, class_is_key_deleted, class_mark_key_deleted,
     class_own_enumerable_field_names, class_own_static_field_value, class_parent_closure,
     class_parent_closure_root_store, class_prototype_method_is_enumerable,

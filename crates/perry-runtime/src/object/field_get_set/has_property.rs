@@ -182,10 +182,34 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if crate::symbol::class_static_symbol_lookup(class_id, key).is_some() {
                 return nanbox_true;
             }
-            // String key path: check CLASS_DYNAMIC_PROPS via the get-by-name fn.
-            if !key_val.is_pointer() && key_val.is_string() {
-                // is_string covers heap StringHeader. Route through the
-                // CLASS_DYNAMIC_PROPS-aware get fn.
+            // #6149: string key on a class ref (`"prototype" in C`,
+            // `"staticField" in C`, `"staticMethod" in C`). Check the
+            // constructor's own static members WITHOUT reading them, so a static
+            // getter is never invoked (`in` is [[HasProperty]], not [[Get]]).
+            // Inherited `Function.prototype` methods (`"call" in C`) and
+            // inherited static *data* fields are not covered — the latter mirror
+            // the get-by-name gap for the same shape.
+            if key_val.is_any_string() {
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    let present = matches!(name, "prototype" | "name" | "length")
+                        || (!super::super::class_registry::class_is_key_deleted(class_id, name)
+                            && (super::super::class_registry::class_has_own_dynamic_prop(
+                                class_id, name,
+                            ) || super::super::class_registry::lookup_static_method_in_chain(
+                                class_id, name,
+                            )
+                            .is_some()
+                                || super::super::class_registry::class_own_static_accessor_ptrs(
+                                    class_id, name,
+                                )
+                                .is_some()));
+                    if present {
+                        return nanbox_true;
+                    }
+                }
             }
             // Fallback: emit false for class refs that aren't in either table.
             return nanbox_false;
