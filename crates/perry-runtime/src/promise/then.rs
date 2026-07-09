@@ -430,10 +430,27 @@ pub extern "C" fn js_promise_new() -> *mut Promise {
 /// Allocate a new Promise, recording `parent` so `v8.promiseHooks` `init`
 /// callbacks (#3139) receive the parent promise.
 pub(crate) fn js_promise_new_with_parent(parent: *mut Promise) -> *mut Promise {
+    js_promise_new_with_parent_impl(parent, false)
+}
+
+/// Allocate a Promise that will cross a thread boundary as a raw address
+/// (`spawn`, `Atomics.waitAsync`): pinned by the caller and referenced only
+/// by a `usize` in the global PENDING_THREAD_RESULTS queue, which no root
+/// scanner visits. A nursery resident in that situation is destroyed by the
+/// copied-minor from-space flip regardless of its PIN flag (the flip resets
+/// eden/survivor blocks wholesale; only root-reachable pins force the
+/// fallback). Malloc space is non-moving and both sweep paths honor
+/// GC_FLAG_PINNED, so these promises are allocated there unconditionally.
+#[no_mangle]
+pub extern "C" fn js_promise_new_cross_thread() -> *mut Promise {
+    js_promise_new_with_parent_impl(ptr::null_mut(), true)
+}
+
+fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
     let async_hooks_active = crate::async_hooks::hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
-    let raw = if lifecycle_hooks_active {
+    let raw = if lifecycle_hooks_active || force_malloc {
         crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE)
     } else {
         crate::arena::arena_alloc_gc(

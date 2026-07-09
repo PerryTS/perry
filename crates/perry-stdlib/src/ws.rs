@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[cfg(not(target_os = "ios"))]
-use crate::common::async_bridge::{queue_promise_resolution, spawn};
+use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution, spawn};
 use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
 /// #6117 — rustls panics resolving the process-level CryptoProvider on the
@@ -876,9 +876,18 @@ pub unsafe extern "C" fn js_ws_wait_for_message(
                 if let Some(conn) = guard.get_mut(&ws_id) {
                     if !conn.messages.is_empty() {
                         let msg = conn.messages.remove(0);
-                        let result_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                        let result_bits = JSValue::pointer(result_str as *const u8).bits();
-                        queue_promise_resolution(promise_ptr, true, result_bits);
+                        // #1292 pattern (see bcrypt.rs): build the JS string on
+                        // the MAIN thread via the deferred converter and tag it
+                        // STRING_TAG. The old path allocated the StringHeader on
+                        // this tokio worker's arena (cross-heap pointer — freed
+                        // under the main thread by the worker's GC/exit) and
+                        // used POINTER_TAG, so the awaited value was a
+                        // string-like *object* (`typeof === "object"`).
+                        queue_deferred_resolution(promise_ptr, true, move || {
+                            let result_str =
+                                js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                            JSValue::string_ptr(result_str).bits()
+                        });
                         return;
                     }
 
