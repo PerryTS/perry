@@ -3,6 +3,57 @@
 
 use super::*;
 
+/// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
+/// (#6160). Covers the registration schemes the generic symbol resolver
+/// (`js_object_get_symbol_property`, which only reads the data-valued
+/// CLASS_STATIC_SYMBOLS table) skips:
+///   * user computed-symbol methods/accessors (`static [S]() {}`,
+///     `static get [S]()`) → CLASS_SYMBOL_METHODS / CLASS_SYMBOL_ACCESSORS;
+///   * `static [Symbol.hasInstance]` → the lifted per-class has-instance hook;
+///   * `static [Symbol.iterator]` / `[Symbol.asyncIterator]` → the synthetic
+///     `@@iterator` / `@@asyncIterator` static-method names the HIR renames them
+///     to.
+/// Presence-only — never invokes a getter or method (`in` is [[HasProperty]]).
+/// `Symbol.toStringTag` is deliberately excluded: its getter lives on the
+/// prototype (instance side), so `Symbol.toStringTag in Class` is false in Node.
+unsafe fn class_ref_has_symbol_member(class_id: u32, sym_f64: f64) -> bool {
+    let sym_key = crate::symbol::sym_key_from_f64(sym_f64);
+    if sym_key == 0 {
+        return false;
+    }
+    if crate::object::class_registry::class_has_symbol_member_in_chain(class_id, sym_key, true) {
+        return true;
+    }
+    let wk_key = |name: &str| -> usize {
+        let s = crate::symbol::well_known_symbol(name);
+        if s.is_null() {
+            0
+        } else {
+            crate::symbol::sym_key_from_f64(f64::from_bits(
+                crate::value::JSValue::pointer(s as *const u8).bits(),
+            ))
+        }
+    };
+    let hi = wk_key("hasInstance");
+    if hi != 0 && sym_key == hi && crate::object::lookup_has_instance_hook(class_id).is_some() {
+        return true;
+    }
+    for (wk, name) in [
+        ("iterator", "@@iterator"),
+        ("asyncIterator", "@@asyncIterator"),
+    ] {
+        let k = wk_key(wk);
+        if k != 0
+            && sym_key == k
+            && crate::object::class_registry::lookup_static_method_in_chain(class_id, name)
+                .is_some()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Render a value the way V8 does inside the `in`-operator TypeError message.
 /// Only the primitive RHS shapes that reach `throw_in_operator_non_object` need
 /// handling: `null`/`undefined` render literally, a Symbol as `Symbol(desc)`,
@@ -152,6 +203,21 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             && crate::value::addr_class::is_handle_band(addr)
         {
             return nanbox_false;
+        }
+    }
+
+    // #6160: `Symbol in Class` where the member is a Symbol-keyed STATIC member
+    // that registers through a scheme the generic symbol resolver below
+    // (`js_object_get_symbol_property`) does not consult — it only sees the
+    // data-valued CLASS_STATIC_SYMBOLS table. `class_ref_has_symbol_member`
+    // presence-checks the method/accessor and well-known static registrations,
+    // so `sym in Class` matches Node even though those members dispatch through
+    // dedicated call paths. Presence-only: `in` is [[HasProperty]], never [[Get]].
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        if let Some(class_id) = crate::object::class_ref_id(obj) {
+            if unsafe { class_ref_has_symbol_member(class_id, key) } {
+                return nanbox_true;
+            }
         }
     }
 

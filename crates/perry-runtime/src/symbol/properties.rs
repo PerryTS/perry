@@ -400,6 +400,21 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     sym_f64: f64,
     value_f64: f64,
 ) -> f64 {
+    // #6160: a runtime symbol assignment onto a class constructor
+    // (`(C as any)[sym] = v`) targets an INT32-tagged class ref, which has no
+    // heap address — `set_symbol_property` keys the own-symbol side table by
+    // `obj_key_from_f64`, which returns 0 for a non-pointer receiver, so the
+    // write was silently dropped and `sym in C` / `C[sym]` came back undefined.
+    // Store it as a static Symbol-keyed member (CLASS_STATIC_SYMBOLS), the same
+    // table `static [sym] = v` uses and that the class-ref arms of
+    // `js_object_get_symbol_property` / `js_object_has_property` already read.
+    if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
+        let sym_key = sym_key_from_f64(sym_f64);
+        if sym_key != 0 {
+            super::store_class_static_symbol_root(class_id, sym_key, value_f64.to_bits());
+            return value_f64;
+        }
+    }
     set_symbol_property(obj_f64, sym_f64, value_f64)
 }
 

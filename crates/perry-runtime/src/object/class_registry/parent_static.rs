@@ -623,6 +623,51 @@ pub(crate) fn lookup_class_symbol_method_in_chain(
     None
 }
 
+/// Presence-only check (`[[HasProperty]]`, never `[[Get]]`) for a Symbol-keyed
+/// METHOD or ACCESSOR declared on `class_id` or any ancestor. These computed
+/// members register into `CLASS_SYMBOL_METHODS` / `CLASS_SYMBOL_ACCESSORS`, which
+/// the generic symbol resolver (`js_object_get_symbol_property`) does NOT consult
+/// — so `sym in Class` reported false even though `Class[sym](...)` dispatches
+/// fine through the direct-call path. Walks the parent chain like
+/// `lookup_class_symbol_method_in_chain`, but returns a bool and also covers
+/// accessors so a static/instance `get [sym]()` is detected without invoking the
+/// getter. Refs #6160.
+pub(crate) fn class_has_symbol_member_in_chain(
+    class_id: u32,
+    sym_key: usize,
+    is_static: bool,
+) -> bool {
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while cid != 0 && depth < 32 {
+        let key = (cid, sym_key, is_static);
+        let in_methods = CLASS_SYMBOL_METHODS
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
+            .unwrap_or(false);
+        if in_methods {
+            return true;
+        }
+        let in_accessors = CLASS_SYMBOL_ACCESSORS
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
+            .unwrap_or(false);
+        if in_accessors {
+            return true;
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 pub(crate) fn class_own_symbol_member_keys(class_id: u32, is_static: bool) -> Vec<usize> {
     let mut keys = Vec::new();
     if let Ok(methods) = CLASS_SYMBOL_METHODS.read() {
