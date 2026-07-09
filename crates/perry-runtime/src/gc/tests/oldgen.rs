@@ -940,3 +940,80 @@ fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
     assert_eq!(event["sweep"]["returned_bytes"].as_u64(), Some(32));
     assert_eq!(event["sweep"]["deallocated_bytes"].as_u64(), Some(32));
 }
+
+/// The delta-maintained `OLD_GEN_IN_USE_BYTES` cache must agree with the
+/// O(blocks) recompute across every old-arena mutation class: small bump
+/// allocations, oversized-block allocation, sweep-driven block reset,
+/// block deallocation back to the OS, post-reset block reuse, and a full
+/// explicit collection. (`old_gen_in_use_bytes()` additionally
+/// debug-asserts the same invariant on every read, so every other GC
+/// test — including the old-page defrag suite — cross-checks it too.)
+#[test]
+fn test_old_gen_in_use_bytes_delta_matches_recompute_across_alloc_and_reclaim() {
+    let _isolation = copying_nursery_isolation_lock();
+    // Keep alloc-point triggers quiet so the mid-test totals compare
+    // deterministically; the explicit sweep/collect calls below still run.
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+    crate::arena::old_pages_begin_gc_cycle();
+
+    fn assert_consistent(label: &str) {
+        assert_eq!(
+            crate::arena::old_gen_in_use_bytes(),
+            crate::arena::old_gen_in_use_bytes_recomputed(),
+            "{label}: cached old-gen in-use bytes drifted from the per-block recompute"
+        );
+    }
+
+    assert_consistent("baseline");
+
+    // Small old-arena bump allocations (also materializes the lazy
+    // initial block on a fresh test thread).
+    let live = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_STRING) as usize;
+    for _ in 0..32 {
+        let _ = unsafe { alloc_old_test_object(4) };
+    }
+    assert_consistent("after small old allocs");
+    let before_oversized = crate::arena::old_gen_in_use_bytes();
+
+    // Oversized allocation: forces a custom-sized fresh-block install +
+    // bump through the fresh-block alloc path.
+    let dead_big = crate::arena::arena_alloc_gc_old(2 * 1024 * 1024, 8, GC_TYPE_STRING) as usize;
+    let (_, dead_total) = old_test_header_and_size(dead_big);
+    assert_consistent("after oversized old alloc");
+    assert!(
+        crate::arena::old_gen_in_use_bytes() >= before_oversized + dead_total,
+        "oversized alloc must raise the cached in-use total"
+    );
+
+    // Sweep + old-block reclaim: the oversized block dies (reset and/or
+    // deallocated), the block holding `live` survives.
+    let (live_header, _) = old_test_header_and_size(live);
+    unsafe {
+        (*live_header).gc_flags |= GC_FLAG_MARKED;
+    }
+    let old_before_sweep = crate::arena::old_gen_in_use_bytes();
+    let _ = sweep_with_age_bump_and_old_reclaim(false, true);
+    assert_consistent("after sweep + old block reclaim");
+    assert!(
+        crate::arena::old_gen_in_use_bytes() < old_before_sweep,
+        "dead old block reclaim must lower the cached in-use total"
+    );
+
+    // Re-allocate after the reclaim so the reset-block reuse path
+    // (forward scan into an offset-0 block) is delta-tracked too.
+    for _ in 0..8 {
+        let _ = unsafe { alloc_old_test_object(2) };
+    }
+    assert_consistent("after post-reclaim reuse allocs");
+
+    // Full explicit collection end-to-end (mark, sweep, reclaim,
+    // possible evacuation-policy pass).
+    js_gc_collect();
+    assert_consistent("after full explicit collection");
+
+    clear_marks();
+    remembered_set_clear();
+}
