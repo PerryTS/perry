@@ -1144,7 +1144,7 @@ fn test_dirty_page_promise_value_slot_marks_child() {
     remembered_set_clear();
 }
 
-fn assert_heap_child_marked(ptr: *const u8, label: &str) {
+pub(super) fn assert_heap_child_marked(ptr: *const u8, label: &str) {
     assert!(!ptr.is_null(), "{label} should not be null");
     unsafe {
         let header = header_from_user_ptr(ptr);

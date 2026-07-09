@@ -1061,13 +1061,17 @@ pub(super) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
         crate::arena::HeapGeneration::Unknown => {
             // Non-arena child: candidate malloc-GC object (RegExp, Symbol,
             // hook-mode Promise, grown string, large-capture closure).
-            // Band-guard before the header sniff — handle-band ids below
-            // HANDLE_BAND_MAX are small integers, not dereferenceable
-            // addresses. A false positive here only dirties a page
-            // (correctness-safe rescan); the exact membership checks run
-            // at scan time against the valid-pointer set.
-            child_addr >= crate::value::addr_class::HANDLE_BAND_MAX
-                && malloc_gc_parent_addr(child_addr)
+            // EXACT malloc-registry membership — deliberately not a header
+            // sniff: barrier child values can be uninitialized slot
+            // contents (array-growth barrier replay passes raw slot bits),
+            // and a plausibility sniff on garbage dirtied pages whose
+            // dirty-scan then treated neighboring garbage slots as movable
+            // young pointers. Band ids and foreign pointers are never in
+            // the registry, so this also needs no pre-deref band guard.
+            child_addr > GC_HEADER_SIZE
+                && super::malloc::gc_malloc_header_is_tracked(
+                    (child_addr - GC_HEADER_SIZE) as *const GcHeader,
+                )
         }
     }
 }

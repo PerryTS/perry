@@ -1,4 +1,5 @@
 use super::super::*;
+use super::barrier::assert_heap_child_marked;
 use super::support::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
