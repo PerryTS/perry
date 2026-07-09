@@ -613,7 +613,11 @@ impl CopyingNurseryCollector {
             let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
             if barrier_parent_needs_remembering(parent_user, external) {
                 if let Some((child_addr, _, _)) = self.ptrs.decode_bits(*slot) {
-                    if crate::arena::pointer_in_nursery(child_addr) {
+                    // Keep old→malloc pages dirty alongside old→nursery:
+                    // the malloc child is spared by this cycle's mark
+                    // (mark_addr handles CopyingPointerKind::Malloc) but
+                    // the NEXT minor's malloc sweep needs the edge again.
+                    if crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
                         self.sticky.remember_slot(parent_header, slot, external);
                     }
                 }

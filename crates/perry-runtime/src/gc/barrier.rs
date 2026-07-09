@@ -1027,10 +1027,7 @@ pub(super) fn write_barrier_slot_inner(
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     }
-    if !matches!(
-        crate::arena::classify_heap_generation(child_addr),
-        crate::arena::HeapGeneration::Nursery
-    ) {
+    if !remembered_child_needs_tracking(child_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
         return;
     }
@@ -1044,6 +1041,34 @@ pub(super) fn write_barrier_slot_inner(
     };
     if inserted {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+    }
+}
+
+/// Which stored children must an old parent's slot be remembered for?
+/// Minor GCs sweep BOTH the nursery and the malloc registry, and old
+/// parents are black leaves in minors — so an unremembered old→nursery OR
+/// old→malloc edge leaves the child unmarked: the nursery sweep or the
+/// malloc sweep frees it while live (and a malloc child's own nursery
+/// children die with it, since marked malloc objects are the only path
+/// that traces them). Longlived and old children need no remembering:
+/// longlived is never swept individually and old is reclaimed only by
+/// full cycles that trace everything.
+#[inline]
+pub(super) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
+    match crate::arena::classify_heap_generation(child_addr) {
+        crate::arena::HeapGeneration::Nursery => true,
+        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived => false,
+        crate::arena::HeapGeneration::Unknown => {
+            // Non-arena child: candidate malloc-GC object (RegExp, Symbol,
+            // hook-mode Promise, grown string, large-capture closure).
+            // Band-guard before the header sniff — handle-band ids below
+            // HANDLE_BAND_MAX are small integers, not dereferenceable
+            // addresses. A false positive here only dirties a page
+            // (correctness-safe rescan); the exact membership checks run
+            // at scan time against the valid-pointer set.
+            child_addr >= crate::value::addr_class::HANDLE_BAND_MAX
+                && malloc_gc_parent_addr(child_addr)
+        }
     }
 }
 

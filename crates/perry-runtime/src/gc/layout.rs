@@ -1315,7 +1315,13 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             let map = user_ptr as *mut crate::map::MapHeader;
             let size = (*map).size;
             let capacity = (*map).capacity;
-            if size > capacity || size > 100_000 || (*map).entries.is_null() {
+            // Corruption guard only: mirror Set's 16M bound (set.rs
+            // gc_element_slot_range). Every GC walk (mark, copy, rewrite,
+            // dirty-scan, verify) funnels through this descriptor, so a
+            // lower cap makes larger maps invisible to the collector —
+            // entries reachable only through a >cap map would be swept
+            // while live and never rewritten after a move.
+            if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
                 return;
             }
             visit(GcMutableSlotDescriptor::Range {

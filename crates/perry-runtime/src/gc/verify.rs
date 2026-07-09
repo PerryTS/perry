@@ -128,7 +128,11 @@ pub(super) unsafe fn remember_evacuated_old_to_young_slot(
         return;
     }
     let child_addr = decode_heap_addr(*slot);
-    if child_addr == 0 || !crate::arena::pointer_in_nursery(child_addr) {
+    // Nursery AND malloc-GC children both need their pages kept dirty:
+    // minors sweep the malloc registry too, and old parents are black
+    // leaves — dropping an old→malloc page here would free the malloc
+    // child on the next minor (see remembered_child_needs_tracking).
+    if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
         return;
     }
     let external = !matches!(
@@ -449,7 +453,7 @@ pub(super) unsafe fn verify_old_young_slot_covered(
         return;
     }
     let child_addr = decode_heap_addr(*slot);
-    if child_addr == 0 || !crate::arena::pointer_in_nursery(child_addr) {
+    if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
         return;
     }
     stats.checked_old_to_young_edges = stats.checked_old_to_young_edges.saturating_add(1);

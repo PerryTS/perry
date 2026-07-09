@@ -509,11 +509,18 @@ pub(super) fn try_mark_young_user_ptr_as_seed(
     if ptr_val == 0 || !valid_ptrs.contains(&ptr_val) {
         return false;
     }
-    if !matches!(
-        crate::arena::classify_heap_generation(ptr_val),
-        crate::arena::HeapGeneration::Nursery
-    ) {
-        return false;
+    match crate::arena::classify_heap_generation(ptr_val) {
+        crate::arena::HeapGeneration::Nursery => {}
+        // Non-arena member of the valid-pointer set = malloc-GC object.
+        // Minors sweep the malloc registry, and malloc objects are NOT
+        // black-leafed in minor traces (they can hold nursery children),
+        // so an RS-reachable malloc child must be seeded and traced
+        // exactly like a nursery one — otherwise the malloc sweep frees
+        // it while its only referrer is a clean old parent.
+        crate::arena::HeapGeneration::Unknown => {}
+        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived => {
+            return false;
+        }
     }
     unsafe {
         let header = header_from_user_ptr(ptr_val as *const u8);
