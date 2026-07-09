@@ -680,6 +680,29 @@ function perry_system_preferences_set(key, value) {
     localStorage.setItem(key, value);
 }
 
+// perry/system hapticPlay — Vibration API. Pattern lengths approximate
+// the native semantics (error = double buzz). Silently a no-op in
+// browsers without navigator.vibrate (Safari, all iOS browsers) and in
+// non-window contexts, matching the "no haptic engine" API contract.
+function perry_system_haptic_play(type) {
+    if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
+    const patterns = {
+        success: 50,
+        error: [50, 80, 50],
+        warning: [30, 50, 30],
+        light: 10,
+        medium: 20,
+        heavy: 40,
+        click: 10,
+        selection: 10,
+        directionUp: 15,
+        directionDown: 15,
+        start: 25,
+        stop: 25,
+    };
+    try { navigator.vibrate(patterns[type] ?? 10); } catch (e) { /* no-op */ }
+}
+
 // --- Audio Capture (Web Audio API) ---
 let _perry_audio_ctx = null;
 let _perry_audio_analyser = null;
@@ -3664,6 +3687,7 @@ window.__perry = {
     perry_system_is_dark_mode,
     perry_system_preferences_get,
     perry_system_preferences_set,
+    perry_system_haptic_play,
     perry_system_keychain_save,
     perry_system_keychain_get,
     perry_system_keychain_delete,

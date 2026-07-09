@@ -462,3 +462,61 @@ fn unicode17_scripts_expand_to_codepoint_ranges() {
         "U+10940 is Sidetic, excluded by the negation"
     );
 }
+
+/// 2026-07-09 GC audit (wave 2 batch A): `REGEX_CACHE`/`FANCY_CACHE` were
+/// unbounded — one entry per distinct `(pattern, flags)` ever compiled, up to
+/// 64 MiB each — so `new RegExp(userInput)` was an attacker-driven OOM. The
+/// caches are now capped (clear-on-overflow) and every `RegExpHeader` OWNS a
+/// leaked Arc reference to its compiled program(s), so a header created
+/// before an eviction keeps matching afterwards.
+#[test]
+fn regex_cache_capped_and_prior_headers_survive_eviction() {
+    // A header compiled before the flood.
+    let re = js_regexp_new(make_string(r"needle\d+"), make_string(""));
+    assert!(js_regexp_test(re, make_string("xx needle42 yy")) != 0);
+
+    // A fancy-fallback header too (lookbehind forces the fancy engine).
+    let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
+    assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
+
+    // Flood the cache with distinct patterns — far past the cap.
+    for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
+        let _ = get_or_compile_regex(&format!("cachefill{i}[a-z]+"), "");
+    }
+    let std_len = REGEX_CACHE.with(|c| c.borrow().len());
+    assert!(
+        std_len <= REGEX_CACHE_MAX_ENTRIES,
+        "REGEX_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {std_len}"
+    );
+
+    // Flood the fancy cache as well (each pattern rejected by the std engine).
+    for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
+        let _ = get_or_compile_regex(&format!("(?<=fill{i})x"), "");
+    }
+    let fancy_len = FANCY_CACHE.with(|c| c.borrow().len());
+    assert!(
+        fancy_len <= REGEX_CACHE_MAX_ENTRIES,
+        "FANCY_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {fancy_len}"
+    );
+
+    // The pre-flood headers still execute correctly: their compiled programs
+    // are owned by the headers (leaked Arc refs), not borrowed from the
+    // now-cleared caches.
+    assert!(
+        js_regexp_test(re, make_string("xx needle42 yy")) != 0,
+        "std-engine header must keep matching after cache eviction"
+    );
+    assert!(
+        js_regexp_test(re, make_string("no match here")) == 0,
+        "std-engine header must keep REJECTING correctly after cache eviction"
+    );
+    assert!(
+        js_regexp_test(fancy, make_string("pre77")) != 0,
+        "fancy-fallback header must keep matching after cache eviction \
+         (header-resident fancy_ptr, not the cleared FANCY_CACHE)"
+    );
+    assert!(
+        js_regexp_test(fancy, make_string("nope77")) == 0,
+        "fancy-fallback header must keep rejecting after cache eviction"
+    );
+}

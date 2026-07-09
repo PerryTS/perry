@@ -1934,7 +1934,10 @@ pub extern "C" fn js_gc_collect() {
 /// forces the conservative native-stack scan (#4977); see `ManualGcScanGuard`.
 fn manual_gc_collect_now() {
     let _scan = super::roots::ManualGcScanGuard::force_full_scan();
-    crate::weakref::clear_pending_finalization_jobs();
+    // NOTE: pending finalization jobs from earlier AUTOMATIC cycles are NOT
+    // cleared here — each record enqueues exactly once (its pending flag is
+    // reset at enqueue time), so dropping the vec would lose those callbacks
+    // forever. The delivery below simply takes whatever is queued.
     // An explicit `gc()` runs a FULL mark-sweep rather than the generational
     // fast path. With gen-GC on (the default), `gc_collect_inner_with_trigger`
     // dispatches a MINOR cycle, whose sweep skips dead-old-block reclamation

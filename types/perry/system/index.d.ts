@@ -152,6 +152,45 @@ export function preferencesGet(key: string): string | number | undefined;
 export function preferencesSet(key: string, value: string | number): void;
 
 // ---------------------------------------------------------------------------
+// Haptics
+// ---------------------------------------------------------------------------
+
+/**
+ * The haptic effect vocabulary understood by `hapticPlay`. Semantic types
+ * (`"success"`, `"warning"`, `"error"`) map to the platform's notification
+ * haptics; intensity types (`"light"`, `"medium"`, `"heavy"`) to impact
+ * haptics; the rest to the closest platform equivalent (tick/click).
+ */
+export type HapticType =
+  | "success"
+  | "warning"
+  | "error"
+  | "light"
+  | "medium"
+  | "heavy"
+  | "click"
+  | "selection"
+  | "directionUp"
+  | "directionDown"
+  | "start"
+  | "stop";
+
+/**
+ * Play a haptic feedback effect. Maps to the platform's native haptic
+ * engine: `WKInterfaceDevice.playHaptic:` on watchOS, `UIFeedbackGenerator`
+ * on iOS, `VibrationEffect` on Android, `NSHapticFeedbackManager` (Force
+ * Touch trackpad) on macOS, and `navigator.vibrate` on the Web. No-op on
+ * platforms without a haptic engine (tvOS, visionOS, GTK4, Windows).
+ *
+ * ```ts
+ * import { hapticPlay } from "perry/system";
+ * hapticPlay("success"); // correct answer
+ * hapticPlay("error");   // wrong answer (double buzz)
+ * ```
+ */
+export function hapticPlay(type: HapticType): void;
+
+// ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
 

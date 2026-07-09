@@ -79,6 +79,41 @@ pub(super) fn scan_promise_all_states_mut(visitor: &mut crate::gc::RuntimeRootVi
     });
 }
 
+/// GC death hook: input promise `promise` died in a sweep — no settle can ever
+/// complete the combinator states keyed by it, so drop them and let the result
+/// machinery (result promise, results/state arrays) become collectible.
+/// 2026-07-09 GC audit, mirrors `PROMISE_CONTEXTS`.
+pub(super) fn remove_all_states_for_dead_promise(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    let key = promise as usize;
+    PROMISE_ALL_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        if !states.is_empty() {
+            states.retain(|(k, _)| *k != key);
+        }
+    });
+}
+
+/// Copied-minor from-space cleanup for `PROMISE_ALL_STATES` — see
+/// `cleanup_copied_minor_settle_listeners_for_gc` (`reactions.rs`).
+pub(super) fn cleanup_copied_minor_all_states_for_gc() {
+    use super::CopiedMinorPromiseKeyFate::*;
+    PROMISE_ALL_STATES.with(|states| {
+        states.borrow_mut().retain_mut(|(key, _)| {
+            match super::copied_minor_promise_key_fate(*key) {
+                Keep => true,
+                Rekey(new_key) => {
+                    *key = new_key;
+                    true
+                }
+                Drop => false,
+            }
+        });
+    });
+}
+
 /// Create a rejected promise with the given reason
 #[no_mangle]
 pub extern "C" fn js_promise_rejected(reason: f64) -> *mut Promise {

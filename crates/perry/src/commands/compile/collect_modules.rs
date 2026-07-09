@@ -1228,6 +1228,11 @@ fn collect_module_one(
                             | "networkStopOnChange"
                             | "appOnOpenUrl"
                             | "appGetLaunchUrl"
+                            // Haptics: perry_system_haptic_play lives in
+                            // the platform UI crates (WKInterfaceDevice /
+                            // UIFeedbackGenerator / VibrationEffect /
+                            // NSHapticFeedbackManager), not perry-stdlib.
+                            | "hapticPlay"
                     ),
                     // Namespace imports — opt in conservatively (covers
                     // `import * as system from "perry/system"; system.audioStartRecording()`).

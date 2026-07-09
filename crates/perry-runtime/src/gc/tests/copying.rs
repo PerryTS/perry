@@ -1,3 +1,4 @@
+mod promise_side_tables;
 mod survival_and_malloc;
 mod weak_semantics;
 use super::super::*;

@@ -958,9 +958,43 @@ pub extern "C" fn js_perf_clear_resource_timings() -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 
+/// Node default for the resource-timing buffer size
+/// (`performance.setResourceTimingBufferSize` unset).
+const RESOURCE_TIMING_BUFFER_DEFAULT: usize = 250;
+
+thread_local! {
+    /// 2026-07-09 GC audit wave 2: the setter used to be a no-op and the
+    /// timeline had NO cap, so per-request `markResourceTiming` leaked
+    /// entries (plus their materialized entry objects, GC-rooted via
+    /// `object_bits`) forever. Node caps 'resource' entries at 250 by
+    /// default and drops new ones when the buffer is full.
+    static RESOURCE_TIMING_BUFFER_SIZE: Cell<usize> =
+        const { Cell::new(RESOURCE_TIMING_BUFFER_DEFAULT) };
+}
+
 #[no_mangle]
-pub extern "C" fn js_perf_set_resource_timing_buffer_size(_n: f64) -> f64 {
+pub extern "C" fn js_perf_set_resource_timing_buffer_size(n: f64) -> f64 {
+    // WebIDL unsigned long conversion, saturating at 0 for junk input.
+    let size = if n.is_finite() && n > 0.0 {
+        n.floor().min(u32::MAX as f64) as usize
+    } else {
+        0
+    };
+    RESOURCE_TIMING_BUFFER_SIZE.with(|cell| cell.set(size));
     f64::from_bits(JSValue::undefined().bits())
+}
+
+/// True when another 'resource' entry fits in the timeline buffer.
+fn resource_timing_buffer_has_room() -> bool {
+    let cap = RESOURCE_TIMING_BUFFER_SIZE.with(|cell| cell.get());
+    PERF_ENTRIES.with(|store| {
+        store
+            .borrow()
+            .iter()
+            .filter(|entry| entry.entry_type == ENTRY_TYPE_RESOURCE)
+            .count()
+            < cap
+    })
 }
 
 #[no_mangle]
@@ -999,7 +1033,12 @@ pub extern "C" fn js_perf_mark_resource_timing(
         let obj = entry_to_object(&entry);
         entry.object_bits = obj.to_bits();
         notify_observers(&entry);
-        PERF_ENTRIES.with(|store| store.borrow_mut().push(entry));
+        // Timeline insertion honors the resource-timing buffer cap (observers
+        // above still see the entry, matching Node: a full buffer only stops
+        // timeline accumulation, not observer delivery).
+        if resource_timing_buffer_has_room() {
+            PERF_ENTRIES.with(|store| store.borrow_mut().push(entry));
+        }
         obj
     }
 }

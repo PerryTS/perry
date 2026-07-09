@@ -212,6 +212,43 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
     });
 }
 
+/// Death pruning (2026-07-09 GC audit wave 2): the root scanner
+/// (`scan_exotic_expando_roots_mut`) strongly roots EVERY owner's values,
+/// dead owners included, so a dead Date/RegExp/Promise/Map/Set's expando
+/// value graph was immortal until the exact address happened to be handed
+/// to a new cell of the same kind (`expando_clear_on_alloc`). Prune entries
+/// whose owner cell is provably dead instead. `is_dead_owner` is one of the
+/// GC's deadness predicates (`gc::dead_owner`). Note: non-movable Date /
+/// Temporal cells that die PINNED are skipped by the predicate's pinned
+/// check and remain covered by the clear-on-alloc path.
+pub(crate) fn prune_dead_exotic_expando_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    if !expando_in_use() {
+        return;
+    }
+    EXOTIC_EXPANDO.with(|m| {
+        let mut map = m.borrow_mut();
+        if !map.is_empty() {
+            map.retain(|owner, _| !is_dead_owner(*owner));
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_exotic_expando_entry(addr: usize, key: &str, value_bits: u64) {
+    EXPANDO_IN_USE.with(|c| c.set(true));
+    EXOTIC_EXPANDO.with(|m| {
+        m.borrow_mut()
+            .entry(addr)
+            .or_default()
+            .push((key.to_string(), value_bits));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
+    EXOTIC_EXPANDO.with(|m| m.borrow().contains_key(&addr))
+}
+
 /// Rekey a movable exotic cell's expando entry after the GC relocates it from
 /// `old_addr` to `new_addr`. Date / RegExp / Temporal cells are non-movable so
 /// this never fires for them, but a `Promise` (`GC_TYPE_PROMISE`) is movable —

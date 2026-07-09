@@ -599,11 +599,16 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         GcMoveHookKind::ObjectOverflowFields => {
             crate::object::clear_overflow_for_ptr(user_ptr);
         }
+        GcMoveHookKind::ClosureDynamicProps => {
+            // 2026-07-09 GC audit wave 2: previously an explicit no-op — a
+            // dead closure's `fn.prop = …` / `setPrototypeOf(fn, …)` entries
+            // leaked and resurrected on a new closure at the reused address.
+            crate::closure::clear_closure_side_tables_for_dead_ptr(user_ptr);
+        }
         GcMoveHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr);
         }
         GcMoveHookKind::None
-        | GcMoveHookKind::ClosureDynamicProps
         | GcMoveHookKind::MapSideTables
         | GcMoveHookKind::SetSideTables
         | GcMoveHookKind::ExoticExpandoOwner => {}

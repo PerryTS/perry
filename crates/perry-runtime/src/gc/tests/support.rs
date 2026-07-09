@@ -182,7 +182,15 @@ impl Drop for IncrementalMarkBarrierTestGuard<'_> {
 
 static COPYING_NURSERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub(super) fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
+/// Serializes every test that mutates PROCESS-GLOBAL runtime side tables.
+/// The guards' state reset clears global stores (e.g. `CLOSURE_PROPS` via
+/// `test_clear_closure_side_tables`) from whatever test thread runs it, so a
+/// test elsewhere in the crate that populates-then-asserts one of those
+/// globals under only its own private lock races the reset (observed:
+/// `closure::dynamic_props::tests_1802` losing its parked entry mid-test).
+/// Such tests must take this lock too — reachable crate-wide as
+/// `crate::gc::global_side_table_test_lock()`.
+pub(crate) fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
     COPYING_NURSERY_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

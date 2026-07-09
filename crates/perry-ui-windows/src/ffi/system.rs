@@ -78,6 +78,12 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
     system::preferences_get(key_ptr as *const u8)
 }
 
+/// perry/system hapticPlay — documented no-op: desktop Windows has no
+/// haptic engine (the API contract is "no-op on platforms without
+/// one", so no stub warning).
+#[no_mangle]
+pub extern "C" fn perry_system_haptic_play(_type_ptr: i64) {}
+
 /// Save a value to the keychain.
 #[no_mangle]
 pub extern "C" fn perry_system_keychain_save(key_ptr: i64, value_ptr: i64) {

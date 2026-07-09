@@ -24,6 +24,7 @@ pub mod checked_dispatch;
 pub mod combinators;
 pub mod microtasks;
 pub mod native_async;
+pub mod reactions;
 pub mod scanners;
 pub mod spec_combinators;
 pub mod subclass;
@@ -61,6 +62,7 @@ pub use native_async::{
     PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK, PERRY_NATIVE_ASYNC_THREAD_MAIN,
     PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
+pub(crate) use reactions::js_promise_attach_settle_listener;
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
 pub use spec_combinators::{
@@ -71,10 +73,9 @@ pub use spec_combinators::{
 pub use subclass::js_promise_subclass_init;
 pub(crate) use subclass::subclass_backing_promise;
 pub(crate) use then::{
-    box_promise_ptr, js_promise_attach_handlers, js_promise_attach_settle_listener,
-    mark_rejection_handled, promise_has_own_constructor, promise_has_own_property,
-    promise_proto_method, promise_prototype_catch_thunk, promise_prototype_finally_thunk,
-    promise_prototype_then_thunk,
+    box_promise_ptr, js_promise_attach_handlers, mark_rejection_handled,
+    promise_has_own_constructor, promise_has_own_property, promise_proto_method,
+    promise_prototype_catch_thunk, promise_prototype_finally_thunk, promise_prototype_then_thunk,
 };
 pub use then::{
     js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free,
@@ -779,43 +780,80 @@ pub(crate) fn clear_promise_context(promise: *mut Promise) {
     });
 }
 
+/// GC finalize hook (`GcFinalizeHookKind::PromiseCleanup`): a promise died in
+/// a sweep, so every side table keyed by its address must drop its entries —
+/// the async-context snapshot AND the settle-listener / overflow-reaction /
+/// Promise.all-state tables (2026-07-09 GC audit: those three had weak keys
+/// but strongly-rooted closures/result machinery pruned only at settle, so an
+/// abandoned pending promise leaked everything it captured forever).
 pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
+    reactions::remove_settle_listeners_for_dead_promise(promise);
+    reactions::remove_overflow_reactions_for_dead_promise(promise);
+    combinators::remove_all_states_for_dead_promise(promise);
+}
+
+/// What the copied-minor from-space cleanup should do with a side-table entry
+/// keyed by promise address `key` after the copy/rewrite passes ran.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CopiedMinorPromiseKeyFate {
+    /// Not a from-space promise (already rewritten, old-gen, malloc'd, …).
+    Keep,
+    /// From-space promise that was evacuated but whose table key was not
+    /// rewritten by a scanner — rekey the entry to the to-space copy.
+    Rekey(usize),
+    /// Dead from-space promise — drop the entry.
+    Drop,
+}
+
+/// Classify a promise-address side-table key for the copied-minor cleanup.
+/// Shared by `PROMISE_CONTEXTS`, the settle-listener/overflow-reaction tables
+/// (`reactions.rs`) and `PROMISE_ALL_STATES` (`combinators.rs`).
+pub(crate) fn copied_minor_promise_key_fate(key: usize) -> CopiedMinorPromiseKeyFate {
+    let space = crate::arena::classify_heap_space(key);
+    let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
+        || space == crate::arena::active_survivor_space();
+    if !in_from_space || key < crate::gc::GC_HEADER_SIZE {
+        return CopiedMinorPromiseKeyFate::Keep;
+    }
+    unsafe {
+        let header =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_PROMISE
+            || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
+        {
+            return CopiedMinorPromiseKeyFate::Keep;
+        }
+        if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+            let new_key = crate::gc::forwarding_address(header) as usize;
+            if new_key != key {
+                return CopiedMinorPromiseKeyFate::Rekey(new_key);
+            }
+            return CopiedMinorPromiseKeyFate::Keep;
+        }
+    }
+    CopiedMinorPromiseKeyFate::Drop
 }
 
 pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
     PROMISE_CONTEXTS.with(|contexts| {
         let mut contexts = contexts.borrow_mut();
         let mut moved = Vec::new();
-        contexts.retain(|key, _| {
-            let space = crate::arena::classify_heap_space(key);
-            let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
-                || space == crate::arena::active_survivor_space();
-            if !in_from_space || key < crate::gc::GC_HEADER_SIZE {
-                return true;
+        contexts.retain(|key, _| match copied_minor_promise_key_fate(key) {
+            CopiedMinorPromiseKeyFate::Keep => true,
+            CopiedMinorPromiseKeyFate::Rekey(new_key) => {
+                moved.push((key, new_key));
+                true
             }
-            unsafe {
-                let header =
-                    (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*header).obj_type != crate::gc::GC_TYPE_PROMISE
-                    || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
-                {
-                    return true;
-                }
-                if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-                    let new_key = crate::gc::forwarding_address(header) as usize;
-                    if new_key != key {
-                        moved.push((key, new_key));
-                    }
-                    return true;
-                }
-            }
-            false
+            CopiedMinorPromiseKeyFate::Drop => false,
         });
         for (old_key, new_key) in moved {
             contexts.rekey(old_key, new_key);
         }
     });
+    reactions::cleanup_copied_minor_settle_listeners_for_gc();
+    reactions::cleanup_copied_minor_overflow_reactions_for_gc();
+    combinators::cleanup_copied_minor_all_states_for_gc();
 }
 
 pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
@@ -878,6 +916,12 @@ pub extern "C" fn js_microtasks_pending() -> i32 {
         return 1;
     }
     if crate::builtins::queued_microtasks_pending() {
+        return 1;
+    }
+    // Undelivered FinalizationRegistry cleanup jobs from an automatic GC
+    // cycle: keep the loop alive one more turn so the pump's
+    // `drain_pending_finalization_jobs` converts them into tick callbacks.
+    if crate::weakref::pending_finalization_jobs_count() > 0 {
         return 1;
     }
     TASK_QUEUE.with(|q| if q.borrow().is_empty() { 0 } else { 1 })

@@ -51,6 +51,12 @@ pub extern "C" fn perry_system_is_dark_mode() -> i64 {
     }
 }
 
+/// perry/system hapticPlay — documented no-op: Apple TV has no haptic
+/// engine reachable from the app process (the API contract is "no-op
+/// on platforms without one", so no stub warning).
+#[no_mangle]
+pub extern "C" fn perry_system_haptic_play(_type_ptr: i64) {}
+
 /// Set a preference value (UserDefaults).
 #[no_mangle]
 pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {

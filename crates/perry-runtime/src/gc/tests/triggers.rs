@@ -274,3 +274,35 @@ fn test_effective_arena_trigger_respects_armed_values() {
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(prev_trigger));
     GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
 }
+
+// #6184: the OS memory-pressure entry must run a real collection when the
+// thread is at a safe point, and must lower+arm the arena trigger.
+#[test]
+fn test_memory_pressure_collects_and_clamps_trigger() {
+    let _guard = GcTestIsolationGuard::new();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    use super::super::policy::{GC_NEXT_TRIGGER_BYTES, GC_TRIGGER_ARMED};
+
+    let prev_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
+    let prev_armed = GC_TRIGGER_ARMED.with(|c| c.get());
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX / 2));
+    GC_TRIGGER_ARMED.with(|c| c.set(false));
+
+    let count_before = GC_STATS.with(|s| s.borrow().collection_count);
+    let rc = js_gc_memory_pressure(2);
+    assert_eq!(rc, 2, "safe point must collect synchronously");
+    let count_after = GC_STATS.with(|s| s.borrow().collection_count);
+    assert!(count_after > count_before, "critical pressure must collect");
+    assert!(
+        GC_TRIGGER_ARMED.with(|c| c.get()),
+        "pressure must arm the lowered trigger"
+    );
+    assert!(
+        GC_NEXT_TRIGGER_BYTES.with(|c| c.get()) < usize::MAX / 2,
+        "pressure must pull the trigger down"
+    );
+
+    GC_NEXT_TRIGGER_BYTES.with(|c| c.set(prev_trigger));
+    GC_TRIGGER_ARMED.with(|c| c.set(prev_armed));
+    assert_eq!(js_gc_memory_pressure(0), 0);
+}

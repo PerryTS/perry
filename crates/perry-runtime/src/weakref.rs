@@ -2,7 +2,12 @@
 //!
 //! Weak target slots are skipped by the GC's strong-edge scanners. A pre-sweep
 //! weak pass clears collected WeakRef targets and records pending
-//! FinalizationRegistry cleanup jobs, which are queued after explicit `gc()`.
+//! FinalizationRegistry cleanup jobs after EVERY collection cycle (automatic
+//! or explicit `gc()` — 2026-07-09 GC audit: delivery used to be gated on the
+//! manual trigger, so ordinary servers never ran any cleanup callback). The
+//! recorded jobs are rooted (`scan_pending_finalization_jobs_roots_mut`) and
+//! delivered as nextTick jobs: immediately after an explicit `gc()`, or at the
+//! next microtask-pump drain for automatic cycles.
 
 use crate::array::{
     js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, js_array_set_f64,
@@ -324,10 +329,19 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
     match (*obj).class_id {
-        // Field 0 is the weak target for all three: WeakRef's referent, a
-        // finalization record's target, and a WeakMap/WeakSet entry's key.
-        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD | CLASS_ID_WEAK_ENTRY => {
+        // Field 0 is the weak target for both: WeakRef's referent and a
+        // WeakMap/WeakSet entry's key.
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY => {
             (*obj).field_count > 0 && slot == object_field_slot(obj, 0)
+        }
+        // A finalization record's target (field 0) AND its unregister token
+        // (field 1) are both weak. The spec's [[UnregisterToken]] is an
+        // ephemeron-style weak slot; tracing it strongly made the canonical
+        // `registry.register(obj, held, obj)` pin the target immortal
+        // (2026-07-09 GC audit).
+        CLASS_ID_FINALIZATION_RECORD => {
+            ((*obj).field_count > 0 && slot == object_field_slot(obj, 0))
+                || ((*obj).field_count > 1 && slot == object_field_slot(obj, 1))
         }
         _ => false,
     }
@@ -441,8 +455,11 @@ fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader
 }
 
 /// Register a (target, held value, optional token) triple. Returns undefined.
-/// The record's target slot is weak; token and held are traced strongly so
-/// `unregister(token)` and eventual cleanup delivery remain deterministic.
+/// The record's target AND token slots are weak (spec: [[UnregisterToken]] is
+/// held weakly); only the held value is traced strongly so cleanup delivery
+/// remains deterministic. A collected token simply makes a later
+/// `unregister(token)` miss, which is spec-correct — the caller can no longer
+/// produce that token value anyway.
 #[no_mangle]
 pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, token: f64) -> f64 {
     if !is_valid_weak_target(target) {
@@ -556,8 +573,25 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     }
 }
 
-pub(crate) fn clear_pending_finalization_jobs() {
-    PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow_mut().clear());
+/// Number of recorded-but-undelivered FinalizationRegistry cleanup jobs on
+/// this thread. Non-zero between a collection's weak pass and the next
+/// delivery point (explicit-`gc()` tail or microtask-pump drain).
+pub(crate) fn pending_finalization_jobs_count() -> usize {
+    PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow().len())
+}
+
+/// Microtask-pump drain: convert jobs recorded by AUTOMATIC collection cycles
+/// into nextTick callback invocations. Returns the number of jobs delivered so
+/// the pump can count them as work. The jobs vec is `mem::take`n by the
+/// delivery, so a manual `gc()` that already delivered leaves nothing here
+/// (no double-delivery), and re-entrant pump drains are safe.
+pub(crate) fn drain_pending_finalization_jobs() -> i32 {
+    let pending = pending_finalization_jobs_count();
+    if pending == 0 {
+        return 0;
+    }
+    queue_pending_finalization_callbacks_after_gc();
+    pending as i32
 }
 
 pub(crate) fn scan_pending_finalization_jobs_roots_mut(
@@ -675,6 +709,14 @@ unsafe fn process_finreg_record_after_mark(
     if collected {
         write_object_field_bits_raw(record, FINREG_RECORD_TARGET_FIELD, TAG_UNDEFINED);
         write_object_field_bits_raw(record, FINREG_RECORD_PENDING_FIELD, TAG_TRUE);
+    }
+    // The unregister token is a weak slot too (see `is_weak_target_trace_slot`):
+    // tombstone it when its referent died so `unregister(deadToken)` misses and
+    // the record can't resurrect the token graph. Independent of the target —
+    // spec: clearing [[UnregisterToken]] does not cancel the registration.
+    let token_bits = object_field_bits(record, FINREG_RECORD_TOKEN_FIELD);
+    if weak_target_should_clear(token_bits, valid_ptrs, minor_only) {
+        write_object_field_bits_raw(record, FINREG_RECORD_TOKEN_FIELD, TAG_UNDEFINED);
     }
 
     if enqueue_callbacks && (pending_bits == TAG_TRUE || collected) {
