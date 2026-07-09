@@ -115,6 +115,69 @@ pub extern "C" fn js_typed_array_sort_default(ta: *mut TypedArrayHeader) -> *mut
     }
 }
 
+/// Invoke a typed-array sort comparator on two raw BigInt64/BigUint64 lanes.
+/// Each lane is boxed as a fresh GC BigInt ONLY for the duration of this one
+/// call, and each box is rooted in a scope: the second box's allocation (and
+/// the comparator body itself) can trigger a GC that would otherwise sweep —
+/// or move — the first while its pointer sits in a bare Rust local.
+unsafe fn bigint_lane_compare(
+    comparator: *const ClosureHeader,
+    a_bits: u64,
+    b_bits: u64,
+    signed: bool,
+) -> std::cmp::Ordering {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let box_lane = |bits: u64| -> f64 {
+        if signed {
+            crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(bits as i64) as i64)
+        } else {
+            crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(bits) as i64)
+        }
+    };
+    let a_handle = scope.root_nanbox_f64(box_lane(a_bits));
+    let b_handle = scope.root_nanbox_f64(box_lane(b_bits));
+    let r = crate::closure::js_closure_call2(
+        comparator,
+        a_handle.get_nanbox_f64(),
+        b_handle.get_nanbox_f64(),
+    );
+    if r < 0.0 {
+        std::cmp::Ordering::Less
+    } else if r > 0.0 {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
+/// Comparator-sorted copy of a BigInt64/BigUint64 array's raw 64-bit lanes.
+/// The lanes live in an OWNED Rust buffer for the whole sort — no boxed
+/// BigInt pointers (the old code parked a `Vec<f64>` full of unrooted boxes
+/// across every comparator call) and no pointer into the typed-array storage
+/// are held across user code; each compare boxes its two operands lazily,
+/// mirroring the raw-lane special case the default no-comparator sort already
+/// had. The comparator closure itself is re-derived from a rooted handle per
+/// call (a comparator-triggered GC can relocate its own closure header).
+unsafe fn sorted_bigint_lanes(
+    ta: *const TypedArrayHeader,
+    len: usize,
+    signed: bool,
+    comparator: *const ClosureHeader,
+) -> Vec<u64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cmp_handle = scope.root_raw_const_ptr(comparator);
+    let mut lanes: Vec<u64> = std::slice::from_raw_parts(data_ptr(ta) as *const u64, len).to_vec();
+    lanes.sort_by(|&a, &b| {
+        bigint_lane_compare(
+            cmp_handle.get_raw_const_ptr::<ClosureHeader>(),
+            a,
+            b,
+            signed,
+        )
+    });
+    lanes
+}
+
 /// `ta.sort(cmp)` — in-place sort with comparator. Issue #654.
 #[no_mangle]
 pub extern "C" fn js_typed_array_sort_with_comparator(
@@ -134,6 +197,23 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
         if len <= 1 {
             return ta_clean;
         }
+        let kind = (*ta_clean).kind;
+        if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+            // Sort the raw lanes with lazy per-compare boxing; the receiver is
+            // rooted so the write-back targets its CURRENT address even when a
+            // comparator-triggered GC relocated it.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let ta_handle = scope.root_raw_mut_ptr(ta_clean);
+            let lanes = sorted_bigint_lanes(ta_clean, len, kind == KIND_BIGINT64, comparator);
+            let ta_cur = ta_handle.get_raw_mut_ptr::<TypedArrayHeader>();
+            let base = data_ptr_mut(ta_cur) as *mut u64;
+            for (i, bits) in lanes.into_iter().enumerate() {
+                *base.add(i) = bits;
+            }
+            return ta_cur;
+        }
+        // Non-BigInt kinds: `load_at` yields plain numeric f64s (no heap
+        // pointers), so the owned buffer is GC-inert by construction.
         let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta_clean, i)).collect();
         buf.sort_by(|a, b| {
             let r = crate::closure::js_closure_call2(comparator, *a, *b);
@@ -191,6 +271,20 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
     unsafe {
         let kind = (*ta).kind;
         let len = (*ta).length as usize;
+        if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+            // Copy the raw lanes out FIRST (owned buffer), sort with lazy
+            // per-compare boxing (no unrooted BigInt boxes parked across
+            // comparator calls), then allocate the result only after all
+            // user code has run.
+            let lanes = sorted_bigint_lanes(ta, len, kind == KIND_BIGINT64, comparator);
+            let out = typed_array_alloc(kind, len as u32);
+            let base = data_ptr_mut(out) as *mut u64;
+            for (i, bits) in lanes.into_iter().enumerate() {
+                *base.add(i) = bits;
+            }
+            return out;
+        }
+        // Non-BigInt kinds: plain numeric f64s — the owned buffer is GC-inert.
         let mut buf: Vec<f64> = (0..len).map(|i| load_at(ta, i)).collect();
         buf.sort_by(|a, b| {
             let r = crate::closure::js_closure_call2(comparator, *a, *b);

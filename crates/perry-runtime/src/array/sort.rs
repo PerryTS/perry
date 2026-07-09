@@ -2,7 +2,6 @@
 //! receivers (index accessors, sparse storage, inherited prototype elements).
 use super::*;
 use crate::closure::{js_closure_call2, ClosureHeader};
-use std::ptr;
 
 // ---------------------------------------------------------------------------
 // SortCompare helpers shared by the dense fast paths, the exotic spec path,
@@ -25,23 +24,26 @@ impl ComparatorCall {
         }
     }
 
-    /// Raw `Call(comparator, undefined, « a, b »)`.
-    #[inline(always)]
-    fn call_raw(&self, a: f64, b: f64) -> f64 {
-        match self.direct {
-            Some(f) => f(self.comparator, a, b),
-            None => js_closure_call2(self.comparator, a, b),
-        }
-    }
-
     /// ECMA-262 `CompareArrayElements` numeric result: `ToNumber(Call(...))`
     /// with NaN → +0. A plain finite/±inf f64 result skips the coercion; any
     /// NaN-boxed value (boolean, string, object with `valueOf`, undefined)
     /// goes through real ToNumber (firing user `valueOf`, throwing on
     /// BigInt/Symbol per spec).
+    ///
+    /// Takes an explicitly re-derived closure header rather than using the
+    /// one cached in `self`: the sorting engines root the comparator in a
+    /// `RuntimeHandleScope` and pass the CURRENT address here after every
+    /// user-code window — a comparator that allocates can trigger a moving
+    /// minor GC that relocates its own closure header, and the raw pointer
+    /// cached in `self.comparator` then points at from-space. `direct` stays
+    /// valid: it is a static code address resolved from the closure's shape,
+    /// which relocation does not change.
     #[inline(always)]
-    pub(crate) fn compare(&self, a: f64, b: f64) -> f64 {
-        let r = self.call_raw(a, b);
+    pub(crate) fn compare_at(&self, comparator: *const ClosureHeader, a: f64, b: f64) -> f64 {
+        let r = match self.direct {
+            Some(f) => f(comparator, a, b),
+            None => js_closure_call2(comparator, a, b),
+        };
         if r == r {
             return r;
         }
@@ -77,126 +79,220 @@ fn is_undefined_bits(bits: u64) -> bool {
     bits == crate::value::TAG_UNDEFINED
 }
 
-/// Stable bottom-up merge sort over a raw f64 buffer pair using `le(a, b)`
-/// ("a sorts at-or-before b"). Tolerant of an inconsistent user comparator
-/// (never panics, unlike `slice::sort_by` which detects total-order
-/// violations). `src` and `dst` must each hold `n` elements; the sorted run
-/// is guaranteed to end up back in `src`'s buffer.
-///
-/// SAFETY: caller keeps both buffers alive (and GC-visible when the values
-/// are NaN-boxed pointers and `le` can allocate — see the rooted temp-array
-/// usage in the spec path).
-unsafe fn stable_merge_sort_raw(
-    src0: *mut f64,
-    dst0: *mut f64,
+/// TimSort-style hybrid threshold shared by the sorting engines below:
+/// insertion sort for runs of at most this many elements, bottom-up merges
+/// above it.
+const INSERTION_THRESHOLD: usize = 32;
+
+/// GC-rooted view of an array's inline element storage. The header pointer
+/// lives in a `RuntimeHandleScope` slot (marked AND rewritten by a moving
+/// collection), and the element base is re-derived from the CURRENT header
+/// address on every access. A comparator — or an accessor fired by the spec
+/// ops — is user code: it can allocate → trigger a minor GC → the array is
+/// swept (bare Rust locals are invisible without a conservative stack scan,
+/// which production does not run) or moved (alloc-point minors can be moving
+/// under the evacuation policy), and any hoisted `*mut f64` then reads or
+/// writes from-space garbage. Mirrors the PR #5981 `RootedIterArray` pattern
+/// in `iter_methods.rs`.
+pub(crate) struct RootedArrayElems<'s> {
+    handle: crate::gc::RuntimeHandle<'s>,
+}
+
+impl<'s> RootedArrayElems<'s> {
+    pub(crate) fn new(scope: &'s crate::gc::RuntimeHandleScope, arr: *mut ArrayHeader) -> Self {
+        Self {
+            handle: scope.root_raw_mut_ptr(arr),
+        }
+    }
+
+    /// The CURRENT (post-any-GC) header address.
+    #[inline(always)]
+    pub(crate) fn arr(&self) -> *mut ArrayHeader {
+        self.handle.get_raw_mut_ptr::<ArrayHeader>()
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn get(&self, index: usize) -> f64 {
+        let arr = self.arr();
+        *((arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64).add(index)
+    }
+
+    /// Barriered store (`note_array_slot`): keeps the layout side-table and
+    /// the remembered set coherent even when the array is tenured mid-sort.
+    #[inline(always)]
+    pub(crate) unsafe fn set(&self, index: usize, value: f64) {
+        note_array_slot(self.arr(), index, value.to_bits());
+    }
+}
+
+/// In-place insertion sort of `vals[start..end]` under `le(a, b)` ("a sorts
+/// at-or-before b"). Swap-based: the moving key is never parked in a Rust
+/// local across a comparator call, so the authoritative element bits always
+/// live in the rooted array and get rewritten in place by a moving GC.
+unsafe fn insertion_sort_rooted(
+    vals: &RootedArrayElems<'_>,
+    start: usize,
+    end: usize,
+    le: &mut impl FnMut(f64, f64) -> bool,
+) {
+    for i in (start + 1)..end {
+        let mut j = i;
+        while j > start {
+            // `le` is user code — both operands are re-read AFTER it returns
+            // (their slots were rewritten in place if the array moved).
+            if le(vals.get(j - 1), vals.get(j)) {
+                break;
+            }
+            let prev = vals.get(j - 1);
+            let cur = vals.get(j);
+            vals.set(j - 1, cur);
+            vals.set(j, prev);
+            j -= 1;
+        }
+    }
+}
+
+/// Stable bottom-up merge sort over TWO rooted element buffers: `data` holds
+/// the values, `scratch` is the ping-pong buffer, and runs of `start_width`
+/// are assumed already sorted. Tolerant of an inconsistent user comparator
+/// (never panics, unlike `slice::sort_by`). Every element access re-derives
+/// the buffer base from its rooted handle and re-reads the winning element
+/// AFTER each comparator call — the authoritative bits always live in one of
+/// the two GC-visible arrays, never in an unrooted Rust buffer. (The #6076
+/// merge engine ping-ponged through a bare `Vec<f64>`: after the first src/dst
+/// swap the authoritative bits lived in that Vec, and a moving minor during a
+/// comparator call left pre-move addresses in the published result.)
+unsafe fn stable_merge_sort_rooted(
+    data: &RootedArrayElems<'_>,
+    scratch: &RootedArrayElems<'_>,
     n: usize,
+    start_width: usize,
     mut le: impl FnMut(f64, f64) -> bool,
 ) {
     if n <= 1 {
         return;
     }
-    let mut src = src0;
-    let mut dst = dst0;
-    let mut width = 1usize;
+    let mut in_data = true; // which buffer currently holds the runs
+    let mut width = start_width.max(1);
     while width < n {
-        let mut i = 0;
+        let (src, dst) = if in_data {
+            (data, scratch)
+        } else {
+            (scratch, data)
+        };
+        let mut i = 0usize;
         while i < n {
             let left = i;
             let mid = (i + width).min(n);
             let right = (i + 2 * width).min(n);
             let (mut l, mut r, mut k) = (left, mid, left);
-            // GC_STORE_AUDIT(STACK): merge writes target caller-rooted scratch buffers.
             while l < mid && r < right {
-                if le(*src.add(l), *src.add(r)) {
-                    *dst.add(k) = *src.add(l);
+                if le(src.get(l), src.get(r)) {
+                    dst.set(k, src.get(l));
                     l += 1;
                 } else {
-                    *dst.add(k) = *src.add(r);
+                    dst.set(k, src.get(r));
                     r += 1;
                 }
                 k += 1;
             }
-            // GC_STORE_AUDIT(STACK): tail copies target caller-rooted scratch buffers.
             while l < mid {
-                *dst.add(k) = *src.add(l);
+                dst.set(k, src.get(l));
                 l += 1;
                 k += 1;
             }
-            // GC_STORE_AUDIT(STACK): tail copies target caller-rooted scratch buffers.
             while r < right {
-                *dst.add(k) = *src.add(r);
+                dst.set(k, src.get(r));
                 r += 1;
                 k += 1;
             }
             i += 2 * width;
         }
-        std::mem::swap(&mut src, &mut dst);
+        in_data = !in_data;
         width *= 2;
     }
-    if src != src0 {
-        // GC_STORE_AUDIT(STACK): final copy between the two caller-rooted buffers.
-        ptr::copy_nonoverlapping(src, src0, n);
+    if !in_data {
+        // Final runs landed in scratch — copy back (no user code here).
+        for i in 0..n {
+            data.set(i, scratch.get(i));
+        }
     }
 }
 
-/// Sort `defined` (no holes / no undefined) per `SortCompare`: with the user
-/// comparator when present, else the default ToString lexicographic order.
-/// The default path materializes each key once (eager), matching the previous
-/// behavior; `String` keys make the Rust sort total (never panics).
-fn sort_defined_values(defined: &mut [f64], scratch: *mut f64, cmp: Option<ComparatorCall>) {
-    let n = defined.len();
+/// Comparator sort of `data[0..n]` (hybrid insertion + merge) with the
+/// comparator header re-derived from `cmp_handle` before every call.
+unsafe fn sort_comparator_rooted(
+    data: &RootedArrayElems<'_>,
+    scratch: &RootedArrayElems<'_>,
+    n: usize,
+    c: &ComparatorCall,
+    cmp_handle: &crate::gc::RuntimeHandle<'_>,
+) {
+    let mut le = |a: f64, b: f64| -> bool {
+        c.compare_at(cmp_handle.get_raw_const_ptr::<ClosureHeader>(), a, b) <= 0.0
+    };
+    // Phase 1: insertion-sort each small run in place.
+    let mut run_start = 0usize;
+    while run_start < n {
+        let run_end = (run_start + INSERTION_THRESHOLD).min(n);
+        insertion_sort_rooted(data, run_start, run_end, &mut le);
+        run_start = run_end;
+    }
+    // Phase 2: bottom-up merges, ping-ponging between the two rooted buffers.
+    stable_merge_sort_rooted(data, scratch, n, INSERTION_THRESHOLD, le);
+}
+
+/// Default (no-comparator) SortCompare over a rooted buffer: ToString each
+/// element (user `toString`/`valueOf` can run — and can sweep or move the
+/// buffer), sort a rank permutation on the owned `String` keys (GC-inert,
+/// total order — never panics), then apply the permutation. Element bits are
+/// only ever read fresh from the rooted array after the last user code.
+unsafe fn sort_default_rooted(vals: &RootedArrayElems<'_>, n: usize) {
     if n <= 1 {
         return;
     }
-    match cmp {
-        Some(c) => unsafe {
-            stable_merge_sort_raw(defined.as_mut_ptr(), scratch, n, |a, b| {
-                c.compare(a, b) <= 0.0
-            });
-        },
-        None => {
-            let mut pairs: Vec<(String, f64)> = Vec::with_capacity(n);
-            for &v in defined.iter() {
-                pairs.push((sort_key_string(v), v));
-            }
-            pairs.sort_by(|a, b| crate::string::utf16_cmp_bytes(a.0.as_bytes(), b.0.as_bytes()));
-            for (i, (_, v)) in pairs.into_iter().enumerate() {
-                defined[i] = v;
-            }
-        }
+    let mut keys: Vec<String> = Vec::with_capacity(n);
+    for i in 0..n {
+        keys.push(sort_key_string(vals.get(i)));
+    }
+    let mut order: Vec<u32> = (0..n as u32).collect();
+    order.sort_by(|&a, &b| {
+        crate::string::utf16_cmp_bytes(keys[a as usize].as_bytes(), keys[b as usize].as_bytes())
+    });
+    // No user code below — a plain snapshot Vec is safe for the permutation.
+    let snapshot: Vec<f64> = (0..n).map(|i| vals.get(i)).collect();
+    for (i, &src) in order.iter().enumerate() {
+        vals.set(i, snapshot[src as usize]);
     }
 }
 
-/// Sort `count` values held in the element buffer of a GC-rooted array (the
-/// caller keeps the array pointer on its stack). The scratch buffer is a
-/// second rooted array so every value stays GC-visible across comparator
-/// calls. Used by the exotic spec path and the generic array-like engine.
+/// Sort the first `count` element slots of `temp` (a dense collection array
+/// with no holes / no undefined) per `SortCompare`: with the user comparator
+/// when present, else the default ToString lexicographic order. `temp` is
+/// rooted here for the duration — the caller's raw pointer may be STALE on
+/// return whenever a comparator / ToString moved the array, so the current
+/// header is returned; callers must either switch to it or hold their own
+/// rooted handle. Used by the exotic spec path and the generic array-like
+/// engine.
 pub(crate) unsafe fn sort_rooted_values(
-    elems: *mut f64,
+    temp: *mut ArrayHeader,
     count: usize,
     cmp: Option<ComparatorCall>,
-) {
+) -> *mut ArrayHeader {
     if count <= 1 {
-        return;
+        return temp;
     }
-    let scratch = js_array_alloc_with_length(count as u32);
-    let scratch_elems = (scratch as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let data = RootedArrayElems::new(&scope, temp);
     match cmp {
         Some(c) => {
-            stable_merge_sort_raw(elems, scratch_elems, count, |a, b| c.compare(a, b) <= 0.0);
+            let cmp_handle = scope.root_raw_const_ptr(c.comparator);
+            let scratch = RootedArrayElems::new(&scope, js_array_alloc_with_length(count as u32));
+            sort_comparator_rooted(&data, &scratch, count, &c, &cmp_handle);
         }
-        None => {
-            let mut defined: Vec<f64> = Vec::with_capacity(count);
-            for i in 0..count {
-                defined.push(*elems.add(i));
-            }
-            sort_defined_values(&mut defined, scratch_elems, None);
-            for (i, v) in defined.into_iter().enumerate() {
-                // GC_STORE_AUDIT(BARRIERED): caller rebuilds the rooted array's layout.
-                ptr::write(elems.add(i), v);
-            }
-        }
+        None => sort_default_rooted(&data, count),
     }
+    data.arr()
 }
 
 // ---------------------------------------------------------------------------
@@ -242,10 +338,15 @@ fn object_prototype_numeric_keys() -> Vec<u32> {
     }
     let mut keys = Vec::new();
     unsafe {
-        let len = (*arr).length as usize;
-        let elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        // Root the freshly-built names array: `sort_key_string` can allocate
+        // (ToString of a non-string key), and a GC at that allocation point
+        // would sweep — or move — the otherwise-unreferenced array while the
+        // loop still reads its elements.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let names = RootedArrayElems::new(&scope, arr as *mut ArrayHeader);
+        let len = (*names.arr()).length as usize;
         for i in 0..len {
-            let s = sort_key_string(*elems.add(i));
+            let s = sort_key_string(names.get(i));
             if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
                 if let Ok(k) = s.parse::<u32>() {
                     keys.push(k);
@@ -298,28 +399,45 @@ pub(crate) fn object_prototype_has_index_prop(index: u32) -> bool {
 /// accessor there, OrdinarySet walks the chain and invokes that SETTER with
 /// the array as receiver (test262 sort/precise-prototype-accessors) — a plain
 /// `js_array_set_f64_extend` would create an own data slot instead.
+///
+/// The receiver travels as a rooted handle (updated in place when
+/// `js_array_set_f64_extend` reallocates it, or when a setter-triggered GC
+/// moves it), and `value` is rooted for the duration: the prototype probe
+/// above the write can allocate, and a moving minor at that point would
+/// otherwise leave `value` holding a pre-move address.
 unsafe fn sort_spec_set(
-    arr: *mut ArrayHeader,
+    arr_handle: &crate::gc::RuntimeHandle<'_>,
     index: u32,
     value: f64,
     objproto_keys: &[u32],
-) -> *mut ArrayHeader {
-    if objproto_keys.contains(&index) && !crate::array::array_has_own_index(arr, index) {
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    if objproto_keys.contains(&index)
+        && !crate::array::array_has_own_index(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), index)
+    {
         if let Some(proto) = object_prototype_value() {
             let addr = (proto.to_bits() & crate::value::POINTER_MASK) as usize;
             if let Some(acc) = crate::object::get_accessor_descriptor(addr, &index.to_string()) {
                 if acc.set != 0 {
                     crate::object::invoke_accessor_setter(
                         acc.set,
-                        crate::value::js_nanbox_pointer(arr as i64),
-                        value,
+                        crate::value::js_nanbox_pointer(
+                            arr_handle.get_raw_mut_ptr::<ArrayHeader>() as i64,
+                        ),
+                        value_handle.get_nanbox_f64(),
                     );
                 }
-                return arr;
+                return;
             }
         }
     }
-    js_array_set_f64_extend(arr, index, value)
+    let updated = js_array_set_f64_extend(
+        arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+        index,
+        value_handle.get_nanbox_f64(),
+    );
+    arr_handle.set_raw_mut_ptr(updated);
 }
 
 // ---------------------------------------------------------------------------
@@ -337,58 +455,66 @@ unsafe fn array_sort_spec_path(
 ) -> *mut ArrayHeader {
     let len = (*arr).length;
 
-    // Collect present elements into a GC-rooted temp array (stack-local
-    // pointer keeps it alive under the conservative scan; its element buffer
-    // keeps accessor-produced values alive across comparator calls — a plain
-    // Rust Vec would not be traced).
-    let temp = js_array_alloc_with_length(len);
-    let temp_elems = (temp as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    // Root the receiver BEFORE the temp allocation below (which can trigger
+    // GC) and re-derive it after every spec op — [[HasProperty]]/[[Get]]/
+    // [[Set]] fire user accessors that can allocate, sweeping or moving it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+
+    // Collect present elements into a GC-rooted temp array whose element
+    // buffer keeps accessor-produced values alive — and CURRENT — across
+    // comparator calls (a plain Rust Vec is invisible to the collector).
+    let temp = RootedArrayElems::new(&scope, js_array_alloc_with_length(len));
     let mut count = 0usize;
     let mut undef_count = 0usize;
     for j in 0..len {
-        let (present, value) = if crate::array::array_spec_has_index(arr, j) {
-            (true, crate::array::array_spec_get(arr, j))
-        } else if objproto_keys.contains(&j) {
-            (true, object_prototype_index_get(j))
-        } else {
-            (false, 0.0)
-        };
+        let (present, value) =
+            if crate::array::array_spec_has_index(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), j) {
+                (
+                    true,
+                    crate::array::array_spec_get(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), j),
+                )
+            } else if objproto_keys.contains(&j) {
+                (true, object_prototype_index_get(j))
+            } else {
+                (false, 0.0)
+            };
         if present {
             if is_undefined_bits(value.to_bits()) {
                 undef_count += 1;
             } else {
-                // GC_STORE_AUDIT(BARRIERED): temp collection array is rebuilt below.
-                ptr::write(temp_elems.add(count), value);
+                temp.set(count, value);
                 count += 1;
             }
         }
     }
-    (*temp).length = count as u32;
-    rebuild_array_layout(temp);
+    (*temp.arr()).length = count as u32;
+    rebuild_array_layout(temp.arr());
     let item_count = count + undef_count;
 
     // Sort the defined values; the scratch buffer is a second rooted array.
-    sort_rooted_values(temp_elems, count, cmp);
-    rebuild_array_layout(temp);
+    let _ = sort_rooted_values(temp.arr(), count, cmp);
 
     // Write back via [[Set]] (fires index setters / honors attrs), then
     // [[Delete]] the trailing [itemCount, len) range — restoring sparseness.
-    let mut cur = arr;
+    // The receiver handle is updated in place by `sort_spec_set`, and the
+    // sorted value is re-read from the rooted temp AFTER the previous
+    // element's (possibly user-code-running) write.
     for j in 0..count {
-        cur = sort_spec_set(cur, j as u32, *temp_elems.add(j), objproto_keys);
+        sort_spec_set(&arr_handle, j as u32, temp.get(j), objproto_keys);
     }
     for j in count..item_count {
-        cur = sort_spec_set(
-            cur,
+        sort_spec_set(
+            &arr_handle,
             j as u32,
             f64::from_bits(crate::value::TAG_UNDEFINED),
             objproto_keys,
         );
     }
     for j in item_count..len as usize {
-        crate::array::js_array_delete(cur, j as u32);
+        crate::array::js_array_delete(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), j as u32);
     }
-    cur
+    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Whether the dense raw-store sort would diverge from the spec protocol for
@@ -546,7 +672,13 @@ unsafe fn sort_array_receiver(
     arr: *mut ArrayHeader,
     cmp: Option<ComparatorCall>,
 ) -> *mut ArrayHeader {
+    // Root the receiver up front: every branch below can run user code
+    // (comparator, ToString, prototype accessors) or allocate before touching
+    // it again, and a bare Rust local is invisible to the collector.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
     let objproto_keys = object_prototype_numeric_keys();
+    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     if sort_needs_spec_path(arr, &objproto_keys) {
         return array_sort_spec_path(arr, cmp, &objproto_keys);
     }
@@ -571,36 +703,44 @@ unsafe fn sort_array_receiver(
         }
     }
     if has_special {
-        // Gather defined (non-hole, non-undefined) elements; tally the
-        // undefined and hole counts to re-emit as a trailing suffix.
-        let mut defined: Vec<f64> = Vec::with_capacity(length);
+        // Gather defined (non-hole, non-undefined) elements into a rooted
+        // collection array; tally the undefined and hole counts to re-emit as
+        // a trailing suffix. (A Rust Vec held the defined values before — a
+        // moving minor during a comparator / ToString call rewrote the array
+        // storage but left pre-move addresses in the Vec's copies.)
+        let temp = RootedArrayElems::new(&scope, js_array_alloc_with_length(length as u32));
+        let mut count = 0usize;
         let mut undef_count = 0usize;
         let mut hole_count = 0usize;
-        for i in 0..length {
-            let v = *elements_ptr.add(i);
-            let bits = v.to_bits();
-            if bits == crate::value::TAG_HOLE {
-                hole_count += 1;
-            } else if is_undefined_bits(bits) {
-                undef_count += 1;
-            } else {
-                defined.push(v);
+        {
+            // Re-derive after the temp allocation above (which can GC).
+            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            for i in 0..length {
+                let v = *elements_ptr.add(i);
+                let bits = v.to_bits();
+                if bits == crate::value::TAG_HOLE {
+                    hole_count += 1;
+                } else if is_undefined_bits(bits) {
+                    undef_count += 1;
+                } else {
+                    temp.set(count, v);
+                    count += 1;
+                }
             }
         }
-        // All defined values remain reachable through the (unmodified) array
-        // storage until the write-back below, so the Vec scratch is safe.
-        let n = defined.len();
-        if n > 1 {
-            let mut buf: Vec<f64> = vec![0.0; n];
-            sort_defined_values(&mut defined, buf.as_mut_ptr(), cmp);
-        }
-        // Write back: sorted defined values, then `undefined` ×N, then
-        // holes ×N — restoring the array's exotic sparseness.
+        (*temp.arr()).length = count as u32;
+        rebuild_array_layout(temp.arr());
+        let _ = sort_rooted_values(temp.arr(), count, cmp);
+        // Write back (no user code below): sorted defined values, then
+        // `undefined` ×N, then holes ×N — restoring the exotic sparseness.
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
         mark_array_layout_unknown(arr);
         let mut idx = 0usize;
         // GC_STORE_AUDIT(BARRIERED): write-back is included in the rebuild below.
-        for &v in &defined {
-            *elements_ptr.add(idx) = v;
+        for i in 0..count {
+            *elements_ptr.add(idx) = temp.get(i);
             idx += 1;
         }
         // GC_STORE_AUDIT(POINTER_FREE): undefined/hole suffix has no child pointer;
@@ -619,157 +759,46 @@ unsafe fn sort_array_receiver(
     }
 
     let Some(c) = cmp else {
-        // Dense all-defined default sort: materialize each element's string
-        // key once, sort stably on the keys, write back.
-        let mut pairs: Vec<(String, f64)> = Vec::with_capacity(length);
-        for i in 0..length {
-            let val = *elements_ptr.add(i);
-            pairs.push((sort_key_string(val), val));
-        }
-        pairs.sort_by(|a, b| crate::string::utf16_cmp_bytes(a.0.as_bytes(), b.0.as_bytes()));
-        mark_array_layout_unknown(arr);
-        for (i, (_, val)) in pairs.into_iter().enumerate() {
-            // GC_STORE_AUDIT(BARRIERED): default sort writes are followed by layout/barrier rebuild.
-            *elements_ptr.add(i) = val;
-        }
-        rebuild_array_layout(arr);
-        return arr;
+        // Dense all-defined default sort: rank-permutation on owned string
+        // keys over the rooted receiver — a user `toString` can allocate and
+        // sweep/move the array mid-key-materialization, so element bits are
+        // only ever read fresh from the rooted handle. A throwing `toString`
+        // unwinds during the key pass, leaving the elements untouched.
+        let vals = RootedArrayElems::new(&scope, arr);
+        sort_default_rooted(&vals, length);
+        return vals.arr();
     };
 
     // #6076: sort a GC-rooted COPY of the elements and publish it back only
-    // after the comparator sort SUCCEEDS. A throwing comparator therefore leaves
-    // the receiver's elements intact (an in-place sort corrupts them), and the
-    // rooted temp keeps every value GC-visible across comparator allocations (a
-    // bare Vec would go stale under a moving GC). `elements_ptr` is rebound to
-    // the temp for the in-place sort below; the receiver storage is untouched
-    // until the write-back.
-    let recv_elems = elements_ptr;
-    let temp = js_array_alloc_with_length(length as u32);
-    let elements_ptr = (temp as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    for i in 0..length {
-        // GC_STORE_AUDIT(INIT): initializing the freshly-allocated temp from the
-        // receiver before it is published; no allocation (hence no GC) occurs
-        // between js_array_alloc_with_length above and rebuild_array_layout below.
-        ptr::write(elements_ptr.add(i), *recv_elems.add(i));
-    }
-    (*temp).length = length as u32;
-    rebuild_array_layout(temp);
-
-    // TimSort-style hybrid: insertion sort for small runs, merge sort for large arrays.
-    // Stable, O(n log n) worst case. Insertion sort is used for runs <= 32 elements
-    // because it has lower overhead for small inputs.
-    const INSERTION_THRESHOLD: usize = 32;
-
-    if length <= INSERTION_THRESHOLD {
-        // Insertion sort for small arrays
-        for i in 1..length {
-            let key = *elements_ptr.add(i);
-            let mut j = i as isize - 1;
-            while j >= 0 {
-                if c.compare(*elements_ptr.add(j as usize), key) > 0.0 {
-                    // GC_STORE_AUDIT(BARRIERED): insertion-sort shift is included in the rebuild below.
-                    ptr::write(
-                        elements_ptr.add((j + 1) as usize),
-                        *elements_ptr.add(j as usize),
-                    );
-                    j -= 1;
-                } else {
-                    break;
-                }
-            }
-            // GC_STORE_AUDIT(BARRIERED): insertion-sort key write is included in the rebuild below.
-            ptr::write(elements_ptr.add((j + 1) as usize), key);
-        }
-    } else {
-        // Bottom-up merge sort for large arrays — O(n log n) stable sort
-        let mut buf: Vec<f64> = Vec::with_capacity(length);
-        buf.set_len(length);
-
-        // Phase 1: Sort small runs with insertion sort
-        let mut run_start = 0;
-        while run_start < length {
-            let run_end = (run_start + INSERTION_THRESHOLD).min(length);
-            for i in (run_start + 1)..run_end {
-                let key = *elements_ptr.add(i);
-                let mut j = i as isize - 1;
-                while j >= run_start as isize {
-                    if c.compare(*elements_ptr.add(j as usize), key) > 0.0 {
-                        // GC_STORE_AUDIT(BARRIERED): large-sort insertion shift is included in the rebuild below.
-                        ptr::write(
-                            elements_ptr.add((j + 1) as usize),
-                            *elements_ptr.add(j as usize),
-                        );
-                        j -= 1;
-                    } else {
-                        break;
-                    }
-                }
-                // GC_STORE_AUDIT(BARRIERED): large-sort insertion key write is included in the rebuild below.
-                ptr::write(elements_ptr.add((j + 1) as usize), key);
-            }
-            run_start = run_end;
-        }
-
-        // Phase 2: Merge runs, doubling width each pass. Values are always
-        // present in either the array storage or the scratch buffer; the
-        // array itself roots them for the conservative scan.
-        let mut width = INSERTION_THRESHOLD;
-        let mut src = elements_ptr;
-        let mut dst = buf.as_mut_ptr();
-
-        while width < length {
-            let mut i = 0;
-            while i < length {
-                let left = i;
-                let mid = (i + width).min(length);
-                let right = (i + 2 * width).min(length);
-
-                let (mut l, mut r, mut k) = (left, mid, left);
-                // GC_STORE_AUDIT(STACK): merge destination is a function-local Vec buffer, not GC heap.
-                while l < mid && r < right {
-                    if c.compare(*src.add(l), *src.add(r)) <= 0.0 {
-                        *dst.add(k) = *src.add(l);
-                        l += 1;
-                    } else {
-                        *dst.add(k) = *src.add(r);
-                        r += 1;
-                    }
-                    k += 1;
-                }
-                // GC_STORE_AUDIT(STACK): remaining left run copies into the temporary merge buffer.
-                while l < mid {
-                    *dst.add(k) = *src.add(l);
-                    l += 1;
-                    k += 1;
-                }
-                // GC_STORE_AUDIT(STACK): remaining right run copies into the temporary merge buffer.
-                while r < right {
-                    *dst.add(k) = *src.add(r);
-                    r += 1;
-                    k += 1;
-                }
-
-                i += 2 * width;
-            }
-            // Swap src and dst for next pass
-            std::mem::swap(&mut src, &mut dst);
-            width *= 2;
-        }
-
-        // If final result is in buf, copy back to the temp element buffer.
-        if src != elements_ptr {
-            // GC_STORE_AUDIT(BARRIERED): merge buffer copyback is followed by layout/barrier rebuild.
-            ptr::copy_nonoverlapping(src, elements_ptr, length);
+    // after the comparator sort SUCCEEDS. A throwing comparator therefore
+    // leaves the receiver's elements intact (an in-place sort corrupts them).
+    // Both the copy AND the merge scratch are rooted arrays: the merge engine
+    // ping-pongs between two GC-visible buffers, so a moving minor during a
+    // comparator call rewrites whichever buffer holds the authoritative bits
+    // (the previous engine's bare `Vec<f64>` kept pre-move addresses and
+    // published them back into the receiver).
+    let cmp_handle = scope.root_raw_const_ptr(c.comparator);
+    let temp = RootedArrayElems::new(&scope, js_array_alloc_with_length(length as u32));
+    {
+        // Re-derive after the temp allocation above (which can GC).
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let recv_elems = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        for i in 0..length {
+            temp.set(i, *recv_elems.add(i));
         }
     }
+    rebuild_array_layout(temp.arr());
+    let scratch = RootedArrayElems::new(&scope, js_array_alloc_with_length(length as u32));
+    sort_comparator_rooted(&temp, &scratch, length, &c, &cmp_handle);
 
     // The comparator sort completed without a throw — publish the sorted temp
-    // back into the receiver. A throwing comparator unwinds before reaching here,
-    // so `arr` keeps its original elements (#6076).
+    // back into the receiver (no user code below; both sides re-derived).
+    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    let recv_elems = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
     mark_array_layout_unknown(arr);
     for i in 0..length {
         // GC_STORE_AUDIT(BARRIERED): dense write-back is followed by the rebuild below.
-        *recv_elems.add(i) = *elements_ptr.add(i);
+        *recv_elems.add(i) = temp.get(i);
     }
     rebuild_array_layout(arr);
 

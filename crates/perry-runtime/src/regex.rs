@@ -54,7 +54,7 @@ pub use escape::js_regexp_escape;
 #[cfg(feature = "regex-engine")]
 use exec_array::{
     byte_index_to_char_index, char_index_to_byte, set_exec_array_groups, set_exec_array_indices,
-    set_exec_array_indices_fancy, set_exec_array_metadata,
+    set_exec_array_indices_fancy, set_exec_array_metadata, set_exec_array_metadata_value,
 };
 #[cfg(feature = "regex-engine")]
 use grammar::{
