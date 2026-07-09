@@ -125,12 +125,38 @@ pub extern "C" fn js_regexp_compile_value(
         ));
     }
 
+    // The header OWNS leaked `Arc` references to its compiled program(s)
+    // (mirrors `js_regexp_new`), so the capped `REGEX_CACHE`/`FANCY_CACHE`
+    // (see `REGEX_CACHE_MAX_ENTRIES`) can evict without invalidating this
+    // receiver. Refresh `fancy_ptr` too — it must track the NEW pattern, not
+    // the one the receiver was constructed with.
     let arc = get_or_compile_regex(pattern_str, flags_str);
-    let regex_ptr = Arc::as_ptr(&arc) as *mut Regex;
+    let regex_ptr = Arc::into_raw(arc) as *mut Regex;
+    let fancy_ptr: *const () = super::FANCY_CACHE.with(|fc| {
+        match fc
+            .borrow()
+            .get(&(pattern_str.to_string(), flags_str.to_string()))
+        {
+            Some(arc) => Arc::into_raw(arc.clone()) as *const (),
+            None => std::ptr::null(),
+        }
+    });
     let canonical_flags_ptr = js_string_from_str(flags_str);
     let pattern_ptr = js_string_from_str(pattern_str);
     unsafe {
+        let old_regex_ptr = (*re).regex_ptr;
+        let old_fancy_ptr = (*re).fancy_ptr;
         (*re).regex_ptr = regex_ptr;
+        (*re).fancy_ptr = fancy_ptr;
+        // Release the receiver's PREVIOUS owned references now that the new
+        // ones are installed (recompiling the same pattern is fine: the fresh
+        // `into_raw` reference above keeps the shared program alive).
+        if !old_regex_ptr.is_null() {
+            drop(Arc::from_raw(old_regex_ptr as *const Regex));
+        }
+        if !old_fancy_ptr.is_null() {
+            drop(Arc::from_raw(old_fancy_ptr as *const fancy_regex::Regex));
+        }
         (*re).pattern_ptr = pattern_ptr;
         (*re).flags_ptr = canonical_flags_ptr;
         (*re).case_insensitive = flags_str.contains('i');

@@ -88,11 +88,13 @@ pub extern "C" fn js_regexp_exec(
         let search_str = &str_data[search_start_byte..];
 
         // Check if this regex has a fancy-regex fallback (lookbehind/lookahead).
-        let fancy_captures = FANCY_CACHE.with(|fc| {
-            let fc = fc.borrow();
-            let pat = string_as_str((*re).pattern_ptr);
-            let flags_str = string_as_str((*re).flags_ptr);
-            if let Some(fre) = fc.get(&(pat.to_string(), flags_str.to_string())) {
+        // Resolved via `lookup_fancy_regex` — the header-resident owned Arc
+        // first, the thread-local FANCY_CACHE second — so the capped cache
+        // (see `REGEX_CACHE_MAX_ENTRIES`) clearing between compile and exec
+        // cannot strand a live fancy regex on the never-matching std
+        // placeholder.
+        let fancy_captures = (|| {
+            if let Some(fre) = lookup_fancy_regex(re) {
                 if let Ok(Some(caps)) = fre.captures(search_str) {
                     let full = caps.get(0).unwrap();
                     // Sticky (`y`) requires the match to start exactly at
@@ -132,7 +134,7 @@ pub extern "C" fn js_regexp_exec(
                     // Extract named-capture groups through the fancy path so
                     // `/(?<=x)(?<y>\d+)/.exec(s).groups` works for patterns the
                     // `regex` crate can't compile.
-                    let groups_obj = build_fancy_groups(fre, &caps, &scope);
+                    let groups_obj = build_fancy_groups(&fre, &caps, &scope);
                     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups_obj);
                     set_exec_array_groups(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), groups_obj);
                     // Build indices array if `d` flag (hasIndices) is set
@@ -141,7 +143,7 @@ pub extern "C" fn js_regexp_exec(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                             str_data,
                             search_start_byte,
-                            fre,
+                            &fre,
                             &caps,
                         );
                     }
@@ -150,7 +152,7 @@ pub extern "C" fn js_regexp_exec(
                 return Some(ptr::null_mut()); // fancy-regex tried but no match
             }
             None // no fancy fallback — use standard regex
-        });
+        })();
         if let Some(result) = fancy_captures {
             if result.is_null() {
                 if use_last_index {

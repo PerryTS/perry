@@ -915,6 +915,60 @@ pub(crate) fn test_clear_promise_scanner_roots() {
     super::combinators::SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
     super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
     super::then::PROMISE_OVERFLOW_REACTIONS.with(|reactions| reactions.borrow_mut().clear());
+    super::combinators::PROMISE_ALL_STATES.with(|states| states.borrow_mut().clear());
+}
+
+/// Test support for the GC death-cleanup tests (gc/tests): park one entry
+/// keyed by `promise` in each of the three leak-audited side tables —
+/// settle listeners, overflow reactions, Promise.all states.
+#[cfg(test)]
+pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
+    let key = promise as usize;
+    super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        listeners.borrow_mut().push((
+            key,
+            super::then::PromiseSettleListener {
+                on_fulfilled: std::ptr::null(),
+                on_rejected: std::ptr::null(),
+                context: capture_context(),
+            },
+        ));
+    });
+    super::then::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        reactions.borrow_mut().push((
+            key,
+            super::then::OverflowReaction {
+                on_fulfilled: std::ptr::null(),
+                on_rejected: std::ptr::null(),
+                next: std::ptr::null_mut(),
+                context: capture_context(),
+            },
+        ));
+    });
+    super::combinators::PROMISE_ALL_STATES.with(|states| {
+        states.borrow_mut().push((
+            key,
+            super::combinators::PromiseAllState {
+                result_promise: std::ptr::null_mut(),
+                results_arr: std::ptr::null_mut(),
+                state_arr: std::ptr::null_mut(),
+                index: 0,
+            },
+        ));
+    });
+}
+
+/// Test support: per-table entry counts keyed by `key` (a promise address) —
+/// (settle listeners, overflow reactions, Promise.all states).
+#[cfg(test)]
+pub(crate) fn test_promise_side_table_counts_for(key: usize) -> (usize, usize, usize) {
+    let listeners = super::then::PROMISE_SETTLE_LISTENERS
+        .with(|l| l.borrow().iter().filter(|(k, _)| *k == key).count());
+    let reactions = super::then::PROMISE_OVERFLOW_REACTIONS
+        .with(|r| r.borrow().iter().filter(|(k, _)| *k == key).count());
+    let states = super::combinators::PROMISE_ALL_STATES
+        .with(|s| s.borrow().iter().filter(|(k, _)| *k == key).count());
+    (listeners, reactions, states)
 }
 
 #[cfg(test)]

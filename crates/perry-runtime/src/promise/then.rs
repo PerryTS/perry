@@ -303,6 +303,41 @@ pub(super) fn scan_promise_settle_listeners_mut(visitor: &mut crate::gc::Runtime
     });
 }
 
+/// GC death hook: `promise` died in a sweep, so listeners parked against it
+/// can never fire — drop them so their strongly-rooted closures/contexts
+/// become collectible (2026-07-09 GC audit, mirrors `PROMISE_CONTEXTS`).
+pub(super) fn remove_settle_listeners_for_dead_promise(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    let key = promise as usize;
+    PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        let mut listeners = listeners.borrow_mut();
+        if !listeners.is_empty() {
+            listeners.retain(|(k, _)| *k != key);
+        }
+    });
+}
+
+/// Copied-minor from-space cleanup for the settle-listener table: drop entries
+/// keyed by dead from-space promises, rekey any the scanners missed. Order-
+/// preserving (`retain_mut`) so live listeners keep registration order.
+pub(super) fn cleanup_copied_minor_settle_listeners_for_gc() {
+    use super::CopiedMinorPromiseKeyFate::*;
+    PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        listeners
+            .borrow_mut()
+            .retain_mut(|(key, _)| match super::copied_minor_promise_key_fate(*key) {
+                Keep => true,
+                Rekey(new_key) => {
+                    *key = new_key;
+                    true
+                }
+                Drop => false,
+            });
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Multiple reactions per promise (PerformPromiseThen's [[PromiseFulfillReactions]]
 // / [[PromiseRejectReactions]] lists).
@@ -418,6 +453,42 @@ pub(super) fn scan_promise_overflow_reactions_mut(visitor: &mut crate::gc::Runti
             visitor.visit_raw_mut_ptr_slot(&mut reaction.next);
             scan_snapshot_roots_mut(&mut reaction.context, visitor);
         }
+    });
+}
+
+/// GC death hook: `promise` died in a sweep — its parked 2nd+ reactions can
+/// never replay, so drop them (their chained `next` promises and closures
+/// become collectible). FIFO order of OTHER promises' reactions is preserved
+/// (`retain`). 2026-07-09 GC audit, mirrors `PROMISE_CONTEXTS`.
+pub(super) fn remove_overflow_reactions_for_dead_promise(promise: *mut Promise) {
+    if promise.is_null() {
+        return;
+    }
+    let key = promise as usize;
+    PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        let mut reactions = reactions.borrow_mut();
+        if !reactions.is_empty() {
+            reactions.retain(|(k, _)| *k != key);
+        }
+    });
+}
+
+/// Copied-minor from-space cleanup for the overflow-reaction table — see
+/// `cleanup_copied_minor_settle_listeners_for_gc`. Order-preserving so live
+/// promises' reactions still replay in registration (FIFO) order.
+pub(super) fn cleanup_copied_minor_overflow_reactions_for_gc() {
+    use super::CopiedMinorPromiseKeyFate::*;
+    PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        reactions
+            .borrow_mut()
+            .retain_mut(|(key, _)| match super::copied_minor_promise_key_fate(*key) {
+                Keep => true,
+                Rekey(new_key) => {
+                    *key = new_key;
+                    true
+                }
+                Drop => false,
+            });
     });
 }
 

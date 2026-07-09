@@ -238,6 +238,26 @@ pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fan
         .build()
 }
 
+/// Entry cap for `REGEX_CACHE`/`FANCY_CACHE` (2026-07-09 GC audit: one entry
+/// per distinct `(pattern, flags)` ever compiled, no cap of any kind, entries
+/// up to [`REGEX_SIZE_LIMIT`] — `new RegExp(userInput)` was an attacker-driven
+/// OOM). When an insert would exceed the cap the whole map is cleared — the
+/// `PARSE_KEY_CACHE` precedent: cheap, no LRU bookkeeping, recompilation is
+/// the fallback. Live `RegExpHeader`s are unaffected: each header OWNS a
+/// leaked `Arc` reference to its compiled program(s) (`regex_ptr`/`fancy_ptr`),
+/// so dropping the cache's references cannot free a program still in use.
+#[cfg(feature = "regex-engine")]
+const REGEX_CACHE_MAX_ENTRIES: usize = 512;
+
+/// Clear-on-overflow guard shared by both compiled-regex caches: make room
+/// for one more entry, wiping the map when it is at capacity.
+#[cfg(feature = "regex-engine")]
+fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
+    if cache.len() >= REGEX_CACHE_MAX_ENTRIES {
+        cache.clear();
+    }
+}
+
 #[cfg(feature = "regex-engine")]
 fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
     REGEX_CACHE.with(|cache| {
@@ -280,7 +300,9 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
                 // is handled in js_regexp_exec_fancy below.
                 FANCY_CACHE.with(|fc| {
                     if let Ok(fre) = build_fancy_regex(&regex_pattern) {
-                        fc.borrow_mut().insert(
+                        let mut fc = fc.borrow_mut();
+                        evict_regex_cache_if_full(&mut fc);
+                        fc.insert(
                             (pattern.to_string(), flags.to_string()),
                             std::sync::Arc::new(fre),
                         );
@@ -290,6 +312,7 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
             }
         };
         let arc = Arc::new(regex);
+        evict_regex_cache_if_full(&mut cache);
         cache.insert((pattern.to_string(), flags.to_string()), arc.clone());
         arc
     })
@@ -638,11 +661,14 @@ pub extern "C" fn js_regexp_new(
         }
     }
 
-    // Get or compile the regex from the cache. The returned Arc is stored
-    // in the cache indefinitely, so the raw pointer we extract stays valid
-    // for the lifetime of the process.
+    // Get or compile the regex from the cache. The header OWNS a leaked `Arc`
+    // reference (`Arc::into_raw`) to the compiled program — mirroring
+    // `fancy_ptr` below — so the pointer stays valid even after the capped
+    // `REGEX_CACHE` (see `REGEX_CACHE_MAX_ENTRIES`) evicts its own reference.
+    // Previously this borrowed `Arc::as_ptr` and relied on the cache never
+    // dropping an entry.
     let arc = get_or_compile_regex(pattern_str, flags_str);
-    let regex_ptr = Arc::as_ptr(&arc) as *mut Regex;
+    let regex_ptr = Arc::into_raw(arc) as *mut Regex;
 
     // Allocate the header via gc_malloc so it's tracked by the GC and gets
     // freed when no longer referenced. Previously this used raw alloc() and

@@ -1096,10 +1096,13 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     if crate::weakref::weak_target_holders_allocated() {
         let phase_start = trace_phase_start(trace);
         let valid_ptrs = build_valid_pointer_set();
+        // Enqueue FinalizationRegistry cleanup jobs on every trigger kind —
+        // see the matching WeakProcessing comment in cycle.rs (2026-07-09 GC
+        // audit: delivery was gated on the Manual trigger).
         crate::weakref::process_weak_targets_after_mark(
             &valid_ptrs,
             /* minor_only = */ true,
-            matches!(trigger_kind, GcTriggerKind::Manual),
+            /* enqueue_callbacks = */ true,
         );
         trace_phase_record(trace, "weak_processing", phase_start);
     }

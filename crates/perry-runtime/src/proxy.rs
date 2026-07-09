@@ -9,7 +9,9 @@
 //! `ProxyEntry`. The handle is returned NaN-boxed with POINTER_TAG by codegen.
 //! A handle ID below 0x1000 is used so callers can distinguish a "real proxy"
 //! from a raw heap pointer if needed. A revoked proxy has its `revoked` flag
-//! flipped; subsequent operations return an error NaN-boxed value.
+//! flipped AND its target/handler slots detached (nulled) so the wrapped
+//! object graphs can be collected; subsequent operations throw the
+//! revoked-proxy TypeError.
 //!
 //! We deliberately do NOT patch generic object.rs/field dispatch — Perry
 //! codegen rewrites known Proxy locals to ProxyGet/ProxySet/etc. variants at
@@ -55,11 +57,25 @@ pub use reflect::{
 };
 
 /// A single Proxy registry entry.
+///
+/// Revocation detaches: `js_proxy_revoke` stores 0 bits into `target` and
+/// `handler` (spec: [[ProxyTarget]]/[[ProxyHandler]] become null) so the
+/// wrapped graphs can die — `scan_proxy_roots_mut` otherwise strongly roots
+/// them for the life of the registry slot (2026-07-09 GC audit). No valid
+/// proxy target/handler is ever the all-zero-bits number `0.0` (both must be
+/// objects), so 0 bits is an unambiguous detached sentinel. Every trap path
+/// checks `revoked` before touching `target`/`handler`.
 #[repr(C)]
 pub struct ProxyEntry {
-    pub target: f64,  // NaN-boxed target value
-    pub handler: f64, // NaN-boxed handler object (raw f64 bits preserved)
+    pub target: f64,  // NaN-boxed target value; 0 bits once revoked
+    pub handler: f64, // NaN-boxed handler object (raw f64 bits preserved); 0 bits once revoked
     pub revoked: bool,
+    /// Whether the proxy's (possibly nested) [[ProxyTarget]] was callable at
+    /// creation. Per spec a proxy has a [[Call]] internal method iff its
+    /// target did AT CREATION, and `typeof` of a revoked proxy is unchanged —
+    /// so callability must be snapshotted, not recomputed from `target`
+    /// (which revocation nulls).
+    pub callable: bool,
 }
 
 thread_local! {
@@ -189,12 +205,30 @@ fn throw_proxy_non_object() -> ! {
     crate::exception::js_throw(boxed)
 }
 
+/// Creation-time callability snapshot for a proxy's target: a nested proxy
+/// contributes ITS creation-time snapshot (per spec, each proxy's [[Call]]
+/// presence is fixed when that proxy is created), anything else is asked
+/// directly.
+fn target_callable_at_creation(target: f64) -> bool {
+    match lookup(target) {
+        Some(id) => PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| e.callable)
+                .unwrap_or(false)
+        }),
+        None => crate::object::value_is_callable(target),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
     // #2846: validate both arguments are objects before allocating.
     if !proxy_arg_is_object(target) || !proxy_arg_is_object(handler) {
         throw_proxy_non_object();
     }
+    let callable = target_callable_at_creation(target);
     PROXIES.with(|p| {
         let mut v = p.borrow_mut();
         let id = v.len() as u64;
@@ -202,6 +236,7 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
             target,
             handler,
             revoked: false,
+            callable,
         })));
         let encoded = encode_proxy_id(id) as u64;
         f64::from_bits(POINTER_TAG | (encoded & POINTER_MASK))
@@ -209,13 +244,19 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
 }
 
 /// Revoke a proxy. Subsequent operations will return TAG_UNDEFINED or fire an
-/// exception where the compiler inserts one.
+/// exception where the compiler inserts one. Detaches the entry's
+/// target/handler (stores 0 bits — spec: [[ProxyTarget]]/[[ProxyHandler]]
+/// become null) so the graphs they root can be collected; every trap path
+/// throws the revoked-proxy TypeError off the `revoked` flag before reading
+/// either slot. Idempotent.
 #[no_mangle]
 pub extern "C" fn js_proxy_revoke(proxy_boxed: f64) {
     if let Some(id) = lookup(proxy_boxed) {
         PROXIES.with(|p| {
             if let Some(Some(entry)) = p.borrow_mut().get_mut(id as usize) {
                 entry.revoked = true;
+                entry.target = f64::from_bits(0);
+                entry.handler = f64::from_bits(0);
             }
         });
     }
@@ -267,29 +308,26 @@ pub(crate) fn is_array_proxy_step(value: f64) -> Option<f64> {
 
 /// Whether a Proxy value's (possibly nested) [[ProxyTarget]] is callable —
 /// the predicate behind `typeof proxyOfFn === "function"` and
-/// `Function.prototype.toString` accepting a proxy receiver. A revoked
-/// proxy's recorded target is retained, so callability survives revocation
-/// (per spec, `typeof` of a revoked proxy is unchanged).
+/// `Function.prototype.toString` accepting a proxy receiver. Reads the
+/// creation-time `callable` snapshot (which already resolved through nested
+/// proxies), so callability survives revocation (per spec, `typeof` of a
+/// revoked proxy is unchanged) even though revoke nulls the recorded target.
 pub(crate) fn proxy_wraps_callable(value: f64) -> bool {
-    let mut v = value;
-    for _ in 0..32 {
-        match lookup(v) {
-            Some(id) => {
-                v = PROXIES.with(|p| {
-                    p.borrow()
-                        .get(id as usize)
-                        .and_then(|o| o.as_ref())
-                        .map(|e| e.target)
-                        .unwrap_or(f64::from_bits(TAG_UNDEFINED))
-                });
-            }
-            None => return crate::object::value_is_callable(v),
-        }
+    match lookup(value) {
+        Some(id) => PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|o| o.as_ref())
+                .map(|e| e.callable)
+                .unwrap_or(false)
+        }),
+        None => crate::object::value_is_callable(value),
     }
-    false
 }
 
 /// Return the proxy's target (for Proxy.revocable.proxy revocation checks).
+/// A revoked proxy's target slot is detached (0 bits) — report it as
+/// `undefined`, the same "no target" convention non-proxies get.
 #[no_mangle]
 pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {
     if let Some(id) = lookup(proxy_boxed) {
@@ -298,6 +336,7 @@ pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {
                 .get(id as usize)
                 .and_then(|o| o.as_ref())
                 .map(|e| e.target)
+                .filter(|t| t.to_bits() != 0)
                 .unwrap_or(f64::from_bits(TAG_UNDEFINED))
         });
     }
@@ -305,6 +344,7 @@ pub extern "C" fn js_proxy_target(proxy_boxed: f64) -> f64 {
 }
 
 /// Return the proxy's handler for `util.inspect(..., { showProxy: true })`.
+/// A revoked proxy's handler slot is detached (0 bits) — report `undefined`.
 #[no_mangle]
 pub extern "C" fn js_proxy_handler(proxy_boxed: f64) -> f64 {
     if let Some(id) = lookup(proxy_boxed) {
@@ -313,6 +353,7 @@ pub extern "C" fn js_proxy_handler(proxy_boxed: f64) -> f64 {
                 .get(id as usize)
                 .and_then(|o| o.as_ref())
                 .map(|e| e.handler)
+                .filter(|h| h.to_bits() != 0)
                 .unwrap_or(f64::from_bits(TAG_UNDEFINED))
         });
     }
