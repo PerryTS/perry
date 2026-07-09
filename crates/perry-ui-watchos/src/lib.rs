@@ -1268,37 +1268,128 @@ pub extern "C" fn perry_system_share_url(_url_ptr: i64, _title_ptr: i64) {
     );
 }
 
-// #675 — App Group stubs on watchOS. WatchKit *does* support
-// `UserDefaults(suiteName:)` against the same App Group entitlement
-// as the iOS host, but the wiring is more complex; tracked as
-// #675 follow-up.
-#[no_mangle]
-pub extern "C" fn perry_system_app_group_set(_key_ptr: i64, _value_ptr: i64) {
+// #675 — App Group / cross-process shared storage on watchOS.
+//
+// WatchKit supports `UserDefaults(suiteName:)` against the App Group
+// container the standalone watch app shares with its WidgetKit
+// extension. The suite name is baked into `main()`'s prelude by the CLI
+// from `[watchos] app_group` in perry.toml (see
+// `perry-runtime::app_group::perry_app_group_init`), so widget targets
+// that declare the same `appGroup` can read the streak/due keys the app
+// mirrors here. When no suite is configured we emit a one-shot stub-warn
+// diagnostic naming the missing `[watchos] app_group` key so the widget's
+// empty reads have a clear explanation rather than a silent in-process map.
+//
+// The suite name is reached through the stable C-ABI accessor
+// `perry_app_group_suite_name` (mirroring perry-ui-ios / perry-ui-macos)
+// rather than the Rust-mangled `configured_suite_name()`, so the symbol
+// resolves even under the `geisterhand` feature where this UI lib and the
+// linked runtime can be built with divergent Cargo feature sets (#1311).
+//
+// ILP32 note: `NSUInteger` is 4 bytes on 32-bit-pointer arm64_32 watches
+// and 8 bytes on the 64-bit sim; the message-send arg/return types use
+// `usize` so the ABI stays correct on both.
+unsafe fn app_group_defaults_watchos() -> *mut objc2::runtime::AnyObject {
+    extern "C" {
+        fn perry_app_group_suite_name(out_len: *mut i32) -> *const u8;
+    }
+    let mut len: i32 = 0;
+    let ptr = perry_app_group_suite_name(&mut len as *mut i32);
+    if ptr.is_null() || len <= 0 {
+        return std::ptr::null_mut();
+    }
+    let slice = std::slice::from_raw_parts(ptr, len as usize);
+    let Ok(suite) = std::str::from_utf8(slice) else {
+        return std::ptr::null_mut();
+    };
+    let ns_suite = objc2_foundation::NSString::from_str(suite);
+    let Some(cls) = objc2::runtime::AnyClass::get(c"NSUserDefaults") else {
+        return std::ptr::null_mut();
+    };
+    let alloc: *mut objc2::runtime::AnyObject = objc2::msg_send![cls, alloc];
+    let defaults: *mut objc2::runtime::AnyObject =
+        objc2::msg_send![alloc, initWithSuiteName: &*ns_suite];
+    defaults
+}
+
+fn warn_app_group_not_configured_watchos(symbol: &'static str) {
     perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_app_group_set",
-        "watchOS App Group not implemented (#675 follow-up)",
+        symbol,
+        "App Group not configured. Add `[watchos] app_group = \"group.com.example.shared\"` to perry.toml (#675).",
         Some("#675"),
     );
 }
+
 #[no_mangle]
-pub extern "C" fn perry_system_app_group_get(_key_ptr: i64) -> i64 {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_app_group_get",
-        "watchOS App Group not implemented (#675 follow-up)",
-        Some("#675"),
-    );
+pub extern "C" fn perry_system_app_group_set(key_ptr: i64, value_ptr: i64) {
+    let key = str_from_header(key_ptr as *const u8);
+    let value = str_from_header(value_ptr as *const u8);
+    if key.is_empty() {
+        return;
+    }
+    unsafe {
+        let defaults = app_group_defaults_watchos();
+        if defaults.is_null() {
+            warn_app_group_not_configured_watchos("perry_system_app_group_set");
+            return;
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let ns_value = objc2_foundation::NSString::from_str(value);
+        let _: () = objc2::msg_send![defaults, setObject: &*ns_value, forKey: &*ns_key];
+        let _: () = objc2::msg_send![defaults, synchronize];
+    }
+}
+#[no_mangle]
+pub extern "C" fn perry_system_app_group_get(key_ptr: i64) -> i64 {
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     }
-    unsafe { js_string_from_bytes(std::ptr::null(), 0) }
+    let empty = || unsafe { js_string_from_bytes(std::ptr::null(), 0) };
+    let key = str_from_header(key_ptr as *const u8);
+    if key.is_empty() {
+        return empty();
+    }
+    unsafe {
+        let defaults = app_group_defaults_watchos();
+        if defaults.is_null() {
+            warn_app_group_not_configured_watchos("perry_system_app_group_get");
+            return empty();
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let value: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![defaults, stringForKey: &*ns_key];
+        if value.is_null() {
+            return empty();
+        }
+        let utf8_ptr: *const u8 = objc2::msg_send![value, UTF8String];
+        if utf8_ptr.is_null() {
+            return empty();
+        }
+        // NSUTF8StringEncoding = 4. `usize` keeps the NSUInteger arg/return
+        // 32-bit on arm64_32 (ILP32) and 64-bit on the sim.
+        let utf8_len: usize = objc2::msg_send![value, lengthOfBytesUsingEncoding: 4usize];
+        if utf8_len == 0 {
+            return empty();
+        }
+        js_string_from_bytes(utf8_ptr, utf8_len as i32)
+    }
 }
 #[no_mangle]
-pub extern "C" fn perry_system_app_group_delete(_key_ptr: i64) {
-    perry_runtime::stub_diag::perry_stub_warn(
-        "perry_system_app_group_delete",
-        "watchOS App Group not implemented (#675 follow-up)",
-        Some("#675"),
-    );
+pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
+    let key = str_from_header(key_ptr as *const u8);
+    if key.is_empty() {
+        return;
+    }
+    unsafe {
+        let defaults = app_group_defaults_watchos();
+        if defaults.is_null() {
+            warn_app_group_not_configured_watchos("perry_system_app_group_delete");
+            return;
+        }
+        let ns_key = objc2_foundation::NSString::from_str(key);
+        let _: () = objc2::msg_send![defaults, removeObjectForKey: &*ns_key];
+        let _: () = objc2::msg_send![defaults, synchronize];
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(_cb: f64) {}
