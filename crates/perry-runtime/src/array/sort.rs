@@ -636,7 +636,24 @@ unsafe fn sort_array_receiver(
         return arr;
     };
 
-    mark_array_layout_unknown(arr);
+    // #6076: sort a GC-rooted COPY of the elements and publish it back only
+    // after the comparator sort SUCCEEDS. A throwing comparator therefore leaves
+    // the receiver's elements intact (an in-place sort corrupts them), and the
+    // rooted temp keeps every value GC-visible across comparator allocations (a
+    // bare Vec would go stale under a moving GC). `elements_ptr` is rebound to
+    // the temp for the in-place sort below; the receiver storage is untouched
+    // until the write-back.
+    let recv_elems = elements_ptr;
+    let temp = js_array_alloc_with_length(length as u32);
+    let elements_ptr = (temp as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    for i in 0..length {
+        // GC_STORE_AUDIT(INIT): initializing the freshly-allocated temp from the
+        // receiver before it is published; no allocation (hence no GC) occurs
+        // between js_array_alloc_with_length above and rebuild_array_layout below.
+        ptr::write(elements_ptr.add(i), *recv_elems.add(i));
+    }
+    (*temp).length = length as u32;
+    rebuild_array_layout(temp);
 
     // TimSort-style hybrid: insertion sort for small runs, merge sort for large arrays.
     // Stable, O(n log n) worst case. Insertion sort is used for runs <= 32 elements
@@ -739,11 +756,20 @@ unsafe fn sort_array_receiver(
             width *= 2;
         }
 
-        // If final result is in buf, copy back to elements
+        // If final result is in buf, copy back to the temp element buffer.
         if src != elements_ptr {
             // GC_STORE_AUDIT(BARRIERED): merge buffer copyback is followed by layout/barrier rebuild.
             ptr::copy_nonoverlapping(src, elements_ptr, length);
         }
+    }
+
+    // The comparator sort completed without a throw — publish the sorted temp
+    // back into the receiver. A throwing comparator unwinds before reaching here,
+    // so `arr` keeps its original elements (#6076).
+    mark_array_layout_unknown(arr);
+    for i in 0..length {
+        // GC_STORE_AUDIT(BARRIERED): dense write-back is followed by the rebuild below.
+        *recv_elems.add(i) = *elements_ptr.add(i);
     }
     rebuild_array_layout(arr);
 
