@@ -1030,10 +1030,13 @@ fn module_hook_member(value: f64, name: &str) -> f64 {
 
 extern "C" fn module_hooks_deregister(closure: *const crate::closure::ClosureHeader) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as u64;
+    // 2026-07-09 GC audit wave 2: deregister used to only flip `active`,
+    // leaving the resolve/load closures strongly rooted by
+    // `scan_process_module_loader_roots_mut` forever. Every consumer
+    // filters on `active`, so removing the entry is observably identical —
+    // and actually releases the hook closures.
     MODULE_LOADER_HOOKS.with(|hooks| {
-        if let Some(entry) = hooks.borrow_mut().iter_mut().find(|entry| entry.id == id) {
-            entry.active = false;
-        }
+        hooks.borrow_mut().retain(|entry| entry.id != id);
     });
     module_undefined()
 }

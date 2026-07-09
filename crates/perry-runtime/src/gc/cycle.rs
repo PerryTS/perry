@@ -1194,11 +1194,14 @@ impl GcCycleState {
                 }
                 let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                 let minor_only = self.minor.is_some();
-                let enqueue_callbacks = matches!(self.trigger_kind, GcTriggerKind::Manual);
+                // Enqueue FinalizationRegistry cleanup jobs on EVERY cycle
+                // kind, not just Manual (2026-07-09 GC audit: callbacks only
+                // ever fired after an explicit `gc()`). Enqueue-once per
+                // record is guaranteed by the record's pending-flag reset;
+                // delivery happens at the explicit-`gc()` tail or the next
+                // microtask-pump drain (`drain_pending_finalization_jobs`).
                 crate::weakref::process_weak_targets_after_mark(
-                    valid_ptrs,
-                    minor_only,
-                    enqueue_callbacks,
+                    valid_ptrs, minor_only, /* enqueue_callbacks = */ true,
                 );
                 let next = if minor_only {
                     AtomicFinalizeSubphase::MinorPrelude
@@ -1570,10 +1573,9 @@ impl GcCycleState {
     fn publish_reclaim_outcome(&mut self) {
         let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
-            let mut stats = stats.borrow_mut();
-            stats.collection_count += 1;
-            stats.total_freed_bytes = stats.total_freed_bytes.saturating_add(self.freed_bytes);
-            stats.last_pause_us = elapsed_us;
+            stats
+                .borrow_mut()
+                .record_collection(self.freed_bytes, elapsed_us);
         });
 
         if let Some(minor) = self.minor.as_ref() {

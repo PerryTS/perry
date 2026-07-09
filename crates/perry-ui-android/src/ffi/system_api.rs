@@ -91,6 +91,13 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
     system::preferences_get(key_ptr as *const u8)
 }
 
+/// Play a haptic feedback effect (perry/system hapticPlay) —
+/// VibrationEffect.createPredefined on API 29+, vibrate(long) before.
+#[no_mangle]
+pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
+    system::haptic_play(type_ptr as *const u8);
+}
+
 #[no_mangle]
 pub extern "C" fn perry_system_keychain_save(key_ptr: i64, value_ptr: i64) {
     keychain::save(key_ptr as *const u8, value_ptr as *const u8);

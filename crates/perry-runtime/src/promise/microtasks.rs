@@ -109,6 +109,13 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
 
+    // FinalizationRegistry cleanup jobs recorded by AUTOMATIC collection
+    // cycles (the explicit-`gc()` path delivers its own immediately). This
+    // converts each job into a nextTick callback invocation, which the tick
+    // drain later in this same pump runs — matching the spec's "cleanup
+    // callbacks run as their own jobs" timing.
+    ran += crate::weakref::drain_pending_finalization_jobs();
+
     // Native async tokens settle only through the main-thread handoff path.
     ran += super::native_async::js_native_async_process_pending();
 

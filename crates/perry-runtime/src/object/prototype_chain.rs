@@ -139,6 +139,20 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
     Some(proto_bits)
 }
 
+/// Death pruning (2026-07-09 GC audit wave 2): entries survived owner death,
+/// so the recorded prototype object stayed strongly rooted forever and a
+/// fresh object at a recycled address inherited the dead owner's prototype
+/// (dangling/wrong `getPrototypeOf`, phantom inherited reads).
+/// `is_dead_owner` is one of the GC's deadness predicates (`gc::dead_owner`).
+pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return;
+    }
+    if let Ok(mut map) = get_object_prototypes().lock() {
+        map.retain(|owner, _| !is_dead_owner(*owner));
+    }
+}
+
 /// Migrate the side-table entry when the owner object is evacuated by a moving
 /// GC. Mirrors `closure_dynamic_props_owner_moved`.
 pub(crate) fn object_static_prototype_owner_moved(old_owner: usize, new_owner: usize) {

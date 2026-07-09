@@ -853,7 +853,10 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // a TLS-load + RefCell borrow + HashMap remove on a missing key)
     // into a single bool test per object. ~1.4 % leaf samples → 0 on
     // the empty-map path, ~80 ms saved on perf-comprehensive.
-    let overflow_active = !crate::object::overflow_fields_is_empty();
+    // Wave 2: the same gate now also covers the closure dynamic-props
+    // dead-payload arm — checked once per sweep, not per object.
+    let overflow_active = !crate::object::overflow_fields_is_empty()
+        || crate::closure::closure_dynamic_side_tables_nonempty();
 
     crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
         let header = header_ptr as *mut GcHeader;
@@ -1153,6 +1156,11 @@ impl IncrementalSweepState {
     /// their registry/side-table entries are pruned when the owner is
     /// genuinely dead (full traces only; they are all tenured old residents).
     pub(super) fn with_dead_collection_finalize(mut self, full_trace: bool) -> Self {
+        // 2026-07-09 GC audit wave 2: death-prune the object-address-keyed
+        // side tables in the same marks-fresh window. Cheap (one flag-check
+        // walk over tables the root scanners already walk every cycle), so
+        // it runs eagerly here rather than budget-chunked.
+        super::dead_owner::prune_dead_owner_side_tables_post_trace(full_trace);
         self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
         self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
@@ -1279,7 +1287,10 @@ impl ArenaSweepObjectsState {
             block_has_live: vec![false; n_blocks],
             resettable_general_n: crate::arena::general_block_count(),
             old_block_start: crate::arena::longlived_end(),
-            overflow_active: !crate::object::overflow_fields_is_empty(),
+            // Wave 2: also arms the closure dynamic-props dead-payload arm
+            // (one gate check per sweep-state build, not per object).
+            overflow_active: !crate::object::overflow_fields_is_empty()
+                || crate::closure::closure_dynamic_side_tables_nonempty(),
             do_age_bump,
             reclaim_dead_old_blocks,
             freed_bytes: 0,

@@ -15,6 +15,14 @@ thread_local! {
 pub fn app_create(_title_ptr: *const u8, _width: f64, _height: f64) -> i64 {
     // On watchOS, the app is created by the SwiftUI @main struct.
     // We just return a handle to satisfy the API contract.
+    //
+    // Ask for notification authorization once here (mirrors iOS, which prompts
+    // from `PerryAppDelegate.didFinishLaunching`). This runs during
+    // `perry_main_init` on the Swift main thread, before the WatchKit run loop
+    // starts, so the permission dialog fires at launch rather than on the first
+    // `notificationSend`. Keeping it Rust-side avoids editing the fixed
+    // PerryWatchApp.swift template.
+    crate::notifications::request_authorization();
     1
 }
 

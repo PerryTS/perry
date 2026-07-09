@@ -684,24 +684,47 @@ fn close_fd_for_state(state: &mut StreamState) {
 }
 
 fn maybe_close_stream(id: usize, force: bool) {
-    let should_emit_close = STREAM_REGISTRY.with(|registry| {
+    // `Some(emit_close)` when the stream transitioned to closed in THIS call.
+    let closed_now = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
         let Some(state) = registry.get_mut(&id) else {
-            return false;
+            return None;
         };
         if state.closed {
-            return false;
+            return None;
         }
         if !force && !state.auto_close {
-            return false;
+            return None;
         }
         close_fd_for_state(state);
         update_common_props(state);
-        state.emit_close
+        Some(state.emit_close)
     });
+    let Some(should_emit_close) = closed_now else {
+        return;
+    };
     if should_emit_close {
         emit_event0(id, "close");
     }
+    // 2026-07-09 GC audit wave 2: the state is terminal — the fd is closed
+    // and 'close' has been delivered — but the registry record previously
+    // kept EVERY GC-rooted value alive forever (listener closures, pipe
+    // targets, and the stream object itself via `object_value`, all visited
+    // by `scan_fs_stream_roots_mut`). Release them now so the stream's
+    // object graph becomes collectable. The slim record itself stays so the
+    // late-listener replay arms in `stream_on_common`
+    // ('error'/'end'/'finish'/'close') keep answering from the terminal
+    // booleans + `error_msg`; those read no rooted values.
+    STREAM_REGISTRY.with(|registry| {
+        if let Some(state) = registry.borrow_mut().get_mut(&id) {
+            state.listeners.clear();
+            state.pipes.clear();
+            state.object_value = f64::from_bits(crate::value::TAG_UNDEFINED);
+            if let FdOwner::FileHandle(handle) = &mut state.owner {
+                *handle = f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+        }
+    });
 }
 
 fn normalize_write_args(chunk: f64, encoding: f64, cb: f64) -> (Option<f64>, Option<f64>) {

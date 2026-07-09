@@ -72,6 +72,10 @@ pub(crate) fn error_side_tables_clear_dead(user_ptr: usize) {
     ERROR_USER_PROPS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
+    // 2026-07-09 GC audit wave 2: the DOMException brand set is address-
+    // keyed with zero removals — clean it up with the rest of the error
+    // side tables (latch-gated no-op unless a DOMException was ever made).
+    crate::event_target::dom_exception_error_clear_dead(user_ptr);
 }
 
 /// Copied-minor counterpart of the finalize hook (the fast path sweeps
