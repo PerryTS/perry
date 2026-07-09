@@ -530,3 +530,11 @@ pub extern "C" fn js_gc_stats(
 
 #[cfg(test)]
 mod tests;
+
+/// Crate-wide handle on the GC test-isolation lock — see
+/// `tests::support::copying_nursery_isolation_lock`. Any test OUTSIDE the gc
+/// module that populates-then-asserts a process-global side table (e.g.
+/// `CLOSURE_PROPS`) must hold this, or the gc test guards' global state reset
+/// on a parallel test thread can wipe its entries mid-test.
+#[cfg(test)]
+pub(crate) use tests::support::copying_nursery_isolation_lock as global_side_table_test_lock;

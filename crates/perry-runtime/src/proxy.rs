@@ -1972,3 +1972,81 @@ pub(crate) fn scan_proxy_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn obj_value() -> f64 {
+        let obj = crate::object::js_object_alloc(0, 0);
+        f64::from_bits(POINTER_TAG | ((obj as u64) & POINTER_MASK))
+    }
+
+    /// 2026-07-09 GC audit (wave 2 batch A): revocation must DETACH — null the
+    /// registry entry's target/handler so `scan_proxy_roots_mut` stops rooting
+    /// the wrapped graphs — while `revoked` keeps gating every trap path.
+    #[test]
+    fn revoke_detaches_target_and_handler_slots() {
+        let target = obj_value();
+        let handler = obj_value();
+        let proxy = js_proxy_new(target, handler);
+
+        assert_eq!(js_proxy_is_revoked(proxy), 0);
+        assert_eq!(js_proxy_target(proxy).to_bits(), target.to_bits());
+        assert_eq!(js_proxy_handler(proxy).to_bits(), handler.to_bits());
+
+        js_proxy_revoke(proxy);
+        assert_eq!(js_proxy_is_revoked(proxy), 1);
+
+        let id = lookup(proxy).expect("revoked proxy stays a registered proxy");
+        let (target_bits, handler_bits) = PROXIES.with(|p| {
+            let v = p.borrow();
+            let entry = v[id as usize].as_ref().expect("entry present");
+            (entry.target.to_bits(), entry.handler.to_bits())
+        });
+        assert_eq!(target_bits, 0, "revoke must null [[ProxyTarget]]");
+        assert_eq!(handler_bits, 0, "revoke must null [[ProxyHandler]]");
+
+        // Detached slots are reported as `undefined`, never as raw 0.0.
+        assert_eq!(js_proxy_target(proxy).to_bits(), TAG_UNDEFINED);
+        assert_eq!(js_proxy_handler(proxy).to_bits(), TAG_UNDEFINED);
+
+        // Idempotent.
+        js_proxy_revoke(proxy);
+        assert_eq!(js_proxy_is_revoked(proxy), 1);
+    }
+
+    /// `typeof` of a revoked proxy is unchanged (spec: [[Call]] presence is
+    /// fixed at creation), so callability must survive target detachment —
+    /// including through a nested proxy whose inner proxy gets revoked.
+    #[test]
+    fn revoked_proxy_keeps_creation_callability() {
+        extern "C" fn dummy_fn(_closure: *const crate::closure::ClosureHeader) -> f64 {
+            f64::from_bits(TAG_UNDEFINED)
+        }
+        let f = crate::closure::js_closure_alloc(dummy_fn as *const u8, 0);
+        let f_val = f64::from_bits(POINTER_TAG | ((f as u64) & POINTER_MASK));
+        let handler = obj_value();
+
+        let callable_proxy = js_proxy_new(f_val, handler);
+        assert!(proxy_wraps_callable(callable_proxy));
+        let nested = js_proxy_new(callable_proxy, handler);
+        assert!(
+            proxy_wraps_callable(nested),
+            "nested proxy inherits the inner proxy's creation-time snapshot"
+        );
+
+        js_proxy_revoke(callable_proxy);
+        assert!(
+            proxy_wraps_callable(callable_proxy),
+            "typeof of a revoked proxy must be unchanged despite the nulled target"
+        );
+        assert!(proxy_wraps_callable(nested));
+
+        // And a plain-object proxy stays non-callable across revocation.
+        let plain_proxy = js_proxy_new(obj_value(), obj_value());
+        assert!(!proxy_wraps_callable(plain_proxy));
+        js_proxy_revoke(plain_proxy);
+        assert!(!proxy_wraps_callable(plain_proxy));
+    }
+}

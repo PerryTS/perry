@@ -325,16 +325,16 @@ pub(super) fn remove_settle_listeners_for_dead_promise(promise: *mut Promise) {
 pub(super) fn cleanup_copied_minor_settle_listeners_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        listeners
-            .borrow_mut()
-            .retain_mut(|(key, _)| match super::copied_minor_promise_key_fate(*key) {
+        listeners.borrow_mut().retain_mut(|(key, _)| {
+            match super::copied_minor_promise_key_fate(*key) {
                 Keep => true,
                 Rekey(new_key) => {
                     *key = new_key;
                     true
                 }
                 Drop => false,
-            });
+            }
+        });
     });
 }
 
@@ -479,16 +479,16 @@ pub(super) fn remove_overflow_reactions_for_dead_promise(promise: *mut Promise) 
 pub(super) fn cleanup_copied_minor_overflow_reactions_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        reactions
-            .borrow_mut()
-            .retain_mut(|(key, _)| match super::copied_minor_promise_key_fate(*key) {
+        reactions.borrow_mut().retain_mut(|(key, _)| {
+            match super::copied_minor_promise_key_fate(*key) {
                 Keep => true,
                 Rekey(new_key) => {
                     *key = new_key;
                     true
                 }
                 Drop => false,
-            });
+            }
+        });
     });
 }
 

@@ -101,16 +101,16 @@ pub(super) fn remove_all_states_for_dead_promise(promise: *mut Promise) {
 pub(super) fn cleanup_copied_minor_all_states_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_ALL_STATES.with(|states| {
-        states
-            .borrow_mut()
-            .retain_mut(|(key, _)| match super::copied_minor_promise_key_fate(*key) {
+        states.borrow_mut().retain_mut(|(key, _)| {
+            match super::copied_minor_promise_key_fate(*key) {
                 Keep => true,
                 Rekey(new_key) => {
                     *key = new_key;
                     true
                 }
                 Drop => false,
-            });
+            }
+        });
     });
 }
 

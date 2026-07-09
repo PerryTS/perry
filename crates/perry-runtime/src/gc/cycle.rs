@@ -1201,9 +1201,7 @@ impl GcCycleState {
                 // delivery happens at the explicit-`gc()` tail or the next
                 // microtask-pump drain (`drain_pending_finalization_jobs`).
                 crate::weakref::process_weak_targets_after_mark(
-                    valid_ptrs,
-                    minor_only,
-                    /* enqueue_callbacks = */ true,
+                    valid_ptrs, minor_only, /* enqueue_callbacks = */ true,
                 );
                 let next = if minor_only {
                     AtomicFinalizeSubphase::MinorPrelude

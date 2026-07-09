@@ -816,7 +816,8 @@ pub(crate) fn copied_minor_promise_key_fate(key: usize) -> CopiedMinorPromiseKey
         return CopiedMinorPromiseKeyFate::Keep;
     }
     unsafe {
-        let header = (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let header =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*header).obj_type != crate::gc::GC_TYPE_PROMISE
             || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
         {

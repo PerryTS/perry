@@ -777,6 +777,11 @@ mod tests_1802 {
     /// removed, the adapter sees every stored value's bits.
     #[test]
     fn dyn_prop_values_are_visited_in_mark_phase() {
+        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, wiping this test's parked entry mid-assertion. Serialize
+        // against those guards, THEN against this module's own tests.
+        let _global = crate::gc::global_side_table_test_lock();
         let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         // A unique synthetic closure address (just an integer key — the
         // scanner doesn't deref it during value visitation; the
@@ -811,6 +816,11 @@ mod tests_1802 {
 
     #[test]
     fn dyn_prop_scanner_visits_values_without_holding_props_lock() {
+        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, wiping this test's parked entry mid-assertion. Serialize
+        // against those guards, THEN against this module's own tests.
+        let _global = crate::gc::global_side_table_test_lock();
         let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         let owner: usize = 0xC10C_AB1E_0000_1803;
         let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCD;
@@ -845,6 +855,11 @@ mod tests_1802 {
 
     #[test]
     fn dyn_prop_get_ignores_non_closure_receivers() {
+        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, wiping this test's parked entry mid-assertion. Serialize
+        // against those guards, THEN against this module's own tests.
+        let _global = crate::gc::global_side_table_test_lock();
         let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         let obj = crate::object::js_object_alloc(0, 0) as usize;
 

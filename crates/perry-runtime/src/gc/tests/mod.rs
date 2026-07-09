@@ -15,6 +15,6 @@ mod oldgen;
 mod roots;
 mod runtime_roots;
 mod smoke;
-mod support;
+pub(super) mod support;
 mod telemetry_verifier;
 mod triggers;
