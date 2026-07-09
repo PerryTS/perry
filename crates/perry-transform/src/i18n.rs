@@ -565,14 +565,38 @@ fn replace_in_stmt(
             then_branch,
             else_branch,
         } => {
-            replace_in_expr(condition, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_stmts(then_branch, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_stmts(
+                then_branch,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             if let Some(else_b) = else_branch {
-                replace_in_stmts(else_b, key_to_idx, plural_info, plural_param_map, anon_shapes);
+                replace_in_stmts(
+                    else_b,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
         }
         Stmt::While { condition, body } => {
-            replace_in_expr(condition, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Stmt::For {
@@ -582,7 +606,13 @@ fn replace_in_stmt(
             body,
         } => {
             if let Some(init_stmt) = init {
-                replace_in_stmt(init_stmt, key_to_idx, plural_info, plural_param_map, anon_shapes);
+                replace_in_stmt(
+                    init_stmt,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
             if let Some(cond) = condition {
                 replace_in_expr(cond, key_to_idx, plural_info, plural_param_map, anon_shapes);
@@ -608,19 +638,37 @@ fn replace_in_stmt(
                 );
             }
             if let Some(finally_body) = finally {
-                replace_in_stmts(finally_body, key_to_idx, plural_info, plural_param_map, anon_shapes);
+                replace_in_stmts(
+                    finally_body,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
         }
         Stmt::Switch {
             discriminant,
             cases,
         } => {
-            replace_in_expr(discriminant, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                discriminant,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             for case in cases {
                 if let Some(test) = &mut case.test {
                     replace_in_expr(test, key_to_idx, plural_info, plural_param_map, anon_shapes);
                 }
-                replace_in_stmts(&mut case.body, key_to_idx, plural_info, plural_param_map, anon_shapes);
+                replace_in_stmts(
+                    &mut case.body,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
         }
         _ => {}
@@ -679,28 +727,70 @@ fn replace_in_expr(
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
             replace_in_expr(left, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_expr(right, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                right,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::Unary { operand, .. } => {
-            replace_in_expr(operand, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                operand,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            replace_in_expr(condition, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_expr(then_expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_expr(else_expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                then_expr,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                else_expr,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::Call { callee, args, .. } => {
-            replace_in_expr(callee, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                callee,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             for arg in args.iter_mut() {
                 replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::CallSpread { callee, args, .. } => {
-            replace_in_expr(callee, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                callee,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             for arg in args.iter_mut() {
                 match arg {
                     perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
@@ -725,11 +815,29 @@ fn replace_in_expr(
             }
         }
         Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } => {
-            replace_in_expr(object, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_expr(index, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                object,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                index,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::PropertyGet { object, .. } | Expr::PropertySet { object, .. } => {
-            replace_in_expr(object, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                object,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::LocalSet(_, expr) | Expr::GlobalSet(_, expr) => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
@@ -757,8 +865,20 @@ fn replace_in_expr(
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Expr::In { property, object } => {
-            replace_in_expr(property, key_to_idx, plural_info, plural_param_map, anon_shapes);
-            replace_in_expr(object, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                property,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                object,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::InstanceOf { expr, .. } => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);

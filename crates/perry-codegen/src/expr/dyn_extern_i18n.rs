@@ -1009,8 +1009,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let locale_count = t.translations.len() / t.key_count;
                         let rows = (0..locale_count)
                             .map(|li| {
-                                match t.translations.get(li * t.key_count + *string_idx as usize)
-                                {
+                                match t.translations.get(li * t.key_count + *string_idx as usize) {
                                     Some(s) if !s.is_empty() => s.clone(),
                                     _ => key.clone(),
                                 }
