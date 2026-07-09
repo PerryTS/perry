@@ -98,6 +98,79 @@ pub(super) enum MallocRegistryState {
     ActiveConsistent,
 }
 
+impl MallocState {
+    /// Reclaim every malloc-tracked object block this state still owns.
+    ///
+    /// Runs at thread exit via `Drop`. Returns the number of bytes freed
+    /// (surfaced for tests). Empties `objects` and `set` so the drop is
+    /// idempotent.
+    ///
+    /// # Why this is sound at thread exit (2026-07-09 GC audit §6 / #6185)
+    /// `MALLOC_STATE` is `thread_local!`, so this only runs while the owning
+    /// thread is being torn down:
+    /// - **Worker threads** (`spawn` / `parallelMap` / `parallelFilter`): by
+    ///   the time TLS is destroyed the worker's result has already crossed the
+    ///   boundary as an owned `SerializedValue` deep-copy — no other thread
+    ///   holds a raw pointer into this heap — so freeing these blocks cannot
+    ///   create a dangling reference elsewhere. Without this, every
+    ///   promise/map/error/large-closure a worker allocated leaked at exit (the
+    ///   first malloc-count GC needs 100k objects, so per-request workers never
+    ///   collected once).
+    /// - **The main thread**: its `MALLOC_STATE` is not dropped until process
+    ///   teardown, never mid-program, so this cannot yank live objects out from
+    ///   under running code.
+    ///
+    /// # Why finalizers are deliberately NOT run here
+    /// The sweep path pairs `dealloc` with `gc_type_finalize_unmarked_payload` /
+    /// `layout_clear_for_ptr`, which reach into *other* thread-locals
+    /// (`MAP_REGISTRY`, `MAP_INDEX`, `PROMISE_CONTEXTS`, the async-hooks queues,
+    /// …). Thread-local destruction order is unspecified, so touching one of
+    /// those during this Drop could hit an already-destroyed TLS and panic
+    /// ("cannot access a Thread Local Storage value during or after
+    /// destruction"), aborting the thread. We therefore reclaim only the object
+    /// blocks themselves — the audit's primary worker-exit leak. Any external
+    /// side-allocations those objects own (a Map's entry table, an error's side
+    /// tables) are out of scope for this mechanical fix. This also avoids the
+    /// re-entrant `MALLOC_STATE.with(...)` the sweep bookkeeping performs.
+    ///
+    /// Pinned objects are skipped, mirroring `process_sweep_header`, so a
+    /// cross-thread promise pinned for an in-flight result is never yanked.
+    fn free_all_tracked_objects(&mut self) -> u64 {
+        let mut freed_bytes: u64 = 0;
+        for header in self.objects.drain(..) {
+            if header.is_null() {
+                continue;
+            }
+            // SAFETY: every entry in `objects` is a live `gc_malloc` header
+            // (GcHeader-prefixed block) until freed here; this loop frees each
+            // exactly once and the thread is exiting, so no concurrent access.
+            unsafe {
+                if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+                    continue;
+                }
+                let total_size = (*header).size as usize;
+                if total_size == 0 {
+                    continue;
+                }
+                let layout = Layout::from_size_align(total_size, 8).unwrap();
+                dealloc(header as *mut u8, layout);
+                freed_bytes = freed_bytes.saturating_add(total_size as u64);
+            }
+        }
+        self.set.clear();
+        freed_bytes
+    }
+}
+
+impl Drop for MallocState {
+    fn drop(&mut self) {
+        // Free the worker thread's malloc objects instead of leaking them at
+        // exit (audit §6 / #6185). See `free_all_tracked_objects` for the
+        // thread-exit soundness and TLS-destruction-order argument.
+        self.free_all_tracked_objects();
+    }
+}
+
 /// Pre-allocated capacity for `MallocState.objects` and `.set`.
 ///
 /// History: this used to be a flat 256 k (`MALLOC_STATE_HEAVY_CAPACITY`
@@ -543,5 +616,108 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
         });
 
         new_raw.add(GC_HEADER_SIZE)
+    }
+}
+
+#[cfg(test)]
+impl MallocState {
+    /// Build an empty, TLS-independent `MallocState` for unit tests.
+    fn new_empty_for_test() -> Self {
+        MallocState {
+            objects: Vec::new(),
+            set: crate::fast_hash::PtrHashSet::with_capacity_and_hasher(
+                0,
+                crate::fast_hash::PtrHasher,
+            ),
+            realloc_forwarding: crate::fast_hash::new_ptr_hash_map(),
+            realloc_snapshot_headers: crate::fast_hash::new_ptr_hash_set(),
+            registry_state: MallocRegistryState::Inactive,
+            heavy_capacity_reserved: false,
+            kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
+        }
+    }
+
+    /// Allocate a raw GcHeader-prefixed block (as `gc_malloc` would) and push
+    /// it into this state's tracking, WITHOUT touching the thread-local
+    /// `MALLOC_STATE`. Returns the header so a test can assert on / manually
+    /// reclaim it. `flags` seeds `gc_flags` (e.g. `GC_FLAG_PINNED`).
+    unsafe fn push_test_object(&mut self, payload: usize, flags: u8) -> *mut GcHeader {
+        let total = GC_HEADER_SIZE + payload;
+        let layout = Layout::from_size_align(total, 8).unwrap();
+        let raw = alloc(layout);
+        assert!(!raw.is_null(), "test allocation failed");
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = GC_TYPE_STRING;
+        (*header).gc_flags = flags;
+        (*header)._reserved = 0;
+        (*header).size = total as u32;
+        self.objects.push(header);
+        self.set.insert(header as usize);
+        header
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+
+    /// `free_all_tracked_objects` (the body of `Drop for MallocState`) reclaims
+    /// every tracked block and reports the exact byte total — the worker-exit
+    /// leak fix (#6185 / GC audit §6). TLS-Drop itself can't be exercised
+    /// directly from a unit test (it fires only at real thread teardown), so we
+    /// drive the shared free path on a TLS-independent `MallocState`.
+    #[test]
+    fn free_all_tracked_objects_reclaims_every_block() {
+        let mut state = MallocState::new_empty_for_test();
+        let payloads = [8usize, 24, 100, 4096];
+        let expected: u64 = payloads.iter().map(|&p| (GC_HEADER_SIZE + p) as u64).sum();
+
+        unsafe {
+            for &p in &payloads {
+                state.push_test_object(p, 0);
+            }
+        }
+        assert_eq!(state.objects.len(), payloads.len());
+
+        let freed = state.free_all_tracked_objects();
+        assert_eq!(
+            freed, expected,
+            "must free the exact total size of every tracked block"
+        );
+        assert!(
+            state.objects.is_empty(),
+            "tracked-object list must be drained after free"
+        );
+
+        // Idempotent: the subsequent real Drop must be a no-op (no double free).
+        let freed_again = state.free_all_tracked_objects();
+        assert_eq!(freed_again, 0);
+    }
+
+    /// Pinned objects are skipped (mirrors `process_sweep_header`) so a
+    /// cross-thread promise pinned for an in-flight result is never yanked.
+    #[test]
+    fn free_all_tracked_objects_skips_pinned() {
+        let mut state = MallocState::new_empty_for_test();
+        let (pinned, unpinned_size);
+        unsafe {
+            pinned = state.push_test_object(64, GC_FLAG_PINNED);
+            state.push_test_object(32, 0);
+        }
+        unpinned_size = (GC_HEADER_SIZE + 32) as u64;
+
+        let freed = state.free_all_tracked_objects();
+        assert_eq!(
+            freed, unpinned_size,
+            "only the unpinned block's bytes are reclaimed"
+        );
+
+        // The pinned block was skipped, not freed — reclaim it manually so the
+        // test itself doesn't leak.
+        unsafe {
+            let total = (*pinned).size as usize;
+            let layout = Layout::from_size_align(total, 8).unwrap();
+            dealloc(pinned as *mut u8, layout);
+        }
     }
 }

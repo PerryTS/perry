@@ -267,6 +267,20 @@ pub enum SerializedValue {
     /// backing is never freed (see `crate::shared_sab`), so the raw address
     /// stays valid for the life of the process.
     SharedArrayBuffer { addr: usize },
+
+    /// A value whose runtime type cannot cross a `perry/thread` boundary
+    /// (Map, Set, Promise, Error, TypedArray, Buffer, Symbol, Temporal,
+    /// native handles, unmaterialized lazy JSON arrays, …).
+    ///
+    /// The serializer used to lower every one of these to `Inline(TAG_UNDEFINED)`,
+    /// so a capture/return of such a value crossed silently as `undefined`
+    /// with no diagnostic (2026-07-09 GC audit §6 / #6185). Instead we now
+    /// carry the human-readable type name here and raise a catchable
+    /// `TypeError` at the transfer boundary **on the main thread** — the
+    /// capture path throws synchronously from `spawn`/`parallelMap`, and the
+    /// `spawn` return path rejects the returned promise. This value is never
+    /// deserialized; its presence anywhere in a serialized tree is a hard error.
+    Unsupported(&'static str),
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -367,15 +381,102 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
                 // a fresh cell (deep-copy, like every other crossed value).
                 return SerializedValue::Date((*(raw_ptr as *const crate::date::DateCell)).ts);
             }
-            _ => {
-                // Unknown pointer type — treat as undefined
-                return SerializedValue::Inline(TAG_UNDEFINED);
+            // Everything below is a genuinely non-transferable runtime type.
+            // Previously all of these silently became `undefined` on the far
+            // side (#6185); now they surface a named TypeError at the boundary.
+            other => {
+                return SerializedValue::Unsupported(unsupported_transfer_type_name(other));
             }
         }
     }
 
     // Regular f64 number (no tag in the NaN-boxing range we use)
     SerializedValue::Inline(bits)
+}
+
+/// Human-readable name for a GC object type that cannot cross a thread
+/// boundary. Used only to build the TypeError message (#6185).
+///
+/// Note: a Symbol is POINTER_TAG'd but allocated with `GC_TYPE_STRING`
+/// (real strings arrive under `STRING_TAG` and never reach this match), so
+/// `GC_TYPE_STRING` here means "Symbol".
+fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
+    match obj_type {
+        gc::GC_TYPE_STRING => "Symbol",
+        gc::GC_TYPE_PROMISE => "Promise",
+        gc::GC_TYPE_BIGINT => "BigInt",
+        gc::GC_TYPE_ERROR => "Error",
+        gc::GC_TYPE_MAP => "Map",
+        gc::GC_TYPE_LAZY_ARRAY => "lazy (unmaterialized) JSON array",
+        gc::GC_TYPE_BUFFER => "Buffer",
+        gc::GC_TYPE_TYPED_ARRAY => "TypedArray",
+        gc::GC_TYPE_SET => "Set",
+        gc::GC_TYPE_NATIVE_ARENA_OWNER
+        | gc::GC_TYPE_NATIVE_TYPED_VIEW
+        | gc::GC_TYPE_NATIVE_HANDLE
+        | gc::GC_TYPE_NATIVE_POD_VIEW => "native handle",
+        gc::GC_TYPE_TEMPORAL => "Temporal value",
+        _ => "value of an unsupported type",
+    }
+}
+
+/// Depth-first search for the first non-transferable value anywhere in a
+/// serialized tree (a captured/returned Map, an object field holding a Set,
+/// an array element that is a Promise, …). Returns its type name, or `None`
+/// if the whole tree is transferable.
+pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'static str> {
+    match sv {
+        SerializedValue::Unsupported(name) => Some(name),
+        SerializedValue::Array(elements) => {
+            elements.iter().find_map(first_unsupported_transfer_type)
+        }
+        SerializedValue::Object { fields, .. } => {
+            fields.iter().find_map(first_unsupported_transfer_type)
+        }
+        SerializedValue::Closure { captures, .. } => {
+            captures.iter().find_map(first_unsupported_transfer_type)
+        }
+        _ => None,
+    }
+}
+
+/// Build (but do not throw) a `TypeError` value naming an unsupported
+/// cross-thread transfer. Used by the `spawn` return path, which *rejects*
+/// the returned promise rather than throwing.
+///
+/// # Safety
+/// Must run on the thread whose arena should own the error object (the main
+/// thread, at the drain boundary).
+unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
+    let msg =
+        format!("Cannot transfer a {type_name} across a perry/thread boundary (unsupported type)");
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+/// Throw a catchable `TypeError` naming an unsupported cross-thread transfer.
+///
+/// # Safety
+/// Must be called on the **main / calling thread** (never a worker): it
+/// `longjmp`s to the nearest active `setjmp` frame, which only the calling
+/// JS thread has established. Worker threads have no such frame, so a throw
+/// there would be undefined behavior — worker-side failures are surfaced by
+/// rejecting the returned promise on the main thread instead.
+unsafe fn throw_unsupported_transfer(type_name: &str) -> ! {
+    crate::exception::js_throw(make_unsupported_transfer_error(type_name));
+}
+
+/// Main-thread guard: if any value in `values` is non-transferable, throw a
+/// named `TypeError`. Call this at a `spawn`/`parallelMap`/`parallelFilter`
+/// serialization boundary, on the calling thread, before spawning any worker.
+///
+/// # Safety
+/// Same as [`throw_unsupported_transfer`] — main/calling thread only.
+unsafe fn guard_transferable(values: &[SerializedValue]) {
+    if let Some(name) = values.iter().find_map(first_unsupported_transfer_type) {
+        throw_unsupported_transfer(name);
+    }
 }
 
 /// Serialize an ArrayHeader into a SerializedValue::Array.
@@ -646,6 +747,12 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             crate::buffer::mark_as_shared_array_buffer(*addr);
             JSValue::pointer(*addr as *const u8).bits()
         }
+
+        // Non-transferable values are rejected at the boundary before we ever
+        // reach deserialization (main-thread throw for captures, promise
+        // rejection for `spawn` returns), so this arm should be unreachable.
+        // Defensive fallback to `undefined` rather than a panic.
+        SerializedValue::Unsupported(_) => TAG_UNDEFINED,
     }
 }
 
@@ -745,6 +852,9 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
         let bits = (*elements_ptr.add(i)).to_bits();
         serialized_elements.push(serialize_nanbox_for_thread(bits));
     }
+    // #6185: a non-transferable element (e.g. a Map in the input array) would
+    // otherwise cross as `undefined`. Fail loudly on the calling thread.
+    guard_transferable(&serialized_elements);
 
     // ── 5. Serialize closure captures (shared across all threads) ────
     let serialized_captures: Option<(usize, u32, Vec<SerializedValue>)> = {
@@ -758,6 +868,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
             for i in 0..actual {
                 caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
             }
+            guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
             Some((fp, cc, caps))
         } else {
             None
@@ -856,6 +967,12 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     });
 
     // ── 7. Deserialize results into main thread's arena ──────────────
+    // #6185: a mapper that returns a non-transferable value (e.g. a Map) is a
+    // loud TypeError on the calling thread, not a silent `undefined`. The
+    // worker never throws (no setjmp frame there); the marker rode back here.
+    for chunk_results in &all_results {
+        guard_transferable(chunk_results);
+    }
     let total_results: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total_results as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -972,6 +1089,8 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         let bits = (*elements_ptr.add(i)).to_bits();
         serialized_elements.push(serialize_nanbox_for_thread(bits));
     }
+    // #6185: fail loudly on a non-transferable input element.
+    guard_transferable(&serialized_elements);
 
     // Serialize closure captures
     let serialized_captures: Option<(usize, u32, Vec<SerializedValue>)> = {
@@ -983,6 +1102,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         for i in 0..actual {
             caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
         }
+        guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
         Some((fp, cc, caps))
     };
 
@@ -1163,7 +1283,29 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         return promise;
     };
 
-    // ── 1. Allocate Promise on main thread ───────────────────────────
+    // ── 1. Serialize closure captures (before allocating the promise) ─
+    // #6185: a captured non-transferable value (Map/Set/Promise/…) must throw
+    // a named TypeError here on the calling thread. Serializing *before* the
+    // promise is allocated keeps the throw clean — `js_throw` longjmps and does
+    // not run Rust destructors, so a pinned promise allocated first would leak.
+    let serialized_captures: Option<(u32, Vec<SerializedValue>)> = {
+        let cc = (*closure).capture_count;
+        let actual = real_capture_count(cc) as usize;
+        if actual > 0 {
+            let base =
+                (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
+            let mut caps = Vec::with_capacity(actual);
+            for i in 0..actual {
+                caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
+            }
+            guard_transferable(&caps);
+            Some((cc, caps))
+        } else {
+            None
+        }
+    };
+
+    // ── 2. Allocate Promise on main thread ───────────────────────────
     // Cross-thread variant: this promise is referenced only by a raw usize
     // in PENDING_THREAD_RESULTS (no scanner) until drain — a nursery
     // resident would be destroyed by the copied-minor from-space flip even
@@ -1175,23 +1317,6 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     (*promise_header).gc_flags |= gc::GC_FLAG_PINNED;
 
     let promise_usize = promise as usize;
-
-    // ── 2. Serialize closure captures ────────────────────────────────
-    let serialized_captures: Option<(u32, Vec<SerializedValue>)> = {
-        let cc = (*closure).capture_count;
-        let actual = real_capture_count(cc) as usize;
-        if actual > 0 {
-            let base =
-                (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
-            let mut caps = Vec::with_capacity(actual);
-            for i in 0..actual {
-                caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
-            }
-            Some((cc, caps))
-        } else {
-            None
-        }
-    };
 
     // ── 3. Spawn background thread ───────────────────────────────────
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
@@ -1337,14 +1462,23 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
         unsafe {
             let promise = item.promise_ptr as *mut crate::promise::Promise;
 
-            // Deserialize the result into the main thread's arena
-            let result_bits = deserialize_nanbox_on_current_thread(&item.result);
-
-            // Unpin the promise now that we're resolving it
+            // Unpin the promise now that we're settling it.
             let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
             (*promise_header).gc_flags &= !gc::GC_FLAG_PINNED;
 
-            // Resolve the promise
+            // #6185: a worker that returned a non-transferable value (e.g.
+            // `spawn(() => new Map())`) can't throw on its own thread (no
+            // setjmp frame). The marker rode back in the serialized result;
+            // reject the returned promise here on the main thread with a named
+            // TypeError so `await`/`.catch` observes it instead of `undefined`.
+            if let Some(name) = first_unsupported_transfer_type(&item.result) {
+                let reason = make_unsupported_transfer_error(name);
+                crate::promise::js_promise_reject(promise, reason);
+                continue;
+            }
+
+            // Deserialize the result into the main thread's arena and resolve.
+            let result_bits = deserialize_nanbox_on_current_thread(&item.result);
             crate::promise::js_promise_resolve(promise, f64::from_bits(result_bits));
         }
     }
@@ -1364,5 +1498,163 @@ pub extern "C" fn js_thread_has_pending() -> i32 {
         0
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod transfer_guard_tests {
+    //! #6185 (2026-07-09 GC audit §6): a non-transferable value crossing a
+    //! `perry/thread` boundary must surface a named `TypeError`, not silently
+    //! become `undefined`. These tests exercise the serialization-boundary
+    //! detection directly. The main-thread `js_throw` and promise-reject wiring
+    //! rides on top of this detection and needs the full JS runtime (setjmp
+    //! frame) to observe, so it is covered by the parity suite rather than here.
+    use super::*;
+
+    #[test]
+    fn unsupported_type_names_are_human_readable() {
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_MAP), "Map");
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_SET), "Set");
+        assert_eq!(
+            unsupported_transfer_type_name(gc::GC_TYPE_PROMISE),
+            "Promise"
+        );
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_ERROR), "Error");
+        assert_eq!(
+            unsupported_transfer_type_name(gc::GC_TYPE_TYPED_ARRAY),
+            "TypedArray"
+        );
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_BUFFER), "Buffer");
+        assert_eq!(
+            unsupported_transfer_type_name(gc::GC_TYPE_TEMPORAL),
+            "Temporal value"
+        );
+        // A Symbol is POINTER_TAG'd but allocated with GC_TYPE_STRING.
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_STRING), "Symbol");
+        // Any unrecognized type still yields a message, never a panic.
+        assert_eq!(
+            unsupported_transfer_type_name(250),
+            "value of an unsupported type"
+        );
+    }
+
+    #[test]
+    fn first_unsupported_transfer_type_finds_nested_markers() {
+        // Top-level.
+        assert_eq!(
+            first_unsupported_transfer_type(&SerializedValue::Unsupported("Map")),
+            Some("Map")
+        );
+        // Inside an array element.
+        let arr = SerializedValue::Array(vec![
+            SerializedValue::Inline(TAG_NULL),
+            SerializedValue::Unsupported("Set"),
+        ]);
+        assert_eq!(first_unsupported_transfer_type(&arr), Some("Set"));
+        // Inside an object field, nested in an array.
+        let obj = SerializedValue::Object {
+            class_id: 0,
+            parent_class_id: 0,
+            fields: vec![
+                SerializedValue::Inline(TAG_TRUE),
+                SerializedValue::Array(vec![SerializedValue::Unsupported("Promise")]),
+            ],
+            keys: None,
+        };
+        assert_eq!(first_unsupported_transfer_type(&obj), Some("Promise"));
+        // Inside a closure capture.
+        let clo = SerializedValue::Closure {
+            func_ptr: 0,
+            capture_count: 1,
+            captures: vec![SerializedValue::Unsupported("Error")],
+        };
+        assert_eq!(first_unsupported_transfer_type(&clo), Some("Error"));
+    }
+
+    #[test]
+    fn transferable_trees_report_no_unsupported() {
+        let tree = SerializedValue::Array(vec![
+            SerializedValue::Inline(0x4045_0000_0000_0000), // a plain f64
+            SerializedValue::String(b"ok".to_vec()),
+            SerializedValue::Object {
+                class_id: 3,
+                parent_class_id: 0,
+                fields: vec![
+                    SerializedValue::Inline(TAG_FALSE),
+                    SerializedValue::Date(1.0),
+                ],
+                keys: None,
+            },
+            SerializedValue::BigInt([0u64; BIGINT_LIMBS]),
+        ]);
+        assert_eq!(first_unsupported_transfer_type(&tree), None);
+    }
+
+    #[test]
+    fn serialize_map_yields_unsupported_marker() {
+        // The concrete audit case: a real Map value serializes to a named
+        // Unsupported marker instead of Inline(undefined).
+        unsafe {
+            let map = crate::map::js_map_alloc(4);
+            let map_bits = POINTER_TAG | (map as u64 & POINTER_MASK);
+            let sv = serialize_nanbox_for_thread(map_bits);
+            assert!(
+                matches!(sv, SerializedValue::Unsupported("Map")),
+                "a Map must serialize to Unsupported(\"Map\"), got {sv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn serialize_supported_values_still_transfer() {
+        unsafe {
+            // Inline scalars round-trip their exact bits.
+            for bits in [TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE] {
+                assert!(matches!(
+                    serialize_nanbox_for_thread(bits),
+                    SerializedValue::Inline(b) if b == bits
+                ));
+            }
+            let int_bits = INT32_TAG | 42u64;
+            assert!(matches!(
+                serialize_nanbox_for_thread(int_bits),
+                SerializedValue::Inline(b) if b == int_bits
+            ));
+            let num_bits = 3.5f64.to_bits();
+            assert!(matches!(
+                serialize_nanbox_for_thread(num_bits),
+                SerializedValue::Inline(b) if b == num_bits
+            ));
+
+            // A real string transfers as its UTF-8 bytes.
+            let s = crate::string::js_string_from_bytes(b"hello".as_ptr(), 5);
+            let s_bits = JSValue::string_ptr(s).bits();
+            match serialize_nanbox_for_thread(s_bits) {
+                SerializedValue::String(bytes) => assert_eq!(bytes, b"hello"),
+                other => panic!("string must serialize to String, got {other:?}"),
+            }
+
+            // A real array of numbers transfers and round-trips.
+            let arr = crate::array::js_array_alloc(3);
+            for (i, v) in [10.0f64, 20.0, 30.0].iter().enumerate() {
+                store_thread_array_slot(arr, i, v.to_bits());
+            }
+            let arr_bits = JSValue::pointer(arr as *const u8).bits();
+            let sv = serialize_nanbox_for_thread(arr_bits);
+            assert_eq!(first_unsupported_transfer_type(&sv), None);
+            match &sv {
+                SerializedValue::Array(elems) => {
+                    assert_eq!(elems.len(), 3);
+                    assert!(
+                        matches!(elems[0], SerializedValue::Inline(b) if b == 10.0f64.to_bits())
+                    );
+                }
+                other => panic!("array must serialize to Array, got {other:?}"),
+            }
+            // Round-trip back into this thread's arena.
+            let back = deserialize_nanbox_on_current_thread(&sv);
+            let back_arr = (back & POINTER_MASK) as *const crate::array::ArrayHeader;
+            assert_eq!((*back_arr).length, 3);
+        }
     }
 }
