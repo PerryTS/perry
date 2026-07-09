@@ -1158,7 +1158,10 @@ fn malloc_state_capacity_grows_once_for_heavy_threads() {
         }
         MALLOC_STATE.with(|s| {
             let s = s.borrow();
-            assert!(s.heavy_capacity_reserved, "heavy latch must trip at the threshold");
+            assert!(
+                s.heavy_capacity_reserved,
+                "heavy latch must trip at the threshold"
+            );
             assert!(
                 s.objects.capacity() >= MALLOC_STATE_HEAVY_CAPACITY,
                 "objects Vec must reserve the heavy capacity (got {})",

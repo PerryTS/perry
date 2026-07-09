@@ -186,9 +186,8 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
             selection.selected_reclaimable_bytes = selection
                 .selected_reclaimable_bytes
                 .saturating_add(meta.dead_bytes);
-            selection.selected_releasable_block_bytes = selection
-                .selected_releasable_block_bytes
-                .saturating_add(
+            selection.selected_releasable_block_bytes =
+                selection.selected_releasable_block_bytes.saturating_add(
                     (meta.page_end.saturating_sub(meta.page_base))
                         .saturating_sub(meta.pinned_bytes),
                 );
@@ -391,9 +390,9 @@ pub(super) fn evacuation_policy_snapshot_after_mark(
             // reset even when empty, so their granule can't be released
             // this cycle regardless of what evacuation moves.
             if !crate::arena::general_block_in_recent_window(block_idx) {
-                snapshot.releasable_block_bytes = snapshot.releasable_block_bytes.saturating_add(
-                    general_block_sizes.get(block_idx).copied().unwrap_or(0),
-                );
+                snapshot.releasable_block_bytes = snapshot
+                    .releasable_block_bytes
+                    .saturating_add(general_block_sizes.get(block_idx).copied().unwrap_or(0));
             }
         }
     }
@@ -438,8 +437,7 @@ pub(super) fn evacuation_policy_final_decision(
         decision.reason = "rss_hard_pressure";
         return decision;
     }
-    if snapshot.effective_reclaimable_candidate_bytes() == 0
-        && snapshot.releasable_block_bytes == 0
+    if snapshot.effective_reclaimable_candidate_bytes() == 0 && snapshot.releasable_block_bytes == 0
     {
         decision.reason = "zero_reclaimable_candidates";
         return decision;

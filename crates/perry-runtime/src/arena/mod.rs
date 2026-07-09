@@ -79,12 +79,12 @@ pub use reset::{arena_reset_all_blocks_to_zero, arena_reset_empty_blocks};
 
 // stats.rs
 pub(crate) use stats::{active_survivor_space, inactive_survivor_space};
-#[cfg(test)]
-pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_resync};
 pub use stats::{
     js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes, pointer_in_nursery,
     pointer_in_old_gen,
 };
+#[cfg(test)]
+pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_resync};
 
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{
