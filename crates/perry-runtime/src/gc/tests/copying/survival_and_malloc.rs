@@ -690,9 +690,8 @@ fn test_copying_minor_old_to_malloc_nursery_grandchild_survives() {
         std::mem::size_of::<crate::closure::ClosureHeader>() + 8,
         GC_TYPE_CLOSURE,
     );
-    let capture_slot = unsafe {
-        init_test_closure_with_one_capture(malloc_child, ptr_bits(grandchild))
-    };
+    let capture_slot =
+        unsafe { init_test_closure_with_one_capture(malloc_child, ptr_bits(grandchild)) };
     let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
     unsafe {
         *elements = ptr_bits(malloc_child as usize);
