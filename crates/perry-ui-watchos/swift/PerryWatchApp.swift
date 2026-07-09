@@ -182,8 +182,13 @@ struct NodeView: View {
         if perry_watchos_node_hidden(nodeId) {
             EmptyView()
         } else {
+            // Pass the tree version so the modifier's value changes on every
+            // tree bump: SwiftUI skips re-running a ViewModifier body whose
+            // stored properties compare equal, which left attribute-only
+            // mutations (bg/fg color, corner radius, ...) invisible until a
+            // structural rebuild recreated the node's views.
             nodeContent
-                .modifier(CommonModifiers(nodeId: nodeId))
+                .modifier(CommonModifiers(nodeId: nodeId, version: bridge.version))
         }
     }
 
@@ -227,9 +232,98 @@ struct NodeView: View {
         }
     }
 
-    var buttonView: some View {
-        Button(nodeText) {
-            perry_watchos_handle_action(nodeId)
+    // The default watchOS button style draws its own opaque rounded
+    // background over anything CommonModifiers hangs outside the Button, so
+    // font/color/shape styling never showed up. When the node carries any
+    // custom styling (font, text color, background color, corner radius) we
+    // render a `.plain`-style button and style the label directly; the
+    // unstyled path keeps the stock system button so existing apps don't
+    // change appearance. CommonModifiers skips fg/bg/cornerRadius for
+    // button nodes — buttonView owns them.
+    @ViewBuilder var buttonView: some View {
+        let t = nodeText
+        let fontSize = perry_watchos_node_font_size(nodeId)
+        let fontWeight = perry_watchos_node_font_weight(nodeId)
+        let hasFg = perry_watchos_node_has_color(nodeId)
+        let hasBg = perry_watchos_node_has_bg_color(nodeId)
+        let cr = perry_watchos_node_corner_radius(nodeId)
+
+        if hasFg || hasBg || cr >= 0 || fontSize > 0 {
+            Button(action: {
+                perry_watchos_handle_action(nodeId)
+            }) {
+                styledButtonLabel(
+                    t,
+                    fontSize: fontSize,
+                    fontWeight: fontWeight,
+                    hasFg: hasFg,
+                    hasBg: hasBg,
+                    cornerRadius: cr
+                )
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button(t) {
+                perry_watchos_handle_action(nodeId)
+            }
+        }
+    }
+
+    /// Label for a custom-styled button: full-width like the stock style,
+    /// with the node's font / foreground / background / corner radius
+    /// applied to the label itself so they actually render.
+    @ViewBuilder func styledButtonLabel(
+        _ t: String,
+        fontSize: Double,
+        fontWeight: Double,
+        hasFg: Bool,
+        hasBg: Bool,
+        cornerRadius: Double
+    ) -> some View {
+        let fg: Color = hasFg
+            ? Color(
+                red: perry_watchos_node_color(nodeId, 0),
+                green: perry_watchos_node_color(nodeId, 1),
+                blue: perry_watchos_node_color(nodeId, 2),
+                opacity: perry_watchos_node_color(nodeId, 3)
+            )
+            : .primary
+        // Approximate the stock dark-gray pill when only font/fg/radius is
+        // customized so the button silhouette survives `.plain` style.
+        let bg: Color = hasBg
+            ? Color(
+                red: perry_watchos_node_bg_color(nodeId, 0),
+                green: perry_watchos_node_bg_color(nodeId, 1),
+                blue: perry_watchos_node_bg_color(nodeId, 2),
+                opacity: perry_watchos_node_bg_color(nodeId, 3)
+            )
+            : Color(white: 0.17)
+        let fh = perry_watchos_node_frame_height(nodeId)
+        let label = styledButtonText(t, fontSize: fontSize, fontWeight: fontWeight)
+            .foregroundColor(fg)
+            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+            .frame(maxWidth: .infinity, minHeight: fh >= 0 ? CGFloat(fh) : nil)
+
+        if cornerRadius >= 0 {
+            label.background(bg).cornerRadius(cornerRadius)
+        } else {
+            label.background(bg).clipShape(Capsule())
+        }
+    }
+
+    /// Same font fallback logic as textView (`fontSize > 0` gate, then
+    /// `fontWeight >= 0` gate).
+    @ViewBuilder func styledButtonText(
+        _ t: String, fontSize: Double, fontWeight: Double
+    ) -> some View {
+        if fontSize > 0 {
+            if fontWeight >= 0 {
+                Text(t).font(.system(size: fontSize, weight: swiftWeight(fontWeight)))
+            } else {
+                Text(t).font(.system(size: fontSize))
+            }
+        } else {
+            Text(t)
         }
     }
 
@@ -369,12 +463,21 @@ struct NodeView: View {
 
 struct CommonModifiers: ViewModifier {
     let nodeId: Int64
+    /// Current tree version. Not read directly — it exists so this value
+    /// differs between render passes and SwiftUI re-runs `body` (see
+    /// NodeView.body); without it, attribute-only mutations never repaint.
+    let version: UInt64
 
     func body(content: Content) -> some View {
         var view = AnyView(content)
 
+        // Buttons style fg/bg/cornerRadius on their own label (buttonView):
+        // the default watchOS button chrome paints over anything applied
+        // out here, so applying them twice would only add artifacts.
+        let stylesOwnColors = perry_watchos_node_kind(nodeId) == 1
+
         // Foreground color
-        if perry_watchos_node_has_color(nodeId) {
+        if !stylesOwnColors && perry_watchos_node_has_color(nodeId) {
             let r = perry_watchos_node_color(nodeId, 0)
             let g = perry_watchos_node_color(nodeId, 1)
             let b = perry_watchos_node_color(nodeId, 2)
@@ -383,7 +486,7 @@ struct CommonModifiers: ViewModifier {
         }
 
         // Background color
-        if perry_watchos_node_has_bg_color(nodeId) {
+        if !stylesOwnColors && perry_watchos_node_has_bg_color(nodeId) {
             let r = perry_watchos_node_bg_color(nodeId, 0)
             let g = perry_watchos_node_bg_color(nodeId, 1)
             let b = perry_watchos_node_bg_color(nodeId, 2)
@@ -393,7 +496,7 @@ struct CommonModifiers: ViewModifier {
 
         // Corner radius
         let cr = perry_watchos_node_corner_radius(nodeId)
-        if cr >= 0 {
+        if !stylesOwnColors && cr >= 0 {
             view = AnyView(view.cornerRadius(cr))
         }
 

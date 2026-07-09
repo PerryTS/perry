@@ -400,6 +400,23 @@ pub struct LoweringContext {
     /// (non-var) bindings. Populated by pre_register_forward_captured_lets
     /// and drained when the body's prealloc set is assembled.
     pub(crate) tdz_forward_ids: HashSet<LocalId>,
+    /// Names of lexical `let`/`const`/`class` bindings declared in the current
+    /// (or an enclosing, same-function) block scope that are still resolvable as
+    /// forward references — i.e. a bare read of the name before its declarator
+    /// lowers to a throwing get. Used ONLY by the `typeof` lowering (#6062): a
+    /// `typeof <name>` whose operand isn't yet a live local suppresses the throw
+    /// (spec `GetValue`-skips for unresolvable refs → `"undefined"`), but a
+    /// declared-but-uninitialized lexical in its TDZ must throw. Presence here
+    /// distinguishes a forward lexical (→ throw) from a genuinely undeclared
+    /// global name (→ `"undefined"`). Populated per block by
+    /// `lower_stmts_using_aware` (pre-scan of the block's direct lexical decls)
+    /// and cleared across function boundaries in `enter_scope`/`exit_scope`,
+    /// since a `typeof` inside a nested closure is runtime-timing-dependent and
+    /// must not statically throw. A post-declaration `typeof` never consults this
+    /// — by then the name is a live local and never reaches the suppressing arm.
+    pub(crate) forward_lexical_names: HashSet<String>,
+    /// Function-boundary save stack for `forward_lexical_names` (see above).
+    pub(crate) forward_lexical_saves: Vec<HashSet<String>>,
     /// Names bound by an enclosing `catch (e)` parameter that is currently in
     /// scope (a stack, innermost last). Annex B B.3.4: a `var e = init;` whose
     /// name collides with a live catch parameter assigns to that *catch

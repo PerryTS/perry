@@ -1661,7 +1661,70 @@ pub fn lower_block_stmt_scoped(
 /// body throw (or an earlier dispose throw) is followed by another dispose
 /// throw, the later error is wrapped in a `SuppressedError` whose `.suppressed`
 /// is the accumulated completion (spec `DisposeResources`).
+/// #6062: record a block's DIRECT `let`/`const`/`class` declaration names (not
+/// nested blocks — those own their scope) in `ctx.forward_lexical_names`, so a
+/// `typeof <name>` lowered before the declarator throws a TDZ `ReferenceError`
+/// instead of yielding `"undefined"`. Returns the names this call newly
+/// inserted, for removal on block exit (a name already present belongs to an
+/// enclosing scope and must survive this block).
+fn register_block_forward_lexicals(ctx: &mut LoweringContext, stmts: &[ast::Stmt]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            ast::Stmt::Decl(ast::Decl::Var(var_decl))
+                if matches!(
+                    var_decl.kind,
+                    ast::VarDeclKind::Let | ast::VarDeclKind::Const
+                ) =>
+            {
+                for decl in &var_decl.decls {
+                    let mut idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut idents);
+                    names.extend(idents.into_iter().map(|(n, _)| n));
+                }
+            }
+            ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
+                names.push(class_decl.ident.sym.to_string());
+            }
+            // `using` / `await using` are block-scoped bindings with the same
+            // TDZ semantics as `let`/`const` (a read before the declarator
+            // throws), so `typeof <forward using>` must throw too.
+            ast::Stmt::Decl(ast::Decl::Using(using_decl)) => {
+                for decl in &using_decl.decls {
+                    let mut idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut idents);
+                    names.extend(idents.into_iter().map(|(n, _)| n));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut newly = Vec::new();
+    for name in names {
+        if ctx.forward_lexical_names.insert(name.clone()) {
+            newly.push(name);
+        }
+    }
+    newly
+}
+
 pub fn lower_stmts_using_aware(
+    ctx: &mut LoweringContext,
+    stmts: &[ast::Stmt],
+) -> Result<Vec<Stmt>> {
+    // #6062: register this block's forward lexicals before lowering any
+    // statement (so a `typeof z` preceding `const z` sees `z`), then remove
+    // exactly what we added once the block is lowered — via a wrapper so the
+    // cleanup runs on every early return inside the inner lowering.
+    let newly = register_block_forward_lexicals(ctx, stmts);
+    let r = lower_stmts_using_aware_inner(ctx, stmts);
+    for name in &newly {
+        ctx.forward_lexical_names.remove(name);
+    }
+    r
+}
+
+fn lower_stmts_using_aware_inner(
     ctx: &mut LoweringContext,
     stmts: &[ast::Stmt],
 ) -> Result<Vec<Stmt>> {
