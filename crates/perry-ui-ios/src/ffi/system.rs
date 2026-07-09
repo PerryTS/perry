@@ -218,6 +218,138 @@ pub extern "C" fn perry_system_open_url(url_ptr: i64) {
     }
 }
 
+// ---- Haptics (perry/system hapticPlay) ----
+//
+// Maps the Perry HapticType vocabulary onto UIKit's three feedback
+// generators. Enum raw values verified against the iOS 26.5 SDK headers:
+// `UINotificationFeedbackType` Success=0 / Warning=1 / Error=2
+// (UINotificationFeedbackGenerator.h) and `UIImpactFeedbackStyle`
+// Light=0 / Medium=1 / Heavy=2 (UIImpactFeedbackGenerator.h).
+
+#[derive(Copy, Clone)]
+enum Haptic {
+    /// UINotificationFeedbackGenerator notificationOccurred:
+    Notification(i64),
+    /// UIImpactFeedbackGenerator initWithStyle: + impactOccurred
+    Impact(i64),
+    /// UISelectionFeedbackGenerator selectionChanged
+    Selection,
+}
+
+fn parse_haptic(name: &str) -> Haptic {
+    match name {
+        "success" => Haptic::Notification(0),
+        "warning" => Haptic::Notification(1),
+        "error" => Haptic::Notification(2),
+        "light" => Haptic::Impact(0),
+        "medium" => Haptic::Impact(1),
+        "heavy" => Haptic::Impact(2),
+        // No UIKit equivalent for the watch's direction/start/stop
+        // haptics — approximate with light/medium impacts.
+        "directionUp" | "directionDown" => Haptic::Impact(0),
+        "start" | "stop" => Haptic::Impact(1),
+        // click / selection / unknown — the neutral selection tick.
+        _ => Haptic::Selection,
+    }
+}
+
+// The dispatch_async context pointer carries the effect as a small
+// integer so no allocation crosses the thread hop.
+fn haptic_encode(h: Haptic) -> usize {
+    match h {
+        Haptic::Notification(t) => t as usize,
+        Haptic::Impact(s) => 0x10 + s as usize,
+        Haptic::Selection => 0x20,
+    }
+}
+
+fn haptic_decode(code: usize) -> Haptic {
+    match code {
+        0x10..=0x12 => Haptic::Impact((code - 0x10) as i64),
+        0x20 => Haptic::Selection,
+        t => Haptic::Notification(t as i64),
+    }
+}
+
+unsafe fn haptic_fire(h: Haptic) {
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject};
+    match h {
+        Haptic::Notification(ty) => {
+            if let Some(cls) = AnyClass::get(c"UINotificationFeedbackGenerator") {
+                let generator: Retained<AnyObject> = objc2::msg_send![cls, new];
+                let _: () = objc2::msg_send![&*generator, prepare];
+                let _: () = objc2::msg_send![&*generator, notificationOccurred: ty];
+            }
+        }
+        Haptic::Impact(style) => {
+            if let Some(cls) = AnyClass::get(c"UIImpactFeedbackGenerator") {
+                let alloc: *mut AnyObject = objc2::msg_send![cls, alloc];
+                let generator: *mut AnyObject = objc2::msg_send![alloc, initWithStyle: style];
+                // Adopt the +1 from `initWithStyle:` so the generator is
+                // released after the trigger call.
+                if let Some(generator) = Retained::from_raw(generator) {
+                    let _: () = objc2::msg_send![&*generator, prepare];
+                    let _: () = objc2::msg_send![&*generator, impactOccurred];
+                }
+            }
+        }
+        Haptic::Selection => {
+            if let Some(cls) = AnyClass::get(c"UISelectionFeedbackGenerator") {
+                let generator: Retained<AnyObject> = objc2::msg_send![cls, new];
+                let _: () = objc2::msg_send![&*generator, prepare];
+                let _: () = objc2::msg_send![&*generator, selectionChanged];
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn haptic_trampoline(ctx: *mut std::ffi::c_void) {
+    haptic_fire(haptic_decode(ctx as usize));
+}
+
+/// Play a haptic feedback effect (perry/system hapticPlay).
+///
+/// UIFeedbackGenerator is main-thread-only; Perry's iOS FFI normally
+/// runs on the main thread already, so the direct path is the norm and
+/// the dispatch hop is a background-thread safety net (fire-and-forget
+/// is fine for a haptic).
+#[no_mangle]
+pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
+    extern "C" {
+        fn pthread_main_np() -> core::ffi::c_int;
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_async_f(
+            queue: *const std::ffi::c_void,
+            context: *mut std::ffi::c_void,
+            work: unsafe extern "C" fn(*mut std::ffi::c_void),
+        );
+    }
+    fn str_from_header(ptr: *const u8) -> &'static str {
+        if ptr.is_null() {
+            return "";
+        }
+        unsafe {
+            let header = ptr as *const perry_runtime::string::StringHeader;
+            let len = (*header).byte_len as usize;
+            let data = ptr.add(std::mem::size_of::<perry_runtime::string::StringHeader>());
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+        }
+    }
+    let haptic = parse_haptic(str_from_header(type_ptr as *const u8));
+    unsafe {
+        if pthread_main_np() != 0 {
+            haptic_fire(haptic);
+        } else {
+            dispatch_async_f(
+                &_dispatch_main_q as *const _ as *const std::ffi::c_void,
+                haptic_encode(haptic) as *mut std::ffi::c_void,
+                haptic_trampoline,
+            );
+        }
+    }
+}
+
 /// Request one-shot location. Callback receives (lat, lon) or (NaN, NaN) on error.
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(callback: f64) {

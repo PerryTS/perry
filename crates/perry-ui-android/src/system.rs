@@ -373,6 +373,101 @@ pub fn keychain_delete(key_ptr: *const u8) {
     }
 }
 
+/// Play a haptic feedback effect via the system Vibrator service
+/// (perry/system hapticPlay). Requires `android.permission.VIBRATE`
+/// (declared in the app template's AndroidManifest.xml — a normal
+/// permission, no runtime prompt).
+pub fn haptic_play(type_ptr: *const u8) {
+    let name = str_from_header(type_ptr);
+
+    // VibrationEffect.createPredefined effect ids (public constants,
+    // API 29+): EFFECT_CLICK=0, EFFECT_DOUBLE_CLICK=1, EFFECT_TICK=2,
+    // EFFECT_HEAVY_CLICK=5.
+    let effect_id: i32 = match name {
+        "success" | "medium" | "start" | "stop" => 0, // EFFECT_CLICK
+        "error" | "warning" => 1,                     // EFFECT_DOUBLE_CLICK (double buzz)
+        "heavy" => 5,                                 // EFFECT_HEAVY_CLICK
+        // light / click / selection / directionUp / directionDown /
+        // unknown — the subtle tick.
+        _ => 2, // EFFECT_TICK
+    };
+    // Duration (ms) for the pre-API-29 `vibrate(long)` fallback.
+    let fallback_ms: i64 = match name {
+        "error" | "warning" => 80,
+        "heavy" => 60,
+        "success" | "medium" | "start" | "stop" => 40,
+        _ => 20,
+    };
+
+    let mut env = jni_bridge::get_env();
+    let _ = env.push_local_frame(32);
+
+    // Haptics are fire-and-forget: any JNI failure (no vibrator
+    // service, missing VIBRATE permission, exotic OEM builds) degrades
+    // to the documented no-op instead of panicking the runtime.
+    if haptic_play_inner(&mut env, effect_id, fallback_ms).is_none() {
+        let _ = env.exception_clear();
+    }
+
+    unsafe {
+        env.pop_local_frame(&jni::objects::JObject::null());
+    }
+}
+
+fn haptic_play_inner(env: &mut jni::JNIEnv, effect_id: i32, fallback_ms: i64) -> Option<()> {
+    let activity = crate::widgets::get_activity(env);
+
+    // Context.VIBRATOR_SERVICE = "vibrator". Deprecated in favor of
+    // VIBRATOR_MANAGER_SERVICE on API 31+ but still returns the default
+    // Vibrator on every current Android version.
+    let service_name = env.new_string("vibrator").ok()?;
+    let vibrator = env
+        .call_method(
+            &activity,
+            "getSystemService",
+            "(Ljava/lang/String;)Ljava/lang/Object;",
+            &[JValue::Object(&service_name)],
+        )
+        .ok()?
+        .l()
+        .ok()?;
+    if vibrator.is_null() {
+        return Some(()); // no vibrator on this device — documented no-op
+    }
+
+    let sdk_int = env
+        .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
+        .ok()?
+        .i()
+        .ok()?;
+
+    if sdk_int >= 29 {
+        // VibrationEffect.createPredefined(int) + vibrate(VibrationEffect).
+        let effect = env
+            .call_static_method(
+                "android/os/VibrationEffect",
+                "createPredefined",
+                "(I)Landroid/os/VibrationEffect;",
+                &[JValue::Int(effect_id)],
+            )
+            .ok()?
+            .l()
+            .ok()?;
+        env.call_method(
+            &vibrator,
+            "vibrate",
+            "(Landroid/os/VibrationEffect;)V",
+            &[JValue::Object(&effect)],
+        )
+        .ok()?;
+    } else {
+        // Pre-29: the deprecated-but-present one-shot vibrate(long).
+        env.call_method(&vibrator, "vibrate", "(J)V", &[JValue::Long(fallback_ms)])
+            .ok()?;
+    }
+    Some(())
+}
+
 /// Tap-callback registration key (#97). Set via `notification_on_tap` and
 /// read by `Java_com_perry_app_PerryBridge_nativeNotificationTap` when the
 /// user taps a notification. `0` means "no tap callback registered".

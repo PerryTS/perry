@@ -395,6 +395,50 @@ pub extern "C" fn perry_system_preferences_get(key_ptr: i64) -> f64 {
     }
 }
 
+/// Play a haptic feedback effect (perry/system hapticPlay) via
+/// NSHapticFeedbackManager — the Force Touch trackpad actuator. Only
+/// fires on hardware with a haptic trackpad; AppKit makes it a silent
+/// no-op elsewhere, which matches the API contract.
+///
+/// Pattern raw values verified against the macOS 26.5 SDK's
+/// `AppKit/NSHapticFeedback.h`: Generic=0, Alignment=1, LevelChange=2.
+/// PerformanceTime: Default=0, Now=1, DrawCompleted=2.
+#[no_mangle]
+pub extern "C" fn perry_system_haptic_play(type_ptr: i64) {
+    fn str_from_header(ptr: *const u8) -> &'static str {
+        if ptr.is_null() {
+            return "";
+        }
+        unsafe {
+            let header = ptr as *const crate::string_header::StringHeader;
+            let len = (*header).byte_len as usize;
+            let data = ptr.add(std::mem::size_of::<crate::string_header::StringHeader>());
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len))
+        }
+    }
+    let name = str_from_header(type_ptr as *const u8);
+    // Semantic notification types get the stronger LevelChange pattern;
+    // everything else (impacts, ticks, directions) maps to Generic.
+    let pattern: i64 = match name {
+        "success" | "warning" | "error" => 2, // NSHapticFeedbackPatternLevelChange
+        _ => 0,                               // NSHapticFeedbackPatternGeneric
+    };
+    unsafe {
+        if let Some(mgr_cls) = objc2::runtime::AnyClass::get(c"NSHapticFeedbackManager") {
+            let performer: *mut objc2::runtime::AnyObject =
+                objc2::msg_send![mgr_cls, defaultPerformer];
+            if !performer.is_null() {
+                // NSHapticFeedbackPerformanceTimeNow = 1
+                let _: () = objc2::msg_send![
+                    performer,
+                    performFeedbackPattern: pattern,
+                    performanceTime: 1i64
+                ];
+            }
+        }
+    }
+}
+
 /// Set the font family on a Text widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
