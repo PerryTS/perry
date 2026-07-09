@@ -357,14 +357,73 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if sym_key == 0 {
             return;
         }
-        let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
+        {
+            let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(HashMap::new());
+            }
+            guard.as_mut().unwrap().insert(
+                (class_id, sym_key, is_static != 0),
+                (func_ptr as usize, param_count as u32, has_rest != 0),
+            );
         }
-        guard.as_mut().unwrap().insert(
-            (class_id, sym_key, is_static != 0),
-            (func_ptr as usize, param_count as u32, has_rest != 0),
-        );
+        // A computed key that evaluates to a WELL-KNOWN symbol — e.g. the
+        // minified `[(gm = new WeakMap, Symbol.asyncIterator)]() {…}` comma
+        // form, whose key expression the lowering can't see through
+        // statically — must land in the same synthetic vtable slot the
+        // static `[Symbol.asyncIterator]` lowering uses. Every consumer
+        // (GetIterator(async), the #5128 symbol-read binder,
+        // `js_to_primitive`, the using-block desugar) resolves these by the
+        // synthetic NAME on the class; `CLASS_SYMBOL_METHODS` above is not
+        // consulted for instance dispatch. Without the alias,
+        // `for await (… of instance)` threw `TypeError: value is not
+        // iterable` for the comma-keyed form.
+        if is_static == 0 {
+            let alias = [
+                ("iterator", "@@iterator"),
+                ("asyncIterator", "@@asyncIterator"),
+                ("toPrimitive", "@@toPrimitive"),
+                ("dispose", "__perry_dispose__"),
+                ("asyncDispose", "__perry_async_dispose__"),
+            ]
+            .iter()
+            .find_map(|(wk, method_name)| {
+                let s = crate::symbol::well_known_symbol(wk);
+                if s.is_null() {
+                    return None;
+                }
+                let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
+                if sym_key == crate::symbol::sym_key_from_f64(f) {
+                    Some(*method_name)
+                } else {
+                    None
+                }
+            });
+            if let Some(method_name) = alias {
+                let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
+                if registry.is_none() {
+                    *registry = Some(HashMap::new());
+                }
+                let vtable = registry
+                    .as_mut()
+                    .unwrap()
+                    .entry(class_id)
+                    .or_insert_with(|| ClassVTable {
+                        methods: HashMap::new(),
+                        getters: HashMap::new(),
+                        setters: HashMap::new(),
+                    });
+                vtable.methods.insert(
+                    method_name.to_string(),
+                    VTableMethodEntry {
+                        func_ptr: func_ptr as usize,
+                        param_count: param_count as u32,
+                        has_synthetic_arguments: false,
+                        has_rest: has_rest != 0,
+                    },
+                );
+            }
+        }
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
