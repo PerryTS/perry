@@ -139,6 +139,7 @@ enum SymbolSideTableRootSlot {
     SymbolPropertyOwner { owner: usize },
     SymbolPropertyEntry { owner: usize, sym_key: usize },
     SymbolPropertyAttrs { owner: usize, sym_key: usize },
+    SymbolAccessorProperty { owner: usize, sym_key: usize },
     ClassStaticSymbol { class_id: u32, sym_key: usize },
     SymbolPointer { ptr: usize },
 }
@@ -195,6 +196,10 @@ fn symbol_side_table_root_snapshot() -> Vec<SymbolSideTableRootSlot> {
         }
     }
 
+    for (owner, sym_key) in accessors::accessor_property_keys() {
+        slots.push(SymbolSideTableRootSlot::SymbolAccessorProperty { owner, sym_key });
+    }
+
     {
         let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if let Some(map) = guard.as_ref() {
@@ -235,6 +240,9 @@ fn scan_symbol_side_table_root_slot(
             };
             visitor.visit_usize_slot(entry_sym);
             visitor.visit_nanbox_u64_slot(value_bits);
+        }
+        SymbolSideTableRootSlot::SymbolAccessorProperty { owner, sym_key } => {
+            accessors::scan_symbol_accessor_root_slot(visitor, owner, sym_key);
         }
         SymbolSideTableRootSlot::SymbolPropertyAttrs { owner, sym_key } => {
             rewrite_symbol_property_attrs_if_forwarded(visitor, owner, sym_key);

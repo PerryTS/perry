@@ -72,6 +72,13 @@ pub fn gc_collect_minor() -> u64 {
 }
 
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Barriers-off ⇒ the remembered set is not being maintained, and a
+    // minor's black-leafed old parents would hide live children. Route
+    // every caller (direct arm, moving-safepoint arm, public FFI) to the
+    // full collection instead of trusting an empty RS.
+    if !gen_gc_enabled() {
+        return gc_collect_full_mark_sweep_with_trigger(trigger);
+    }
     // Phase C4b-γ-3: re-entrancy guard. Without this, the evacuation
     // pass's `arena_alloc_gc_old` can trigger `gc_check_trigger` (via
     // `arena.alloc`'s slow-path block-fill) DURING the outer collection
@@ -167,6 +174,17 @@ pub fn gen_gc_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
+        // Generational minors are only sound with runtime write barriers:
+        // minors black-leaf old parents and trust the remembered set for
+        // every old→young/old→malloc edge. `PERRY_WRITE_BARRIERS=0` used
+        // to disable only evacuation gating while minors kept running —
+        // the remembered set stayed empty, so a born-old (>16 KB) parent's
+        // nursery children were swept on the first minor and the
+        // "bisection" mode crashed for reasons unrelated to what was being
+        // bisected. Barriers off now means full mark-sweep only.
+        if !write_barriers_enabled() {
+            return false;
+        }
         !matches!(
             std::env::var("PERRY_GEN_GC").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

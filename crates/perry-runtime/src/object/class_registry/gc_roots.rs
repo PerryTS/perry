@@ -26,6 +26,9 @@ enum ClassSideTableRootSlot {
     ParentClosure {
         class_id: u32,
     },
+    DynamicParentValue {
+        class_id: u32,
+    },
     ClassSymbolMethod {
         class_id: u32,
         sym_key: usize,
@@ -226,6 +229,19 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     }
 
+    // Step twin of the CLASS_DYNAMIC_PARENT_VALUE block in
+    // `scan_class_side_table_roots_mut`. Cycle-based collections run only
+    // this snapshot machine, so omitting the stash meant a heap parent
+    // (`class X extends someRuntimeValue()`) reachable only through it was
+    // swept/left stale — `super()` then dereferenced freed/moved memory.
+    if let Ok(guard) = CLASS_DYNAMIC_PARENT_VALUE.read() {
+        if let Some(map) = guard.as_ref() {
+            for &class_id in map.keys() {
+                slots.push(ClassSideTableRootSlot::DynamicParentValue { class_id });
+            }
+        }
+    }
+
     if let Ok(guard) = CLASS_SYMBOL_METHODS.read() {
         if let Some(map) = guard.as_ref() {
             for &(class_id, sym_key, is_static) in map.keys() {
@@ -306,6 +322,13 @@ fn scan_class_side_table_root_slot(
             if let Ok(mut guard) = CLASS_PARENT_CLOSURES.write() {
                 if let Some(closure_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
                     visitor.visit_usize_slot(closure_addr);
+                }
+            }
+        }
+        ClassSideTableRootSlot::DynamicParentValue { class_id } => {
+            if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
+                if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                    visitor.visit_nanbox_u64_slot(value_bits);
                 }
             }
         }
