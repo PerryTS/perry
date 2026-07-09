@@ -134,10 +134,9 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         let freed_bytes = fast_path.freed_bytes;
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
-            let mut stats = stats.borrow_mut();
-            stats.collection_count += 1;
-            stats.total_freed_bytes += freed_bytes;
-            stats.last_pause_us = elapsed_us;
+            stats
+                .borrow_mut()
+                .record_collection(freed_bytes, elapsed_us);
         });
         restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut() {
@@ -523,6 +522,44 @@ pub extern "C" fn js_gc_stats(
             }
             if !out_pause_us.is_null() {
                 *out_pause_us = stats.last_pause_us;
+            }
+        }
+    });
+}
+
+/// FFI: always-on pause observability (#6187, 2026-07-09 audit). Fills the
+/// max pause since thread start, the max and mean over the recent-pause
+/// ring (`GC_RECENT_PAUSE_WINDOW` samples), and how many samples the ring
+/// currently holds. Cheap enough for a UI frame scheduler to poll per tick.
+#[no_mangle]
+pub extern "C" fn js_gc_pause_stats(
+    out_max_us: *mut u64,
+    out_recent_max_us: *mut u64,
+    out_recent_avg_us: *mut u64,
+    out_recent_count: *mut u64,
+) {
+    GC_STATS.with(|stats| {
+        let stats = stats.borrow();
+        let n = stats.recent_len as usize;
+        let window = &stats.recent_pauses_us[..n.min(GC_RECENT_PAUSE_WINDOW)];
+        let recent_max = window.iter().copied().max().unwrap_or(0);
+        let recent_avg = if window.is_empty() {
+            0
+        } else {
+            window.iter().copied().sum::<u64>() / window.len() as u64
+        };
+        unsafe {
+            if !out_max_us.is_null() {
+                *out_max_us = stats.max_pause_us;
+            }
+            if !out_recent_max_us.is_null() {
+                *out_recent_max_us = recent_max;
+            }
+            if !out_recent_avg_us.is_null() {
+                *out_recent_avg_us = recent_avg;
+            }
+            if !out_recent_count.is_null() {
+                *out_recent_count = n as u64;
             }
         }
     });

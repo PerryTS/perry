@@ -1,9 +1,40 @@
 use super::*;
 
+/// Number of most-recent pause samples retained per thread (#6187).
+pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
+
 pub struct GcStats {
     pub collection_count: u64,
     pub total_freed_bytes: u64,
     pub last_pause_us: u64,
+    /// 2026-07-09 audit (#6187): always-on pause observability. A frame
+    /// scheduler or an ops dashboard needs more than the last sample; the
+    /// max-since-start plus a small ring of recent pauses costs a few
+    /// stores per collection and a few hundred bytes of TLS. The rich
+    /// per-phase traces stay behind PERRY_GC_TRACE.
+    pub max_pause_us: u64,
+    pub recent_pauses_us: [u64; GC_RECENT_PAUSE_WINDOW],
+    pub recent_cursor: u8,
+    pub recent_len: u8,
+}
+
+impl GcStats {
+    /// Single funnel for per-collection accounting: last/max pause and the
+    /// recent-pause ring advance together with the counters, so no future
+    /// collection path can update one without the others.
+    pub(super) fn record_collection(&mut self, freed_bytes: u64, elapsed_us: u64) {
+        self.collection_count += 1;
+        self.total_freed_bytes = self.total_freed_bytes.saturating_add(freed_bytes);
+        self.last_pause_us = elapsed_us;
+        if elapsed_us > self.max_pause_us {
+            self.max_pause_us = elapsed_us;
+        }
+        self.recent_pauses_us[self.recent_cursor as usize] = elapsed_us;
+        self.recent_cursor = ((self.recent_cursor as usize + 1) % GC_RECENT_PAUSE_WINDOW) as u8;
+        if (self.recent_len as usize) < GC_RECENT_PAUSE_WINDOW {
+            self.recent_len += 1;
+        }
+    }
 }
 
 thread_local! {
@@ -11,6 +42,10 @@ thread_local! {
         collection_count: 0,
         total_freed_bytes: 0,
         last_pause_us: 0,
+        max_pause_us: 0,
+        recent_pauses_us: [0; GC_RECENT_PAUSE_WINDOW],
+        recent_cursor: 0,
+        recent_len: 0,
     }) };
 }
 

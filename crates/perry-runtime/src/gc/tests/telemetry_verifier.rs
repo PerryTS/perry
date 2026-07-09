@@ -331,3 +331,38 @@ fn verifier_rejects_over_budget_ordinary_step() {
         "synthetic over-budget ordinary step should fail verifier"
     );
 }
+
+// #6187: the always-on pause ring must track last/max/window coherently.
+#[test]
+fn test_pause_ring_records_max_and_window() {
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        let baseline_count = stats.collection_count;
+        stats.record_collection(10, 100);
+        stats.record_collection(0, 900);
+        stats.record_collection(5, 300);
+        assert_eq!(stats.collection_count, baseline_count + 3);
+        assert_eq!(stats.last_pause_us, 300);
+        assert!(stats.max_pause_us >= 900);
+        assert!(stats.recent_len >= 3);
+    });
+    // Overflow the ring: cursor wraps, len saturates at the window size.
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        for i in 0..(GC_RECENT_PAUSE_WINDOW as u64 + 5) {
+            stats.record_collection(0, i + 1);
+        }
+        assert_eq!(stats.recent_len as usize, GC_RECENT_PAUSE_WINDOW);
+        assert!((stats.recent_cursor as usize) < GC_RECENT_PAUSE_WINDOW);
+        assert_eq!(stats.last_pause_us, GC_RECENT_PAUSE_WINDOW as u64 + 5);
+    });
+    let mut max_us = 0u64;
+    let mut recent_max = 0u64;
+    let mut recent_avg = 0u64;
+    let mut count = 0u64;
+    js_gc_pause_stats(&mut max_us, &mut recent_max, &mut recent_avg, &mut count);
+    assert_eq!(count as usize, GC_RECENT_PAUSE_WINDOW);
+    assert!(max_us >= 900);
+    assert!(recent_max >= GC_RECENT_PAUSE_WINDOW as u64);
+    assert!(recent_avg > 0 && recent_avg <= recent_max);
+}
