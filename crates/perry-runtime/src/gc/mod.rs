@@ -56,6 +56,9 @@ mod barrier;
 pub use barrier::*;
 mod copying;
 use copying::*;
+// The copied-minor pointer classifier is consumed by the weak-holder registry
+// pass in `crate::weakref` (#6182), which lives outside the gc module.
+pub(crate) use copying::{CopyingPointer, CopyingPointerSet};
 mod dead_owner;
 mod oldgen;
 use oldgen::*;
@@ -436,6 +439,12 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
     gc_register_mutable_root_scanner(crate::builtins::scan_boxed_primitive_payload_roots_mut);
     gc_register_mutable_root_scanner(crate::weakref::scan_pending_finalization_jobs_roots_mut);
+    // #6182: keep the weak-holder registry's stored holder ADDRESSES current
+    // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
+    // addresses in rewrite phases and emits nothing during mark, so it never
+    // keeps a dead holder alive. Copied-minor liveness/prune is driven by
+    // `process_weak_targets_from_registry`; this covers full-cycle currency.
+    gc_register_mutable_root_scanner(crate::weakref::scan_weak_holders_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle

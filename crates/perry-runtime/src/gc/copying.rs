@@ -11,12 +11,12 @@ pub(super) enum CopyingPointerKind {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct CopyingPointer {
-    pub(super) header: *mut GcHeader,
+pub(crate) struct CopyingPointer {
+    pub(crate) header: *mut GcHeader,
     pub(super) kind: CopyingPointerKind,
 }
 
-pub(super) struct CopyingPointerSet {
+pub(crate) struct CopyingPointerSet {
     pub(super) malloc_registry_available: Cell<bool>,
     pub(super) malloc_registry_empty_at_start: bool,
     pub(super) malloc_validation_lookups: Cell<usize>,
@@ -39,7 +39,7 @@ impl CopyingPointerSet {
     }
 
     #[inline]
-    pub(super) fn classify(&self, addr: usize) -> Option<CopyingPointer> {
+    pub(crate) fn classify(&self, addr: usize) -> Option<CopyingPointer> {
         self.classify_arena(addr)
             .or_else(|| self.classify_malloc(addr))
     }
@@ -1085,23 +1085,33 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // operative cycle (unbounded retention in long-running servers).
     // Now the scan records weak slots without evacuating; here we repair
     // any whose target was moved via a strong edge after the slot was
-    // visited, then run the shared after-mark tombstone pass. Must run
+    // visited, then run the registry-scoped tombstone pass. Must run
     // BEFORE `copying_reset_from_spaces_and_flip` below: liveness is
     // MARKED|PINNED on pre-flip headers (to-space copies carry MARKED
-    // until `clear_marks`). Gated on the weak-holder latch so programs
-    // that never allocate a weak container skip the full arena walk.
+    // until `clear_marks`), and dead holders' from-space headers are still
+    // intact/classifiable before the flip. Gated on the weak-holder latch
+    // (now "registry non-empty") so programs that never allocate — or that
+    // once did but whose holders have all died — skip the pass entirely.
+    //
+    // 2026-07-09 GC audit (#6182): this used to build a full-heap
+    // `build_valid_pointer_set()` BTreeSet AND `arena_walk_objects` over
+    // EVERY live object to find the 3 weak-holder class_ids — two O(all
+    // objects) passes forfeited forever once any WeakMap/WeakRef/FinReg was
+    // allocated. `process_weak_targets_from_registry` instead walks only the
+    // registered holders and classifies targets with the O(1) page-metadata
+    // classifier the copy already built (`collector.ptrs`) — no BTreeSet, no
+    // arena walk. The full-cycle path (cycle.rs `WeakProcessing`) is
+    // untouched and still uses the valid-pointer set it built for its trace.
     unsafe {
         collector.repair_weak_slots();
     }
     if crate::weakref::weak_target_holders_allocated() {
         let phase_start = trace_phase_start(trace);
-        let valid_ptrs = build_valid_pointer_set();
         // Enqueue FinalizationRegistry cleanup jobs on every trigger kind —
         // see the matching WeakProcessing comment in cycle.rs (2026-07-09 GC
         // audit: delivery was gated on the Manual trigger).
-        crate::weakref::process_weak_targets_after_mark(
-            &valid_ptrs,
-            /* minor_only = */ true,
+        crate::weakref::process_weak_targets_from_registry(
+            &collector.ptrs,
             /* enqueue_callbacks = */ true,
         );
         trace_phase_record(trace, "weak_processing", phase_start);
