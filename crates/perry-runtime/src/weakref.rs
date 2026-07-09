@@ -711,7 +711,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         weak_target_should_clear_copied(target_bits, self.ptrs)
     }
     unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader> {
-        classify_live_gc_type(bits, self.ptrs, crate::gc::GC_TYPE_ARRAY)
+        classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_ARRAY)
             .map(|ptr| ptr as *mut ArrayHeader)
     }
     unsafe fn as_live_object_with_class(
@@ -719,20 +719,31 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         bits: u64,
         class_id: u32,
     ) -> Option<*mut ObjectHeader> {
-        let ptr = classify_live_gc_type(bits, self.ptrs, crate::gc::GC_TYPE_OBJECT)?;
+        let ptr = classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_OBJECT)?;
         let obj = ptr as *mut ObjectHeader;
         ((*obj).class_id == class_id).then_some(obj)
     }
 }
 
 /// Copied-minor twin of `weak_target_should_clear`. A weak target is collected
-/// iff it is a REAL heap object the classifier can attribute and that object is
-/// not live (MARKED|PINNED). The key correctness difference from the
-/// `ValidPointerSet` predicate: a classifier miss (`None`) means "not a
-/// collectible heap object" — a handle-band id (Proxy / node:http / fetch /
-/// Web-Stream) or any non-heap pointer — so we KEEP it. The old predicate
-/// treated "not in valid_ptrs" as dead, which FALSE-tombstoned live handle-band
-/// weak keys ≥0x1000 on the first GC (2026-07-09 audit §8); this path fixes it.
+/// iff it is a REAL, NURSERY heap object the classifier can attribute and that
+/// object is not live (MARKED|PINNED). Two correctness rules, both replicating
+/// the `weak_target_should_clear(.., minor_only = true)` semantics:
+///
+/// * A classifier miss (`None`) means "not a collectible heap object" — a
+///   handle-band id (Proxy / node:http / fetch / Web-Stream) or any non-heap
+///   pointer — so KEEP it. The old `ValidPointerSet` predicate treated "not in
+///   valid_ptrs" as dead, which FALSE-tombstoned live handle-band weak keys
+///   ≥0x1000 on the first GC (2026-07-09 audit §8); this path fixes it.
+/// * A copied minor IS a MINOR, so it does NOT mark the old generation (old
+///   objects are black leaves, not re-traced). An old-gen / longlived / malloc
+///   target is therefore live-but-unmarked here — its mark bit proves nothing —
+///   so it must be conservatively KEPT (a full GC tombstones it properly once it
+///   traces old-gen). This mirrors the original `minor_only && !pointer_in_nursery`
+///   guard: without it a WeakMap key that survived enough minors to be PROMOTED
+///   to old-gen would be silently dropped from the map on the next copied minor.
+///   Only nursery/survivor targets — which this minor DID trace — may be judged
+///   dead by their mark bit.
 fn weak_target_should_clear_copied(target_bits: u64, ptrs: &crate::gc::CopyingPointerSet) -> bool {
     if target_bits == TAG_UNDEFINED {
         return false;
@@ -747,44 +758,92 @@ fn weak_target_should_clear_copied(target_bits: u64, ptrs: &crate::gc::CopyingPo
     match ptrs.classify(ptr) {
         // Band-id handle / non-heap pointer → not collectible → keep.
         None => false,
-        // Real heap object → dead iff not MARKED|PINNED.
-        Some(cp) => unsafe { !header_is_live(cp.header) },
+        Some(cp) => {
+            // Old / longlived / malloc target in a minor: unmarked ≠ dead → keep.
+            if !crate::arena::pointer_in_nursery(ptr) {
+                return false;
+            }
+            // Nursery/survivor target this minor traced: dead iff not MARKED|PINNED.
+            unsafe { !header_is_live(cp.header) }
+        }
     }
 }
 
-/// Resolve `bits` to a live heap object of `obj_type` using the copied-minor
+/// Resolve `bits` to a heap object of `obj_type` using the copied-minor
 /// classifier, without following forwarding (the caller's fields are already
-/// current). Returns the user address, or `None` if dead / wrong type.
-unsafe fn classify_live_gc_type(
+/// current). Returns the user address, or `None` if not a valid heap object of
+/// that type.
+///
+/// This intentionally does NOT gate on the mark bit: it resolves a STRONG child
+/// of a holder whose liveness `resolve_live_holder_copied` already established
+/// (a FinalizationRegistry's entries array and records). Requiring MARKED would
+/// wrongly drop an entries array or record that was PROMOTED to old-gen (a minor
+/// doesn't mark old-gen), delaying finalization — the original
+/// `object_value_to_array` / `object_value_with_class` resolvers only checked
+/// validity + `obj_type`, never MARKED.
+unsafe fn classify_gc_type_child(
     bits: u64,
     ptrs: &crate::gc::CopyingPointerSet,
     obj_type: u8,
 ) -> Option<usize> {
     let ptr = heap_ptr_from_tagged_bits(bits)?;
     let cp = ptrs.classify(ptr)?;
-    if !header_is_live(cp.header) {
-        return None;
-    }
     (unsafe { (*cp.header).obj_type } == obj_type).then_some(ptr)
 }
 
-/// Follow a registered holder address to its current (post-evacuation)
-/// location and confirm the holder is live. Returns the current user address,
-/// or `None` when the holder is dead (unmarked, un-forwarded) or the address
-/// is no longer classifiable (stale / recycled). Copied-minor only: it reads
-/// pre-flip from-space headers, so the FORWARDED bit and the forwarding
-/// address are still valid.
-unsafe fn resolve_live_holder_copied(
+/// What the copied-minor pass should do with a registered holder address.
+enum HolderDisposition {
+    /// Live holder scanned this cycle (its weak slots are repaired): rekey the
+    /// registry to this current address and process it.
+    Process(usize),
+    /// Cannot be proven dead in a minor (an unmarked OLD/longlived holder — a
+    /// minor doesn't mark old-gen) AND its weak slots may be stale/unrepaired:
+    /// leave it registered untouched and let a full GC resolve it. Mirrors the
+    /// original arena walk, which only ever processed MARKED objects.
+    Keep,
+    /// Provably dead (unmarked nursery holder) or unclassifiable (stale /
+    /// recycled address): remove it from the registry.
+    Drop,
+}
+
+/// Decide the disposition of a registered holder in a copied minor. Copied-minor
+/// only: it reads pre-flip from-space headers, so the FORWARDED bit and the
+/// forwarding address are still valid.
+///
+/// A copied minor is a MINOR — it authoritatively traces only the nursery and
+/// does NOT mark or scan the old generation. So:
+/// * a live young holder is EVACUATED (FORWARDED); its to-space copy carries
+///   MARKED and had its weak slots repaired this cycle → `Process`;
+/// * an unmarked NURSERY holder is genuinely dead (an eligible copied minor has
+///   no pinned young survivors) → `Drop`;
+/// * an unmarked OLD/longlived holder is live-but-unmarked and its weak slots
+///   were neither repaired nor remembered, so it can be neither proven dead nor
+///   safely processed here → `Keep` (a full GC handles it).
+unsafe fn resolve_weak_holder_copied(
     ptrs: &crate::gc::CopyingPointerSet,
     addr: usize,
-) -> Option<usize> {
-    let cp = ptrs.classify(addr)?;
-    if (*cp.header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+) -> HolderDisposition {
+    let Some(cp) = ptrs.classify(addr) else {
+        return HolderDisposition::Drop;
+    };
+    let (cur_addr, cur_header) = if (*cp.header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         let fwd = crate::gc::forwarding_address(cp.header) as usize;
-        let cp2 = ptrs.classify(fwd)?;
-        return header_is_live(cp2.header).then_some(fwd);
+        match ptrs.classify(fwd) {
+            Some(cp2) => (fwd, cp2.header),
+            None => return HolderDisposition::Drop,
+        }
+    } else {
+        (addr, cp.header)
+    };
+    if header_is_live(cur_header) {
+        // MARKED|PINNED ⇒ scanned this cycle ⇒ weak slots repaired ⇒ processable.
+        return HolderDisposition::Process(cur_addr);
     }
-    header_is_live(cp.header).then_some(addr)
+    if crate::arena::pointer_in_nursery(cur_addr) {
+        HolderDisposition::Drop
+    } else {
+        HolderDisposition::Keep
+    }
 }
 
 /// Full / fallback-cycle weak processing. Walks EVERY live object in the arena
@@ -829,22 +888,32 @@ pub(crate) fn process_weak_targets_from_registry(
     let snapshot: Vec<usize> =
         WEAK_HOLDERS.with(|holders| holders.borrow().iter().copied().collect());
     for addr in snapshot {
-        let Some(current) = (unsafe { resolve_live_holder_copied(ptrs, addr) }) else {
-            // Dead or unclassifiable holder → drop and skip.
-            WEAK_HOLDERS.with(|holders| {
-                holders.borrow_mut().remove(&addr);
-            });
-            continue;
-        };
-        if current != addr {
-            WEAK_HOLDERS.with(|holders| {
-                let mut holders = holders.borrow_mut();
-                holders.remove(&addr);
-                holders.insert(current);
-            });
-        }
-        unsafe {
-            dispatch_weak_holder(current as *mut ObjectHeader, &liveness, enqueue_callbacks);
+        match unsafe { resolve_weak_holder_copied(ptrs, addr) } {
+            HolderDisposition::Drop => {
+                WEAK_HOLDERS.with(|holders| {
+                    holders.borrow_mut().remove(&addr);
+                });
+            }
+            // Live old holder: keep tracking it, but do not process it this
+            // minor (a full GC will). Not dropping keeps a promoted holder from
+            // being forgotten by the registry.
+            HolderDisposition::Keep => {}
+            HolderDisposition::Process(current) => {
+                if current != addr {
+                    WEAK_HOLDERS.with(|holders| {
+                        let mut holders = holders.borrow_mut();
+                        holders.remove(&addr);
+                        holders.insert(current);
+                    });
+                }
+                unsafe {
+                    dispatch_weak_holder(
+                        current as *mut ObjectHeader,
+                        &liveness,
+                        enqueue_callbacks,
+                    );
+                }
+            }
         }
     }
 }

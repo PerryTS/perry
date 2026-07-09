@@ -318,3 +318,135 @@ fn test_copied_minor_finreg_enqueues_cleanup_via_registry() {
         "a second automatic cycle must NOT re-enqueue the same record"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Promoted-key generational-invariant guards.
+//
+// A copied minor does NOT mark the old generation (old objects are black
+// leaves, not re-traced), so a weak target that survived enough minors to be
+// PROMOTED to old-gen is live-but-unmarked during a copied minor. Judging its
+// deadness by the mark bit would silently drop a live entry / deref / target.
+// Each of these FAILS against a mark-only copied-minor predicate and PASSES
+// with the `pointer_in_nursery` guard (replicating `minor_only`).
+// ---------------------------------------------------------------------------
+
+/// Drive a rooted young object to old-gen via `GC_COPY_PROMOTION_SURVIVALS`
+/// (4) survivals, then return its (promoted) address. Leaves it rooted in
+/// `slot`.
+fn promote_rooted_to_old(slot: u32) -> usize {
+    for _ in 0..4 {
+        let _ = gc_collect_minor();
+    }
+    let addr = (js_shadow_slot_get(slot) & POINTER_MASK) as usize;
+    assert!(
+        crate::arena::pointer_in_old_gen(addr),
+        "test premise: the object must be promoted to old-gen after 4 survivals"
+    );
+    addr
+}
+
+/// A WeakMap key promoted to old-gen (still strongly held) whose entry is a
+/// young object must NOT be tombstoned by a further copied minor. Pre-fix
+/// (`classify → !header_is_live`) the unmarked old key was judged dead and the
+/// entry silently dropped from the map.
+#[test]
+fn test_copied_minor_promoted_weakmap_key_not_tombstoned() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let key = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(1, obj_bits(key));
+    let key_old = promote_rooted_to_old(1);
+
+    // Fresh (young) WeakMap + entry keyed by the promoted old-gen key.
+    let map = crate::weakref::js_weakmap_new();
+    js_shadow_slot_set(0, obj_bits(map));
+    let map_v = f64::from_bits(js_shadow_slot_get(0));
+    crate::weakref::js_weakmap_set(
+        map_v,
+        f64::from_bits(ptr_bits(key_old)),
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let key_now = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    let map_v = f64::from_bits(js_shadow_slot_get(0));
+    assert_eq!(
+        crate::weakref::js_weakmap_has(map_v, f64::from_bits(ptr_bits(key_now))).to_bits(),
+        crate::value::TAG_TRUE,
+        "a live WeakMap key PROMOTED to old-gen must NOT be tombstoned by a copied minor \
+         (a minor does not mark old-gen)"
+    );
+    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+    assert_eq!(
+        crate::weakref::weak_collection_entries(map_after).len(),
+        1,
+        "the promoted-key entry must survive"
+    );
+}
+
+/// A WeakRef whose target is promoted to old-gen and still live must deref to
+/// the target (not `undefined`) after a copied minor.
+#[test]
+fn test_copied_minor_weakref_promoted_target_survives() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let target = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(1, obj_bits(target));
+    let target_old = promote_rooted_to_old(1);
+
+    let wr = crate::weakref::js_weakref_new(f64::from_bits(ptr_bits(target_old)));
+    js_shadow_slot_set(0, obj_bits(wr));
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let wr_after = ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize);
+    let target_now = js_shadow_slot_get(1) & POINTER_MASK;
+    let deref = crate::weakref::js_weakref_deref(f64::from_bits(wr_after)).to_bits();
+    assert_ne!(
+        deref,
+        crate::value::TAG_UNDEFINED,
+        "a live WeakRef target promoted to old-gen must NOT be tombstoned by a copied minor"
+    );
+    assert_eq!(
+        deref & POINTER_MASK,
+        target_now,
+        "deref must return the (old-gen) target"
+    );
+}
+
+/// A FinalizationRegistry target promoted to old-gen and still live must NOT be
+/// reported collected by a copied minor (no cleanup job enqueued). Pre-fix the
+/// unmarked old target was judged collected and its callback prematurely queued.
+#[test]
+fn test_copied_minor_finreg_promoted_live_target_not_collected() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let target = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(1, obj_bits(target));
+    let target_old = promote_rooted_to_old(1);
+
+    let cb = crate::closure::js_closure_alloc(finreg_registry_test_callback as *const u8, 0);
+    let reg = crate::weakref::js_finreg_new(f64::from_bits(ptr_bits(cb as usize)));
+    js_shadow_slot_set(0, obj_bits(reg));
+    let reg_v = f64::from_bits(js_shadow_slot_get(0));
+    crate::weakref::js_finreg_register(
+        reg_v,
+        f64::from_bits(ptr_bits(target_old)),
+        f64::from_bits(crate::value::TAG_TRUE),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(crate::weakref::pending_finalization_jobs_count(), 0);
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        0,
+        "a FinalizationRegistry target promoted to old-gen and still live must NOT be \
+         reported collected by a copied minor"
+    );
+}
