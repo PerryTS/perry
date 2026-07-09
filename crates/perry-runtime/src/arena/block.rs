@@ -197,6 +197,62 @@ impl Arena {
         }
     }
 
+    /// Lazy variant of `new`: starts with a single tombstone block
+    /// (`data = null, size = 0`) instead of an eagerly-mapped 1 MB
+    /// block, so JS-touching threads that never allocate in this
+    /// region (spawn workers, tokio callers) don't pay the block.
+    /// The tombstone shape is exactly the one C4b-δ dealloc leaves
+    /// behind, so every walker/reset/alloc path already handles it:
+    /// the first `alloc` misses the tombstone, and the slow path's
+    /// `install_fresh_block` replaces the tombstone slot in place.
+    /// Only used for the non-Eden regions — Eden must stay eager
+    /// because `js_inline_arena_state` hands its current block to
+    /// codegen's inline bump allocator at thread start.
+    fn new_lazy(generation: HeapGeneration, space: HeapSpace) -> Self {
+        Arena {
+            blocks: vec![ArenaBlock {
+                data: std::ptr::null_mut(),
+                size: 0,
+                offset: 0,
+                dead_cycles: 0,
+            }],
+            current: 0,
+            generation,
+            space,
+        }
+    }
+
+    /// Bump-allocate in `blocks[idx]`, delta-maintaining the cached
+    /// old-gen in-use counter (see `OLD_GEN_IN_USE_BYTES`). Every
+    /// successful offset advance of an old-arena block MUST go through
+    /// here — a bypassed site silently skews the OldReclaim trigger.
+    #[inline]
+    fn try_block_alloc(&mut self, idx: usize, size: usize, align: usize) -> Option<*mut u8> {
+        let before = self.blocks[idx].offset;
+        let ptr = self.blocks[idx].alloc(size, align)?;
+        if self.generation == HeapGeneration::Old {
+            old_gen_in_use_bytes_add(self.blocks[idx].offset - before);
+        }
+        Some(ptr)
+    }
+
+    /// `try_block_alloc` twin for the page-excluding path.
+    #[inline]
+    fn try_block_alloc_excluding_pages(
+        &mut self,
+        idx: usize,
+        size: usize,
+        align: usize,
+        excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
+    ) -> Option<*mut u8> {
+        let before = self.blocks[idx].offset;
+        let ptr = self.blocks[idx].alloc_excluding_pages(size, align, excluded_pages)?;
+        if self.generation == HeapGeneration::Old {
+            old_gen_in_use_bytes_add(self.blocks[idx].offset - before);
+        }
+        Some(ptr)
+    }
+
     #[inline]
     fn resync_inline_to_current(&self) {
         // `INLINE_STATE` mirrors ONLY the general nursery-Eden arena — the
@@ -254,8 +310,7 @@ impl Arena {
 
     fn alloc_fresh_block(&mut self, size: usize, align: usize) -> *mut u8 {
         self.install_fresh_block(size);
-        self.blocks[self.current]
-            .alloc(size, align)
+        self.try_block_alloc(self.current, size, align)
             .expect("Fresh block should have space")
     }
 
@@ -268,7 +323,7 @@ impl Arena {
         loop {
             self.install_fresh_block(size);
             if let Some(ptr) =
-                self.blocks[self.current].alloc_excluding_pages(size, align, excluded_pages)
+                self.try_block_alloc_excluding_pages(self.current, size, align, excluded_pages)
             {
                 return ptr;
             }
@@ -278,7 +333,7 @@ impl Arena {
     #[inline]
     pub(crate) fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
         // Try current block first
-        if let Some(ptr) = self.blocks[self.current].alloc(size, align) {
+        if let Some(ptr) = self.try_block_alloc(self.current, size, align) {
             return ptr;
         }
 
@@ -296,7 +351,7 @@ impl Arena {
         // Retry the (possibly newly-reset) current block. arena.current
         // may have been changed by arena_reset_empty_blocks to point
         // at the lowest reset block.
-        if let Some(ptr) = self.blocks[self.current].alloc(size, align) {
+        if let Some(ptr) = self.try_block_alloc(self.current, size, align) {
             return ptr;
         }
 
@@ -308,7 +363,7 @@ impl Arena {
             if i == self.current {
                 continue;
             }
-            if let Some(ptr) = self.blocks[i].alloc(size, align) {
+            if let Some(ptr) = self.try_block_alloc(i, size, align) {
                 self.current = i;
                 // Resync inline state to the new current block.
                 self.resync_inline_to_current();
@@ -335,7 +390,7 @@ impl Arena {
             return self.alloc(size, align);
         }
         if let Some(ptr) =
-            self.blocks[self.current].alloc_excluding_pages(size, align, excluded_pages)
+            self.try_block_alloc_excluding_pages(self.current, size, align, excluded_pages)
         {
             return ptr;
         }
@@ -343,7 +398,8 @@ impl Arena {
             if i == self.current {
                 continue;
             }
-            if let Some(ptr) = self.blocks[i].alloc_excluding_pages(size, align, excluded_pages) {
+            if let Some(ptr) = self.try_block_alloc_excluding_pages(i, size, align, excluded_pages)
+            {
                 self.current = i;
                 self.resync_inline_to_current();
                 return ptr;
@@ -366,6 +422,31 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
+    /// Cached running sum of `block.offset` across the old-gen arena —
+    /// the delta-maintained twin of `ARENA_TOTAL_BYTES` above, same
+    /// rationale: `gc_budgeted_due_trigger()` reads the old-gen in-use
+    /// total on every `gc_check_trigger` (i.e. every `gc_malloc` and
+    /// every nursery block fill), and recomputing it walked every
+    /// old-arena block each time — a linear-in-old-gen tax on every
+    /// malloc-class allocation once the old gen holds real data.
+    /// Mutation sites (each MUST maintain the delta):
+    ///   - `Arena::try_block_alloc` / `try_block_alloc_excluding_pages`
+    ///     (the only offset-advance funnel for `Arena::alloc`,
+    ///     `alloc_excluding_pages`, and the fresh-block paths),
+    ///   - `reset_region_to_zero` (generation-aware, reset.rs),
+    ///   - the old-arena reclaim family in reset.rs
+    ///     (`old_arena_reclaim_dead_blocks`,
+    ///     `old_arena_reclaim_selected_dead_blocks`,
+    ///     `OldArenaReclaimDeadBlocksState::process_block`) which zero
+    ///     old block offsets on sweep/defrag.
+    /// Block install/dealloc paths don't touch it: fresh blocks start
+    /// at offset 0 and blocks are only deallocated after their offset
+    /// was already zeroed. `old_gen_in_use_bytes()` (stats.rs)
+    /// debug-asserts this cache against the O(blocks) recompute so a
+    /// missed mutation site fails tests instead of silently skewing
+    /// the OldReclaim trigger.
+    pub(crate) static OLD_GEN_IN_USE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
     pub(crate) static ARENA: UnsafeCell<Arena> =
         UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::NurseryEden));
 
@@ -387,15 +468,15 @@ thread_local! {
     /// scanners (`scan_parse_roots`, `scan_shape_cache_roots`,
     /// `scan_transition_cache_roots`) keep them marked.
     pub(crate) static LONGLIVED_ARENA: UnsafeCell<Arena> =
-        UnsafeCell::new(Arena::new(HeapGeneration::Longlived, HeapSpace::Longlived));
+        UnsafeCell::new(Arena::new_lazy(HeapGeneration::Longlived, HeapSpace::Longlived));
 
     /// Copying nursery survivor semispaces. At most one is the active
     /// from-space at the start of a copying minor GC; the other is reset
     /// and used as to-space for fresh Eden survivors.
     pub(crate) static SURVIVOR_ARENA_0: UnsafeCell<Arena> =
-        UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::Survivor0));
+        UnsafeCell::new(Arena::new_lazy(HeapGeneration::Nursery, HeapSpace::Survivor0));
     pub(crate) static SURVIVOR_ARENA_1: UnsafeCell<Arena> =
-        UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::Survivor1));
+        UnsafeCell::new(Arena::new_lazy(HeapGeneration::Nursery, HeapSpace::Survivor1));
     pub(crate) static ACTIVE_SURVIVOR: Cell<usize> = const { Cell::new(0) };
 
     /// Generational-GC old-generation arena (gen-GC Phase B per
@@ -413,7 +494,7 @@ thread_local! {
     /// mark-sweep can reclaim completely dead old blocks through the
     /// dedicated old-arena reset/deallocation path.
     pub(crate) static OLD_ARENA: UnsafeCell<Arena> =
-        UnsafeCell::new(Arena::new(HeapGeneration::Old, HeapSpace::Old));
+        UnsafeCell::new(Arena::new_lazy(HeapGeneration::Old, HeapSpace::Old));
 
     /// Inline allocator state — a cache of the current arena block's
     /// `(data, offset, size)` triple, exposed via a stable pointer so
@@ -429,4 +510,22 @@ thread_local! {
         offset: 0,
         size: 0,
     }) };
+}
+
+/// Delta-maintenance for `OLD_GEN_IN_USE_BYTES` — see the thread-local's
+/// doc comment for the full mutation-site inventory.
+#[inline]
+pub(crate) fn old_gen_in_use_bytes_add(delta: usize) {
+    if delta == 0 {
+        return;
+    }
+    OLD_GEN_IN_USE_BYTES.with(|c| c.set(c.get().saturating_add(delta)));
+}
+
+#[inline]
+pub(crate) fn old_gen_in_use_bytes_sub(delta: usize) {
+    if delta == 0 {
+        return;
+    }
+    OLD_GEN_IN_USE_BYTES.with(|c| c.set(c.get().saturating_sub(delta)));
 }

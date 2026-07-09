@@ -84,6 +84,11 @@ pub(crate) struct MallocState {
     /// already-active exact registry, but must never rebuild it on the fast
     /// path because that would scale with total malloc churn.
     pub(super) registry_state: MallocRegistryState,
+    /// One-shot latch for the small-start → heavy-capacity growth (see
+    /// `MALLOC_STATE_INITIAL_CAPACITY`). Stays latched even if a sweep
+    /// later drops `objects.len()` back under the threshold — a thread
+    /// that was malloc-heavy once keeps the reserved capacity.
+    pub(super) heavy_capacity_reserved: bool,
     pub(super) kind_telemetry: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
 }
 
@@ -95,19 +100,28 @@ pub(super) enum MallocRegistryState {
 
 /// Pre-allocated capacity for `MallocState.objects` and `.set`.
 ///
-/// On promise-heavy kernels (`promise_all_chains` allocates ~200 k
-/// strings/closures/promises before the first GC) the set grows from
-/// 0 → 128 → … → 256 k buckets across the allocation history. Each
-/// hashbrown doubling re-inserts every existing key, and at the
-/// ~100 k mark those rehashes were the single hottest leaf in the
-/// profile (15.6 % self-time on `gc_malloc`'s caller chain). Starting
-/// at 256 k buckets covers the kernel's full pre-GC working set
-/// (200 k entries at hashbrown's 7/8 load factor) in one allocation —
-/// subsequent kernel iterations re-use the slots that sweep re-emptied,
-/// so we never pay the rehash tax. Cost: one upfront ~4 MB allocation
-/// per thread (vs ~2 MB at 128 k); pays for itself on the first 100
-/// allocations.
-pub(super) const MALLOC_STATE_INITIAL_CAPACITY: usize = 256 * 1024;
+/// History: this used to be a flat 256 k (`MALLOC_STATE_HEAVY_CAPACITY`
+/// below), sized for promise-heavy kernels (`promise_all_chains`
+/// allocates ~200 k strings/closures/promises before the first GC)
+/// where hashbrown's doubling rehashes at the ~100 k mark were the
+/// single hottest leaf in the profile (15.6 % self-time on
+/// `gc_malloc`'s caller chain). But that pre-sized a ~2 MB Vec plus a
+/// ~4 MB PtrHashSet on EVERY JS-touching thread — spawn workers and
+/// tokio callers that allocate a few hundred malloc objects paid a
+/// ~6 MB floor for a benchmark they never run. Now: start small, and
+/// the first time a thread's tracked-object count crosses
+/// `MALLOC_STATE_HEAVY_LEN_THRESHOLD` (a genuinely malloc-heavy
+/// thread), reserve straight to the heavy capacity in one step —
+/// preserving the rehash-amortization rationale exactly where it
+/// mattered while cutting the per-thread floor everywhere else.
+pub(super) const MALLOC_STATE_INITIAL_CAPACITY: usize = 4096;
+/// One-time growth trigger: a thread whose live tracked-object count
+/// reaches this is on the promise-heavy profile — reserve the rest.
+pub(super) const MALLOC_STATE_HEAVY_LEN_THRESHOLD: usize = 64 * 1024;
+/// Capacity reserved once the heavy threshold trips (the old flat
+/// pre-size; covers the 200 k-entry pre-GC working set at hashbrown's
+/// 7/8 load factor without further rehashes).
+pub(super) const MALLOC_STATE_HEAVY_CAPACITY: usize = 256 * 1024;
 
 thread_local! {
     pub(crate) static MALLOC_STATE: RefCell<MallocState> = RefCell::new(MallocState {
@@ -119,6 +133,7 @@ thread_local! {
         realloc_forwarding: crate::fast_hash::new_ptr_hash_map(),
         realloc_snapshot_headers: crate::fast_hash::new_ptr_hash_set(),
         registry_state: MallocRegistryState::Inactive,
+        heavy_capacity_reserved: false,
         kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
     });
 
@@ -167,6 +182,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
             if s.malloc_registry_available() {
                 s.set.insert(header as usize);
             }
+            s.maybe_reserve_heavy_capacity();
         });
         GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
 
@@ -215,6 +231,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             if s.malloc_registry_available() {
                 s.set.extend(headers.iter().map(|&h| h as usize));
             }
+            s.maybe_reserve_heavy_capacity();
         });
 
         GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
@@ -227,6 +244,23 @@ impl MallocState {
     #[inline]
     pub(super) fn malloc_registry_available(&self) -> bool {
         self.registry_state == MallocRegistryState::ActiveConsistent
+    }
+
+    /// One-time jump from the small per-thread start to the heavy
+    /// pre-size once this thread proves malloc-heavy. Called after the
+    /// tracked-object push on the allocation paths; `>=` (rather than
+    /// an exact-crossing check) keeps `gc_malloc_batch`'s multi-entry
+    /// extends from skipping over the threshold.
+    #[inline]
+    pub(super) fn maybe_reserve_heavy_capacity(&mut self) {
+        if self.heavy_capacity_reserved || self.objects.len() < MALLOC_STATE_HEAVY_LEN_THRESHOLD {
+            return;
+        }
+        self.heavy_capacity_reserved = true;
+        self.objects
+            .reserve(MALLOC_STATE_HEAVY_CAPACITY.saturating_sub(self.objects.len()));
+        self.set
+            .reserve(MALLOC_STATE_HEAVY_CAPACITY.saturating_sub(self.set.len()));
     }
 
     #[inline]
