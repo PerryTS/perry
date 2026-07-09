@@ -942,7 +942,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         name: format!("__res_{}", res_id),
                         ty: Type::Any,
                         mutable: true,
-                        init: Some(read_call()),
+                        init: Some(Expr::Undefined),
                     });
 
                     let item_name = if let ast::ForHead::VarDecl(var_decl) = &for_of_stmt.left {
@@ -973,17 +973,24 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     });
                     let user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
                     body_stmts.extend(user_body);
-                    body_stmts.push(Stmt::Expr(Expr::LocalSet(res_id, Box::new(read_call()))));
 
-                    result.push(Stmt::While {
-                        condition: Expr::Unary {
-                            op: UnaryOp::Not,
-                            operand: Box::new(Expr::PropertyGet {
+                    // Advance-at-top driver (see lower_decl/body_stmt/for_await.rs):
+                    // `continue` must re-run the read, not re-process the same chunk.
+                    let mut loop_body = vec![
+                        Stmt::Expr(Expr::LocalSet(res_id, Box::new(read_call()))),
+                        Stmt::If {
+                            condition: Expr::PropertyGet {
                                 object: Box::new(Expr::LocalGet(res_id)),
                                 property: "done".to_string(),
-                            }),
+                            },
+                            then_branch: vec![Stmt::Break],
+                            else_branch: None,
                         },
-                        body: body_stmts,
+                    ];
+                    loop_body.extend(body_stmts);
+                    result.push(Stmt::While {
+                        condition: Expr::Bool(true),
+                        body: loop_body,
                     });
 
                     // reader.releaseLock(); — best-effort cleanup so the
@@ -1162,7 +1169,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     name: format!("__result_{}", result_id),
                     ty: Type::Any,
                     mutable: true,
-                    init: Some(next_call.clone()),
+                    init: Some(Expr::Undefined),
                 });
 
                 let binding_pat: Option<&ast::Pat> =
@@ -1222,17 +1229,24 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
                 }
                 body_stmts.extend(user_body);
-                body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
 
-                result.push(Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
+                // Advance-at-top driver (see lower_decl/body_stmt/for_await.rs):
+                // `continue` must re-run `next()`, not re-process the same result.
+                let mut loop_body = vec![
+                    Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
+                    Stmt::If {
+                        condition: Expr::PropertyGet {
                             object: Box::new(Expr::LocalGet(result_id)),
                             property: "done".to_string(),
-                        }),
+                        },
+                        then_branch: vec![Stmt::Break],
+                        else_branch: None,
                     },
-                    body: body_stmts,
+                ];
+                loop_body.extend(body_stmts);
+                result.push(Stmt::While {
+                    condition: Expr::Bool(true),
+                    body: loop_body,
                 });
 
                 ctx.pop_block_scope(scope_mark);

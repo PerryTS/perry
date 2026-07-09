@@ -358,6 +358,40 @@ pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
     })
 }
 
+/// Iterator-driver loop with the ADVANCE AT THE TOP of the body:
+///   while (true) { __result = <next_call>; if (__result.done) break; <bind + body> }
+/// `continue` in the user body falls to the `while` condition and re-runs the
+/// advance. The previous shape — `while (!__result.done) { <body>;
+/// __result = next() }` — put the advance at the body TAIL, so a `continue`
+/// skipped it and re-processed the SAME result forever (the footgun
+/// `lazy_iter_for_stmt` documents; it can use `Stmt::For`'s update clause,
+/// but the await-capable drivers here cannot carry an `await` there, so they
+/// use this shape). Canonical spin: an SSE consumer's
+/// `for await (...) { if (ev === "ping") continue; ... }` hung a large
+/// esbuild-bundled CLI app on the first real server ping.
+///
+/// The synthetic `if done break` is appended AFTER
+/// `insert_iterator_return_before_abrupts` runs over the user body, so the
+/// normal-completion exit never triggers a spurious IteratorClose.
+fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) -> Stmt {
+    let mut body = vec![
+        Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
+        Stmt::If {
+            condition: Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(result_id)),
+                property: "done".to_string(),
+            },
+            then_branch: vec![Stmt::Break],
+            else_branch: None,
+        },
+    ];
+    body.extend(rest);
+    Stmt::While {
+        condition: Expr::Bool(true),
+        body,
+    }
+}
+
 /// The lazy `for...of` driver loop, modeled as a `for` so `continue` re-pulls
 /// the iterator via the update clause (a `while` with the advance at the body
 /// tail would skip it on `continue` and spin):
@@ -683,7 +717,7 @@ fn lower_runtime_for_await_iterator(
         name: format!("__result_{}", result_id),
         ty: Type::Any,
         mutable: true,
-        init: Some(next_call.clone()),
+        init: Some(Expr::Undefined),
     });
 
     let binding_pat = match &for_of_stmt.left {
@@ -725,18 +759,9 @@ fn lower_runtime_for_await_iterator(
     let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
     insert_iterator_return_before_abrupts(&mut user_body, iter_id, true);
     body_stmts.append(&mut user_body);
-    body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
-
-    module.init.push(Stmt::While {
-        condition: Expr::Unary {
-            op: UnaryOp::Not,
-            operand: Box::new(Expr::PropertyGet {
-                object: Box::new(Expr::LocalGet(result_id)),
-                property: "done".to_string(),
-            }),
-        },
-        body: body_stmts,
-    });
+    module
+        .init
+        .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
 
     ctx.pop_block_scope(for_scope_mark);
     Ok(())
@@ -934,7 +959,7 @@ pub(crate) fn lower_stmt_for_of(
             name: format!("__result_{}", result_id),
             ty: Type::Any,
             mutable: true,
-            init: Some(next_call.clone()),
+            init: Some(Expr::Undefined),
         });
 
         // Extract the loop variable binding pattern.
@@ -1016,20 +1041,10 @@ pub(crate) fn lower_stmt_for_of(
             insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
         }
         body_stmts.append(&mut user_body);
-        // __result = __iter.next()
-        body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
-
-        // while (!__result.done) { body }
-        module.init.push(Stmt::While {
-            condition: Expr::Unary {
-                op: UnaryOp::Not,
-                operand: Box::new(Expr::PropertyGet {
-                    object: Box::new(Expr::LocalGet(result_id)),
-                    property: "done".to_string(),
-                }),
-            },
-            body: body_stmts,
-        });
+        // while (true) { __result = __iter.next(); if (__result.done) break; body }
+        module
+            .init
+            .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
 
         ctx.pop_block_scope(for_scope_mark);
         return Ok(());
@@ -1136,7 +1151,7 @@ pub(crate) fn lower_stmt_for_of(
                 name: format!("__res_{}", res_id),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(read_call(reader_id)),
+                init: Some(Expr::Undefined),
             });
 
             // Loop variable: const <name> = __res.value;
@@ -1176,23 +1191,12 @@ pub(crate) fn lower_stmt_for_of(
             }
             let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
             body_stmts.append(&mut user_body);
-            // __res = await __reader.read();
-            body_stmts.push(Stmt::Expr(Expr::LocalSet(
+            // while (true) { __res = await read(); if (__res.done) break; body }
+            module.init.push(iter_driver_while_stmt(
                 res_id,
-                Box::new(read_call(reader_id)),
-            )));
-
-            // while (!__res.done) { body }
-            module.init.push(Stmt::While {
-                condition: Expr::Unary {
-                    op: UnaryOp::Not,
-                    operand: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(res_id)),
-                        property: "done".to_string(),
-                    }),
-                },
-                body: body_stmts,
-            });
+                read_call(reader_id),
+                body_stmts,
+            ));
 
             // reader.releaseLock(); — best-effort cleanup.
             module.init.push(Stmt::Expr(Expr::NativeMethodCall {
