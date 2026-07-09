@@ -23,6 +23,11 @@ func perry_watchos_dispatch_background_task(_ id: UnsafePointer<CChar>)
 // callback).
 @_silgen_name("js_callback_timer_tick") func js_callback_timer_tick() -> Int32
 @_silgen_name("js_interval_timer_tick") func js_interval_timer_tick() -> Int32
+// perry-runtime's embedder GC stepper (#6183): spends up to `budgetUs`
+// advancing an ACTIVE budgeted collection in bounded work units; a cheap
+// status probe when no cycle is active (out=nil is allowed).
+@_silgen_name("js_gc_step_us")
+func js_gc_step_us(_ budgetUs: UInt64, _ out: UnsafeMutablePointer<UInt8>?) -> UInt32
 
 // Tree query
 @_silgen_name("perry_watchos_root_node") func perry_watchos_root_node() -> Int64
@@ -114,6 +119,13 @@ class PerryBridge: ObservableObject {
             // Drive JS runtime timers (setInterval, setTimeout) each frame.
             _ = js_callback_timer_tick()
             _ = js_interval_timer_tick()
+            // #6183 (2026-07-09 GC audit): spend a bounded idle budget on any
+            // active budgeted GC cycle at the pump boundary — the JS stack is
+            // fully unwound here, so this is a precise-root safepoint. A 2 ms
+            // slice per frame drains collection debt incrementally instead of
+            // letting an alloc-point collection land unbounded on this (main)
+            // thread mid-interaction.
+            _ = js_gc_step_us(2_000, nil)
             let v = perry_watchos_tree_version()
             if v != self.version {
                 self.version = v

@@ -395,6 +395,11 @@ pub fn app_run(_app_handle: i64) {
     // Install crash reporting hooks before anything else
     crate::crash_log::install_crash_hooks();
 
+    // #6184 (2026-07-09 GC audit): install a libdispatch memory-pressure
+    // source on the main queue so the runtime can collect under OS memory
+    // pressure (WARN → minor, CRITICAL → full collect). See memory_pressure.rs.
+    crate::memory_pressure::install();
+
     // Phase 2 v3.3: register cross-platform showToast / setText handlers.
     // These are no-ops on harmonyos (where the ArkUI drain-queue path
     // owns the dispatch) but on macOS they wire `perry_arkts_show_toast`

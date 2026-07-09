@@ -3,6 +3,11 @@ import UIKit
 
 @_silgen_name("perry_main_init") func perry_main_init()
 @_silgen_name("perry_visionos_root_view") func perry_visionos_root_view() -> Int64
+// perry-runtime's OS-memory-pressure entry point (#6184): level 1 =
+// collect-if-safe (minor), level 2+ = full collect + clamp trigger. Always
+// lowers+arms the arena trigger so an unsafe delivery still collects at the
+// next allocation.
+@_silgen_name("js_gc_memory_pressure") func js_gc_memory_pressure(_ level: UInt32) -> UInt32
 
 final class PerryVisionBootstrap {
     static let shared = PerryVisionBootstrap()
@@ -17,6 +22,18 @@ final class PerryVisionBootstrap {
             let label = UILabel()
             label.text = "Perry visionOS root view missing"
             rootView = label
+        }
+        // #6184 (2026-07-09 GC audit): this SwiftUI host has no app-delegate
+        // `applicationDidReceiveMemoryWarning:`, so observe the equivalent
+        // notification. A UIKit memory warning is the last notice before the
+        // app is jettisoned, so treat it as critical (level 2). The observer
+        // fires on the main thread, which owns the JS arena.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            _ = js_gc_memory_pressure(2)
         }
     }
 }

@@ -90,6 +90,17 @@ define_class!(
             crate::background::flush_pending_registrations();
             true
         }
+
+        /// UIKit memory-warning delivery (#6184). On tvOS a memory warning is
+        /// the last notice before the app is terminated, so treat it as
+        /// critical: force a full collect and clamp the GC trigger. Runs on
+        /// the main thread, which owns the JS arena.
+        #[unsafe(method(applicationDidReceiveMemoryWarning:))]
+        fn application_did_receive_memory_warning(&self, _application: &AnyObject) {
+            unsafe {
+                js_gc_memory_pressure(2);
+            }
+        }
     }
 );
 
@@ -446,6 +457,13 @@ extern "C" {
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_frame_pump_default() -> i32;
+    // perry-runtime's embedder GC stepper: spends up to `budget_us`
+    // advancing an ACTIVE budgeted collection in bounded work units; a
+    // cheap status probe when no cycle is active (out=null is allowed).
+    fn js_gc_step_us(budget_us: u64, out: *mut u8) -> u32;
+    // perry-runtime's OS-memory-pressure entry point (#6184): level 1 =
+    // collect-if-safe (minor), level 2+ = full collect + clamp trigger.
+    fn js_gc_memory_pressure(level: u32) -> u32;
 }
 
 // ============================================
@@ -470,6 +488,14 @@ define_class!(
                     // Issue #1865: perry/ui `onFrame` display-link callbacks.
                     js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // #6183 (2026-07-09 GC audit): spend a bounded idle
+                    // budget on any active budgeted GC cycle at the pump
+                    // boundary — the JS stack is fully unwound here, so this
+                    // is a precise-root safepoint. A 2 ms slice per tick
+                    // drains collection debt incrementally instead of letting
+                    // an alloc-point collection land unbounded on this
+                    // (main/UI) thread mid-interaction.
+                    js_gc_step_us(2_000, std::ptr::null_mut());
                     #[cfg(feature = "geisterhand")]
                     {
                         extern "C" { fn perry_geisterhand_pump(); }
