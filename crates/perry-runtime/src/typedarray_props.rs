@@ -778,7 +778,12 @@ pub(crate) unsafe fn typed_array_has_property(
 /// object (spec methods + the reflectable accessors), the per-kind prototype
 /// object (`Float64Array.prototype` — `constructor` and any user patches),
 /// and finally `Object.prototype` (its universal methods + user expandos).
-unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -> bool {
+pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -> bool {
+    // Build the shared `%TypedArray%.prototype` intrinsic if it hasn't been yet,
+    // so the membership check doesn't depend on a registered typed array having
+    // been created first (#6164 — otherwise the result was creation-order
+    // dependent, and buffer-backed `Uint8Array` never populated it).
+    let _ = crate::object::ensure_typed_array_intrinsic();
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     // %TypedArray%.prototype intrinsic.
     let intrinsic = crate::object::typed_array_intrinsic_proto_ptr();

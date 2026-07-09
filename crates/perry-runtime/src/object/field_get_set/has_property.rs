@@ -419,19 +419,38 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 return if present { nanbox_true } else { nanbox_false };
             }
             if key_val.is_any_string() {
-                // Own view slots, always present. Inherited prototype MEMBERS
-                // (`subarray`, `map`, `toString`, …) via `in` on a buffer are a
-                // separate follow-up — the same string-key gap the registered
-                // typed-array arm above has, tied to lazy `%TypedArray%`
-                // prototype population.
                 let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                 if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
                     .and_then(|b| std::str::from_utf8(b).ok())
                 {
+                    // Own view slots, always present.
                     if matches!(
                         name,
                         "length" | "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" | "buffer"
                     ) {
+                        return nanbox_true;
+                    }
+                    // A canonical numeric-index string (`"0"`, `"2"`, …) is an own
+                    // in-bounds index. The round-trip check rejects non-canonical
+                    // forms (`"00"`, `"1.5"`, `"-1"`, `"0x1"`), which stay ordinary
+                    // string keys.
+                    if let Ok(idx) = name.parse::<u32>() {
+                        if idx.to_string() == name && idx < len as u32 {
+                            return nanbox_true;
+                        }
+                    }
+                    // A Buffer / `Uint8Array` is a `%TypedArray%`, so inherited
+                    // prototype members (`subarray`, `map`, `join`, `toString`, …)
+                    // count. `typed_array_prototype_chain_has` builds the shared
+                    // prototype intrinsic on demand, so this is order-independent
+                    // (#6164). Buffer-specific `Buffer.prototype` methods
+                    // (`readUInt8`, …) are not covered here.
+                    if unsafe {
+                        crate::typedarray_props::typed_array_prototype_chain_has(
+                            obj_addr as usize,
+                            name,
+                        )
+                    } {
                         return nanbox_true;
                     }
                 }
