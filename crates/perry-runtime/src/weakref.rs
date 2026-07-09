@@ -733,10 +733,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
 /// Web-Stream) or any non-heap pointer — so we KEEP it. The old predicate
 /// treated "not in valid_ptrs" as dead, which FALSE-tombstoned live handle-band
 /// weak keys ≥0x1000 on the first GC (2026-07-09 audit §8); this path fixes it.
-fn weak_target_should_clear_copied(
-    target_bits: u64,
-    ptrs: &crate::gc::CopyingPointerSet,
-) -> bool {
+fn weak_target_should_clear_copied(target_bits: u64, ptrs: &crate::gc::CopyingPointerSet) -> bool {
     if target_bits == TAG_UNDEFINED {
         return false;
     }
@@ -829,7 +826,8 @@ pub(crate) fn process_weak_targets_from_registry(
     // Snapshot addresses so the registry can be mutated (rekey moved holders,
     // drop dead ones) while iterating. Holders don't allocate GC objects in
     // the helpers below, so no re-entrant `WEAK_HOLDERS` borrow occurs.
-    let snapshot: Vec<usize> = WEAK_HOLDERS.with(|holders| holders.borrow().iter().copied().collect());
+    let snapshot: Vec<usize> =
+        WEAK_HOLDERS.with(|holders| holders.borrow().iter().copied().collect());
     for addr in snapshot {
         let Some(current) = (unsafe { resolve_live_holder_copied(ptrs, addr) }) else {
             // Dead or unclassifiable holder → drop and skip.
@@ -961,8 +959,8 @@ unsafe fn process_finreg_after_mark(
     let registry_value = f64::from_bits(JSValue::pointer(registry as *const u8).bits());
     for i in 0..len {
         let record_value = js_array_get_f64(entries, i as u32);
-        let Some(record) =
-            liveness.as_live_object_with_class(record_value.to_bits(), CLASS_ID_FINALIZATION_RECORD)
+        let Some(record) = liveness
+            .as_live_object_with_class(record_value.to_bits(), CLASS_ID_FINALIZATION_RECORD)
         else {
             continue;
         };

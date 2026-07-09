@@ -191,7 +191,9 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(full_trace: bool) {
     // entries die. The copied-minor fast path prunes inside
     // `process_weak_targets_from_registry`; this covers the full/fallback
     // (non-copying) cycles, which don't run that pass.
-    crate::weakref::prune_dead_weak_holders(&|addr| probe.owner_is_dead(addr, Some(GC_TYPE_OBJECT)));
+    crate::weakref::prune_dead_weak_holders(&|addr| {
+        probe.owner_is_dead(addr, Some(GC_TYPE_OBJECT))
+    });
 }
 
 /// Copied-minor fan-out: prune entries owned by dead from-space objects

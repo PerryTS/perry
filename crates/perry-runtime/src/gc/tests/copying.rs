@@ -1,5 +1,6 @@
 mod promise_side_tables;
 mod survival_and_malloc;
+mod weak_holder_registry;
 mod weak_semantics;
 use super::super::*;
 use super::support::*;
