@@ -144,6 +144,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     result.extend(stmts);
                     return Ok(result);
                 }
+                // #6071: compound member/index assignment — spill base + computed
+                // key into Let temps so each is evaluated exactly once.
+                if let Some(stmts) =
+                    crate::lower::expr_assign::hoist_compound_member_assign(ctx, assign)?
+                {
+                    result.extend(stmts);
+                    return Ok(result);
+                }
             }
             let expr = lower_expr(ctx, &expr_stmt.expr)?;
             if matches!(

@@ -1243,6 +1243,15 @@ pub(crate) fn lower_stmt(
                     module.init.extend(stmts);
                     return Ok(());
                 }
+                // #6071: a compound member/index assignment at statement level —
+                // spill the base + computed key into Let temps so each is
+                // evaluated once (the expression path lowers them twice).
+                if let Some(stmts) =
+                    crate::lower::expr_assign::hoist_compound_member_assign(ctx, assign)?
+                {
+                    module.init.extend(stmts);
+                    return Ok(());
+                }
             }
             let expr = lower_expr(ctx, &expr_stmt.expr)?;
             module.init.push(Stmt::Expr(expr));
