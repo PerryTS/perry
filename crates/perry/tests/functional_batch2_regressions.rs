@@ -198,3 +198,54 @@ console.log("neg:", ({} as any) instanceof ns.Thing);"#,
     );
     assert_eq!(stdout, "member: true\nlocal: true\nneg: false\n");
 }
+
+/// Characterizes the complete metadata surface assembled for an imported
+/// class. The class travels through a renamed re-export and is consumed through
+/// both a named alias and a namespace, so its source class id must remain the
+/// defining module's id rather than a fresh importer-local id.
+#[test]
+fn imported_class_metadata_survives_alias_reexport_and_namespace_imports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        &[
+            ("base.ts", r#"export class Parent { base = "parent"; }"#),
+            (
+                "model.ts",
+                r#"import { Parent } from "./base.ts";
+const computedName = "not-a-static-global";
+export class Child extends Parent {
+  next: Parent = new Parent();
+  private saved = "";
+  static plain = "static";
+  static [computedName] = "computed";
+  constructor(...parts: string[]) { super(); this.saved = parts.join("|"); }
+  get value() { return this.saved; }
+  set value(value: string) { this.saved = "set:" + value; }
+  describe(first: string, ...tail: string[]) { return this.value + ":" + first + ":" + tail.length; }
+}"#,
+            ),
+            (
+                "barrel.ts",
+                r#"export { Child as PublicChild } from "./model.ts";"#,
+            ),
+            (
+                "main.ts",
+                r#"import { PublicChild as LocalChild } from "./barrel.ts";
+import * as barrel from "./barrel.ts";
+const value: any = new LocalChild("one", "two");
+value.value = "changed";
+console.log("method:", value.describe("head", "tail-a", "tail-b"));
+console.log("parent:", value.next.base);
+console.log("static:", LocalChild.plain);
+console.log("named:", value instanceof LocalChild);
+console.log("namespace:", value instanceof barrel.PublicChild);"#,
+            ),
+        ],
+        "main.ts",
+    );
+    assert_eq!(
+        stdout,
+        "method: set:changed:head:2\nparent: parent\nstatic: static\nnamed: true\nnamespace: true\n"
+    );
+}

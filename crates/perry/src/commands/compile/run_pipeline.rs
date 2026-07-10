@@ -17,6 +17,78 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
+/// Builds the complete codegen view of a foreign HIR class.
+///
+/// Callers choose only the import binding (when the route introduces one) and
+/// the already-resolved defining-module prefix.  All other metadata must
+/// describe the class definition itself, so keeping it here prevents import
+/// routes from drifting as `ImportedClass` gains fields.
+fn imported_class_from_hir(
+    class: &perry_hir::Class,
+    source_prefix: String,
+    local_alias: Option<String>,
+) -> perry_codegen::ImportedClass {
+    perry_codegen::ImportedClass {
+        name: class.name.clone(),
+        local_alias,
+        source_prefix,
+        constructor_param_count: class
+            .constructor
+            .as_ref()
+            .map(|ctor| ctor.params.len())
+            .unwrap_or(0),
+        has_own_constructor: class.constructor.is_some(),
+        constructor_has_rest: class
+            .constructor
+            .as_ref()
+            .map(|ctor| ctor.params.iter().any(|param| param.is_rest))
+            .unwrap_or(false),
+        has_instance_fields: !class.fields.is_empty(),
+        method_names: class
+            .methods
+            .iter()
+            .map(|method| method.name.clone())
+            .collect(),
+        method_param_counts: class
+            .methods
+            .iter()
+            .map(|method| method.params.len())
+            .collect(),
+        method_has_rest: class
+            .methods
+            .iter()
+            .map(|method| method.params.iter().any(|param| param.is_rest))
+            .collect(),
+        static_field_names: class
+            .static_fields
+            .iter()
+            .filter(|field| field.key_expr.is_none())
+            .map(|field| field.name.clone())
+            .collect(),
+        static_method_names: class
+            .static_methods
+            .iter()
+            .map(|method| method.name.clone())
+            .collect(),
+        getter_names: class.getters.iter().map(|(name, _)| name.clone()).collect(),
+        setter_names: class.setters.iter().map(|(name, _)| name.clone()).collect(),
+        parent_name: class.extends_name.clone(),
+        field_names: class
+            .fields
+            .iter()
+            .filter(|field| field.key_expr.is_none())
+            .map(|field| field.name.clone())
+            .collect(),
+        field_types: class
+            .fields
+            .iter()
+            .filter(|field| field.key_expr.is_none())
+            .map(|field| field.ty.clone())
+            .collect(),
+        source_class_id: Some(class.id),
+    }
+}
+
 /// Same as [`run`] but accepts an optional in-memory [`ParseCache`] that
 /// `perry dev` uses to reuse parsed ASTs across rebuilds in a single session.
 /// Pass `None` for the batch-compile path.
@@ -2421,73 +2493,7 @@ pub fn run_with_parse_cache(
                                         &ctx.project_root,
                                         &origin_prefix,
                                     );
-                                    imported_classes.push(perry_codegen::ImportedClass {
-                                        name: class.name.clone(),
-                                        local_alias: None,
-                                        source_prefix: class_prefix,
-                                        constructor_param_count: class
-                                            .constructor
-                                            .as_ref()
-                                            .map(|c| c.params.len())
-                                            .unwrap_or(0),
-                                        has_own_constructor: class.constructor.is_some(),
-                                        constructor_has_rest: class
-                                            .constructor
-                                            .as_ref()
-                                            .map(|c| c.params.iter().any(|p| p.is_rest))
-                                            .unwrap_or(false),
-                                        has_instance_fields: !class.fields.is_empty(),
-                                        method_names: class
-                                            .methods
-                                            .iter()
-                                            .map(|m| m.name.clone())
-                                            .collect(),
-                                        method_param_counts: class
-                                            .methods
-                                            .iter()
-                                            .map(|m| m.params.len())
-                                            .collect(),
-                                        method_has_rest: class
-                                            .methods
-                                            .iter()
-                                            .map(|m| m.params.iter().any(|p| p.is_rest))
-                                            .collect(),
-                                        static_method_names: class
-                                            .static_methods
-                                            .iter()
-                                            .map(|m| m.name.clone())
-                                            .collect(),
-                                        static_field_names: class
-                                            .static_fields
-                                            .iter()
-                                            .filter(|f| f.key_expr.is_none())
-                                            .map(|f| f.name.clone())
-                                            .collect(),
-                                        getter_names: class
-                                            .getters
-                                            .iter()
-                                            .map(|(n, _)| n.clone())
-                                            .collect(),
-                                        setter_names: class
-                                            .setters
-                                            .iter()
-                                            .map(|(n, _)| n.clone())
-                                            .collect(),
-                                        parent_name: class.extends_name.clone(),
-                                        field_names: class
-                                            .fields
-                                            .iter()
-                                            .filter(|f| f.key_expr.is_none())
-                                            .map(|f| f.name.clone())
-                                            .collect(),
-                                        field_types: class
-                                            .fields
-                                            .iter()
-                                            .filter(|f| f.key_expr.is_none())
-                                            .map(|f| f.ty.clone())
-                                            .collect(),
-                                        source_class_id: Some(class.id),
-                                    });
+                                    imported_classes.push(imported_class_from_hir(class, class_prefix, None));
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((export_name.clone(), members.clone()));
@@ -2730,73 +2736,7 @@ pub fn run_with_parse_cache(
                                             &ctx.project_root,
                                             &origin_prefix,
                                         );
-                                        imported_classes.push(perry_codegen::ImportedClass {
-                                            name: class.name.clone(),
-                                            local_alias: None,
-                                            source_prefix: class_prefix,
-                                            constructor_param_count: class
-                                                .constructor
-                                                .as_ref()
-                                                .map(|c| c.params.len())
-                                                .unwrap_or(0),
-                                            has_own_constructor: class.constructor.is_some(),
-                                            constructor_has_rest: class
-                                                .constructor
-                                                .as_ref()
-                                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                                .unwrap_or(false),
-                                            has_instance_fields: !class.fields.is_empty(),
-                                            method_names: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.name.clone())
-                                                .collect(),
-                                            method_param_counts: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.params.len())
-                                                .collect(),
-                                            method_has_rest: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                                .collect(),
-                                            static_method_names: class
-                                                .static_methods
-                                                .iter()
-                                                .map(|m| m.name.clone())
-                                                .collect(),
-                                            static_field_names: class
-                                                .static_fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.name.clone())
-                                                .collect(),
-                                            getter_names: class
-                                                .getters
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect(),
-                                            setter_names: class
-                                                .setters
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect(),
-                                            parent_name: class.extends_name.clone(),
-                                            field_names: class
-                                                .fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.name.clone())
-                                                .collect(),
-                                            field_types: class
-                                                .fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.ty.clone())
-                                                .collect(),
-                                            source_class_id: Some(class.id),
-                                        });
+                                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
                                     }
                                     if let Some(members) = exported_enums.get(&key) {
                                         imported_enums.push((export_name.clone(), members.clone()));
@@ -3005,133 +2945,21 @@ pub fn run_with_parse_cache(
                         // letting consumer-side `Expr::ExternFuncRef { name:
                         // exported_name }` resolve to the class-id NaN-box.
                         if local_name != exported_name {
-                            imported_classes.push(perry_codegen::ImportedClass {
-                                name: class.name.clone(),
-                                local_alias: Some(exported_name.clone()),
-                                source_prefix: class_prefix.clone(),
-                                constructor_param_count: class
-                                    .constructor
-                                    .as_ref()
-                                    .map(|c| c.params.len())
-                                    .unwrap_or(0),
-                                has_own_constructor: class.constructor.is_some(),
-                                constructor_has_rest: class
-                                    .constructor
-                                    .as_ref()
-                                    .map(|c| c.params.iter().any(|p| p.is_rest))
-                                    .unwrap_or(false),
-                                has_instance_fields: !class.fields.is_empty(),
-                                method_names: class
-                                    .methods
-                                    .iter()
-                                    .map(|m| m.name.clone())
-                                    .collect(),
-                                method_param_counts: class
-                                    .methods
-                                    .iter()
-                                    .map(|m| m.params.len())
-                                    .collect(),
-                                method_has_rest: class
-                                    .methods
-                                    .iter()
-                                    .map(|m| m.params.iter().any(|p| p.is_rest))
-                                    .collect(),
-                                static_method_names: class
-                                    .static_methods
-                                    .iter()
-                                    .map(|m| m.name.clone())
-                                    .collect(),
-                                static_field_names: class
-                                    .static_fields
-                                    .iter()
-                                    .filter(|f| f.key_expr.is_none())
-                                    .map(|f| f.name.clone())
-                                    .collect(),
-                                getter_names: class
-                                    .getters
-                                    .iter()
-                                    .map(|(n, _)| n.clone())
-                                    .collect(),
-                                setter_names: class
-                                    .setters
-                                    .iter()
-                                    .map(|(n, _)| n.clone())
-                                    .collect(),
-                                parent_name: class.extends_name.clone(),
-                                field_names: class
-                                    .fields
-                                    .iter()
-                                    .filter(|f| f.key_expr.is_none())
-                                    .map(|f| f.name.clone())
-                                    .collect(),
-                                field_types: class
-                                    .fields
-                                    .iter()
-                                    .filter(|f| f.key_expr.is_none())
-                                    .map(|f| f.ty.clone())
-                                    .collect(),
-                                source_class_id: Some(class.id),
-                            });
+                            imported_classes.push(imported_class_from_hir(
+                                class,
+                                class_prefix.clone(),
+                                Some(exported_name.clone()),
+                            ));
                         }
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: if local_name != class.name {
+                        imported_classes.push(imported_class_from_hir(
+                            class,
+                            class_prefix,
+                            if local_name != class.name {
                                 Some(local_name.clone())
                             } else {
                                 None
                             },
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        ));
                     }
 
                     // Imported param counts
@@ -3236,61 +3064,7 @@ pub fn run_with_parse_cache(
                             continue;
                         }
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: None,
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
                     }
                 }
             }
@@ -3710,61 +3484,7 @@ pub fn run_with_parse_cache(
                             continue;
                         }
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: None,
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
                     }
                 }
             }
@@ -3916,61 +3636,7 @@ pub fn run_with_parse_cache(
                         } else {
                             None
                         };
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: alias,
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        imported_classes.push(imported_class_from_hir(class, class_prefix, alias));
                         visited_imports.insert(ref_name.clone());
                         // Process the entry we just pushed (by index, so a
                         // same-named distinct-module class isn't skipped). Refs #26.
