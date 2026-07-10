@@ -963,17 +963,32 @@ pub(super) fn init_static_fields_late(
                 c.name.clone(),
                 crate::codegen::static_method_registry_key(&sm.name),
             );
-            // Skip if the init stream already invokes this block. The
-            // typical class-decl path emits a `StaticMethodCall` for
-            // each block; if we find one referencing this (class,
-            // method) pair, the user-init lowering above has already
-            // run it and a duplicate call here would double-fire any
-            // observable side effects.
-            if hir
+            // Skip if the block is already invoked inline. The typical class-decl
+            // path emits a `StaticMethodCall` for each block at its evaluation
+            // point; a duplicate call here would double-fire side effects.
+            //
+            // #5989: check both `hir.init` (a MODULE-level class decl) AND every
+            // function body (a function-NESTED class decl — `lower_decl::body_stmt`
+            // emits the block's `StaticMethodCall` into the enclosing factory
+            // body, which lives in `hir.functions`, not `hir.init`). Without the
+            // function-body scan, a nested class's block was ALSO run here at
+            // module init — before its factory ran — so a block that reads a
+            // captured factory-local (a turbopack module factory
+            // `a=>{ var g=a.i(N); class m { static { this.contextType =
+            // g.AppRouterContext } } }`) threw "Cannot read properties of
+            // undefined (reading 'AppRouterContext')" in `<module>__init` (the
+            // Next.js /plain App Router ErrorBoundaryHandler chunk). Class
+            // EXPRESSIONS (no inline invocation) still fall through to run here.
+            let invoked_inline = hir
                 .init
                 .iter()
                 .any(|s| init_calls_static_block(s, &c.name, &sm.name))
-            {
+                || hir.functions.iter().any(|f| {
+                    f.body
+                        .iter()
+                        .any(|s| init_calls_static_block(s, &c.name, &sm.name))
+                });
+            if invoked_inline {
                 continue;
             }
             if let Some(llvm_name) = ctx.methods.get(&key).cloned() {
