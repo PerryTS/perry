@@ -457,19 +457,44 @@ pub(crate) fn lower_let(
                 let blk = ctx.block();
                 unbox_str_handle(blk, &delimiter_box)
             };
+            let length_only_indices = ctx
+                .non_escaping_array_length_only_indices
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            let mut length_slots = std::collections::HashMap::new();
             for index in used_indices {
-                let value = ctx.block().call(
-                    DOUBLE,
-                    "js_string_split_part_value",
-                    &[
-                        (I64, &receiver),
-                        (I64, &delimiter),
-                        (I32, &index.to_string()),
-                    ],
-                );
-                ctx.block().store(DOUBLE, &value, &slots[index as usize]);
+                if length_only_indices.contains(&index) {
+                    let length = ctx.block().call(
+                        DOUBLE,
+                        "js_string_split_part_utf16_length",
+                        &[
+                            (I64, &receiver),
+                            (I64, &delimiter),
+                            (I32, &index.to_string()),
+                        ],
+                    );
+                    let length_slot = ctx.func.alloca_entry(DOUBLE);
+                    ctx.block().store(DOUBLE, &length, &length_slot);
+                    length_slots.insert(index, length_slot);
+                } else {
+                    let value = ctx.block().call(
+                        DOUBLE,
+                        "js_string_split_part_value",
+                        &[
+                            (I64, &receiver),
+                            (I64, &delimiter),
+                            (I32, &index.to_string()),
+                        ],
+                    );
+                    ctx.block().store(DOUBLE, &value, &slots[index as usize]);
+                }
             }
             ctx.scalar_replaced_arrays.insert(id, slots);
+            if !length_slots.is_empty() {
+                ctx.scalar_replaced_split_part_lengths
+                    .insert(id, length_slots);
+            }
             ctx.local_types.insert(id, refined_ty);
             let dummy_slot = ctx.func.alloca_entry(DOUBLE);
             ctx.locals.insert(id, dummy_slot);

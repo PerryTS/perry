@@ -867,12 +867,20 @@ pub(crate) struct FnCtx<'a> {
     /// `PropertyGet LocalGet(id), "length"` folds to the constant N.
     pub scalar_replaced_arrays: std::collections::HashMap<u32, Vec<String>>,
 
+    /// Scalar-replaced string-split parts whose only observed property is
+    /// `.length`. These slots hold the already-boxed numeric length, allowing
+    /// PropertyGet to bypass construction of a temporary StringHeader.
+    pub scalar_replaced_split_part_lengths:
+        std::collections::HashMap<u32, std::collections::HashMap<u32, String>>,
+
     /// Non-escaping array literals identified by escape analysis. Maps
     /// local_id → length. Used by the Stmt::Let lowering to intercept
     /// `let arr = [a, b, c]` and emit per-index allocas instead of a
     /// heap array, and by `.length` reads to fold to the constant.
     pub non_escaping_arrays: std::collections::HashMap<u32, u32>,
     pub non_escaping_array_used_indices:
+        std::collections::HashMap<u32, std::collections::HashSet<u32>>,
+    pub non_escaping_array_length_only_indices:
         std::collections::HashMap<u32, std::collections::HashSet<u32>>,
 
     /// Non-escaping object literals identified by escape analysis. Maps

@@ -247,6 +247,26 @@ fn test_string_split_part_value() {
 }
 
 #[test]
+fn test_string_split_part_utf16_length() {
+    let ascii = js_string_from_bytes(b"a,bc,d".as_ptr(), 6);
+    let comma = js_string_from_bytes(b",".as_ptr(), 1);
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(ascii, comma, 1),
+        2.0
+    );
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(ascii, comma, 3),
+        0.0
+    );
+
+    let unicode = js_string_from_str("a,😀,d");
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(unicode, comma, 1),
+        2.0
+    );
+}
+
+#[test]
 fn test_string_append_inplace() {
     // First append: creates new string with 2x capacity and refcount=1
     let a = js_string_from_bytes(b"hello".as_ptr(), 5);

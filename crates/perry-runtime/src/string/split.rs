@@ -154,6 +154,40 @@ pub extern "C" fn js_string_split_part_value(
     crate::value::js_nanbox_string(result as i64)
 }
 
+/// Return the UTF-16 length of one string-delimiter split part without
+/// materializing that part. Scalar replacement uses this for a direct
+/// `split("literal")[constant].length` read.
+///
+/// A missing part returns zero, matching the existing scalar string-length
+/// lowering's guarded pointer load for `undefined`.
+#[no_mangle]
+pub extern "C" fn js_string_split_part_utf16_length(
+    s: *const StringHeader,
+    delimiter: *const StringHeader,
+    index: i32,
+) -> f64 {
+    if index < 0 || !is_valid_string_ptr(s) || !is_valid_string_ptr(delimiter) {
+        return 0.0;
+    }
+    let str_data = string_as_str(s);
+    let delim = string_as_str(delimiter);
+    if delim.is_empty() {
+        return str_data
+            .chars()
+            .nth(index as usize)
+            .map_or(0.0, |c| c.len_utf16() as f64);
+    }
+
+    let Some(part) = str_data.split(delim).nth(index as usize) else {
+        return 0.0;
+    };
+    if is_ascii_string(s) {
+        part.len() as f64
+    } else {
+        compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
+    }
+}
+
 /// Split a string by a delimiter, with optional limit (issue #567).
 /// `limit < 0` → no limit (matches `js_string_split`).
 /// `limit == 0` → empty array.

@@ -70,6 +70,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // scalar replacement when the split result is non-escaping and only a
     // constant index is observed.
     module.declare_function("js_string_split_part_value", DOUBLE, &[I64, I64, I32]);
+    // Direct `.length` of a scalar-replaced split part. Returns a JS number
+    // without allocating the otherwise unobserved substring.
+    module.declare_function(
+        "js_string_split_part_utf16_length",
+        DOUBLE,
+        &[I64, I64, I32],
+    );
     // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)
     // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
     module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);

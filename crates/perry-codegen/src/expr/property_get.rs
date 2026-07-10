@@ -70,6 +70,29 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // `split("literal")[constant].length` on a scalar-replaced split can
+    // read the precomputed numeric length directly. The split part itself was
+    // never observable as a string, so materializing a StringHeader would only
+    // create short-lived garbage.
+    if let Expr::PropertyGet { object, property } = expr {
+        if property == "length" {
+            if let Expr::IndexGet { object, index } = object.as_ref() {
+                if let (Expr::LocalGet(id), Some(index)) =
+                    (object.as_ref(), crate::collectors::const_index(index))
+                {
+                    if let Some(slot) = ctx
+                        .scalar_replaced_split_part_lengths
+                        .get(id)
+                        .and_then(|lengths| lengths.get(&index))
+                        .cloned()
+                    {
+                        return Ok(ctx.block().load(DOUBLE, &slot));
+                    }
+                }
+            }
+        }
+    }
+
     match expr {
         Expr::PropertyGet { object, property }
             if matches!(object.as_ref(), Expr::LocalGet(id)
