@@ -1,6 +1,29 @@
 use super::*;
 
 thread_local! {
+    /// Set by test-only helpers that wipe page metadata for isolation
+    /// (`old_arena_page_index_clear_for_tests`): real objects become
+    /// unclassifiable in that synthetic state, so the differential verifier
+    /// must stand down for the rest of the thread's test.
+    pub(crate) static CLASSIFIER_VERIFY_SUPPRESSED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// #6179: differential-verification mode for the page-metadata classifier.
+pub(super) fn classifier_verify_enabled() -> bool {
+    if CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get()) {
+        return false;
+    }
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_VERIFY_CLASSIFIER").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
+thread_local! {
     pub(super) static MARK_SEEDS: std::cell::UnsafeCell<Vec<*mut GcHeader>> =
         const { std::cell::UnsafeCell::new(Vec::new()) };
 }
@@ -35,6 +58,12 @@ pub(crate) struct ValidPointerSet {
     /// building the pointer set so evacuation policy Stage 1 doesn't
     /// need a second full arena walk on low-pressure cycles.
     pub(super) tenured_nursery_bytes: usize,
+    /// True only for sets produced by the production census walk
+    /// (`ValidPointerSetBuilder::finish`). The #6179 differential verifier
+    /// runs only on census-built sets: tests fabricate sets with synthetic
+    /// addresses, and classifying those dereferences headers that don't
+    /// exist (panics inside no-unwind scanner contexts → poisoned globals).
+    pub(super) built_by_census: bool,
 }
 
 impl ValidPointerSet {
@@ -46,6 +75,7 @@ impl ValidPointerSet {
             range_min: usize::MAX,
             range_max: 0,
             tenured_nursery_bytes: 0,
+            built_by_census: false,
         }
     }
 
@@ -114,12 +144,41 @@ impl ValidPointerSet {
     #[inline]
     pub(crate) fn contains(&self, ptr: &usize) -> bool {
         if !self.maybe_contains(*ptr) {
+            // Range-rejected candidates skip the differential check: the
+            // classifier legitimately accepts objects born after the census
+            // (allocate-black keeps them safe), which can lie outside the
+            // censused address range.
             return false;
         }
         // Exact lookup. The B-tree insert path is bounded during
         // `BuildValidPointerSet`, so a tiny GC step cannot trigger a
         // heap-sized hash-table rebuild.
-        self.lookup_set.contains(ptr)
+        let exact = self.lookup_set.contains(ptr);
+        // #6179 differential verification (PERRY_GC_VERIFY_CLASSIFIER=1):
+        // before the exact set can be replaced by page-metadata
+        // classification on precise cycles, the classifier must be proven a
+        // SUPERSET of the census on every query — a censused object the
+        // classifier rejects would be un-markable, i.e. swept live. The
+        // other direction (classifier accepts, census lacks) is expected:
+        // objects allocated after the census walk; over-approximation is
+        // safe (bounded floating garbage under allocate-black).
+        if exact && self.built_by_census && classifier_verify_enabled() {
+            let heur = super::barrier::current_heap_header_for_user_ptr(*ptr, None).is_some();
+            // Censused-then-MOVED is a legitimate divergence: the plausible-
+            // header check rejects FORWARDED headers by design (the object
+            // lives at its new address; the copying machinery owns the
+            // redirect).
+            let forwarded = !heur
+                && unsafe {
+                    let header = header_from_user_ptr(*ptr as *const u8);
+                    (*header).gc_flags & GC_FLAG_FORWARDED != 0
+                };
+            assert!(
+                heur || forwarded,
+                "classifier rejected censused object {ptr:#x} — page metadata / header heuristic disagrees with the exact valid-pointer set"
+            );
+        }
+        exact
     }
 
     /// Issue #73: interior-pointer lookup. Given a scanned word, find
@@ -276,6 +335,7 @@ impl ValidPointerSetBuilder {
     }
 
     pub(super) fn finish(mut self) -> ValidPointerSet {
+        self.set.built_by_census = true;
         if self.phase != ValidPointerSetBuildPhase::Done {
             while !self.step(usize::MAX) {}
         }
