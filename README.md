@@ -6,7 +6,7 @@
 
 Perry is a native TypeScript compiler written in Rust. It takes your TypeScript and compiles it straight to native executables — no Node.js, no Electron, no browser engine. Just fast, small binaries that run anywhere.
 
-**Current Version:** 0.5.1164 | [Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
+[Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
 
 **Community:** [Join the Perry Discord](https://discord.gg/chEmpGdTtZ)
 
@@ -909,6 +909,22 @@ macOS CI gate. **Major releases** — any bump of the major or minor number
 supported platform** before the tag is pushed. Patch releases only require the
 default CI gate.
 
+### Release metadata contract
+
+This section is the release checklist. The version is defined **only** by
+`[workspace.package].version` in [`Cargo.toml`](Cargo.toml); do not copy it to
+README or `CLAUDE.md`. `CHANGELOG.md` must begin with the matching
+`## vX.Y.Z` entry. The actual publication trigger is the
+[`release-packages.yml`](.github/workflows/release-packages.yml) workflow:
+publishing a GitHub Release starts it; a tag push does not. The workflow also
+allows `workflow_dispatch` for manual recovery.
+
+Validate those structured fields before tagging:
+
+```bash
+python3 scripts/check_release_metadata.py
+```
+
 ### 1. Pre-release checklist (every release)
 
 Run on macOS (the canonical dev host):
@@ -928,14 +944,19 @@ cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos \
 Then bump and tag:
 
 ```bash
-# Edit Cargo.toml workspace.package.version + CLAUDE.md "Current Version".
-# Add a "Recent Changes" entry in CLAUDE.md.
+# Update [workspace.package].version in Cargo.toml.
+# Prepend the matching ## vX.Y.Z entry to CHANGELOG.md.
+python3 scripts/check_release_metadata.py
 git commit -am "release: v0.x.y"
-git tag v0.x.y && git push --tags
+VERSION="$(python3 scripts/check_release_metadata.py --print-version)"
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
+# After the tag-triggered tests are green, publish the GitHub Release.
+gh release create "v${VERSION}" --generate-notes
 ```
 
-The `release-packages.yml` workflow fires on the pushed tag and builds the
-cross-platform matrix (see §3).
+The tag starts the tag-triggered test and documentation workflows. Publishing
+the GitHub Release starts `release-packages.yml` (see §3).
 
 ### 2. Major-release verification (all platforms)
 
@@ -988,7 +1009,7 @@ Same recipe works for `tvos-simulator` + `"Apple TV"` device. On watchOS the
 Rust Tier-3 toolchain requires `+nightly -Zbuild-std` — see the
 `watchos-simulator` row in the matrix above.
 
-### 3. What CI does on the tag
+### 3. What CI does after GitHub Release publication
 
 The `Release Packages` workflow (`.github/workflows/release-packages.yml`)
 triggers on a published GitHub Release or manual `workflow_dispatch`. Matrix
@@ -1008,7 +1029,7 @@ Artifacts are published to:
 4. **winget** — manifest auto-update
 5. **hub.perryts.com** — worker notification so cloud build workers refresh
 
-A tag push with a failing platform build aborts the publish step for that
+A failing platform build aborts the publish step for that
 platform only; fix-forward with a new patch tag (e.g. `v0.6.1`) rather than
 amending the existing one.
 

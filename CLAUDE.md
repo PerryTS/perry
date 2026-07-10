@@ -8,9 +8,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1256
-
-
 ## TypeScript Parity Status
 
 Tracked via the gap test suite (`test-files/test_gap_*.ts`, 258 tests). Compared byte-for-byte against `node --experimental-strip-types`. Run via `./scripts/run_gap_tests.sh` (a thin wrapper over `run_parity_tests.sh --filter test_gap_` that builds the compiler itself and gates on no new untriaged failures).
@@ -33,17 +30,21 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 258 tests). Compared
 2. Wait for required checks to go green.
 3. Squash- or rebase-merge. The PR branch auto-deletes on merge.
 
-**For every change that lands on `main`** (whether via PR or admin bypass):
-
-1. **Bump version**: Increment patch in `[workspace.package].version` in `Cargo.toml` and the `**Current Version:**` line above. That is the ONLY metadata edit CLAUDE.md needs.
-2. **Add changelog entry**: Prepend a new `## v0.5.x — <one-line summary>` block at the top of `CHANGELOG.md`. Detail can go below in the same block — long-form root-cause writeups, file paths, validation notes, etc. all belong here, NOT in CLAUDE.md.
-3. **Commit changes**: Include code, `Cargo.toml`/`Cargo.lock`, `CLAUDE.md` (version bump only), and `CHANGELOG.md` updates together.
-
-**Do not write changelog entries into CLAUDE.md.** This file is for orientation (architecture, common pitfalls, build commands). Per-version history lives in `CHANGELOG.md` so CLAUDE.md stays small and stable across context loads.
+For release metadata and the publication sequence, follow the single checklist
+in [`README.md` → Releasing Perry](README.md#releasing-perry). The authoritative
+version is `[workspace.package].version` in `Cargo.toml`; `CHANGELOG.md` begins
+with the matching release heading, and
+`python3 scripts/check_release_metadata.py` validates both plus the workflow
+trigger. Do not copy the version or changelog entries into this file.
 
 ### External contributor PRs
 
-PRs from outside contributors should **not** touch `[workspace.package] version` in `Cargo.toml`, the `**Current Version:**` line in `CLAUDE.md`, or `CHANGELOG.md`. The maintainer bumps the version and writes the changelog entry at merge time — usually by rebasing the PR branch and amending. This avoids the patch-version collisions that happen when Perry's `main` ships several commits while a PR is in review (each on-main commit bumps the version; a PR that bumped to the same patch on day 1 is already behind by merge day). Contributors just write code; let the maintainer fold in the metadata last.
+PRs from outside contributors should **not** touch `[workspace.package] version`
+in `Cargo.toml` or `CHANGELOG.md`. The maintainer bumps the version and writes
+the changelog entry at merge time — usually by rebasing the PR branch and
+amending. This avoids the patch-version collisions that happen when Perry's
+`main` ships several commits while a PR is in review. Contributors just write
+code; let the maintainer fold in the metadata last.
 
 ## Build Commands
 
@@ -173,9 +174,3 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ### objc2 v0.6 API
 - `define_class!` with `#[unsafe(super(NSObject))]`, `msg_send!` returns `Retained` directly
 - All AppKit constructors require `MainThreadMarker`
-
-## Recent Changes
-
-Per-version entries live in CHANGELOG.md.
-
-**Do not add changelog entries to this file.** Bump only the `**Current Version:**` line above when you ship a release; everything else goes in CHANGELOG.md as a new `## v0.5.x — ...` block at the top.

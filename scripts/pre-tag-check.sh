@@ -68,11 +68,14 @@ run_check() {
 # 1. cargo fmt --all -- --check (Tests `lint` job)
 run_check "cargo fmt --all --check" cargo fmt --all -- --check
 
-# 2. docs/src linter (Tests `doc-tests` matrix --lint pass)
+# 2. Release metadata contract (Cargo.toml, CHANGELOG.md, and publish trigger)
+run_check "release metadata contract" python3 scripts/check_release_metadata.py
+
+# 3. docs/src linter (Tests `doc-tests` matrix --lint pass)
 run_check "perry-doc-tests --lint docs/src" \
     cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
 
-# 3. cargo check (catches type errors fast; Tests `cargo-test` builds
+# 4. cargo check (catches type errors fast; Tests `cargo-test` builds
 #    everything anyway). Skipped under --quick.
 if [[ "$mode" != "quick" ]]; then
     run_check "cargo check --release --workspace" \
@@ -87,7 +90,7 @@ fi
 # regressions and runtime Perry behavior that fmt + cargo check can't
 # see (HIR rewrites, codegen routing, api-manifest gating).
 if [[ "$mode" == "thorough" ]]; then
-    # 4. Run the macOS doc-test suite end-to-end with the same
+    # 5. Run the macOS doc-test suite end-to-end with the same
     #    --filter-exclude shape the Tests workflow uses. Catches
     #    real Perry bugs (state desugar, WebView 1-arg routing,
     #    api-manifest class lookup, etc.).
@@ -95,7 +98,7 @@ if [[ "$mode" == "thorough" ]]; then
         cargo run --release --quiet -p perry-doc-tests -- \
             --skip-xcompile --filter-exclude ui/gallery.ts
 
-    # 5. cargo check against musl. Catches `cfg(target_os = "linux")`
+    # 6. cargo check against musl. Catches `cfg(target_os = "linux")`
     #    gates that should be `cfg(all(target_os = "linux", target_env = "gnu"))`
     #    (e.g. RTLD_DEEPBIND, glibc-only libc constants). Only runs
     #    if the musl target is installed — `rustup target add
