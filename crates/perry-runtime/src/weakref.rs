@@ -855,6 +855,14 @@ pub(crate) fn process_weak_targets_after_mark(
     minor_only: bool,
     enqueue_callbacks: bool,
 ) {
+    // #6180 pause floor: the whole-heap walk below exists only to FIND weak
+    // holders (WeakRef / FinalizationRegistry / WeakMap-entry objects). The
+    // #6182 registry tracks every live holder — if none exist (the common
+    // case), the entire O(heap) pass is a no-op. This is the single largest
+    // atomic-finalize cost for weakref-free programs.
+    if !weak_target_holders_allocated() {
+        return;
+    }
     let liveness = FullCycleLiveness {
         valid_ptrs,
         minor_only,
