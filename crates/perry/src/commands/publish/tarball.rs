@@ -176,6 +176,21 @@ fn append_dir_beneath(
     Ok(true)
 }
 
+/// TAR headers always use `/` as the path separator. Keep the accompanying
+/// manifest in the same form on Windows without rewriting literal backslashes
+/// in valid Unix filenames.
+fn inventory_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        path.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        path.into_owned()
+    }
+}
+
 /// Resolve `file:` dependencies from package.json and return (package_name, resolved_path) pairs.
 pub(super) fn resolve_file_deps(project_dir: &Path) -> Vec<(String, PathBuf)> {
     let pkg_path = project_dir.join("package.json");
@@ -324,7 +339,7 @@ pub(super) fn create_project_tarball_with_includes(
                 continue;
             }
             if append_file_beneath(&mut ar, &project_root, path, relative)? {
-                inventory.push(relative.to_string_lossy().into_owned());
+                inventory.push(inventory_path(relative));
             }
         } else if entry.file_type().is_dir() {
             append_dir_beneath(&mut ar, &project_root, path, relative)?;
@@ -372,7 +387,7 @@ pub(super) fn create_project_tarball_with_includes(
                     continue;
                 }
                 if append_file_beneath(&mut ar, dep_dir, path, &tar_path)? {
-                    inventory.push(tar_path.to_string_lossy().into_owned());
+                    inventory.push(inventory_path(&tar_path));
                 }
             } else if entry.file_type().is_dir() {
                 append_dir_beneath(&mut ar, dep_dir, path, &tar_path)?;
@@ -433,6 +448,15 @@ mod force_include_tests {
             }
         }
         panic!("publish manifest missing from archive");
+    }
+
+    #[test]
+    fn inventory_paths_use_tar_separators_without_rewriting_unix_names() {
+        let path = Path::new(r"directory\file.ts");
+        #[cfg(windows)]
+        assert_eq!(inventory_path(path), "directory/file.ts");
+        #[cfg(not(windows))]
+        assert_eq!(inventory_path(path), r"directory\file.ts");
     }
 
     #[test]
