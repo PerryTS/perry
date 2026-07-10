@@ -5962,6 +5962,7 @@ dependencies = [
  "anyhow",
  "base64",
  "dirs",
+ "encoding_rs",
  "fancy-regex",
  "hickory-proto",
  "hostname",

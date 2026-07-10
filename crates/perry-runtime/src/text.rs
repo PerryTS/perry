@@ -19,15 +19,21 @@ use crate::buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array, BufferHea
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 
+// WHATWG single-byte index tables + `resolve_single_byte()`, generated in
+// build.rs from encoding_rs (only the `[u16; 128]` arrays ship in the binary).
+include!(concat!(env!("OUT_DIR"), "/single_byte_encodings.rs"));
+
 /// Supported decode encodings (the WHATWG-canonical name lives in the
 /// registry as a `&'static str`; this enum drives the byte-level path).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DecoderEncoding {
     Utf8,
-    /// `latin1` / `windows-1252` / `iso-8859-1` — single-byte, every byte
-    /// maps 1:1 to U+0000–U+00FF (windows-1252 0x80–0x9F differences are
-    /// not modeled; Node canonicalizes the label to `windows-1252`).
-    Latin1,
+    /// A WHATWG single-byte legacy encoding (ibm866, iso-8859-*, windows-125x,
+    /// koi8, macintosh, …). The `[u16; 128]` is the high-half index (byte
+    /// 0x80..=0xFF → BMP code point, 0xFFFD for unmapped). `windows-1252` and
+    /// its `latin1`/`iso-8859-1`/`ascii` labels route here too — the previous
+    /// 1:1 Latin-1 approximation mis-decoded the 0x80–0x9F range.
+    SingleByte(&'static [u16; 128]),
     Utf16Le,
 }
 
@@ -52,15 +58,20 @@ fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
         .trim_matches(|c| matches!(c, '\t' | '\n' | '\u{0C}' | '\r' | ' '))
         .to_ascii_lowercase();
     match l.as_str() {
-        "" | "utf-8" | "utf8" | "unicode-1-1-utf-8" | "unicode11utf8" | "unicode20utf8"
+        // NB: an explicit empty/whitespace label is NOT utf-8 (only an omitted
+        // arg defaults to utf-8, handled in js_text_decoder_new).
+        "utf-8" | "utf8" | "unicode-1-1-utf-8" | "unicode11utf8" | "unicode20utf8"
         | "x-unicode20utf8" => Some((DecoderEncoding::Utf8, "utf-8")),
-        "latin1" | "l1" | "iso-8859-1" | "iso8859-1" | "iso88591" | "iso_8859-1" | "iso-ir-100"
-        | "ascii" | "us-ascii" | "windows-1252" | "x-cp1252" | "cp1252" | "cp819" | "ibm819"
-        | "csisolatin1" => Some((DecoderEncoding::Latin1, "windows-1252")),
         "utf-16le" | "utf-16" | "unicode" | "csunicode" | "unicodefeff" | "utf-16-le" => {
             Some((DecoderEncoding::Utf16Le, "utf-16le"))
         }
-        _ => None,
+        // All WHATWG single-byte encodings (incl. windows-1252 and its
+        // latin1/iso-8859-1/ascii labels). Multi-byte encodings (gbk, big5,
+        // shift_jis, euc-*) are intentionally NOT recognized here — perry can't
+        // decode them yet, so constructing one still throws rather than silently
+        // mis-decoding.
+        other => resolve_single_byte(other)
+            .map(|(table, canonical)| (DecoderEncoding::SingleByte(table), canonical)),
     }
 }
 
@@ -119,9 +130,12 @@ pub fn is_known_text_decoder_id(id: i64) -> bool {
 #[no_mangle]
 pub extern "C" fn js_text_decoder_new(label: f64, fatal: f64, ignore_bom: f64) -> i64 {
     let label_jsval = crate::value::JSValue::from_bits(label.to_bits());
-    let label_str = if label_jsval.is_undefined() {
-        String::new()
-    } else {
+    // An OMITTED label defaults to utf-8; an EXPLICIT "" (or all-whitespace) is
+    // an invalid label per WHATWG "get an encoding" and must throw RangeError.
+    if label_jsval.is_undefined() {
+        return register_decoder(DecoderEncoding::Utf8, "utf-8", fatal, ignore_bom);
+    }
+    let label_str = {
         let ptr = crate::value::js_jsvalue_to_string(label) as *const StringHeader;
         text_string_header_to_string(ptr)
     };
@@ -130,17 +144,27 @@ pub extern "C" fn js_text_decoder_new(label: f64, fatal: f64, ignore_bom: f64) -
         Some(pair) => pair,
         None => {
             let message = format!("The \"{label_str}\" encoding is not supported");
-            crate::fs::validate::throw_type_error_with_code(&message, "ERR_ENCODING_NOT_SUPPORTED");
+            // WHATWG (and Node) throw a RangeError for an unknown label, not a
+            // TypeError — `RangeError [ERR_ENCODING_NOT_SUPPORTED]`.
+            crate::fs::validate::throw_range_error_named(&message, "ERR_ENCODING_NOT_SUPPORTED");
         }
     };
 
+    register_decoder(encoding, canonical, fatal, ignore_bom)
+}
+
+fn register_decoder(
+    encoding: DecoderEncoding,
+    canonical: &'static str,
+    fatal: f64,
+    ignore_bom: f64,
+) -> i64 {
     let state = DecoderState {
         encoding,
         label: canonical,
         fatal: crate::value::js_is_truthy(fatal) != 0,
         ignore_bom: crate::value::js_is_truthy(ignore_bom) != 0,
     };
-
     let id = {
         let mut next = NEXT_DECODER_ID.lock().unwrap();
         let id = *next;
@@ -533,11 +557,22 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> i64 {
                 js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64
             }
         }
-        DecoderEncoding::Latin1 => {
-            // Each byte maps to U+0000–U+00FF, UTF-8 re-encoded.
+        DecoderEncoding::SingleByte(table) => {
+            // ASCII passes through; 0x80..=0xFF map via the WHATWG index. In
+            // fatal mode an unmapped byte (0xFFFD in the table) is a decode
+            // error; non-fatal keeps the U+FFFD replacement.
             let mut out = String::with_capacity(bytes.len());
             for &b in bytes {
-                out.push(b as char);
+                let cp = if b < 0x80 {
+                    b as u32
+                } else {
+                    table[(b - 0x80) as usize] as u32
+                };
+                if fatal && cp == 0xFFFD {
+                    throw_invalid_encoded_data();
+                }
+                // Single-byte tables only hold BMP scalars (never surrogates).
+                out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
             }
             js_string_from_bytes(out.as_ptr(), out.len() as u32) as i64
         }
