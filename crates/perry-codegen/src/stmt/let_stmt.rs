@@ -5,7 +5,7 @@ use super::*;
 use crate::expr::{
     box_i1_for_compat_shadow, emit_root_nanbox_store_on_block,
     expr_produces_non_pointer_bits_by_construction, lower_expr_value,
-    lower_expr_with_expected_type,
+    lower_expr_with_expected_type, unbox_str_handle,
 };
 use crate::native_value::{
     AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
@@ -408,6 +408,70 @@ pub(crate) fn lower_let(
             }
             PodLayoutDecision::Rejected(reason) => record_pod_rejection(ctx, id, reason),
             PodLayoutDecision::NotPod => {}
+        }
+    }
+
+    // Scalar replacement: a literal-separator split whose result only has
+    // small constant-index reads does not need an ArrayHeader or unobserved
+    // substring allocations. The escape collector admits this exact shape and
+    // rejects `.length`, mutation, captures, and dynamic indices.
+    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+        if ctx.non_escaping_arrays.contains_key(&id)
+            && matches!(args.as_slice(), [perry_hir::Expr::String(s)] if !s.is_empty())
+            && matches!(
+                callee.as_ref(),
+                perry_hir::Expr::PropertyGet { object, property }
+                    if matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
+                        && property == "split"
+            )
+        {
+            let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
+                unreachable!();
+            };
+            let used_indices = ctx
+                .non_escaping_array_used_indices
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            let slot_count = used_indices
+                .iter()
+                .max()
+                .map_or(0usize, |index| *index as usize + 1);
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut slots = Vec::with_capacity(slot_count);
+            for _ in 0..slot_count {
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                slots.push(slot);
+            }
+
+            let receiver_box = lower_expr(ctx, object)?;
+            let delimiter_box = lower_expr(ctx, &args[0])?;
+            let receiver = {
+                let blk = ctx.block();
+                unbox_str_handle(blk, &receiver_box)
+            };
+            let delimiter = {
+                let blk = ctx.block();
+                unbox_str_handle(blk, &delimiter_box)
+            };
+            for index in used_indices {
+                let value = ctx.block().call(
+                    DOUBLE,
+                    "js_string_split_part_value",
+                    &[
+                        (I64, &receiver),
+                        (I64, &delimiter),
+                        (I32, &index.to_string()),
+                    ],
+                );
+                ctx.block().store(DOUBLE, &value, &slots[index as usize]);
+            }
+            ctx.scalar_replaced_arrays.insert(id, slots);
+            ctx.local_types.insert(id, refined_ty);
+            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.locals.insert(id, dummy_slot);
+            return Ok(());
         }
     }
 

@@ -108,6 +108,34 @@ pub extern "C" fn js_string_split(
     js_string_split_n(s, delimiter, -1)
 }
 
+/// Materialize one element of a string-delimiter split as a boxed JS value.
+/// This is used when codegen proves the result array does not escape and only
+/// a constant element is observed. A missing element remains `undefined`.
+#[no_mangle]
+pub extern "C" fn js_string_split_part_value(
+    s: *const StringHeader,
+    delimiter: *const StringHeader,
+    index: i32,
+) -> f64 {
+    if index < 0 || !is_valid_string_ptr(s) || !is_valid_string_ptr(delimiter) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let str_data = string_as_str(s);
+    let delim = string_as_str(delimiter);
+    let part = if delim.is_empty() {
+        str_data.chars().nth(index as usize).map(|c| {
+            let mut buf = [0u8; 4];
+            c.encode_utf8(&mut buf).to_owned()
+        })
+    } else {
+        str_data.split(delim).nth(index as usize).map(str::to_owned)
+    };
+    match part {
+        Some(part) => crate::value::js_nanbox_string(js_string_from_str(&part) as i64),
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
 /// Split a string by a delimiter, with optional limit (issue #567).
 /// `limit < 0` → no limit (matches `js_string_split`).
 /// `limit == 0` → empty array.

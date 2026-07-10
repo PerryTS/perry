@@ -180,6 +180,26 @@ pub fn find_array_candidates(
                     candidates.insert(*id, n as u32);
                 }
             }
+            // A non-escaping `text.split("literal")` can use the same scalar
+            // replacement machinery as an array literal. The bounded sentinel
+            // admits only small constant indices; the lowering materializes
+            // precisely those slots instead of allocating the result array.
+            Stmt::Let {
+                id,
+                init: Some(Expr::Call { callee, args, .. }),
+                ..
+            } if !boxed_vars.contains(id)
+                && !module_globals.contains_key(id)
+                && matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, property }
+                        if matches!(object.as_ref(), Expr::LocalGet(_))
+                            && property == "split"
+                )
+                && matches!(args.as_slice(), [Expr::String(s)] if !s.is_empty()) =>
+            {
+                candidates.insert(*id, MAX_SCALAR_ARRAY_LEN as u32);
+            }
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -380,8 +400,17 @@ pub fn check_array_escapes_in_expr(
         // Safe: `arr.length` read folds to the constant N.
         Expr::PropertyGet { object, property } => {
             if let Expr::LocalGet(id) = object.as_ref() {
-                if candidates.contains_key(id) && property == "length" {
-                    return;
+                if let Some(&len) = candidates.get(id) {
+                    if property == "length" {
+                        // `MAX_SCALAR_ARRAY_LEN` is also the bounded sentinel
+                        // for scalar-replaced literal splits, whose runtime
+                        // length is not statically known.
+                        if len == MAX_SCALAR_ARRAY_LEN as u32 {
+                            escaped.insert(*id);
+                        } else {
+                            return;
+                        }
+                    }
                 }
             }
             check_array_escapes_in_expr(object, candidates, escaped);
