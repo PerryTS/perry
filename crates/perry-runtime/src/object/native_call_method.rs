@@ -694,6 +694,46 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     };
 
+    // #6230: a native-module namespace object (globalThis.process, console, or an
+    // imported node module) reached as a dynamic value — `const p = process;
+    // p.exit(1)`, `process["exit"](1)`, `p.cwd()`, `p.nextTick(cb)`, dynamic
+    // `console.log` — lands here rather than the codegen intrinsic used for the
+    // bare `process.exit(...)` form. Route the call to the native-module dispatch
+    // with the actual args; previously every such method fell through to
+    // `undefined` (so `exit` dropped its code, `cwd()` returned undefined,
+    // dynamic `nextTick`/`console.log` no-op'd). Exclude the generic
+    // Object.prototype methods and perry-internal (`__perry_*`) hooks so they
+    // keep using the shared object dispatch below; everything else is a genuine
+    // module method whose result (incl. a legitimate `undefined`) is returned
+    // directly — returning unconditionally avoids double-invoking a void method.
+    if jsval.is_pointer()
+        && !method_name.starts_with("__perry_")
+        && !matches!(
+            method_name,
+            "toString"
+                | "toLocaleString"
+                | "valueOf"
+                | "hasOwnProperty"
+                | "isPrototypeOf"
+                | "propertyIsEnumerable"
+                | "constructor"
+        )
+    {
+        let ns_ptr = jsval.as_pointer::<ObjectHeader>();
+        if !ns_ptr.is_null()
+            && crate::object::is_valid_obj_ptr(ns_ptr as *const u8)
+            && (*ns_ptr).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+        {
+            let ns_args = refreshed_args();
+            return crate::object::dispatch_native_module_method(
+                ns_ptr as *const ObjectHeader,
+                method_name,
+                ns_args.as_ptr(),
+                ns_args.len(),
+            );
+        }
+    }
+
     // #4795: `using` / `await using` desugars disposal to
     // `obj.__perry_dispose__()` / `obj.__perry_async_dispose__()`. Class
     // instances resolve these through the renamed vtable method (handled by
