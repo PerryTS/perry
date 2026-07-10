@@ -283,7 +283,12 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(v, ctx, lookup);
             }
         }
-        Expr::InstanceOf { expr, .. } => update_call_sites_in_expr(expr, ctx, lookup),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            update_call_sites_in_expr(expr, ctx, lookup);
+            if let Some(t) = ty_expr {
+                update_call_sites_in_expr(t, ctx, lookup);
+            }
+        }
         Expr::Await(inner) => update_call_sites_in_expr(inner, ctx, lookup),
         Expr::SuperCall(args) => {
             for arg in args.iter_mut() {
