@@ -198,6 +198,13 @@ fn test_string_split() {
     let arr = js_string_split(s, delim);
 
     assert_eq!(js_array_length(arr), 3);
+    // `split` produces a pointer-only result array. Its layout is recorded
+    // once for the initialized prefix rather than through one side-table
+    // update per string element.
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+        Some(3)
+    );
 
     // Get the string pointers from the array and verify their contents
     // Note: split() stores NaN-boxed string pointers with STRING_TAG
@@ -216,6 +223,14 @@ fn test_string_split() {
         assert_eq!((*ptr1).flags, 0);
         assert_eq!((*ptr2).flags, 0);
     }
+
+    // A later non-pointer write must conservatively drop the specialized
+    // pointer-only layout instead of retaining stale pointer assumptions.
+    crate::array::js_array_set_f64(arr, 1, 42.0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+        None
+    );
 }
 
 #[test]

@@ -3,6 +3,29 @@
 use super::*;
 use crate::array::ArrayHeader;
 
+/// Store one freshly-created heap string into a `String.prototype.split`
+/// result. The result array starts with an all-pointer layout, so advancing
+/// `length` after the write makes its initialized prefix visible to GC without
+/// a per-element layout-map update. The write barrier remains necessary if a
+/// collection has promoted the rooted result array while it is being built.
+#[inline]
+unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut StringHeader) {
+    const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let value_bits = STRING_TAG | (string as u64 & POINTER_MASK);
+    std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
+    // The all-pointer layout only covers the initialized prefix. Publish this
+    // element before the next allocation can run a collection.
+    (*arr).length = (index + 1) as u32;
+    crate::gc::runtime_write_barrier_slot(
+        arr as usize,
+        elements_ptr.add(index) as usize,
+        value_bits,
+    );
+}
+
 /// Advance to the next UTF-8 character boundary strictly after `i`.
 #[cfg(feature = "regex-engine")]
 fn next_char_boundary(s: &str, i: usize) -> usize {
@@ -126,50 +149,44 @@ pub extern "C" fn js_string_split_n(
         string_as_str(delimiter)
     };
 
-    const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     if delim.is_empty() {
-        // Empty delimiter: split into individual characters (single pass)
-        let mut parts: Vec<*mut StringHeader> = str_data
-            .chars()
-            .map(|c| {
+        // Empty delimiter: count then materialize directly. Besides avoiding a
+        // temporary `Vec`, rooting the result before each character allocation
+        // keeps it valid if a collection runs while the array is filled.
+        let mut n = str_data.chars().count();
+        if limit > 0 {
+            n = n.min(limit as usize);
+        }
+        let arr = crate::array::js_array_alloc_pointer_elements(n as u32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        unsafe {
+            for (i, c) in str_data.chars().take(n).enumerate() {
                 let mut buf = [0u8; 4];
                 let char_str = c.encode_utf8(&mut buf);
-                js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32)
-            })
-            .collect();
-        if limit > 0 && (parts.len() as i64) > (limit as i64) {
-            parts.truncate(limit as usize);
-        }
-
-        let arr = crate::array::js_array_alloc(parts.len() as u32);
-        unsafe {
-            (*arr).length = parts.len() as u32;
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-            for (i, p) in parts.iter().enumerate() {
-                let nanboxed = STRING_TAG | (*p as u64 & POINTER_MASK);
-                // GC_STORE_AUDIT(BARRIERED): split char slot is immediately recorded via note_array_slot.
-                std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
-                crate::array::note_array_slot(arr, i, nanboxed);
+                let string = js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32);
+                store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), i, string);
             }
         }
-        return arr;
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
 
-    // Non-empty delimiter: arena-allocate parts (bump-pointer, no tracking overhead)
-    let mut part_slices: Vec<&str> = str_data.split(delim).collect();
-    if limit > 0 && (part_slices.len() as i64) > (limit as i64) {
-        part_slices.truncate(limit as usize);
+    // Non-empty delimiter: count first, then materialize directly into the
+    // result array. Collecting `Vec<&str>` for every split made this hot path
+    // perform a separate Rust heap allocation and copy of the slice list.
+    // `matches` and `split` share the same non-overlapping delimiter semantics.
+    let mut n = str_data.matches(delim).count().saturating_add(1);
+    if limit > 0 {
+        n = n.min(limit as usize);
     }
-    let n = part_slices.len();
 
     let src_is_ascii = is_ascii_string(s);
 
-    let arr = crate::array::js_array_alloc(n as u32);
+    let arr = crate::array::js_array_alloc_pointer_elements(n as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
-        (*arr).length = n as u32;
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        for (i, part) in part_slices.iter().enumerate() {
+        for (i, part) in str_data.split(delim).take(n).enumerate() {
             let byte_len = part.len() as u32;
             let (sh, data_ptr) = string_storage_alloc(byte_len);
             let utf16_len = if src_is_ascii {
@@ -181,14 +198,11 @@ pub extern "C" fn js_string_split_n(
             if byte_len > 0 {
                 ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
             }
-            let nanboxed = STRING_TAG | (sh as u64 & POINTER_MASK);
-            // GC_STORE_AUDIT(BARRIERED): split part slot is immediately recorded via note_array_slot.
-            std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
-            crate::array::note_array_slot(arr, i, nanboxed);
+            store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), i, sh);
         }
     }
 
-    arr
+    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`

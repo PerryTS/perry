@@ -60,6 +60,12 @@ pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
 pub(super) enum LayoutSlotMask {
     Inline(u64),
     Heap(Vec<u64>),
+    /// Every currently-live slot is pointer-bearing. This is useful for
+    /// runtime-produced arrays such as `String.prototype.split` results: the
+    /// array grows its visible length only after each string has been stored,
+    /// so the collector can visit `0..length` directly without allocating or
+    /// updating a side-table bit for every element.
+    AllPointers,
 }
 
 impl LayoutSlotMask {
@@ -94,6 +100,7 @@ impl LayoutSlotMask {
                 }
                 words[word] |= 1u64 << (slot_index % 64);
             }
+            LayoutSlotMask::AllPointers => {}
         }
     }
 
@@ -116,6 +123,12 @@ impl LayoutSlotMask {
                     }
                 }
             }
+            // `layout_note_slot` must downgrade an all-pointer layout before
+            // clearing a slot, because this variant intentionally stores no
+            // per-slot bitmap from which to reconstruct the remaining set.
+            LayoutSlotMask::AllPointers => {
+                unreachable!("all-pointer layouts must be downgraded before clearing a slot")
+            }
         }
     }
 
@@ -124,6 +137,7 @@ impl LayoutSlotMask {
         match self {
             LayoutSlotMask::Inline(bits) => *bits == 0,
             LayoutSlotMask::Heap(words) => words.iter().all(|&w| w == 0),
+            LayoutSlotMask::AllPointers => false,
         }
     }
 
@@ -165,6 +179,11 @@ impl LayoutSlotMask {
                     }
                 }
             }
+            LayoutSlotMask::AllPointers => {
+                for slot in 0..slot_count {
+                    visit(slot);
+                }
+            }
         }
     }
 
@@ -195,6 +214,7 @@ impl LayoutSlotMask {
                 let word = slot_index / 64;
                 word < words.len() && (words[word] & (1u64 << (slot_index % 64))) != 0
             }
+            LayoutSlotMask::AllPointers => true,
         }
     }
 
@@ -246,6 +266,7 @@ impl LayoutSlotMask {
                 }
                 None
             }
+            LayoutSlotMask::AllPointers => (cursor < slot_count).then_some(cursor),
         }
     }
 }
@@ -356,6 +377,29 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     header_clear_typed_layout_intact(header);
 }
 
+/// Declare that every currently-live slot of a fresh array-like payload holds
+/// a pointer. Callers must keep `length` at the initialized prefix while the
+/// payload is being filled; the `AllPointers` mask then remains precise across
+/// any GC that runs between element allocations.
+///
+/// The representation intentionally remains a normal side layout so copying
+/// GC and the existing layout-transfer machinery can move it unchanged.
+#[inline]
+pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
+    let Some(header) = layout_header_for_user(user_ptr as usize) else {
+        return;
+    };
+    header_clear_typed_layout_intact(header);
+    TYPED_LAYOUTS.with(|m| {
+        m.borrow_mut().remove(&(user_ptr as usize));
+    });
+    LAYOUT_SLOT_MASKS.with(|m| {
+        m.borrow_mut()
+            .insert(user_ptr as usize, LayoutSlotMask::AllPointers);
+    });
+    set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+}
+
 pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -455,6 +499,22 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             return;
         }
         let pointer = layout_pointer_bearing_bits(value_bits);
+        // A result array built by a runtime helper can declare that its live
+        // prefix is pointer-only once, instead of growing a HashMap-backed
+        // bitmap for every inserted element. Runtime construction bypasses
+        // this generic write path; any later ordinary array write may create
+        // holes or replace an element, so conservatively fall back to the
+        // generic scan path regardless of the stored value.
+        let all_pointer_layout = LAYOUT_SLOT_MASKS.with(|m| {
+            matches!(
+                m.borrow().get(&parent_user),
+                Some(LayoutSlotMask::AllPointers)
+            )
+        });
+        if all_pointer_layout {
+            layout_mark_unknown(parent_user as *mut u8);
+            return;
+        }
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
             return;
         }

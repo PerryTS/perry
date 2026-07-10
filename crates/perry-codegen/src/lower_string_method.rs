@@ -228,6 +228,22 @@ pub(crate) fn lower_string_method(
                     args.len()
                 );
             }
+            // A literal separator with no `limit` cannot invoke user code,
+            // cannot be a RegExp, and has the unbounded limit directly
+            // expressible by `js_string_split_n`. Avoid the boxed dispatch and
+            // its coercion/undefined/RegExp checks for this common hot path.
+            if args.len() == 1 && matches!(&args[0], Expr::String(_) | Expr::WtfString(_)) {
+                let delim_box = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let recv_handle = unbox_str_handle(blk, &recv_box);
+                let delim_handle = unbox_str_handle(blk, &delim_box);
+                let result_arr = blk.call(
+                    I64,
+                    "js_string_split_n",
+                    &[(I64, &recv_handle), (I64, &delim_handle), (I32, "-1")],
+                );
+                return Ok(crate::expr::nanbox_pointer_inline(blk, &result_arr));
+            }
             // Route through `js_string_split_value`, which takes the BOXED
             // separator and limit and performs the full spec coercion:
             // `ToUint32(limit)` before `ToString(separator)`, an `undefined`
