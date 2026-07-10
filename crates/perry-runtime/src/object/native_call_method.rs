@@ -878,6 +878,49 @@ pub unsafe extern "C" fn js_native_call_method(
             return result;
         }
     }
+    // `class X extends Array` — inherited *read* Array methods
+    // (`map`/`filter`/`join`/`at`/`indexOf`/`forEach`/`reduce`/…). The mutator
+    // arm above already routes the mutating family through the relaxed
+    // plain-object guard, and the `dispatch_arraylike_read_method` call further
+    // down only fires for Proxy receivers, so a subclass instance's read methods
+    // have no arm otherwise and fall through to "<m> is not a function". Gated on
+    // the receiver actually being an Array-subclass instance, so ordinary objects
+    // and non-Array class instances keep their existing dispatch untouched.
+    if matches!(
+        method_name,
+        "forEach"
+            | "map"
+            | "filter"
+            | "some"
+            | "every"
+            | "find"
+            | "findIndex"
+            | "findLast"
+            | "findLastIndex"
+            | "reduce"
+            | "reduceRight"
+            | "indexOf"
+            | "lastIndexOf"
+            | "includes"
+            | "at"
+            | "join"
+            | "slice"
+            | "concat"
+    ) && crate::array::is_array_subclass_instance(object)
+        // Defer to a user override (own callable field of this name), matching
+        // the own-slot gate in the mutator path.
+        && !crate::array::object_owns_user_method(object, method_name)
+    {
+        let args = refreshed_args();
+        if let Some(result) = crate::array::dispatch_arraylike_read_method(
+            object,
+            method_name,
+            args.as_ptr(),
+            args.len(),
+        ) {
+            return result;
+        }
+    }
     // A plain object whose [[Prototype]] chain contains a real array
     // (`function foo() {}; foo.prototype = new Array(1, 2, 3); new foo()`)
     // inherits the `Array.prototype` methods through that array, but the

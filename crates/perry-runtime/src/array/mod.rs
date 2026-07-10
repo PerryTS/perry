@@ -19,6 +19,7 @@ mod search;
 mod sort;
 mod species;
 mod splice_slice;
+mod subclass;
 
 #[cfg(test)]
 mod tests;
@@ -51,7 +52,7 @@ pub use self::generic::{
     js_arraylike_splice, try_array_proto_chain_method, try_object_arraylike_mutator,
 };
 pub(crate) use self::generic::{
-    non_array_object_receiver, object_pop as generic_object_pop,
+    non_array_object_receiver, object_owns_user_method, object_pop as generic_object_pop,
     object_shift as generic_object_shift, object_sort, object_splice, plain_object_value,
 };
 pub use self::generic_mutators::{
@@ -107,6 +108,9 @@ pub use self::iterator::{
 };
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
+pub use self::subclass::{
+    array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
+};
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator
 // protocol instead of being appended as a single chunk.

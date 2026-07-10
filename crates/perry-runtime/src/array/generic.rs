@@ -45,7 +45,7 @@ fn boxed_bool(b: bool) -> f64 {
 }
 
 #[inline(always)]
-fn nanbox_arr(arr: *mut ArrayHeader) -> f64 {
+pub(super) fn nanbox_arr(arr: *mut ArrayHeader) -> f64 {
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
 }
 
@@ -409,7 +409,7 @@ fn object_get_named_property_chain(obj_ptr: usize, name: &str) -> f64 {
 }
 
 /// `Get(ToObject(recv), k)` (returns `undefined` for absent/out-of-range).
-fn al_get(recv: f64, k: i64) -> f64 {
+pub(super) fn al_get(recv: f64, k: i64) -> f64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         if k < 0 {
@@ -1338,7 +1338,10 @@ pub fn plain_object_value(arr: *const ArrayHeader) -> Option<f64> {
         return None;
     }
     let class_id = crate::object::js_object_get_class_id(arr as *const crate::object::ObjectHeader);
-    if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+    if class_id != 0
+        && !crate::object::is_anon_shape_class_id(class_id)
+        && !super::subclass::is_array_subclass_class_id(class_id)
+    {
         return None;
     }
     Some(recv)
@@ -1894,6 +1897,19 @@ fn classify_own_slot(v: f64) -> OwnSlot {
     }
 }
 
+/// True when `object` owns a user method (an own callable field, not a borrowed
+/// builtin) named `method`, so an array-like read/iterate fast path must defer
+/// to it rather than hijack the name. Mirrors the own-slot gate that
+/// [`try_object_arraylike_mutator`] applies to the mutating family, for callers
+/// (the Array-subclass read arm) that reach `dispatch_arraylike_read_method`
+/// directly.
+pub(crate) fn object_owns_user_method(object: f64, method: &str) -> bool {
+    let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
+    let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+    let own = crate::object::js_object_get_field_by_name_f64(raw, key);
+    matches!(classify_own_slot(own), OwnSlot::UserMethod)
+}
+
 /// Dispatch a generic `Array.prototype` mutator over an array-like receiver.
 ///
 /// Returns `Some(result)` only when `object` is a plain heap object / closure
@@ -1902,6 +1918,9 @@ fn classify_own_slot(v: f64) -> OwnSlot {
 /// `js_native_call_method` keep their existing behavior. The caller routes
 /// `pop` / `shift` / `push` / `unshift` / `reverse` / `splice` here before the
 /// dense array arms that would otherwise read the object as an `ArrayHeader`.
+///
+/// A `class X extends Array` instance (see [`super::subclass`]) is also admitted
+/// by the relaxed guard below, so its inherited mutators run on the object.
 pub fn try_object_arraylike_mutator(
     object: f64,
     method: &str,
@@ -1917,7 +1936,10 @@ pub fn try_object_arraylike_mutator(
     // regression, so leave those to the normal vtable dispatch.
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let class_id = crate::object::js_object_get_class_id(raw);
-    if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+    if class_id != 0
+        && !crate::object::is_anon_shape_class_id(class_id)
+        && !super::subclass::is_array_subclass_class_id(class_id)
+    {
         return None;
     }
     // Fire the generic engine when the own `method_name` slot is absent (the
@@ -1951,7 +1973,10 @@ pub fn run_object_mutator(
     }
     let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let class_id = crate::object::js_object_get_class_id(raw);
-    if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+    if class_id != 0
+        && !crate::object::is_anon_shape_class_id(class_id)
+        && !super::subclass::is_array_subclass_class_id(class_id)
+    {
         return None;
     }
     let result = match method {

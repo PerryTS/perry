@@ -756,13 +756,30 @@ pub fn try_lower_native_method_str_dispatch(
             .and_then(|n| class_builtin_collection_kind(ctx, n))
             .filter(|kind| matches!(*kind, "Map" | "Set"))
             .is_some_and(|kind| is_collection_method_for_kind(kind, property.as_str()));
+        // A `class X extends Array` instance's inherited Array methods
+        // (`push`/`map`/`join`/…) are NOT class methods — they live on the
+        // runtime's spec-generic array-like engine over the plain `ObjectHeader`
+        // instance. The static class-dispatch tower above finds no method entry
+        // (Array is not a user class) and returns None, so without this carve-out
+        // the call falls into the closure-call fallthrough, which reads the
+        // method as a non-callable property and throws "value is not a function".
+        // Route it through `js_native_call_method` (whose relaxed plain-object
+        // mutator guard + Array-subclass read arm handle it). A user-defined
+        // override of the same name resolves earlier via the static tower, so it
+        // never reaches here. Mirrors the `is_collection_subclass_method`
+        // carve-out for Map/Set subclasses.
+        let is_array_subclass_method = class_name_opt
+            .as_deref()
+            .is_some_and(|n| class_extends_builtin_array(ctx, n))
+            && is_array_like_method(property.as_str());
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))
             || (class_name_opt.is_some()
                 && !is_buffer_class
                 && !class_unknown_to_codegen
                 && !is_well_known_proto_method
-                && !is_collection_subclass_method);
+                && !is_collection_subclass_method
+                && !is_array_subclass_method);
         if !skip_native {
             // Issue #92 fast path: intrinsify Buffer numeric reads
             // (`buf.readInt32BE(off)` etc.) when the receiver is a tracked
@@ -949,6 +966,81 @@ fn is_collection_method_for_kind(kind: &str, method: &str) -> bool {
         "WeakSet" => matches!(method, "has" | "add" | "delete"),
         _ => false,
     }
+}
+
+/// True when `cls_name` is a user class that (transitively) extends the builtin
+/// `Array` — `class Stack extends Array`, `class B extends Stack`, … The chain
+/// walk mirrors [`class_builtin_collection_kind`]: any ancestor whose
+/// `extends_name` is `Array` (or `ReadonlyArray`) marks the class as an Array
+/// subclass. `Array` itself is not a user class (never in `ctx.classes`), so the
+/// heritage is detected by name at the end of the chain.
+pub fn class_extends_builtin_array(ctx: &FnCtx<'_>, cls_name: &str) -> bool {
+    fn is_array_name(name: &str) -> bool {
+        matches!(name, "Array" | "ReadonlyArray")
+    }
+    // A receiver whose static type IS `Array` is a real array, not a subclass —
+    // it has its own array-method lowering and must not be treated here.
+    if is_array_name(cls_name) {
+        return false;
+    }
+    let mut cur = Some(cls_name.to_string());
+    let mut depth = 0usize;
+    while let Some(c) = cur {
+        if depth > 32 {
+            break;
+        }
+        let Some(ci) = ctx.classes.get(&c) else {
+            // Reached a name codegen doesn't track — it may be the builtin
+            // `Array` heritage itself.
+            return is_array_name(c.as_str());
+        };
+        if let Some(parent) = ci.extends_name.as_deref() {
+            if is_array_name(parent) {
+                return true;
+            }
+        }
+        cur = ci.extends_name.clone();
+        depth += 1;
+    }
+    false
+}
+
+/// The inherited `Array.prototype` methods the runtime's spec-generic array-like
+/// engine handles for a `class X extends Array` instance (union of the mutator
+/// and read dispatch families in `perry-runtime`'s `array::generic`). A method
+/// name outside this set is left on the normal class-dispatch path (a genuine
+/// user method already resolved earlier; anything else keeps its prior behavior).
+fn is_array_like_method(method: &str) -> bool {
+    matches!(
+        method,
+        // mutators (try_object_arraylike_mutator / run_object_mutator)
+        "push"
+            | "pop"
+            | "shift"
+            | "unshift"
+            | "reverse"
+            | "splice"
+            | "sort"
+            | "concat"
+            // reads (dispatch_arraylike_read_method)
+            | "forEach"
+            | "map"
+            | "filter"
+            | "some"
+            | "every"
+            | "find"
+            | "findIndex"
+            | "findLast"
+            | "findLastIndex"
+            | "reduce"
+            | "reduceRight"
+            | "indexOf"
+            | "lastIndexOf"
+            | "includes"
+            | "at"
+            | "join"
+            | "slice"
+    )
 }
 
 pub fn try_lower_class_static_accessor_call(
