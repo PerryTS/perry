@@ -105,15 +105,22 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             key_ptr,
         );
     }
+    // A non-NaN-boxed f64 reaching here is a plain `number` (its `[idx]` is
+    // `undefined` per JS). The old code kept a "raw I64 pointer passed as
+    // DOUBLE" heuristic — `bits < 2^48 && (bits & 3) == 0 && bits >= 0x10000` —
+    // that treated such a number's bits as a heap pointer, a relic of the
+    // now-removed module-var raw-I64 representation (module vars are uniform
+    // NaN-boxed doubles today, so a real object always takes the `is_pointer()`
+    // branch above). The heuristic only ever MISfired on numbers whose f64 bits
+    // land in that band — e.g. a subnormal `~1.7e-314` (bits `0x8_0000_0000`).
+    // On the macOS host the resulting address was below the heap range so
+    // `is_valid_obj_ptr` rejected it and this returned `undefined`; on Linux
+    // (`HEAP_MIN = 0x1000`, needed for Android/Scudo low allocations) the same
+    // address is *in range*, so it was dereferenced as an `ObjectHeader` →
+    // garbage/crash. Drop the heuristic: a non-pointer receiver is a number and
+    // its indexed read is `undefined` on every platform (#63/#321 denormal-safe).
     let raw_ptr = if jsval.is_pointer() {
         (bits & POINTER_MASK) as usize
-    } else if !value.is_nan()
-        && bits != 0
-        && bits < 0x0001_0000_0000_0000
-        && (bits & 0x3) == 0
-        && bits >= 0x10000
-    {
-        bits as usize
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     };
