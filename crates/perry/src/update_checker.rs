@@ -383,38 +383,92 @@ pub fn platform_artifact_name() -> Option<&'static str> {
     None
 }
 
+#[derive(Debug, Deserialize)]
+struct TrustedUpdateKey {
+    key_id: String,
+    public_key: String,
+}
+
+/// Public keys are compile-time configuration, never fetched from the update
+/// server. A release built without them deliberately cannot self-update.
+fn trusted_cli_update_keys() -> Result<Vec<TrustedUpdateKey>> {
+    let raw = option_env!("PERRY_CLI_UPDATE_PUBLIC_KEYS").context(
+        "this Perry release has no trusted CLI update public keys; self-update is disabled until the release is built with PERRY_CLI_UPDATE_PUBLIC_KEYS",
+    )?;
+    let keys: Vec<TrustedUpdateKey> = serde_json::from_str(raw)
+        .context("compiled PERRY_CLI_UPDATE_PUBLIC_KEYS is invalid JSON")?;
+    if keys.is_empty()
+        || keys
+            .iter()
+            .any(|key| key.key_id.is_empty() || key.public_key.is_empty())
+    {
+        bail!("compiled CLI update keyring is empty or invalid");
+    }
+    Ok(keys)
+}
+
+fn secure_staging_dir(install_dir: &std::path::Path) -> Result<tempfile::TempDir> {
+    // Windows replacement and recovery require ACL/reparse-point validation
+    // plus a helper process because the running PE cannot be replaced safely.
+    // Do not silently fall back to the former unsafe copy/rename flow.
+    #[cfg(windows)]
+    bail!("Windows self-update is disabled until ACL-verified staging and a replacement helper are available; install the signed release manually");
+    let staging = tempfile::Builder::new()
+        .prefix("perry-update-")
+        .tempdir_in(install_dir)
+        .context("failed to create exclusive update staging directory")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))?;
+        let metadata = fs::symlink_metadata(staging.path())?;
+        if !metadata.file_type().is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            bail!(
+                "refusing insecure update staging directory {}",
+                staging.path().display()
+            );
+        }
+    }
+    Ok(staging)
+}
+
+fn require_https(url: &str, what: &str) -> Result<()> {
+    let parsed = url::Url::parse(url).with_context(|| format!("invalid {} URL", what))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || parsed.username() != ""
+        || parsed.password().is_some()
+    {
+        bail!(
+            "{} URL must be an absolute HTTPS URL without credentials",
+            what
+        );
+    }
+    Ok(())
+}
+
 pub fn perform_self_update(verbose: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
-
     if verbose {
         eprintln!("Fetching latest version info...");
     }
-
     let cache = fetch_latest_version().context("Failed to check for updates")?;
-
     if compare_versions(&cache.latest_version, current) != Ordering::Greater {
         println!("Already up to date (v{})", current);
         return Ok(());
     }
-
     let artifact_name = platform_artifact_name().context("Unsupported platform for self-update")?;
-
-    if verbose {
-        eprintln!("Looking for artifact: {}", artifact_name);
-    }
-
-    // Re-fetch full release info to get asset URLs
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(Duration::from_secs(300)) // longer timeout for download
+        .timeout(Duration::from_secs(300))
         .user_agent(format!("perry/{}", current))
         .build()?;
-
-    let servers = get_update_servers();
     let mut release_info = None;
-
-    for url in &servers {
-        if let Ok(resp) = client.get(url).send() {
+    for url in get_update_servers() {
+        if let Ok(resp) = client.get(&url).send() {
             if resp.status().is_success() {
                 if let Ok(info) = resp.json::<ReleaseInfo>() {
                     release_info = Some(info);
@@ -423,151 +477,413 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
             }
         }
     }
-
     let info = release_info.context("Failed to fetch release info")?;
-
-    let asset = info
+    let manifest_name = format!("{}.update.json", artifact_name);
+    let manifest_asset = info
         .assets
         .iter()
-        .find(|a| a.name == artifact_name)
-        .with_context(|| format!("No binary found for this platform ({})", artifact_name))?;
-
-    println!("Downloading {} v{}...", artifact_name, cache.latest_version);
-
-    let current_exe =
-        std::env::current_exe().context("Cannot determine current executable path")?;
-    let current_exe = current_exe.canonicalize().unwrap_or(current_exe);
-
-    let tmp_dir = std::env::temp_dir().join(format!("perry-update-{}", std::process::id()));
-    fs::create_dir_all(&tmp_dir).context("Failed to create temp directory")?;
-
-    // Download
-    let resp = client
-        .get(&asset.browser_download_url)
+        .find(|a| a.name == manifest_name)
+        .with_context(|| format!("No authenticated update manifest found ({})", manifest_name))?;
+    require_https(&manifest_asset.browser_download_url, "manifest")?;
+    let manifest_bytes = client
+        .get(&manifest_asset.browser_download_url)
         .send()
-        .context("Failed to download update")?;
-
-    if !resp.status().is_success() {
-        bail!("Download failed: HTTP {}", resp.status());
+        .context("failed to download update manifest")?
+        .error_for_status()
+        .context("failed to download update manifest")?
+        .bytes()?;
+    let manifest: perry_updater::cli_manifest::CliUpdateManifest =
+        serde_json::from_slice(&manifest_bytes).context("update manifest is malformed")?;
+    let keys = trusted_cli_update_keys()?;
+    let key_refs: Vec<(&str, &str)> = keys
+        .iter()
+        .map(|k| (k.key_id.as_str(), k.public_key.as_str()))
+        .collect();
+    perry_updater::cli_manifest::verify_cli_manifest(&manifest, artifact_name, current, &key_refs)
+        .context("refusing unauthenticated update manifest")?;
+    if manifest.artifact.name != artifact_name {
+        bail!("authenticated manifest artifact name does not match this platform");
     }
-
-    let bytes = resp.bytes().context("Failed to read download")?;
-
+    require_https(&manifest.artifact.url, "artifact")?;
     if verbose {
-        eprintln!("Downloaded {} bytes", bytes.len());
+        eprintln!(
+            "Authenticated update v{} with key {}",
+            manifest.version, manifest.key_id
+        );
     }
 
-    // Extract. Windows ships a .zip; every other platform a .tar.gz.
-    extract_archive(&bytes, artifact_name, &tmp_dir).context("Failed to extract archive")?;
-
-    // Find the perry binary in extracted files. The Windows zip ships `perry.exe`,
-    // so an unsuffixed "perry" lookup would miss it (#4715).
+    let current_exe = std::env::current_exe()
+        .context("Cannot determine current executable path")?
+        .canonicalize()
+        .context("Cannot canonicalize current executable path")?;
+    let install_dir = current_exe
+        .parent()
+        .context("current executable has no parent directory")?;
+    let staging = secure_staging_dir(install_dir)?;
+    let archive_path = staging.path().join("download");
+    let mut archive =
+        fs::File::create(&archive_path).context("failed to create staged update artifact")?;
+    let mut response = client
+        .get(&manifest.artifact.url)
+        .send()
+        .context("Failed to download update")?
+        .error_for_status()
+        .context("Failed to download update")?;
+    std::io::copy(&mut response, &mut archive).context("failed to stage update artifact")?;
+    use std::io::Write as _;
+    archive.flush()?;
+    archive.sync_all()?;
+    drop(archive);
+    perry_updater::cli_manifest::verify_cli_artifact(&archive_path, &manifest.artifact)
+        .context("refusing update artifact")?;
+    let extract_dir = staging.path().join("extract");
+    fs::create_dir(&extract_dir)?;
+    extract_archive(&fs::read(&archive_path)?, artifact_name, &extract_dir)
+        .context("Failed to safely extract authenticated archive")?;
     #[cfg(target_os = "windows")]
     let binary_name = "perry.exe";
     #[cfg(not(target_os = "windows"))]
     let binary_name = "perry";
-    let new_binary =
-        find_binary_in_dir(&tmp_dir, binary_name).context("Perry binary not found in archive")?;
-
-    // Atomic swap
-    let backup_path = current_exe.with_extension("old");
-
-    // Remove stale backup if exists
-    let _ = fs::remove_file(&backup_path);
-
-    // Rename current -> .old
-    if let Err(e) = fs::rename(&current_exe, &backup_path) {
-        // Try to clean up and give helpful error
-        let _ = fs::remove_dir_all(&tmp_dir);
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            bail!(
-                "Permission denied. Try:\n  sudo perry update\n\nOr download manually from:\n  {}",
-                asset.browser_download_url
-            );
-        }
-        return Err(e).context("Failed to move current binary");
+    let new_binary = find_binary_in_dir(&extract_dir, binary_name)
+        .context("Perry binary not found in authenticated archive")?;
+    if let Err(err) = transactional_install(&current_exe, &new_binary, &extract_dir) {
+        let preserved = staging.keep();
+        return Err(err).context(format!(
+            "update install failed; recovery files retained at {}",
+            preserved.display()
+        ));
     }
-
-    // Copy new binary into place
-    if let Err(e) = fs::copy(&new_binary, &current_exe) {
-        // Rollback
-        let _ = fs::rename(&backup_path, &current_exe);
-        let _ = fs::remove_dir_all(&tmp_dir);
-        return Err(e).context("Failed to install new binary");
-    }
-
-    // Set executable permission
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&current_exe, fs::Permissions::from_mode(0o755));
-    }
-
-    // Also update runtime/stdlib libs if present next to binary
-    if let Some(exe_dir) = current_exe.parent() {
-        #[cfg(target_os = "windows")]
-        let (runtime_name, stdlib_name) = ("perry_runtime.lib", "perry_stdlib.lib");
-        #[cfg(not(target_os = "windows"))]
-        let (runtime_name, stdlib_name) = ("libperry_runtime.a", "libperry_stdlib.a");
-
-        let runtime_lib = exe_dir.join(runtime_name);
-        if runtime_lib.exists() {
-            if let Some(new_lib) = find_binary_in_dir(&tmp_dir, runtime_name) {
-                let _ = fs::copy(&new_lib, &runtime_lib);
-            }
-        }
-        let stdlib_lib = exe_dir.join(stdlib_name);
-        if stdlib_lib.exists() {
-            if let Some(new_lib) = find_binary_in_dir(&tmp_dir, stdlib_name) {
-                let _ = fs::copy(&new_lib, &stdlib_lib);
-            }
-        }
-    }
-
-    // Clean up
-    let _ = fs::remove_file(&backup_path);
-    let _ = fs::remove_dir_all(&tmp_dir);
-
-    println!("Updated perry: v{} -> v{}", current, cache.latest_version);
-
+    println!("Updated perry: v{} -> v{}", current, manifest.version);
     Ok(())
 }
 
-/// Unpack a downloaded release archive into `dest`, dispatching on the artifact
-/// extension. Windows ships a `.zip`; every other platform a `.tar.gz`. Feeding a
-/// zip to the gzip/tar decoder fails with "invalid gzip header" (#4715), so the
-/// extension — not the host OS — decides the decoder.
+fn safe_archive_path(path: &std::path::Path) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+    if path.is_absolute() || path.as_os_str().is_empty() {
+        bail!("archive entry has unsafe path");
+    }
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            _ => bail!("archive entry escapes staging directory"),
+        }
+    }
+    Ok(out)
+}
+
 fn extract_archive(bytes: &[u8], artifact_name: &str, dest: &std::path::Path) -> Result<()> {
     if artifact_name.ends_with(".zip") {
-        let reader = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(reader).context("Failed to open zip archive")?;
-        archive.extract(dest).context("Failed to extract zip")?;
-    } else {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+            .context("Failed to open zip archive")?;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            if entry.encrypted()
+                || entry
+                    .unix_mode()
+                    .is_some_and(|mode| mode & 0o170000 == 0o120000)
+            {
+                bail!("archive contains an encrypted or symlink entry");
+            }
+            let rel = safe_archive_path(std::path::Path::new(entry.name()))?;
+            let output = dest.join(rel);
+            if entry.is_dir() {
+                fs::create_dir_all(&output)?;
+                continue;
+            }
+            let parent = output.parent().context("archive entry has no parent")?;
+            fs::create_dir_all(parent)?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output)
+                .with_context(|| {
+                    format!("refusing duplicate archive entry {}", output.display())
+                })?;
+            std::io::copy(&mut entry, &mut file)?;
+            file.sync_all()?;
+        }
+    } else if artifact_name.ends_with(".tar.gz") {
         let decoder = flate2::read::GzDecoder::new(bytes);
         let mut archive = tar::Archive::new(decoder);
-        archive.unpack(dest).context("Failed to extract tarball")?;
+        for entry in archive.entries().context("Failed to read tarball")? {
+            let mut entry = entry?;
+            let ty = entry.header().entry_type();
+            let rel = safe_archive_path(&entry.path()?)?;
+            let output = dest.join(rel);
+            if ty.is_dir() {
+                fs::create_dir_all(&output)?;
+                continue;
+            }
+            if !ty.is_file() {
+                bail!("archive contains a non-regular entry");
+            }
+            let parent = output.parent().context("archive entry has no parent")?;
+            fs::create_dir_all(parent)?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output)
+                .with_context(|| {
+                    format!("refusing duplicate archive entry {}", output.display())
+                })?;
+            std::io::copy(&mut entry, &mut file)?;
+            file.sync_all()?;
+        }
+    } else {
+        bail!("unsupported update archive extension");
     }
     Ok(())
 }
 
 fn find_binary_in_dir(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
-    // Check top level first
-    let direct = dir.join(name);
-    if direct.exists() {
-        return Some(direct);
-    }
-
-    // Search recursively
     for entry in walkdir::WalkDir::new(dir)
         .max_depth(3)
+        .follow_links(false)
         .into_iter()
         .flatten()
     {
-        if entry.file_name().to_string_lossy() == name && entry.file_type().is_file() {
+        if entry.file_name() == name && entry.file_type().is_file() {
             return Some(entry.path().to_path_buf());
         }
     }
     None
+}
+
+#[cfg(test)]
+static INSTALL_FAIL_POINT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+#[cfg(test)]
+static INSTALL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn injected_install_failure(point: u8) -> std::io::Result<()> {
+    use std::sync::atomic::Ordering;
+    let configured = INSTALL_FAIL_POINT.load(Ordering::SeqCst);
+    if configured == point || (configured == 5 && matches!(point, 2 | 3)) {
+        let kind = if point == 4 {
+            std::io::ErrorKind::PermissionDenied
+        } else {
+            std::io::ErrorKind::WriteZero
+        };
+        return Err(std::io::Error::new(kind, "injected update install failure"));
+    }
+    Ok(())
+}
+#[cfg(not(test))]
+fn injected_install_failure(_: u8) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RecoveryJournal {
+    entries: Vec<RecoveryEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RecoveryEntry {
+    target: PathBuf,
+    backup: PathBuf,
+}
+
+fn recovery_journal_path(install_dir: &std::path::Path) -> PathBuf {
+    install_dir.join(".perry-update-recovery.json")
+}
+
+/// Run before CLI argument parsing. A crash during the multi-file swap always
+/// leaves the executable at a valid old-or-new path; this journal restores all
+/// files to the known old set before any compiler/runtime code is executed.
+pub fn recover_interrupted_self_update() -> Result<()> {
+    let current_exe = std::env::current_exe()
+        .context("cannot determine executable for update recovery")?
+        .canonicalize()
+        .context("cannot canonicalize executable for update recovery")?;
+    let install_dir = current_exe
+        .parent()
+        .context("executable has no parent for update recovery")?;
+    recover_interrupted_update_at(install_dir)
+}
+
+fn recover_interrupted_update_at(install_dir: &std::path::Path) -> Result<()> {
+    let journal_path = recovery_journal_path(install_dir);
+    let raw = match fs::read(&journal_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("cannot read interrupted-update journal"),
+    };
+    let journal: RecoveryJournal =
+        serde_json::from_slice(&raw).context("interrupted-update journal is malformed")?;
+    if journal.entries.is_empty() {
+        bail!("interrupted-update journal has no entries");
+    }
+    for entry in &journal.entries {
+        if entry.target.parent() != Some(install_dir)
+            || !entry.backup.starts_with(install_dir)
+            || !fs::symlink_metadata(&entry.backup)?.file_type().is_file()
+        {
+            bail!("interrupted-update journal contains unsafe recovery paths");
+        }
+        fs::rename(&entry.backup, &entry.target)
+            .with_context(|| format!("failed to restore {}", entry.target.display()))?;
+    }
+    fs::remove_file(&journal_path)?;
+    if let Some(transaction) = journal
+        .entries
+        .first()
+        .and_then(|entry| entry.backup.parent())
+    {
+        let _ = fs::remove_dir_all(transaction);
+    }
+    #[cfg(unix)]
+    {
+        fs::File::open(install_dir)?.sync_all()?;
+    }
+    eprintln!("Recovered an interrupted Perry self-update; the previous version was restored.");
+    Ok(())
+}
+
+fn write_recovery_journal(install_dir: &std::path::Path, journal: &RecoveryJournal) -> Result<()> {
+    let journal_path = recovery_journal_path(install_dir);
+    if fs::symlink_metadata(&journal_path).is_ok() {
+        bail!("refusing to overwrite an existing update recovery journal");
+    }
+    let mut file = tempfile::NamedTempFile::new_in(install_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    use std::io::Write as _;
+    serde_json::to_writer(&mut file, journal)?;
+    file.as_file_mut().flush()?;
+    file.as_file().sync_all()?;
+    file.persist_noclobber(&journal_path)
+        .map_err(|error| error.error)
+        .context("failed to arm update recovery journal")?;
+    #[cfg(unix)]
+    {
+        fs::File::open(install_dir)?.sync_all()?;
+    }
+    Ok(())
+}
+
+fn transactional_install(
+    current_exe: &std::path::Path,
+    new_binary: &std::path::Path,
+    extract_dir: &std::path::Path,
+) -> Result<()> {
+    if !fs::symlink_metadata(current_exe)?.file_type().is_file()
+        || !fs::symlink_metadata(new_binary)?.file_type().is_file()
+    {
+        bail!("refusing to replace a non-regular executable");
+    }
+    let install_dir = current_exe.parent().context("executable has no parent")?;
+    recover_interrupted_update_at(install_dir)?;
+    let payload = extract_dir
+        .parent()
+        .context("extract directory has no staging parent")?
+        .join("transaction");
+    fs::create_dir(&payload).context("failed to create update transaction journal")?;
+    #[cfg(unix)]
+    {
+        fs::File::open(extract_dir.parent().expect("checked staging parent"))?.sync_all()?;
+    }
+    let mut replacements = vec![(current_exe.to_path_buf(), new_binary.to_path_buf(), true)];
+    #[cfg(target_os = "windows")]
+    let libraries = ["perry_runtime.lib", "perry_stdlib.lib"];
+    #[cfg(not(target_os = "windows"))]
+    let libraries = ["libperry_runtime.a", "libperry_stdlib.a"];
+    for name in libraries {
+        let target = install_dir.join(name);
+        if target.exists() {
+            let source = find_binary_in_dir(extract_dir, name).with_context(|| {
+                format!(
+                    "authenticated archive is missing installed library {}",
+                    name
+                )
+            })?;
+            if !fs::symlink_metadata(&target)?.file_type().is_file()
+                || !fs::symlink_metadata(&source)?.file_type().is_file()
+            {
+                bail!("refusing non-regular library replacement");
+            }
+            replacements.push((target, source, false));
+        }
+    }
+    let mut prepared = Vec::new();
+    for (index, (target, source, executable)) in replacements.iter().enumerate() {
+        let staged = payload.join(format!("new-{}", index));
+        injected_install_failure(1).context("injected disk-full/copy failure")?;
+        fs::copy(source, &staged)
+            .with_context(|| format!("failed to stage {}", target.display()))?;
+        injected_install_failure(4).context("injected permission failure")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                &staged,
+                fs::Permissions::from_mode(if *executable { 0o755 } else { 0o644 }),
+            )?;
+        }
+        fs::File::open(&staged)?.sync_all()?;
+        prepared.push((target.clone(), staged));
+    }
+    // Do not move any live target away. A hard-link/copy backup keeps an
+    // executable in place across power loss; the durable journal makes a
+    // partially installed group self-heal to the prior complete group.
+    let mut journal = RecoveryJournal {
+        entries: Vec::new(),
+    };
+    for (index, (target, _)) in prepared.iter().enumerate() {
+        let backup = payload.join(format!("old-{}", index));
+        if fs::hard_link(target, &backup).is_err() {
+            fs::copy(target, &backup)
+                .with_context(|| format!("failed to back up {}", target.display()))?;
+        }
+        fs::File::open(&backup)?.sync_all()?;
+        journal.entries.push(RecoveryEntry {
+            target: target.clone(),
+            backup,
+        });
+    }
+    #[cfg(unix)]
+    {
+        // Persist backup directory entries before publishing the journal that
+        // authorizes recovery to rely on them after power loss.
+        fs::File::open(&payload)?.sync_all()?;
+    }
+    write_recovery_journal(install_dir, &journal)?;
+    for (target, staged) in &prepared {
+        if let Err(error) = injected_install_failure(2).and_then(|_| fs::rename(staged, target)) {
+            let rollback = rollback_install(&journal);
+            return match rollback { Ok(()) => Err(error).with_context(|| format!("failed to install {}; restored previous version", target.display())), Err(rollback_error) => Err(anyhow::anyhow!("failed to install {}: {}; rollback also failed; recovery will run on next launch: {}", target.display(), error, rollback_error)), };
+        }
+    }
+    #[cfg(unix)]
+    {
+        fs::File::open(install_dir)?.sync_all()?;
+    }
+    fs::remove_file(recovery_journal_path(install_dir))
+        .context("installed update but failed to disarm recovery journal")?;
+    let _ = fs::remove_dir_all(&payload);
+    Ok(())
+}
+
+fn rollback_install(journal: &RecoveryJournal) -> Result<()> {
+    injected_install_failure(3).context("injected rollback failure")?;
+    for entry in journal.entries.iter().rev() {
+        fs::rename(&entry.backup, &entry.target)?;
+    }
+    fs::remove_file(recovery_journal_path(entry_install_dir(journal)?))?;
+    Ok(())
+}
+
+fn entry_install_dir(journal: &RecoveryJournal) -> Result<&std::path::Path> {
+    journal
+        .entries
+        .first()
+        .and_then(|entry| entry.target.parent())
+        .context("recovery journal has no install directory")
 }
 
 #[cfg(test)]
@@ -695,5 +1011,115 @@ mod tests {
         assert!(tmp.join("perry").exists(), "perry should be extracted");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    fn install_fixture(with_libs: bool) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("perry");
+        let extract = dir.path().join("extract");
+        fs::create_dir(&extract).unwrap();
+        let new = extract.join("perry");
+        fs::write(&current, b"old-cli").unwrap();
+        fs::write(&new, b"new-cli").unwrap();
+        if with_libs {
+            fs::write(dir.path().join("libperry_runtime.a"), b"old-runtime").unwrap();
+            fs::write(extract.join("libperry_runtime.a"), b"new-runtime").unwrap();
+            fs::write(dir.path().join("libperry_stdlib.a"), b"old-stdlib").unwrap();
+            fs::write(extract.join("libperry_stdlib.a"), b"new-stdlib").unwrap();
+        }
+        (dir, current, new, extract)
+    }
+
+    #[test]
+    fn rejects_corrupt_archive_and_zip_slip_and_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            extract_archive(b"not an archive", "perry-linux-x86_64.tar.gz", dir.path()).is_err()
+        );
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            zip.start_file::<_, ()>("../outside", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            use std::io::Write;
+            zip.write_all(b"x").unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(extract_archive(&bytes, "perry-windows-x86_64.zip", dir.path()).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = dir.path().join("preexisting");
+            symlink("/tmp", &link).unwrap();
+            assert_ne!(secure_staging_dir(dir.path()).unwrap().path(), link);
+        }
+    }
+
+    #[test]
+    fn transaction_updates_all_libraries_or_restores_everything_on_failure() {
+        let _guard = INSTALL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, current, new, extract) = install_fixture(true);
+        transactional_install(&current, &new, &extract).unwrap();
+        assert_eq!(fs::read(&current).unwrap(), b"new-cli");
+        assert_eq!(
+            fs::read(current.parent().unwrap().join("libperry_runtime.a")).unwrap(),
+            b"new-runtime"
+        );
+        assert_eq!(
+            fs::read(current.parent().unwrap().join("libperry_stdlib.a")).unwrap(),
+            b"new-stdlib"
+        );
+
+        let (_dir, current, new, extract) = install_fixture(true);
+        INSTALL_FAIL_POINT.store(2, std::sync::atomic::Ordering::SeqCst);
+        assert!(transactional_install(&current, &new, &extract).is_err());
+        INSTALL_FAIL_POINT.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(fs::read(&current).unwrap(), b"old-cli");
+        assert_eq!(
+            fs::read(current.parent().unwrap().join("libperry_runtime.a")).unwrap(),
+            b"old-runtime"
+        );
+    }
+
+    #[test]
+    fn transaction_fault_injection_covers_copy_permission_missing_lib_and_rollback_failure() {
+        let _guard = INSTALL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for point in [1, 4] {
+            let (_dir, current, new, extract) = install_fixture(false);
+            INSTALL_FAIL_POINT.store(point, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                transactional_install(&current, &new, &extract).is_err(),
+                "point {point}"
+            );
+            INSTALL_FAIL_POINT.store(0, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(fs::read(&current).unwrap(), b"old-cli");
+        }
+        let (_dir, current, new, extract) = install_fixture(true);
+        fs::remove_file(extract.join("libperry_stdlib.a")).unwrap();
+        assert!(transactional_install(&current, &new, &extract).is_err());
+        assert_eq!(fs::read(&current).unwrap(), b"old-cli");
+        let (_dir, current, new, extract) = install_fixture(true);
+        // Point 5 fails the first new-file rename and the rollback itself.
+        // The transaction journal must retain every old file for recovery;
+        // no cleanup is allowed to erase the only viable rollback state.
+        INSTALL_FAIL_POINT.store(5, std::sync::atomic::Ordering::SeqCst);
+        assert!(transactional_install(&current, &new, &extract).is_err());
+        INSTALL_FAIL_POINT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let journal = extract.parent().unwrap().join("transaction");
+        assert!(
+            journal.join("old-0").exists(),
+            "old executable retained for recovery"
+        );
+        assert!(
+            journal.join("old-1").exists(),
+            "old library retained for recovery"
+        );
+        recover_interrupted_update_at(current.parent().unwrap()).unwrap();
+        assert_eq!(fs::read(&current).unwrap(), b"old-cli");
+        assert_eq!(
+            fs::read(current.parent().unwrap().join("libperry_runtime.a")).unwrap(),
+            b"old-runtime"
+        );
+        assert!(!recovery_journal_path(current.parent().unwrap()).exists());
     }
 }

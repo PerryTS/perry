@@ -5356,6 +5356,7 @@ dependencies = [
  "hex",
  "indicatif",
  "jsonwebtoken",
+ "libc",
  "log",
  "notify",
  "perry-api-manifest",
@@ -5372,6 +5373,7 @@ dependencies = [
  "perry-runtime",
  "perry-transform",
  "perry-types",
+ "perry-updater",
  "rand 0.9.4",
  "rayon",
  "regex",
@@ -6287,6 +6289,7 @@ dependencies = [
 name = "perry-updater"
 version = "0.5.1255"
 dependencies = [
+ "anyhow",
  "base64",
  "ed25519-dalek",
  "hex",
@@ -6295,6 +6298,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]

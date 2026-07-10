@@ -18,6 +18,7 @@ perry-transform.workspace = true
 perry-codegen.workspace = true
 perry-runtime.workspace = true
 perry-diagnostics.workspace = true
+perry-updater.workspace = true
 # Codegen backends for non-native targets — optional so a slim dev CLI
 # (--no-default-features --features dev-cli) drops them. full-cli (default)
 # re-enables all via all-codegen-backends, keeping the shipped CLI unchanged.
@@ -52,6 +53,8 @@ flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
 zip.workspace = true
+tempfile = "3"
+libc = "0.2"
 zstd.workspace = true
 jsonwebtoken.workspace = true
 semver = "1.0"
