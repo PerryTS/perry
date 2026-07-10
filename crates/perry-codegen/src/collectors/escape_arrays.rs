@@ -2,6 +2,20 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 
+/// Distinguishes a literal-separator string split from an array literal. It
+/// must not overlap the valid literal-array length range: a 16-element array
+/// is a normal scalar-replacement candidate, not a split sentinel.
+const SPLIT_CANDIDATE_MARKER: u32 = u32::MAX;
+
+#[inline]
+fn scalar_candidate_allows_index(candidate_len: u32, index: u32) -> bool {
+    if candidate_len == SPLIT_CANDIDATE_MARKER {
+        index < MAX_SCALAR_ARRAY_LEN as u32
+    } else {
+        index < candidate_len
+    }
+}
+
 pub fn collect_non_escaping_arrays(
     stmts: &[perry_hir::Stmt],
     boxed_vars: &HashSet<u32>,
@@ -162,7 +176,10 @@ fn collect_length_only_indices_in_expr(
     use perry_hir::Expr;
     if let Expr::IndexGet { object, index } = expr {
         if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
-            if non_escaping_arrays.get(id).is_some_and(|&len| index < len) {
+            if non_escaping_arrays
+                .get(id)
+                .is_some_and(|&len| scalar_candidate_allows_index(len, index))
+            {
                 let entry = uses.entry(*id).or_default().entry(index).or_default();
                 entry.0 += 1;
             }
@@ -172,7 +189,10 @@ fn collect_length_only_indices_in_expr(
         if property == "length" {
             if let Expr::IndexGet { object, index } = object.as_ref() {
                 if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
-                    if non_escaping_arrays.get(id).is_some_and(|&len| index < len) {
+                    if non_escaping_arrays
+                        .get(id)
+                        .is_some_and(|&len| scalar_candidate_allows_index(len, index))
+                    {
                         let entry = uses.entry(*id).or_default().entry(index).or_default();
                         entry.1 += 1;
                     }
@@ -301,7 +321,7 @@ fn collect_used_array_indices_in_expr(
         if let Expr::LocalGet(id) = object.as_ref() {
             if let Some(&len) = non_escaping_arrays.get(id) {
                 if let Some(k) = const_index(index) {
-                    if k < len {
+                    if scalar_candidate_allows_index(len, k) {
                         used.entry(*id).or_default().insert(k);
                     }
                 }
@@ -336,8 +356,8 @@ pub fn find_array_candidates(
                 }
             }
             // A non-escaping `text.split("literal")` can use the same scalar
-            // replacement machinery as an array literal. The bounded sentinel
-            // admits only small constant indices; the lowering materializes
+            // replacement machinery as an array literal. Its distinct marker
+            // still admits only small constant indices; the lowering materializes
             // precisely those slots instead of allocating the result array.
             Stmt::Let {
                 id,
@@ -353,7 +373,7 @@ pub fn find_array_candidates(
                 )
                 && matches!(args.as_slice(), [Expr::String(s)] if !s.is_empty()) =>
             {
-                candidates.insert(*id, MAX_SCALAR_ARRAY_LEN as u32);
+                candidates.insert(*id, SPLIT_CANDIDATE_MARKER);
             }
             Stmt::If {
                 then_branch,
@@ -535,7 +555,7 @@ pub fn check_array_escapes_in_expr(
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(&len) = candidates.get(id) {
                     match const_index(index) {
-                        Some(k) if k < len => {
+                        Some(k) if scalar_candidate_allows_index(len, k) => {
                             // Safe use — walk index for other candidates (none
                             // in a literal), skip object walk.
                             check_array_escapes_in_expr(index, candidates, escaped);
@@ -557,10 +577,9 @@ pub fn check_array_escapes_in_expr(
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(&len) = candidates.get(id) {
                     if property == "length" {
-                        // `MAX_SCALAR_ARRAY_LEN` is also the bounded sentinel
-                        // for scalar-replaced literal splits, whose runtime
-                        // length is not statically known.
-                        if len == MAX_SCALAR_ARRAY_LEN as u32 {
+                        // A scalar-replaced literal split has no statically
+                        // known runtime length, unlike a literal array.
+                        if len == SPLIT_CANDIDATE_MARKER {
                             escaped.insert(*id);
                         } else {
                             return;
@@ -774,3 +793,25 @@ pub fn check_array_escapes_in_expr(
 /// Upper bound on field count — matches `MAX_SCALAR_ARRAY_LEN`. Beyond this the
 /// per-field alloca cost overtakes the arena-bump heap path we'd otherwise use.
 pub(crate) const MAX_SCALAR_OBJECT_FIELDS: usize = 16;
+
+#[cfg(test)]
+mod tests {
+    use super::{scalar_candidate_allows_index, SPLIT_CANDIDATE_MARKER};
+    use crate::collectors::MAX_SCALAR_ARRAY_LEN;
+
+    #[test]
+    fn split_marker_does_not_collide_with_maximum_literal_array_length() {
+        let literal_len = MAX_SCALAR_ARRAY_LEN as u32;
+        assert!(scalar_candidate_allows_index(literal_len, literal_len - 1));
+        assert!(!scalar_candidate_allows_index(literal_len, literal_len));
+
+        assert!(scalar_candidate_allows_index(
+            SPLIT_CANDIDATE_MARKER,
+            literal_len - 1
+        ));
+        assert!(!scalar_candidate_allows_index(
+            SPLIT_CANDIDATE_MARKER,
+            literal_len
+        ));
+    }
+}

@@ -73,6 +73,10 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        // Arena slots can be reused after a raw-f64 array. The all-pointer
+        // layout owns the same header, so clear numeric representation flags
+        // before publishing it as pointer-only.
+        clear_array_numeric_layout(ptr);
         crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
     }
 
