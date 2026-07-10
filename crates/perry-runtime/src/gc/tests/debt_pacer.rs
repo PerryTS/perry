@@ -535,3 +535,60 @@ fn manual_gc_drains_parked_budgeted_cycle_first() {
         assert_string_bytes(live_after, b"drain_first_live");
     }
 }
+
+/// Final-root-remark (#6180 Stage 2): a pointer whose ONLY reference appears
+/// in a shadow-stack slot AFTER the budgeted cycle's one-shot RootScan has
+/// completed is invisible to the original scan — the atomic-finalize remark
+/// must re-scan roots and keep it alive. The object is allocated BEFORE the
+/// cycle starts (so whole-cycle allocate-black does not protect it) and is
+/// referenced by nothing until it is planted in the slot mid-cycle.
+#[test]
+fn atomic_finalize_remark_rescues_pointer_hidden_in_shadow_slot_after_root_scan() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = live_test_string(b"remark_anchor_live");
+    js_shadow_slot_set(0, string_bits(live));
+
+    // The victim: unreferenced at cycle start, NOT born during the cycle.
+    let hidden = live_test_string(b"remark_hidden_victim");
+
+    for _ in 0..(GC_MUTATOR_ASSIST_WORK_UNITS * 4) {
+        let _ = young_leaf();
+    }
+    trigger_guard.make_arena_trigger_due();
+    gc_check_trigger();
+
+    // Advance the budgeted cycle PAST RootScan, then plant the only
+    // reference — the exact hide-in-a-local shape.
+    let status = budgeted_step_until_phase(GcCyclePhase::MarkPropagation);
+    assert_eq!(status.phase, GcCyclePhase::MarkPropagation.ffi_code());
+    // RAW slot write, deliberately bypassing js_shadow_slot_set: that setter
+    // fires runtime_write_barrier_root_nanbox, whose incremental-mark shading
+    // would keep `hidden` alive on its own and stop this test from isolating
+    // FinalRootRemark (CodeRabbit, PR #6235). The hide-in-a-local hazard is
+    // exactly a migration that crosses NO barriered store.
+    SHADOW.with(|cell| unsafe {
+        let st = &mut *cell.get();
+        let slot = st.frame_top + 1;
+        st.stack[slot] = string_bits(hidden);
+        st.active[slot] = true;
+    });
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+
+    let hidden_after = (js_shadow_slot_get(1) & POINTER_MASK) as *const crate::StringHeader;
+    unsafe {
+        assert_string_bytes(hidden_after, b"remark_hidden_victim");
+    }
+    // Deterministic deadness probe: a swept arena object's slot is pushed
+    // onto the free list — the victim must not be there.
+    let on_free_list =
+        ARENA_FREE_LIST.with(|fl| fl.borrow().iter().any(|&(ptr, _)| ptr as usize == hidden));
+    assert!(
+        !on_free_list,
+        "remark must keep the shadow-slot-only pointer off the sweep free list"
+    );
+}

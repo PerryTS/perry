@@ -779,6 +779,19 @@ enum AtomicFinalizeSubphase {
     WeakProcessing,
     MinorPrelude,
     BarrierSeedDrain,
+    /// Budgeted cycles only: the final root re-scan (remark). A budgeted
+    /// cycle's RootScan runs ONCE, early; a pointer whose only reference
+    /// migrated into a stack local (its heap slot overwritten — the store
+    /// barrier shades the NEW value, never the old) is invisible to the
+    /// one-shot scan and would be swept live. Re-scan all roots with the
+    /// marks nearly final, then drain the resulting seeds, so WeakProcessing
+    /// and Sweep read a complete mark set. Bounded by root-set size (shadow
+    /// stack + globals + registered scanners), not heap size. From this
+    /// subphase to the Sweep transition the minor path runs ATOMICALLY (no
+    /// mutator windows); the full path's sliced RememberedSetRebuild is the
+    /// one post-remark window, and it is store-covered by the still-active
+    /// mark barrier.
+    FinalRootRemark,
     RememberedSetRebuild,
     DisableBarrier,
     Done,
@@ -788,10 +801,13 @@ struct AtomicFinalizeCycleState {
     subphase: AtomicFinalizeSubphase,
     barrier_drain: Option<TraceWorklistCycleState>,
     remembered_rebuild: Option<OldToYoungRememberedRebuildState>,
+    /// Budgeted cycles insert FinalRootRemark after BarrierSeedDrain;
+    /// synchronous cycles have no mutator windows and skip it.
+    remark: bool,
 }
 
 impl AtomicFinalizeCycleState {
-    fn new(_collection_kind: GcCollectionKind) -> Self {
+    fn new(_collection_kind: GcCollectionKind, remark: bool) -> Self {
         // Both kinds start by draining the incremental-mark-barrier seeds:
         // minors run the barrier too now (see step_build_valid_pointer_set),
         // and the drain must precede WeakProcessing so weak/finalization
@@ -803,6 +819,7 @@ impl AtomicFinalizeCycleState {
             subphase: AtomicFinalizeSubphase::BarrierSeedDrain,
             barrier_drain: None,
             remembered_rebuild: None,
+            remark,
         }
     }
 }
@@ -1185,13 +1202,47 @@ impl GcCycleState {
     }
 
     fn step_atomic_finalize(&mut self, budget: GcWorkBudget) {
+        let remark = self.progress_kind.is_budgeted();
         self.atomic_finalize
-            .get_or_insert_with(|| AtomicFinalizeCycleState::new(self.collection_kind));
+            .get_or_insert_with(|| AtomicFinalizeCycleState::new(self.collection_kind, remark));
+        if budget.work_units == 0 {
+            // Status probe: never start the atomic tail on a zero budget.
+            return;
+        }
         loop {
+            let subphase = self
+                .atomic_finalize
+                .as_ref()
+                .expect("atomic finalize state exists")
+                .subphase;
+            // SLICED subphases (seed drain, full-cycle RS rebuild) honor the
+            // caller's budget and may return to the mutator; the ATOMIC TAIL
+            // (remark → weak → barrier-off → Sweep) runs to the phase
+            // transition in this single pause so no mutator window can
+            // invalidate the near-final mark set.
+            let sliced = matches!(
+                subphase,
+                AtomicFinalizeSubphase::BarrierSeedDrain
+                    | AtomicFinalizeSubphase::RememberedSetRebuild
+            );
+            let sub_budget = if sliced {
+                budget.work_units
+            } else {
+                usize::MAX
+            };
             let phase_start = trace_phase_start(&self.trace);
-            self.step_atomic_finalize_current_subphase(budget.work_units);
+            self.step_atomic_finalize_current_subphase(sub_budget);
             trace_phase_record(&mut self.trace, "atomic_finalize", phase_start);
-            if self.phase != GcCyclePhase::AtomicFinalize || budget.work_units != usize::MAX {
+            if self.phase != GcCyclePhase::AtomicFinalize {
+                break;
+            }
+            let advanced = self
+                .atomic_finalize
+                .as_ref()
+                .expect("atomic finalize state exists")
+                .subphase
+                != subphase;
+            if sliced && !advanced && budget.work_units != usize::MAX {
                 break;
             }
         }
@@ -1204,6 +1255,48 @@ impl GcCycleState {
             .expect("atomic finalize state exists")
             .subphase;
         match subphase {
+            AtomicFinalizeSubphase::FinalRootRemark => {
+                if budget == 0 {
+                    return;
+                }
+                // Re-scan every root with the marks nearly final (see the
+                // enum doc). Reuses the RootScan machinery unbudgeted —
+                // bounded by root-set size, not heap size. consider_evacuation
+                // is false: pinning decisions were made in the original scan,
+                // and budgeted cycles are non-moving anyway.
+                {
+                    let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                    let minor_only = self.minor.is_some();
+                    let remark_scan = self.root_scan.get_or_insert_with(RootScanCycleState::new);
+                    loop {
+                        if remark_scan.step_current_subphase(
+                            valid_ptrs,
+                            &mut self.trace,
+                            /* consider_evacuation = */ false,
+                            usize::MAX,
+                            /* allow_synchronous_scanners = */ true,
+                            minor_only,
+                        ) {
+                            break;
+                        }
+                    }
+                    self.root_scan = None;
+                    // Trace everything the remark newly discovered so
+                    // WeakProcessing (and the full path's RS rebuild) read a
+                    // COMPLETE mark set, not just remark-marked parents.
+                    let mut remark_drain = TraceWorklistCycleState::new(minor_only);
+                    while !remark_drain.step(valid_ptrs, usize::MAX) {}
+                }
+                let next = if self.minor.is_some() {
+                    AtomicFinalizeSubphase::WeakProcessing
+                } else {
+                    AtomicFinalizeSubphase::RememberedSetRebuild
+                };
+                self.atomic_finalize
+                    .as_mut()
+                    .expect("atomic finalize state exists")
+                    .subphase = next;
+            }
             AtomicFinalizeSubphase::WeakProcessing => {
                 if budget == 0 {
                     return;
@@ -1259,7 +1352,9 @@ impl GcCycleState {
                         .expect("atomic finalize state exists");
                     state.barrier_drain = None;
                     // Kind-specific continuation (see AtomicFinalizeCycleState::new).
-                    state.subphase = if minor_only {
+                    state.subphase = if state.remark {
+                        AtomicFinalizeSubphase::FinalRootRemark
+                    } else if minor_only {
                         AtomicFinalizeSubphase::WeakProcessing
                     } else {
                         AtomicFinalizeSubphase::RememberedSetRebuild
