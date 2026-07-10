@@ -749,13 +749,11 @@ fn record_test_malloc_trim_call() {
 }
 
 fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
-    if progress_kind.is_budgeted() {
-        return MallocTrimOutcome {
-            status: AllocatorMaintenanceStatus::Skipped,
-            reason: AllocatorMaintenanceReason::OrdinaryBudgeted,
-            elapsed_us: 0,
-        };
-    }
+    // #6179/#6180 RSS floor: budgeted cycles are the DEFAULT-path collector
+    // once incremental graduates — skipping allocator trim there meant a
+    // long-lived incremental process never returned freed allocator pages to
+    // the OS (2026-07-09 audit finding). Trim runs at Reclaim, outside the
+    // atomic tail, and is itself bounded allocator maintenance.
 
     #[cfg(target_env = "gnu")]
     {

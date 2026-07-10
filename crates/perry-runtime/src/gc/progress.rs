@@ -24,7 +24,7 @@ pub const GC_MUTATOR_ASSIST_SOFT_PAUSE_US: u64 = 500;
 /// ~its trigger step and RSS lands near parity. When the collector is
 /// keeping up (debt ≈ 0) the budget stays at the base, so low-latency
 /// workloads never see the scaled assists.
-pub const GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT: u64 = 64;
+pub const GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT: u64 = 32;
 
 /// Runtime-visible classification for GC progress.
 ///
