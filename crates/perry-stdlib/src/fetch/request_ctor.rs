@@ -47,8 +47,17 @@ pub unsafe extern "C" fn js_request_new(
     // typed-array/buffer registries first and copy the real bytes verbatim; a
     // genuine string body falls through to the lossless StringHeader read so its
     // UTF-8 bytes are preserved.
-    let body: Option<Vec<u8>> = dispatch::body_addr_buffer_bytes(body_ptr as usize)
-        .or_else(|| dispatch::body_bytes_from_header(body_ptr));
+    // A Blob / File body is a handle-band id (>= 0x40000), NOT a real
+    // StringHeader/Buffer pointer, so it must be resolved via the blob registry
+    // first: reading it through `body_bytes_from_header` would dereference the
+    // synthetic id → SIGSEGV (#6231, the Request-constructor twin).
+    let body: Option<Vec<u8>> =
+        if perry_runtime::value::addr_class::is_handle_band(body_ptr as usize) {
+            crate::fetch::blob_bytes_clone(body_ptr as usize)
+        } else {
+            dispatch::body_addr_buffer_bytes(body_ptr as usize)
+                .or_else(|| dispatch::body_bytes_from_header(body_ptr))
+        };
     // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.
     if body.is_some() && (method == "GET" || method == "HEAD") {
         throw_fetch_type_error("Request with GET/HEAD method cannot have body.");

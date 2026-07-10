@@ -61,7 +61,12 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
     let top16 = bits >> 48;
     if top16 == 0x7FFD {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if addr >= 0x10000 && !perry_runtime::buffer::is_registered_buffer(addr) {
+        // A real heap pointer (array) lives above the synthetic handle band;
+        // handle-band ids (blobs/headers/… start at 0x40000) must NOT be read
+        // as an ArrayHeader or we dereference a fake pointer.
+        if perry_runtime::value::addr_class::is_above_handle_band(addr)
+            && !perry_runtime::buffer::is_registered_buffer(addr)
+        {
             let arr_ptr = addr as *const perry_runtime::array::ArrayHeader;
             if !arr_ptr.is_null() {
                 let gc_header = (arr_ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
@@ -96,15 +101,22 @@ unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
     // POINTER_TAG ─ either a Blob handle or a Buffer/Uint8Array.
     if top16 == 0x7FFD {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        // Small id → registered Blob handle.
-        if addr != 0 && addr < 0x10000 {
+        // Handle-band id (a Blob handle or another synthetic fetch handle) —
+        // NOT a real pointer. #6231: this previously tested `addr < 0x10000`,
+        // but blob handle ids start at 0x40000 (FETCH_HANDLE_BAND_START), so a
+        // `Blob` used as a BlobPart never matched here and fell through to
+        // `js_jsvalue_to_string`, which dereferenced the id as a pointer and
+        // SIGSEGV'd. Recognize the whole handle band and copy the blob's bytes.
+        if perry_runtime::value::addr_class::is_handle_band(addr) {
             if let Some(body) = blob_bytes_clone(addr) {
                 out.extend_from_slice(&body);
-                return;
             }
+            // A non-blob handle as a BlobPart: skip it rather than deref a
+            // synthetic id. (Spec would ToString it; skipping is crash-safe.)
+            return;
         }
         // BufferHeader (Buffer / Uint8Array / ArrayBuffer)?
-        if addr >= 0x1000 && perry_runtime::buffer::is_registered_buffer(addr) {
+        if perry_runtime::buffer::is_registered_buffer(addr) {
             let buf = addr as *const perry_runtime::buffer::BufferHeader;
             let len = (*buf).length as usize;
             let data = perry_runtime::buffer::buffer_data(buf);
