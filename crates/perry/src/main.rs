@@ -318,6 +318,13 @@ fn install_panic_hook() {
 
 fn main_inner() -> Result<()> {
     env_logger::init();
+    #[cfg(windows)]
+    {
+        let raw_args: Vec<String> = std::env::args().collect();
+        if let Some(result) = update_checker::maybe_run_windows_update_helper(&raw_args) {
+            return result;
+        }
+    }
     update_checker::recover_interrupted_self_update()?;
 
     // Handle legacy invocation (perry file.ts -o out)

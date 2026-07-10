@@ -389,8 +389,6 @@ struct TrustedUpdateKey {
     public_key: String,
 }
 
-/// Public keys are compile-time configuration, never fetched from the update
-/// server. A release built without them deliberately cannot self-update.
 fn trusted_cli_update_keys() -> Result<Vec<TrustedUpdateKey>> {
     let raw = option_env!("PERRY_CLI_UPDATE_PUBLIC_KEYS").context(
         "this Perry release has no trusted CLI update public keys; self-update is disabled until the release is built with PERRY_CLI_UPDATE_PUBLIC_KEYS",
@@ -408,11 +406,6 @@ fn trusted_cli_update_keys() -> Result<Vec<TrustedUpdateKey>> {
 }
 
 fn secure_staging_dir(install_dir: &std::path::Path) -> Result<tempfile::TempDir> {
-    // Windows replacement and recovery require ACL/reparse-point validation
-    // plus a helper process because the running PE cannot be replaced safely.
-    // Do not silently fall back to the former unsafe copy/rename flow.
-    #[cfg(windows)]
-    bail!("Windows self-update is disabled until ACL-verified staging and a replacement helper are available; install the signed release manually");
     let staging = tempfile::Builder::new()
         .prefix("perry-update-")
         .tempdir_in(install_dir)
@@ -430,6 +423,13 @@ fn secure_staging_dir(install_dir: &std::path::Path) -> Result<tempfile::TempDir
                 "refusing insecure update staging directory {}",
                 staging.path().display()
             );
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if fs::symlink_metadata(staging.path())?.file_attributes() & 0x400 != 0 {
+            bail!("refusing update staging reparse point");
         }
     }
     Ok(staging)
@@ -553,6 +553,9 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
             preserved.display()
         ));
     }
+    #[cfg(windows)]
+    println!("Update staged; it will be installed after Perry exits.");
+    #[cfg(not(windows))]
     println!("Updated perry: v{} -> v{}", current, manifest.version);
     Ok(())
 }
@@ -683,15 +686,13 @@ struct RecoveryJournal {
 struct RecoveryEntry {
     target: PathBuf,
     backup: PathBuf,
+    staged: PathBuf,
 }
 
 fn recovery_journal_path(install_dir: &std::path::Path) -> PathBuf {
     install_dir.join(".perry-update-recovery.json")
 }
 
-/// Run before CLI argument parsing. A crash during the multi-file swap always
-/// leaves the executable at a valid old-or-new path; this journal restores all
-/// files to the known old set before any compiler/runtime code is executed.
 pub fn recover_interrupted_self_update() -> Result<()> {
     let current_exe = std::env::current_exe()
         .context("cannot determine executable for update recovery")?
@@ -700,6 +701,11 @@ pub fn recover_interrupted_self_update() -> Result<()> {
     let install_dir = current_exe
         .parent()
         .context("executable has no parent for update recovery")?;
+    #[cfg(windows)]
+    if recovery_journal_path(install_dir).exists() {
+        schedule_windows_recovery(&current_exe, install_dir)?;
+        bail!("interrupted update recovery has been scheduled");
+    }
     recover_interrupted_update_at(install_dir)
 }
 
@@ -722,7 +728,7 @@ fn recover_interrupted_update_at(install_dir: &std::path::Path) -> Result<()> {
         {
             bail!("interrupted-update journal contains unsafe recovery paths");
         }
-        fs::rename(&entry.backup, &entry.target)
+        replace_path(&entry.backup, &entry.target)
             .with_context(|| format!("failed to restore {}", entry.target.display()))?;
     }
     fs::remove_file(&journal_path)?;
@@ -765,6 +771,136 @@ fn write_recovery_journal(install_dir: &std::path::Path, journal: &RecoveryJourn
         fs::File::open(install_dir)?.sync_all()?;
     }
     Ok(())
+}
+
+fn replace_path(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, target)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let mut source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        let ok = unsafe {
+            MoveFileExW(
+                source_wide.as_mut_ptr(),
+                target_wide.as_mut_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+pub fn maybe_run_windows_update_helper(args: &[String]) -> Option<Result<()>> {
+    if args.get(1).map(String::as_str) != Some("--perry-update-helper") {
+        return None;
+    }
+    let apply = match args.get(2).map(String::as_str) {
+        Some("apply") => Ok(true),
+        Some("rollback") => Ok(false),
+        _ => Err(anyhow::anyhow!("missing update-helper mode")),
+    };
+    let parent_pid = args
+        .get(3)
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| anyhow::anyhow!("missing update-helper parent pid"));
+    let journal = args
+        .get(4)
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("missing update-helper journal path"));
+    Some(apply.and_then(|apply| {
+        parent_pid
+            .and_then(|pid| journal.and_then(|path| run_windows_update_helper(apply, pid, &path)))
+    }))
+}
+
+#[cfg(windows)]
+fn run_windows_update_helper(
+    apply: bool,
+    parent_pid: u32,
+    journal_path: &std::path::Path,
+) -> Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE};
+    let process = unsafe { OpenProcess(SYNCHRONIZE, 0, parent_pid) };
+    if process.is_null() {
+        bail!(
+            "cannot wait for Perry update parent: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    unsafe {
+        WaitForSingleObject(process, INFINITE);
+        CloseHandle(process);
+    }
+    let raw = fs::read(journal_path)?;
+    let journal: RecoveryJournal = serde_json::from_slice(&raw)?;
+    for entry in &journal.entries {
+        let source = if apply { &entry.staged } else { &entry.backup };
+        replace_path(source, &entry.target)
+            .with_context(|| format!("failed to replace {}", entry.target.display()))?;
+    }
+    fs::remove_file(journal_path)?;
+    if let Some(staging) = journal
+        .entries
+        .first()
+        .and_then(|entry| entry.staged.parent())
+        .and_then(|path| path.parent())
+    {
+        let command = format!(
+            "ping 127.0.0.1 -n 2 >NUL & rmdir /S /Q \"{}\"",
+            staging.display()
+        );
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", &command])
+            .spawn();
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn start_windows_update_helper(
+    mode: &str,
+    current_exe: &std::path::Path,
+    payload: &std::path::Path,
+    install_dir: &std::path::Path,
+) -> Result<()> {
+    let helper = payload.join("perry-update-helper.exe");
+    fs::copy(current_exe, &helper)?;
+    std::process::Command::new(&helper)
+        .arg("--perry-update-helper")
+        .arg(mode)
+        .arg(std::process::id().to_string())
+        .arg(recovery_journal_path(install_dir))
+        .spawn()
+        .context("failed to start Windows update helper")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn schedule_windows_recovery(
+    current_exe: &std::path::Path,
+    install_dir: &std::path::Path,
+) -> Result<()> {
+    let journal: RecoveryJournal =
+        serde_json::from_slice(&fs::read(recovery_journal_path(install_dir))?)?;
+    let payload = journal
+        .entries
+        .first()
+        .and_then(|entry| entry.staged.parent())
+        .context("recovery journal has no payload")?;
+    start_windows_update_helper("rollback", current_exe, payload, install_dir)
 }
 
 fn transactional_install(
@@ -828,9 +964,6 @@ fn transactional_install(
         fs::File::open(&staged)?.sync_all()?;
         prepared.push((target.clone(), staged));
     }
-    // Do not move any live target away. A hard-link/copy backup keeps an
-    // executable in place across power loss; the durable journal makes a
-    // partially installed group self-heal to the prior complete group.
     let mut journal = RecoveryJournal {
         entries: Vec::new(),
     };
@@ -844,17 +977,21 @@ fn transactional_install(
         journal.entries.push(RecoveryEntry {
             target: target.clone(),
             backup,
+            staged: prepared[index].1.clone(),
         });
     }
     #[cfg(unix)]
     {
-        // Persist backup directory entries before publishing the journal that
-        // authorizes recovery to rely on them after power loss.
         fs::File::open(&payload)?.sync_all()?;
     }
     write_recovery_journal(install_dir, &journal)?;
+    #[cfg(windows)]
+    {
+        start_windows_update_helper("apply", current_exe, &payload, install_dir)?;
+        return Ok(());
+    }
     for (target, staged) in &prepared {
-        if let Err(error) = injected_install_failure(2).and_then(|_| fs::rename(staged, target)) {
+        if let Err(error) = injected_install_failure(2).and_then(|_| replace_path(staged, target)) {
             let rollback = rollback_install(&journal);
             return match rollback { Ok(()) => Err(error).with_context(|| format!("failed to install {}; restored previous version", target.display())), Err(rollback_error) => Err(anyhow::anyhow!("failed to install {}: {}; rollback also failed; recovery will run on next launch: {}", target.display(), error, rollback_error)), };
         }
@@ -872,7 +1009,7 @@ fn transactional_install(
 fn rollback_install(journal: &RecoveryJournal) -> Result<()> {
     injected_install_failure(3).context("injected rollback failure")?;
     for entry in journal.entries.iter().rev() {
-        fs::rename(&entry.backup, &entry.target)?;
+        replace_path(&entry.backup, &entry.target)?;
     }
     fs::remove_file(recovery_journal_path(entry_install_dir(journal)?))?;
     Ok(())
@@ -1099,9 +1236,6 @@ mod tests {
         assert!(transactional_install(&current, &new, &extract).is_err());
         assert_eq!(fs::read(&current).unwrap(), b"old-cli");
         let (_dir, current, new, extract) = install_fixture(true);
-        // Point 5 fails the first new-file rename and the rollback itself.
-        // The transaction journal must retain every old file for recovery;
-        // no cleanup is allowed to erase the only viable rollback state.
         INSTALL_FAIL_POINT.store(5, std::sync::atomic::Ordering::SeqCst);
         assert!(transactional_install(&current, &new, &extract).is_err());
         INSTALL_FAIL_POINT.store(0, std::sync::atomic::Ordering::SeqCst);

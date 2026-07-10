@@ -199,6 +199,4 @@ The updater stages under the install directory with owner-only permissions,
 verifies before extraction, rejects links/path traversal, and restores the old
 binary and libraries after an interrupted transaction. It never recommends
 running the updater with elevated privileges; use the package manager or a
-manual install when the installation directory is not writable. Windows
-self-update remains fail-closed until ACL/reparse-point validation and a
-replacement helper are implemented; use the signed release installer there.
+manual install when the installation directory is not writable.

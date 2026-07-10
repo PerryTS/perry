@@ -88,6 +88,9 @@ rand = { version = "0.9", optional = true }
 # LICENSE template substitution.
 chrono = "0.4"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
 [features]
 # The default build is the full official CLI — every command and codegen
 # backend. The shipped binary is unchanged from before #5422.

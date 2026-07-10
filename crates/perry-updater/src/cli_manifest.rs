@@ -1,9 +1,4 @@
-//! Shared authenticated manifest format for the Perry CLI self-updater.
-//!
-//! This intentionally lives beside the desktop updater's Ed25519 primitives:
-//! CLI and desktop updates therefore use the same `ed25519-dalek` verifier and
-//! the same SHA-256 + version binding rather than maintaining two crypto
-//! implementations.
+//! Authenticated manifest format for the Perry CLI self-updater.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
@@ -37,8 +32,6 @@ pub struct CliUpdateArtifact {
     pub size: u64,
 }
 
-/// Return the domain-separated and fully version/platform-bound signing bytes.
-/// The fixed-width length prefixes avoid ambiguous concatenation.
 pub fn cli_manifest_signing_payload(manifest: &CliUpdateManifest) -> Result<Vec<u8>> {
     if manifest.schema_version != 1 {
         bail!(
@@ -123,8 +116,6 @@ pub fn verify_cli_manifest(
         .context("CLI update manifest signature verification failed")
 }
 
-/// Hash a downloaded artifact after the authenticated manifest has been
-/// verified. Both length and digest are security checks, not diagnostics.
 pub fn verify_cli_artifact(path: &Path, artifact: &CliUpdateArtifact) -> Result<()> {
     let metadata =
         std::fs::metadata(path).with_context(|| format!("cannot stat {}", path.display()))?;
