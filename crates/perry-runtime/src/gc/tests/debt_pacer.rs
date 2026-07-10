@@ -367,3 +367,87 @@ fn direct_malloc_minor_rebaselines_trigger_above_survivors() {
     );
     assert!(next_malloc_trigger > survivors_after);
 }
+
+/// Debt-proportional assist pacing: the per-assist work budget must grow
+/// linearly with measured debt (and be exactly the base when no debt).
+#[test]
+fn mutator_assist_work_units_scale_with_debt() {
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    // Suppressed triggers (usize::MAX) → both debts read zero → base budget.
+    assert_eq!(
+        gc_mutator_assist_scaled_work_units(),
+        GC_MUTATOR_ASSIST_WORK_UNITS
+    );
+
+    // Arena debt scales at GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT bytes per unit.
+    let total = crate::arena::arena_total_bytes();
+    let arena_debt = (2 * 1024 * 1024).min(total);
+    GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(total - arena_debt));
+    let expected = GC_MUTATOR_ASSIST_WORK_UNITS
+        + (arena_debt as u64 / GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT) as usize;
+    assert_eq!(gc_mutator_assist_scaled_work_units(), expected);
+
+    // Malloc debt converts 1:1 (one mark/sweep unit per outstanding object).
+    let malloc_count = malloc_object_count();
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(malloc_count.saturating_sub(7)));
+    let malloc_debt = malloc_count - malloc_count.saturating_sub(7);
+    assert_eq!(
+        gc_mutator_assist_scaled_work_units(),
+        expected + malloc_debt
+    );
+}
+
+/// The measured #6180 Stage-2 failure mode: with a FIXED 256-unit assist
+/// budget, a large-debt cycle crawls — a 10M-allocation benchmark completed
+/// ZERO collections while the synchronous default completed 7, and RSS grew
+/// 6-22× unbounded. With debt-scaled assists the same shape must finish in a
+/// bounded number of allocation-side calls: the heap below needs hundreds of
+/// thousands of work units, which 300 fixed-256 assists (76.8k units) cannot
+/// supply but 300 debt-scaled assists comfortably can.
+#[test]
+fn debt_scaled_assists_cannot_be_outrun_by_allocation() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = live_test_string(b"debt_pacing_live");
+    js_shadow_slot_set(0, string_bits(live));
+
+    // A heap big enough that fixed-256 assists could not finish the cycle
+    // within this test's call budget (see doc comment).
+    for _ in 0..150_000 {
+        let _ = young_leaf();
+    }
+
+    // Simulate the collector having fallen far behind: several MB of debt.
+    let total = crate::arena::arena_total_bytes();
+    let debt = (total / 2).max(1);
+    GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(total - debt));
+    assert!(
+        gc_mutator_assist_scaled_work_units() > GC_MUTATOR_ASSIST_WORK_UNITS * 10,
+        "large debt must scale the assist budget well past the base"
+    );
+
+    // Drive the cycle with allocation-side assists ONLY (never a host step),
+    // while the mutator keeps allocating between calls.
+    let before = gc_collection_count();
+    let mut calls = 0usize;
+    while gc_collection_count() == before {
+        for _ in 0..8 {
+            let _ = young_leaf();
+        }
+        gc_check_trigger();
+        calls += 1;
+        assert!(
+            calls <= 300,
+            "debt-scaled assists must complete the cycle before allocation \
+             outruns collection (still incomplete after {calls} calls)"
+        );
+    }
+
+    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+    unsafe {
+        assert_string_bytes(live_after, b"debt_pacing_live");
+    }
+}

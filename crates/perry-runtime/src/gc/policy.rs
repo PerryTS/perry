@@ -6,10 +6,23 @@ use super::*;
 pub const GC_NORMAL_INCREMENTAL_WORK_UNITS: usize = 2_048;
 /// Soft telemetry target for ordinary automatic GC steps.
 pub const GC_NORMAL_INCREMENTAL_SOFT_PAUSE_US: u64 = 2_000;
-/// Hard work budget for allocation-side mutator assist steps.
+/// BASE work budget for allocation-side mutator assist steps. The actual
+/// per-assist budget is debt-scaled (`gc_mutator_assist_scaled_work_units`):
+/// this constant alone is only enough when the collector is keeping up.
 pub const GC_MUTATOR_ASSIST_WORK_UNITS: usize = 256;
 /// Soft telemetry target for allocation-side mutator assist steps.
 pub const GC_MUTATOR_ASSIST_SOFT_PAUSE_US: u64 = 500;
+/// Debt-proportional assist pacing: one extra work unit per this many bytes
+/// of arena debt (allocation past the armed trigger). This is the gain of a
+/// proportional controller whose equilibrium debt scales as
+/// sqrt(cycle_work × gain⁻¹): measured on a 10M-allocation churn loop, a
+/// 1024-bytes-per-unit gain left cycles spanning ~300 MB of allocation
+/// (pct_freed 156-190% in the re-arm DIAG) and RSS at 3.5× the synchronous
+/// collector's. At 64 bytes per unit the same loop completes cycles within
+/// ~its trigger step and RSS lands near parity. When the collector is
+/// keeping up (debt ≈ 0) the budget stays at the base, so low-latency
+/// workloads never see the scaled assists.
+pub const GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT: u64 = 64;
 
 /// Runtime-visible classification for GC progress.
 ///
@@ -1324,9 +1337,43 @@ pub fn gc_check_trigger() {
     }
 
     let _ = gc_mutator_assist_step_work_units_inner_with_progress(
-        GC_MUTATOR_ASSIST_WORK_UNITS,
+        gc_mutator_assist_scaled_work_units(),
         GcProgressKind::MutatorAssist,
     );
+}
+
+/// Debt-proportional assist pacing (#6180 Stage 2, measured 2026-07-10).
+///
+/// A FIXED per-assist budget lets a tight allocation loop outrun the
+/// collector: on a 10M-allocation ring benchmark the budgeted cycle NEVER
+/// completed (0 collections vs the synchronous default's 7) and RSS grew
+/// unbounded (6-22× the synchronous collector's) — the cycle crawled at 256
+/// units per arena-block allocation against a heap growing by ~16k objects
+/// per block. `GcDebtSnapshot` already measured exactly this shortfall but
+/// fed telemetry only.
+///
+/// Scale the budget linearly with the measured debt instead. Debt is how far
+/// allocation has run past the armed triggers, so between two block-alloc
+/// assists it grows by ~one block while the budget grows with total debt —
+/// the controller self-stabilizes at the equilibrium where collection keeps
+/// pace with allocation, instead of falling behind forever.
+///
+/// No explicit cap is needed: the budget is a CEILING on work, not a pause
+/// floor — `GcCycleState::step` stops the moment the cycle completes, and a
+/// cycle's remaining work is bounded by the heap. The worst case is therefore
+/// finishing the whole cycle in one assist: exactly the pause the synchronous
+/// collector takes on every collection today. Under extreme allocation
+/// pressure incremental degrades gracefully toward synchronous behavior
+/// rather than toward unbounded memory.
+pub(super) fn gc_mutator_assist_scaled_work_units() -> usize {
+    let debt = GcDebtSnapshot::current();
+    let arena_units = (debt.arena_debt_bytes / GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT) as usize;
+    // Malloc-registry work is per-object (mark/sweep touches each header
+    // once), so malloc debt converts 1:1.
+    let malloc_units = debt.malloc_debt_objects as usize;
+    GC_MUTATOR_ASSIST_WORK_UNITS
+        .saturating_add(arena_units)
+        .saturating_add(malloc_units)
 }
 
 pub const JS_GC_STEP_STATUS_IDLE: u32 = 0;
