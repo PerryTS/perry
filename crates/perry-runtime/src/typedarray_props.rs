@@ -640,6 +640,20 @@ pub(crate) unsafe fn typed_array_get_numeric_index(owner: usize, index: f64) -> 
 
 pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) -> f64 {
     let Some(owner) = typed_array_addr_from_value(f64::from_bits(owner_bits as u64)) else {
+        // #5989: a `u8.subarray(...)` / `u8.slice(...)` of a BufferHeader-backed
+        // Uint8Array returns another (uint8array-marked) BUFFER, which the
+        // typed-array registry gate above doesn't know — a statically-typed
+        // `r[i]` on such a value silently read `undefined` (react-server-dom's
+        // flight row parser walks exactly these chunk views). Route buffer
+        // receivers through the generic dynamic index path, which handles
+        // BufferHeader indexing (numeric, string, and symbol keys) correctly.
+        let addr = owner_bits & crate::value::POINTER_MASK as usize;
+        if addr != 0 && crate::buffer::is_registered_buffer(addr) {
+            return crate::value::js_dyn_index_get(
+                crate::value::js_nanbox_pointer(addr as i64),
+                key,
+            );
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     // A Symbol key is never an integer-indexed element — read it from the symbol
@@ -689,6 +703,17 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
 ) -> f64 {
     unsafe {
         let Some(owner) = typed_array_addr_from_value(f64::from_bits(ta as u64)) else {
+            // #5989: BufferHeader-backed receivers (subarray/slice results) —
+            // mirror the get-side fallback so statically-typed `r[i] = v`
+            // stores aren't silently dropped.
+            let addr = (ta as usize) & crate::value::POINTER_MASK as usize;
+            if addr != 0 && crate::buffer::is_registered_buffer(addr) {
+                return crate::value::js_dyn_index_set(
+                    crate::value::js_nanbox_pointer(addr as i64),
+                    key,
+                    value,
+                );
+            }
             return value;
         };
         // A Symbol key is never an integer-indexed element — store it in the

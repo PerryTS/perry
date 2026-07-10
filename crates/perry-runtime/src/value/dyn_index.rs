@@ -117,8 +117,28 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    if raw_ptr < 0x10000 {
-        return f64::from_bits(TAG_UNDEFINED);
+    if crate::value::addr_class::is_small_handle(raw_ptr) {
+        // #5989: registry HANDLES (fetch/native ids) live below HANDLE_BAND_MAX
+        // (0x100000). The old guard only excluded the first 64KB, so a handle
+        // in [0x10000, 0x100000) indexed as `h[key]` fell through to the raw
+        // ObjectHeader walk below and dereferenced the id as a pointer —
+        // react-server-dom's flight wake path indexes a handle-valued object
+        // and segfaulted at the handle address. Route through the by-name read,
+        // which triages small handles (HANDLE_PROPERTY_DISPATCH, recorded
+        // prototypes) without ever dereferencing the id.
+        let idx_top16 = index.to_bits() >> 48;
+        let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+            js_get_string_pointer_unified(index) as *const crate::StringHeader
+        } else {
+            crate::builtins::js_string_coerce(index) as *const crate::StringHeader
+        };
+        if key_ptr.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return crate::object::js_object_get_field_by_name_f64(
+            raw_ptr as *const crate::object::ObjectHeader,
+            key_ptr,
+        );
     }
     // TypedArrays carry element-typed storage, not boxed ArrayHeader slots.
     // Probe the registry before any GC-header or raw ArrayHeader fallback so
