@@ -2493,7 +2493,16 @@ pub fn run_with_parse_cache(
                                         &ctx.project_root,
                                         &origin_prefix,
                                     );
-                                    imported_classes.push(imported_class_from_hir(class, class_prefix, None));
+                                    let local_alias = if export_name == &class.name {
+                                        None
+                                    } else {
+                                        Some(export_name.clone())
+                                    };
+                                    imported_classes.push(imported_class_from_hir(
+                                        class,
+                                        class_prefix,
+                                        local_alias,
+                                    ));
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((export_name.clone(), members.clone()));
@@ -2736,7 +2745,16 @@ pub fn run_with_parse_cache(
                                             &ctx.project_root,
                                             &origin_prefix,
                                         );
-                                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
+                                        let local_alias = if export_name == &class.name {
+                                            None
+                                        } else {
+                                            Some(export_name.clone())
+                                        };
+                                        imported_classes.push(imported_class_from_hir(
+                                            class,
+                                            class_prefix,
+                                            local_alias,
+                                        ));
                                     }
                                     if let Some(members) = exported_enums.get(&key) {
                                         imported_enums.push((export_name.clone(), members.clone()));

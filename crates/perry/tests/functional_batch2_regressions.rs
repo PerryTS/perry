@@ -200,11 +200,11 @@ console.log("neg:", ({} as any) instanceof ns.Thing);"#,
 }
 
 /// Characterizes the complete metadata surface assembled for an imported
-/// class. The class travels through a renamed re-export and is consumed through
-/// both a named alias and a namespace, so its source class id must remain the
-/// defining module's id rather than a fresh importer-local id.
+/// class. The class travels through a renamed re-export and named alias, so its
+/// source class id must remain the defining module's id rather than a fresh
+/// importer-local id.
 #[test]
-fn imported_class_metadata_survives_alias_reexport_and_namespace_imports() {
+fn imported_class_metadata_survives_named_alias_reexport() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
@@ -232,20 +232,49 @@ export class Child extends Parent {
             (
                 "main.ts",
                 r#"import { PublicChild as LocalChild } from "./barrel.ts";
-import * as barrel from "./barrel.ts";
 const value: any = new LocalChild("one", "two");
 value.value = "changed";
 console.log("method:", value.describe("head", "tail-a", "tail-b"));
 console.log("parent:", value.next.base);
 console.log("static:", LocalChild.plain);
-console.log("named:", value instanceof LocalChild);
-console.log("namespace:", value instanceof barrel.PublicChild);"#,
+console.log("computed:", LocalChild["not-a-static-global"]);
+console.log("named:", value instanceof LocalChild);"#,
             ),
         ],
         "main.ts",
     );
     assert_eq!(
         stdout,
-        "method: set:changed:head:2\nparent: parent\nstatic: static\nnamed: true\nnamespace: true\n"
+        "method: set:changed:head:2\nparent: parent\nstatic: static\ncomputed: computed\nnamed: true\n"
     );
+}
+
+/// A renamed re-export must retain its visible export name when consumed only
+/// through a namespace. Keeping this entry point separate prevents named-import
+/// metadata from masking a missing namespace registration.
+#[test]
+fn imported_class_namespace_reexport_uses_visible_alias() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        &[
+            (
+                "model.ts",
+                r#"export class Child { constructor(public value: string) {} }"#,
+            ),
+            (
+                "barrel.ts",
+                r#"export { Child as PublicChild } from "./model.ts";"#,
+            ),
+            (
+                "main.ts",
+                r#"import * as barrel from "./barrel.ts";
+const value: any = new barrel.PublicChild("namespace");
+console.log("value:", value.value);
+console.log("instanceof:", value instanceof barrel.PublicChild);"#,
+            ),
+        ],
+        "main.ts",
+    );
+    assert_eq!(stdout, "value: namespace\ninstanceof: true\n");
 }
