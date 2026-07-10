@@ -1586,7 +1586,18 @@ impl GcCycleState {
                 if let Some(minor) = self.minor.as_ref() {
                     let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)
                         .then(|| minor.old_page_source_blocks.block_indices.clone());
-                    (true, false, targeted_old_blocks, minor.malloc_sweep_due)
+                    // Budgeted cycles must NOT age-bump: whole-cycle
+                    // allocate-black (#6224 soundness) marks every mid-cycle
+                    // birth, and the age-bump reads MARKED as "survived" —
+                    // dead churn then tenures into old-gen two cycles later,
+                    // where minors never reclaim it (measured: ~700 MB of
+                    // tenured garbage on a churn loop, 928 MB RSS vs the
+                    // synchronous collector's 524 MB with identical arena
+                    // block counts). Promotion under incremental happens via
+                    // the copied-minor path, which runs between budgeted
+                    // cycles and ages genuinely-surviving objects only.
+                    let age_bump = !self.progress_kind.is_budgeted();
+                    (age_bump, false, targeted_old_blocks, minor.malloc_sweep_due)
                 } else {
                     (false, true, None, true)
                 };
