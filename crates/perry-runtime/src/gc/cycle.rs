@@ -743,7 +743,7 @@ pub(super) fn test_malloc_trim_call_count() -> usize {
     TEST_MALLOC_TRIM_CALLS.with(Cell::get)
 }
 
-#[cfg(all(test, target_env = "gnu"))]
+#[cfg(all(test, any(target_env = "gnu", target_os = "macos")))]
 fn record_test_malloc_trim_call() {
     TEST_MALLOC_TRIM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
 }
@@ -771,7 +771,30 @@ fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
         };
     }
 
-    #[cfg(not(target_env = "gnu"))]
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(test)]
+        record_test_malloc_trim_call();
+
+        // Darwin counterpart of glibc's malloc_trim: ask every malloc zone
+        // to return clean pages to the OS. Bounded allocator maintenance —
+        // same placement (Reclaim, outside the atomic tail).
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut core::ffi::c_void, goal: usize) -> usize;
+        }
+        let start = Instant::now();
+        unsafe {
+            // NULL zone = all zones; goal 0 = release as much as possible.
+            malloc_zone_pressure_relief(core::ptr::null_mut(), 0);
+        }
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Executed,
+            reason: AllocatorMaintenanceReason::ExplicitOrEmergency,
+            elapsed_us: start.elapsed().as_micros() as u64,
+        };
+    }
+
+    #[cfg(not(any(target_env = "gnu", target_os = "macos")))]
     {
         MallocTrimOutcome {
             status: AllocatorMaintenanceStatus::Unsupported,

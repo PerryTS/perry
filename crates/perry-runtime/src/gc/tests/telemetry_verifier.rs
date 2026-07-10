@@ -294,7 +294,8 @@ fn emergency_full_trace_is_excluded_from_ordinary_pause_stats() {
         malloc_trim["ordinary_pause_stats_include"].as_bool(),
         Some(false)
     );
-    if cfg!(target_env = "gnu") {
+    if cfg!(any(target_env = "gnu", target_os = "macos")) {
+        // glibc malloc_trim / darwin malloc_zone_pressure_relief (#6180).
         assert_eq!(malloc_trim["status"].as_str(), Some("executed"));
         assert_eq!(
             malloc_trim["reason"].as_str(),

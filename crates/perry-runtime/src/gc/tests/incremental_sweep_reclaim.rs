@@ -561,10 +561,9 @@ fn budgeted_reclaim_runs_process_malloc_trim() {
 
     let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
-    assert_eq!(
-        test_malloc_trim_call_count(),
-        0,
-        "ordinary budgeted reclaim must not invoke process-wide malloc_trim"
+    assert!(
+        test_malloc_trim_call_count() >= 1,
+        "budgeted reclaim must invoke allocator trim (#6180 RSS floor)"
     );
     assert!(gc_collection_count() > before);
     assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
