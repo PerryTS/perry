@@ -34,14 +34,16 @@ pub(crate) fn emit_grow_mutator_writeback(
         // Boxed var: the slot / capture holds the BOX pointer; update the box
         // content so every closure sharing the box sees the new head.
         if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
-            let closure_ptr = ctx
-                .current_closure_ptr
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("unshift boxed capture but no current_closure_ptr"))?;
+            let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
+                anyhow::anyhow!("unshift boxed capture but no current_closure_ptr")
+            })?;
             let idx_str = capture_idx.to_string();
             let blk = ctx.block();
-            let box_ptr =
-                blk.call(I64, "js_closure_get_capture_bits", &[(I64, &closure_ptr), (I32, &idx_str)]);
+            let box_ptr = blk.call(
+                I64,
+                "js_closure_get_capture_bits",
+                &[(I64, &closure_ptr), (I32, &idx_str)],
+            );
             let new_bits = blk.bitcast_double_to_i64(new_box);
             blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
             emit_write_barrier(ctx, &box_ptr, &new_bits);
