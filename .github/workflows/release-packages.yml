@@ -641,6 +641,7 @@ jobs:
         env:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -648,7 +649,7 @@ jobs:
           : "${PERRY_CLI_UPDATE_KEY_ID:?configure the matching trusted public-key id}"
           : "${PERRY_CLI_UPDATE_PUBLIC_KEYS:?configure the compiled public-key keyring}"
           jq -e --arg id "$PERRY_CLI_UPDATE_KEY_ID" '.[] | select(.key_id == $id and (.public_key | length > 0))' <<< "$PERRY_CLI_UPDATE_PUBLIC_KEYS" >/dev/null
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="$RELEASE_TAG"
           if [ -z "$TAG" ]; then TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName'); fi
           ARCHIVE="${{ matrix.artifact }}.tar.gz"
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ARCHIVE}"
@@ -662,6 +663,7 @@ jobs:
         env:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -669,7 +671,7 @@ jobs:
           if (-not $env:PERRY_CLI_UPDATE_KEY_ID) { throw 'configure PERRY_CLI_UPDATE_KEY_ID' }
           if (-not $env:PERRY_CLI_UPDATE_PUBLIC_KEYS) { throw 'configure PERRY_CLI_UPDATE_PUBLIC_KEYS' }
           if (-not (($env:PERRY_CLI_UPDATE_PUBLIC_KEYS | ConvertFrom-Json) | Where-Object { $_.key_id -eq $env:PERRY_CLI_UPDATE_KEY_ID -and $_.public_key })) { throw 'configured key id is not in PERRY_CLI_UPDATE_PUBLIC_KEYS' }
-          $tag = "${{ github.event.release.tag_name }}"
+          $tag = $env:RELEASE_TAG
           if (-not $tag) { $tag = (gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName') }
           $archive = "${{ matrix.artifact }}.zip"
           $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$archive"

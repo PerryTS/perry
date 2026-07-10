@@ -230,6 +230,33 @@ mod tests {
         );
     }
     #[test]
+    fn rejects_invalid_manifest_fields_and_keys() {
+        let (m, public) = signed();
+        let trusted = [("release-2026", public.as_str())];
+
+        let unknown = [("other-key", public.as_str())];
+        assert!(verify_cli_manifest(&m, &m.platform, "1.0.0", &unknown).is_err());
+
+        let mut invalid_signature = m.clone();
+        invalid_signature.signature = "not-base64".into();
+        assert!(verify_cli_manifest(&invalid_signature, &m.platform, "1.0.0", &trusted).is_err());
+
+        let invalid_public_key = [("release-2026", "not-base64")];
+        assert!(verify_cli_manifest(&m, &m.platform, "1.0.0", &invalid_public_key).is_err());
+
+        for mutate in [0, 1, 2] {
+            let mut invalid = m.clone();
+            match mutate {
+                0 => invalid.version = "not-semver".into(),
+                1 => invalid.key_id.clear(),
+                _ => invalid.schema_version = 2,
+            }
+            assert!(cli_manifest_signing_payload(&invalid).is_err());
+            assert!(verify_cli_manifest(&invalid, &m.platform, "1.0.0", &trusted).is_err());
+        }
+    }
+
+    #[test]
     fn artifact_hash_and_size_are_checked() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a");
