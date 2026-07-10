@@ -812,7 +812,13 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             }
             return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
         }
-        if !ptr.is_null() && (ptr as usize) >= 0x10000 {
+        // Only a *real heap pointer* (above the whole synthetic handle band)
+        // may enter the object-deref block below. The prior `>= 0x10000` floor
+        // let fetch/Blob/socket/stream handle ids (0x40000+) through, so
+        // `String(new Blob())` reached the ToPrimitive/GC-header derefs and
+        // segfaulted (#6240/#6241). Proxies (a handle-band id) are already
+        // resolved above; any other handle falls through to "[object Object]".
+        if !ptr.is_null() && crate::value::addr_class::is_above_handle_band(ptr as usize) {
             // A Proxy is a small registered id, not a heap object — the GC-header
             // probes / ToPrimitive dispatch below would deref the fake pointer
             // and segfault (e.g. `String(proxy)`). Default `ToString` has no

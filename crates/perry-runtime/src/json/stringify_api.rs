@@ -26,7 +26,11 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
     } else {
         return value;
     };
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // A synthetic handle-band id (fetch/Blob/socket/… < HANDLE_BAND_MAX) is not
+    // a real heap object; `gc_header = ptr - 8` would deref unmapped memory →
+    // SIGSEGV on e.g. `JSON.stringify(new Blob())` (#6240/#6241). It's never a
+    // LazyArrayHeader, so bail before the header read.
+    if ptr.is_null() || crate::value::addr_class::is_handle_band(ptr as usize) {
         return value;
     }
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -76,7 +80,9 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
     } else {
         return None;
     };
-    if maybe_ptr.is_null() || (maybe_ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // Handle-band synthetic ids are never lazy arrays and must not be deref'd
+    // one word below the id (#6240/#6241).
+    if maybe_ptr.is_null() || crate::value::addr_class::is_handle_band(maybe_ptr as usize) {
         return None;
     }
     let gc_header = maybe_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
