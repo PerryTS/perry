@@ -62,9 +62,9 @@ fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
         // arg defaults to utf-8, handled in js_text_decoder_new).
         "utf-8" | "utf8" | "unicode-1-1-utf-8" | "unicode11utf8" | "unicode20utf8"
         | "x-unicode20utf8" => Some((DecoderEncoding::Utf8, "utf-8")),
-        "utf-16le" | "utf-16" | "unicode" | "csunicode" | "unicodefeff" | "utf-16-le" => {
-            Some((DecoderEncoding::Utf16Le, "utf-16le"))
-        }
+        // WHATWG utf-16le label set (`utf-16-le` is not a real label).
+        "utf-16le" | "utf-16" | "unicode" | "csunicode" | "unicodefeff" | "iso-10646-ucs-2"
+        | "ucs-2" => Some((DecoderEncoding::Utf16Le, "utf-16le")),
         // All WHATWG single-byte encodings (incl. windows-1252 and its
         // latin1/iso-8859-1/ascii labels). Multi-byte encodings (gbk, big5,
         // shift_jis, euc-*) are intentionally NOT recognized here — perry can't
@@ -465,12 +465,12 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
     // Pull the decoder state (encoding / fatal). Unknown handle → utf-8,
     // non-fatal (matches the old stateless default).
     let id = decoder_handle_id(handle);
-    let (encoding, fatal) = DECODER_REGISTRY
+    let (encoding, fatal, label) = DECODER_REGISTRY
         .lock()
         .unwrap()
         .get(&id)
-        .map(|s| (s.encoding, s.fatal))
-        .unwrap_or((DecoderEncoding::Utf8, false));
+        .map(|s| (s.encoding, s.fatal, s.label))
+        .unwrap_or((DecoderEncoding::Utf8, false, "utf-8"));
 
     // Node `TextDecoder.prototype.decode(input)` input contract:
     //   - omitted / undefined → decode empty (returns "").
@@ -529,7 +529,7 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
         }
     };
 
-    decode_bytes(bytes, encoding, fatal)
+    decode_bytes(bytes, encoding, fatal, label)
 }
 
 fn throw_invalid_decode_input() -> ! {
@@ -542,13 +542,13 @@ fn throw_invalid_decode_input() -> ! {
 
 /// Decode `bytes` per `encoding`; returns a `*mut StringHeader` as i64.
 /// `fatal` only affects UTF-8 (latin1/utf-16le never error in Node).
-fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> i64 {
+fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool, label: &str) -> i64 {
     match encoding {
         DecoderEncoding::Utf8 => {
             if fatal {
                 match std::str::from_utf8(bytes) {
                     Ok(s) => js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64,
-                    Err(_) => throw_invalid_encoded_data(),
+                    Err(_) => throw_invalid_encoded_data(label),
                 }
             } else {
                 // Lossy decode: invalid sequences become U+FFFD, exactly
@@ -569,7 +569,7 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> i64 {
                     table[(b - 0x80) as usize] as u32
                 };
                 if fatal && cp == 0xFFFD {
-                    throw_invalid_encoded_data();
+                    throw_invalid_encoded_data(label);
                 }
                 // Single-byte tables only hold BMP scalars (never surrogates).
                 out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
@@ -595,11 +595,9 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> i64 {
     }
 }
 
-fn throw_invalid_encoded_data() -> ! {
-    crate::fs::validate::throw_type_error_with_code(
-        "The encoded data was not valid for encoding utf-8",
-        "ERR_ENCODING_INVALID_ENCODED_DATA",
-    )
+fn throw_invalid_encoded_data(encoding: &str) -> ! {
+    let message = format!("The encoded data was not valid for encoding {encoding}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_ENCODING_INVALID_ENCODED_DATA")
 }
 
 /// Keepalive anchors — these `#[no_mangle]` fns are only called from
