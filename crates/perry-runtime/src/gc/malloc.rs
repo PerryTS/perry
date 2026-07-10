@@ -247,7 +247,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
 
         let header = raw as *mut GcHeader;
         (*header).obj_type = obj_type;
-        (*header).gc_flags = 0; // not arena
+        (*header).gc_flags = super::barrier::gc_birth_extra_flags(); // not arena; allocate-black while a budgeted cycle marks
         (*header)._reserved = 0;
         (*header).size = total as u32;
 
@@ -300,7 +300,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             }
             let header = raw as *mut GcHeader;
             (*header).obj_type = obj_type;
-            (*header).gc_flags = 0;
+            (*header).gc_flags = super::barrier::gc_birth_extra_flags();
             (*header)._reserved = 0;
             (*header).size = total as u32;
 

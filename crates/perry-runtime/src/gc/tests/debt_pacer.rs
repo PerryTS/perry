@@ -451,3 +451,87 @@ fn debt_scaled_assists_cannot_be_outrun_by_allocation() {
         assert_string_bytes(live_after, b"debt_pacing_live");
     }
 }
+
+/// Allocate-black lifecycle: runtime-path allocations made while a budgeted
+/// cycle is in flight are born MARKED (from the FIRST build slice, not just
+/// the barrier window), and birth flags reset once the cycle completes.
+#[test]
+fn budgeted_cycle_allocations_are_born_marked_for_the_whole_cycle() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = live_test_string(b"birth_flags_live");
+    js_shadow_slot_set(0, string_bits(live));
+    for _ in 0..(GC_MUTATOR_ASSIST_WORK_UNITS * 4) {
+        let _ = young_leaf();
+    }
+    trigger_guard.make_arena_trigger_due();
+
+    // Start the budgeted cycle; it parks in BuildValidPointerSet after one
+    // bounded assist — BEFORE the mark barrier enables.
+    gc_check_trigger();
+    let mut status = JsGcStepResult::default();
+    assert_eq!(js_gc_step_status(&mut status), JS_GC_STEP_STATUS_ACTIVE);
+
+    let mid_cycle = young_leaf();
+    let header = unsafe { header_from_user_ptr(mid_cycle as *const u8) };
+    assert!(
+        unsafe { (*header).gc_flags } & GC_FLAG_MARKED != 0,
+        "allocation during an active budgeted cycle must be born marked \
+         (raw-installed runtime buffers would otherwise be swept live)"
+    );
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    let post_cycle = young_leaf();
+    let post_header = unsafe { header_from_user_ptr(post_cycle as *const u8) };
+    assert_eq!(
+        unsafe { (*post_header).gc_flags } & GC_FLAG_MARKED,
+        0,
+        "birth flags must reset once the cycle completes"
+    );
+}
+
+/// Manual `gc()` landing while a budgeted cycle is parked mid-phase must
+/// drain that cycle to completion FIRST: two cycles share GC_FLAG_MARKED,
+/// the mark-seed queue, and the barrier TLS, so the synchronous full's sweep
+/// would erase the parked cycle's marks and its later sweep would free live
+/// objects (measured as the #6224 stress SIGSEGV).
+#[test]
+fn manual_gc_drains_parked_budgeted_cycle_first() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live = live_test_string(b"drain_first_live");
+    js_shadow_slot_set(0, string_bits(live));
+    for _ in 0..(GC_MUTATOR_ASSIST_WORK_UNITS * 4) {
+        let _ = young_leaf();
+    }
+    trigger_guard.make_arena_trigger_due();
+
+    gc_check_trigger();
+    let mut status = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_status(&mut status),
+        JS_GC_STEP_STATUS_ACTIVE,
+        "budgeted cycle should be parked mid-phase before the manual gc"
+    );
+
+    let before = gc_collection_count();
+    js_gc_collect();
+
+    assert!(
+        !gc_budgeted_cycle_active(),
+        "manual gc must leave no parked budgeted cycle behind"
+    );
+    assert!(
+        gc_collection_count() >= before + 2,
+        "both the drained budgeted cycle and the manual full must complete"
+    );
+    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+    unsafe {
+        assert_string_bytes(live_after, b"drain_first_live");
+    }
+}

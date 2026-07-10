@@ -166,7 +166,7 @@ pub(super) struct IncrementalMarkBarrierTestGuard<'a> {
 
 impl<'a> IncrementalMarkBarrierTestGuard<'a> {
     pub(super) fn new(valid_ptrs: &'a ValidPointerSet) -> Self {
-        incremental_mark_barrier_enable(valid_ptrs);
+        incremental_mark_barrier_enable(valid_ptrs, /* minor_only = */ false);
         Self {
             _valid_ptrs: valid_ptrs,
         }

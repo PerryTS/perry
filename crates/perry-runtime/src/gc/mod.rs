@@ -38,6 +38,8 @@ pub use types::*;
 mod policy;
 pub(crate) use policy::gc_runtime_safepoint;
 pub use policy::*;
+mod progress;
+pub use progress::*;
 mod heap_budget;
 pub use heap_budget::*;
 mod pressure;
@@ -80,6 +82,7 @@ pub fn gc_collect_minor() -> u64 {
 }
 
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    gc_drain_active_budgeted_cycle();
     // Barriers-off ⇒ the remembered set is not being maintained, and a
     // minor's black-leafed old parents would hide live children. Route
     // every caller (direct arm, moving-safepoint arm, public FFI) to the
@@ -251,6 +254,7 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
     GcCycleState::new_full(trigger).run_to_completion()
 }

@@ -791,13 +791,16 @@ struct AtomicFinalizeCycleState {
 }
 
 impl AtomicFinalizeCycleState {
-    fn new(collection_kind: GcCollectionKind) -> Self {
-        let subphase = match collection_kind {
-            GcCollectionKind::Minor => AtomicFinalizeSubphase::WeakProcessing,
-            GcCollectionKind::Full => AtomicFinalizeSubphase::BarrierSeedDrain,
-        };
+    fn new(_collection_kind: GcCollectionKind) -> Self {
+        // Both kinds start by draining the incremental-mark-barrier seeds:
+        // minors run the barrier too now (see step_build_valid_pointer_set),
+        // and the drain must precede WeakProcessing so weak/finalization
+        // decisions read the final marks. The post-drain order stays
+        // kind-specific: Minor → WeakProcessing → MinorPrelude →
+        // RememberedSetRebuild(→Sweep); Full → RememberedSetRebuild →
+        // WeakProcessing → DisableBarrier(→Sweep).
         Self {
-            subphase,
+            subphase: AtomicFinalizeSubphase::BarrierSeedDrain,
             barrier_drain: None,
             remembered_rebuild: None,
         }
@@ -837,6 +840,14 @@ impl GcCycleState {
         let start = Instant::now();
         crate::arena::old_pages_begin_gc_cycle();
         clear_mark_seeds();
+        // Allocate-black for the WHOLE cycle, from the first build slice on:
+        // the mark barrier only engages at the END of BuildValidPointerSet
+        // (the longest phase), so an object born during a build slice and
+        // installed via a runtime-internal raw store would be swept live
+        // (measured: identical 2,890-node loss with barrier-window-only
+        // birth flags). Cleared in the outcome finalizer / Drop, NOT at
+        // barrier disable — sweeping runs after the barrier is off.
+        super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
         Self {
             collection_kind: GcCollectionKind::Full,
             trigger_kind,
@@ -878,6 +889,14 @@ impl GcCycleState {
     ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
         let trigger_kind = trigger.kind;
+        // Allocate-black for the WHOLE cycle, from the first build slice on:
+        // the mark barrier only engages at the END of BuildValidPointerSet
+        // (the longest phase), so an object born during a build slice and
+        // installed via a runtime-internal raw store would be swept live
+        // (measured: identical 2,890-node loss with barrier-window-only
+        // birth flags). Cleared in the outcome finalizer / Drop, NOT at
+        // barrier disable — sweeping runs after the barrier is off.
+        super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
         Self {
             collection_kind: GcCollectionKind::Minor,
             trigger_kind,
@@ -1027,9 +1046,17 @@ impl GcCycleState {
             .expect("valid-pointer builder exists");
         self.valid_ptrs = Some(builder.finish());
         trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
-        if matches!(self.collection_kind, GcCollectionKind::Full) {
+        // Enable the incremental mark barrier for BOTH kinds. A budgeted
+        // MINOR cycle sliced across mutator turns has the same lost-store
+        // hazard as a Full one: a store into an already-traced object after
+        // its slot was scanned would leave the stored child unmarked, and
+        // the minor sweep frees it live (measured as a property-key UAF the
+        // moment #6224's pacing made budgeted minors actually complete).
+        // Minor barriers shade nursery children only — see
+        // INCREMENTAL_MARK_BARRIER_MINOR_ONLY.
+        {
             let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-            incremental_mark_barrier_enable(valid_ptrs);
+            incremental_mark_barrier_enable(valid_ptrs, self.minor.is_some());
         }
 
         let active_elapsed_us = self.active_elapsed_us();
@@ -1213,6 +1240,7 @@ impl GcCycleState {
                     .subphase = AtomicFinalizeSubphase::RememberedSetRebuild;
             }
             AtomicFinalizeSubphase::BarrierSeedDrain => {
+                let minor_only = self.minor.is_some();
                 let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                 let done = {
                     let state = self
@@ -1221,7 +1249,7 @@ impl GcCycleState {
                         .expect("atomic finalize state exists");
                     let drain = state
                         .barrier_drain
-                        .get_or_insert_with(|| TraceWorklistCycleState::new(false));
+                        .get_or_insert_with(|| TraceWorklistCycleState::new(minor_only));
                     drain.step(valid_ptrs, budget)
                 };
                 if done {
@@ -1230,7 +1258,12 @@ impl GcCycleState {
                         .as_mut()
                         .expect("atomic finalize state exists");
                     state.barrier_drain = None;
-                    state.subphase = AtomicFinalizeSubphase::RememberedSetRebuild;
+                    // Kind-specific continuation (see AtomicFinalizeCycleState::new).
+                    state.subphase = if minor_only {
+                        AtomicFinalizeSubphase::WeakProcessing
+                    } else {
+                        AtomicFinalizeSubphase::RememberedSetRebuild
+                    };
                 }
             }
             AtomicFinalizeSubphase::RememberedSetRebuild => {
@@ -1246,6 +1279,14 @@ impl GcCycleState {
                 // leave `live_old_to_young_sticky` None; reclaim then restores
                 // only `evacuation_sticky` + the pre-clear dirty snapshot.
                 if self.minor.is_some() {
+                    // Barrier off for the minor: first drain any seeds the
+                    // barrier pushed since BarrierSeedDrain completed (late
+                    // stores mark the child but its children still need the
+                    // trace), then disable. Bounded by late-store volume.
+                    let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                    let mut final_drain = TraceWorklistCycleState::new(true);
+                    while !final_drain.step(valid_ptrs, usize::MAX) {}
+                    incremental_mark_barrier_disable();
                     self.atomic_finalize = None;
                     self.phase = GcCyclePhase::Sweep;
                     return;
@@ -1281,6 +1322,15 @@ impl GcCycleState {
             AtomicFinalizeSubphase::DisableBarrier => {
                 if budget == 0 {
                     return;
+                }
+                // Same late-seed closure as the minor path: trace anything
+                // the barrier shaded after BarrierSeedDrain completed, so no
+                // marked-but-untraced object reaches Sweep with unmarked
+                // children.
+                {
+                    let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                    let mut final_drain = TraceWorklistCycleState::new(false);
+                    while !final_drain.step(valid_ptrs, usize::MAX) {}
                 }
                 incremental_mark_barrier_disable();
                 if let Some(state) = self.atomic_finalize.as_mut() {
@@ -1597,6 +1647,7 @@ impl GcCycleState {
             .map(|minor| minor.malloc_sweep_due)
             .unwrap_or(true);
 
+        super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
         self.outcome = Some(GcCollectOutcome {
             freed_bytes: self.freed_bytes,
             malloc_swept,
@@ -1607,10 +1658,11 @@ impl GcCycleState {
 
 impl Drop for GcCycleState {
     fn drop(&mut self) {
-        if matches!(self.collection_kind, GcCollectionKind::Full)
-            && self.phase != GcCyclePhase::Complete
-        {
+        // Both kinds enable the barrier now (minor cycles too); never let the
+        // raw valid-ptrs pointer dangle past the cycle that owns the set.
+        if self.phase != GcCyclePhase::Complete {
             incremental_mark_barrier_disable();
+            super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
             clear_mark_seeds();
         }
     }
