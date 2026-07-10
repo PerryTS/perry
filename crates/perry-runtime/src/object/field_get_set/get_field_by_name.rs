@@ -102,6 +102,46 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // WeakMap / WeakSet instance — a VALUE read of the collection methods
+    // (`w.add`, `wm.set`, `typeof w.has`; react-server-dom's chunk-preload
+    // dedup does `u.add.bind(u, a)` — #5989) must resolve the brand-checking
+    // prototype thunk. Method CALLS dispatch via js_native_call_method's weak
+    // arms, but this by-name read path had no equivalent, so the read yielded
+    // `undefined` and the subsequent `.bind` threw. Own keys keep precedence
+    // (fresh instances only carry the `__perry_wk_entries` sentinel).
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        unsafe {
+            let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+            if let Some(cid) = crate::weakref::weak_class_id_from_receiver(boxed) {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::slice::from_raw_parts(name_ptr, name_len);
+                let (builtin, known) = if cid == crate::weakref::CLASS_ID_WEAKMAP {
+                    (
+                        "WeakMap",
+                        matches!(name, b"set" | b"get" | b"has" | b"delete"),
+                    )
+                } else {
+                    ("WeakSet", matches!(name, b"add" | b"has" | b"delete"))
+                };
+                if known && !super::super::own_key_present(obj as *mut ObjectHeader, key) {
+                    if let Ok(method_name) = std::str::from_utf8(name) {
+                        if let Some(v) =
+                            super::super::collection_proto_thunks::collection_proto_method_value(
+                                builtin,
+                                method_name,
+                            )
+                        {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
+                }
+            }
+        }
+    }
     // `class X extends Promise` instance — a value read of `then`/`catch`/
     // `finally` (`p.then` / `typeof p.finally`, and codegen's `p.finally(cb)`
     // which reads the property first) must resolve the reified Promise prototype
