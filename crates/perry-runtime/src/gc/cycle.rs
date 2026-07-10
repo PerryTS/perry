@@ -562,6 +562,15 @@ impl RootScanCycleState {
                 if budget == 0 {
                     return false;
                 }
+                // #6179: classifier-mode (budgeted) cycles have no exact set
+                // and traced conservative words cannot tolerate heuristic
+                // false positives — never conservative-scan here, even if a
+                // ManualGcScanGuard appears mid-cycle (drain-before-manual-gc
+                // finishing a parked cycle under the guard).
+                if valid_ptrs.classifier_mode {
+                    self.subphase = RootScanSubphase::MutableSlots;
+                    return false;
+                }
                 let conservative_scan_decision = conservative_stack_scan_decision();
                 // #5029: minors retain old-gen conservative discoveries
                 // pin-only (no trace) — see try_mark_conservative_word.
@@ -1050,9 +1059,20 @@ impl GcCycleState {
 
     fn step_build_valid_pointer_set(&mut self, budget: GcWorkBudget) {
         let phase_start = trace_phase_start(&self.trace);
-        let builder = self
-            .valid_builder
-            .get_or_insert_with(ValidPointerSetBuilder::new);
+        let builder = self.valid_builder.get_or_insert_with(|| {
+            // #6179: budgeted cycles are precise (no conservative scan,
+            // non-moving) — skip the O(heap) exact census and resolve
+            // membership via the page-metadata classifier, which the
+            // differential mode proves is a census superset. Synchronous
+            // cycles keep the exact set: they force the conservative
+            // scan, whose TRACED roots cannot tolerate a heuristic
+            // false positive.
+            if self.progress_kind.is_budgeted() {
+                ValidPointerSetBuilder::new_classifier()
+            } else {
+                ValidPointerSetBuilder::new()
+            }
+        });
         if !builder.step(budget.work_units) {
             trace_phase_record(&mut self.trace, "build_valid_pointer_set", phase_start);
             return;

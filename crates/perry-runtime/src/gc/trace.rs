@@ -9,6 +9,28 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+/// #6179 membership classifier: is `addr` a plausible live GC object start?
+/// UNION of the two backends — exact membership in the malloc registry OR a
+/// plausible arena header on an arena-classified page — deliberately NOT the
+/// exclusive generation branch of `current_heap_header_for_user_ptr`: malloc
+/// allocations can sit inside address ranges the page metadata attributes to
+/// an arena generation, and an exclusive branch then never consults the
+/// (exact) malloc registry, leaving live malloc roots unmarked.
+#[inline]
+pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
+    if addr < GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let header = unsafe { header_from_user_ptr(addr as *const u8) };
+    if super::gc_malloc_header_is_tracked(header) {
+        return true;
+    }
+    !matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Unknown
+    ) && unsafe { super::barrier::plausible_arena_user_ptr_header(header).is_some() }
+}
+
 /// #6179: differential-verification mode for the page-metadata classifier.
 pub(super) fn classifier_verify_enabled() -> bool {
     if CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get()) {
@@ -64,6 +86,13 @@ pub(crate) struct ValidPointerSet {
     /// addresses, and classifying those dereferences headers that don't
     /// exist (panics inside no-unwind scanner contexts → poisoned globals).
     pub(super) built_by_census: bool,
+    /// #6179: budgeted (precise, non-moving, no-conservative-scan) cycles
+    /// skip the O(heap) exact census entirely; membership routes through the
+    /// page-metadata classifier (differentially verified as a superset of
+    /// the census across the whole suite). Classifier-mode cycles must NEVER
+    /// run a conservative stack scan: conservative words are traced, and a
+    /// heuristic false positive would trace garbage.
+    pub(super) classifier_mode: bool,
 }
 
 impl ValidPointerSet {
@@ -76,6 +105,7 @@ impl ValidPointerSet {
             range_max: 0,
             tenured_nursery_bytes: 0,
             built_by_census: false,
+            classifier_mode: false,
         }
     }
 
@@ -83,6 +113,9 @@ impl ValidPointerSet {
     /// order — `ValidPointerSetBuilder` does so via `ArenaObjectCursor`
     /// in address order.
     pub(super) fn push_arena(&mut self, ptr: usize) {
+        if self.classifier_mode {
+            return; // #6179: no exact census in classifier mode
+        }
         if let Some(previous) = self
             .current_arena_run
             .last()
@@ -101,6 +134,9 @@ impl ValidPointerSet {
     }
 
     pub(super) fn push_malloc(&mut self, ptr: usize) {
+        if self.classifier_mode {
+            return; // #6179: no exact census in classifier mode
+        }
         self.lookup_set.insert(ptr);
         self.record_pointer_range(ptr);
     }
@@ -139,10 +175,23 @@ impl ValidPointerSet {
     /// and we skip the binary search.
     #[inline(always)]
     pub(crate) fn maybe_contains(&self, ptr: usize) -> bool {
+        // #6179 classifier mode: no census, so no address range — the
+        // prefilter must pass everything through to `contains()` (call sites
+        // check maybe_contains SEPARATELY before contains and would
+        // otherwise reject every root).
+        if self.classifier_mode {
+            return true;
+        }
         ptr >= self.range_min && ptr <= self.range_max
     }
     #[inline]
     pub(crate) fn contains(&self, ptr: &usize) -> bool {
+        if self.classifier_mode {
+            // No census was built: classify live. FORWARDED rejects are
+            // correct here (budgeted cycles are non-moving; a forwarded
+            // header can only be pre-existing stale state).
+            return classifier_valid_object_start(*ptr);
+        }
         if !self.maybe_contains(*ptr) {
             // Range-rejected candidates skip the differential check: the
             // classifier legitimately accepts objects born after the census
@@ -163,7 +212,7 @@ impl ValidPointerSet {
         // objects allocated after the census walk; over-approximation is
         // safe (bounded floating garbage under allocate-black).
         if exact && self.built_by_census && classifier_verify_enabled() {
-            let heur = super::barrier::current_heap_header_for_user_ptr(*ptr, None).is_some();
+            let heur = classifier_valid_object_start(*ptr);
             // Censused-then-MOVED is a legitimate divergence: the plausible-
             // header check rejects FORWARDED headers by design (the object
             // lives at its new address; the copying machinery owns the
@@ -263,6 +312,16 @@ pub(super) struct ValidPointerSetBuilderSnapshot {
 }
 
 impl ValidPointerSetBuilder {
+    /// #6179: budgeted-cycle flavor — the census walk still runs (it feeds
+    /// tenured_nursery_bytes for evacuation policy) but nothing is inserted
+    /// into the exact set; membership resolves via the classifier. Saves the
+    /// O(heap) BTreeSet held across the whole sliced cycle.
+    pub(super) fn new_classifier() -> Self {
+        let mut b = Self::new();
+        b.set.classifier_mode = true;
+        b
+    }
+
     pub(super) fn new() -> Self {
         Self {
             set: ValidPointerSet::new(),
