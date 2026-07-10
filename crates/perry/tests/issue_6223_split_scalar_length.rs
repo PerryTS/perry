@@ -68,3 +68,37 @@ console.log(readPart("a-bc"));
     );
     assert_eq!(stdout, "2\nbc\n");
 }
+
+#[test]
+fn non_escaping_uppercase_pipeline_keeps_utf16_and_source_snapshot() {
+    let stdout = compile_and_run(
+        r#"
+function pipeline(value: string): string {
+  const upper = value.toUpperCase();
+  const parts = upper.split("-");
+  return parts[1].length + ":" + upper.indexOf("SS");
+}
+let source = "a-9";
+const upper = source.toUpperCase();
+source = "changed";
+const parts = upper.split("-");
+console.log(parts[1].length + ":" + upper.indexOf("9"));
+console.log(pipeline("straße-😀"));
+"#,
+    );
+    assert_eq!(stdout, "1:2\n2:4\n");
+}
+
+#[test]
+fn uppercase_result_materializes_when_an_unsupported_use_is_observed() {
+    let stdout = compile_and_run(
+        r#"
+function materialize(value: string): string {
+  const upper = value.toUpperCase();
+  return upper;
+}
+console.log(materialize("a-bc"));
+"#,
+    );
+    assert_eq!(stdout, "A-BC\n");
+}

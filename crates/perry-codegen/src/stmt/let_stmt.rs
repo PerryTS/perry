@@ -412,6 +412,36 @@ pub(crate) fn lower_let(
         }
     }
 
+    // Keep a non-escaping uppercase result virtual when every consumer is a
+    // fused string operation. Store the original boxed receiver now so later
+    // writes to its source local cannot change the captured value.
+    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+        if ctx.fusible_uppercase_locals.contains(&id)
+            && args.is_empty()
+            && matches!(
+                callee.as_ref(),
+                perry_hir::Expr::PropertyGet { object, property }
+                    if is_string_expr(ctx, object) && property == "toUpperCase"
+            )
+        {
+            let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
+                unreachable!();
+            };
+            let source = lower_expr(ctx, object)?;
+            let source_slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.block().store(DOUBLE, &source, &source_slot);
+            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.func
+                .entry_allocas_push_store(DOUBLE, &undef, &dummy_slot);
+            ctx.scalar_replaced_uppercase_sources
+                .insert(id, source_slot);
+            ctx.local_types.insert(id, refined_ty);
+            ctx.locals.insert(id, dummy_slot);
+            return Ok(());
+        }
+    }
+
     // Scalar replacement: a literal-separator split whose result only has
     // small constant-index reads does not need an ArrayHeader or unobserved
     // substring allocations. The escape collector admits this exact shape and
@@ -447,7 +477,17 @@ pub(crate) fn lower_let(
                 slots.push(slot);
             }
 
-            let receiver_box = lower_expr(ctx, object)?;
+            let uppercase_source_slot = match object.as_ref() {
+                perry_hir::Expr::LocalGet(id) => {
+                    ctx.scalar_replaced_uppercase_sources.get(id).cloned()
+                }
+                _ => None,
+            };
+            let receiver_box = if let Some(source_slot) = &uppercase_source_slot {
+                ctx.block().load(DOUBLE, source_slot)
+            } else {
+                lower_expr(ctx, object)?
+            };
             let delimiter_box = lower_expr(ctx, &args[0])?;
             let receiver = {
                 let blk = ctx.block();
@@ -462,12 +502,24 @@ pub(crate) fn lower_let(
                 .get(&id)
                 .cloned()
                 .unwrap_or_default();
+            debug_assert!(
+                uppercase_source_slot.is_none()
+                    || used_indices
+                        .iter()
+                        .all(|index| length_only_indices.contains(index)),
+                "virtual uppercase split may only feed direct part-length reads"
+            );
             let mut length_slots = std::collections::HashMap::new();
             for index in used_indices {
                 if length_only_indices.contains(&index) {
+                    let runtime_fn = if uppercase_source_slot.is_some() {
+                        "js_string_to_upper_case_split_part_utf16_length"
+                    } else {
+                        "js_string_split_part_utf16_length"
+                    };
                     let length = ctx.block().call(
                         DOUBLE,
-                        "js_string_split_part_utf16_length",
+                        runtime_fn,
                         &[
                             (I64, &receiver),
                             (I64, &delimiter),

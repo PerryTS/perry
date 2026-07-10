@@ -223,6 +223,77 @@ pub extern "C" fn js_string_split_part_utf16_length(
     }
 }
 
+#[inline]
+fn ascii_upper_byte(byte: u8) -> u8 {
+    if byte.is_ascii_lowercase() {
+        byte - (b'a' - b'A')
+    } else {
+        byte
+    }
+}
+
+/// Return the UTF-16 length of `s.toUpperCase().split(delimiter)[index]`
+/// without materializing the uppercase JS string when `s` is ASCII.
+#[no_mangle]
+pub extern "C" fn js_string_to_upper_case_split_part_utf16_length(
+    s: *const StringHeader,
+    delimiter: *const StringHeader,
+    index: i32,
+) -> f64 {
+    if index < 0 || !is_valid_string_ptr(s) || !is_valid_string_ptr(delimiter) {
+        return 0.0;
+    }
+    let source = string_as_str(s);
+    let delim = string_as_str(delimiter);
+    if !is_ascii_string(s) {
+        let upper = source.to_uppercase();
+        if delim.is_empty() {
+            return upper
+                .chars()
+                .nth(index as usize)
+                .map_or(0.0, |c| c.len_utf16() as f64);
+        }
+        return upper.split(delim).nth(index as usize).map_or(0.0, |part| {
+            compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
+        });
+    }
+
+    let bytes = source.as_bytes();
+    if delim.is_empty() {
+        return ((index as usize) < bytes.len()) as u8 as f64;
+    }
+    let delimiter = delim.as_bytes();
+    if !delim.is_ascii() {
+        return if index == 0 { bytes.len() as f64 } else { 0.0 };
+    }
+
+    let target = index as usize;
+    let mut part_start = 0usize;
+    let mut part_index = 0usize;
+    let mut scan = 0usize;
+    while scan + delimiter.len() <= bytes.len() {
+        let matches = bytes[scan..scan + delimiter.len()]
+            .iter()
+            .zip(delimiter)
+            .all(|(&source_byte, &delimiter_byte)| ascii_upper_byte(source_byte) == delimiter_byte);
+        if matches {
+            if part_index == target {
+                return (scan - part_start) as f64;
+            }
+            part_index += 1;
+            scan += delimiter.len();
+            part_start = scan;
+        } else {
+            scan += 1;
+        }
+    }
+    if part_index == target {
+        (bytes.len() - part_start) as f64
+    } else {
+        0.0
+    }
+}
+
 /// Split a string by a delimiter, with optional limit (issue #567).
 /// `limit < 0` → no limit (matches `js_string_split`).
 /// `limit == 0` → empty array.

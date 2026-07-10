@@ -77,6 +77,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[I64, I64, I32],
     );
+    module.declare_function(
+        "js_string_to_upper_case_split_part_utf16_length",
+        DOUBLE,
+        &[I64, I64, I32],
+    );
+    module.declare_function("js_string_to_upper_case_index_of", I32, &[I64, I64]);
     // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)
     // coercion + undefined/RegExp handling (ECMA-262 §22.1.3.21).
     module.declare_function("js_string_split_value", I64, &[I64, DOUBLE, DOUBLE]);

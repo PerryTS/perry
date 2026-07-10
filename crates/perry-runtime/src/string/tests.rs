@@ -279,6 +279,32 @@ fn test_string_split_part_utf16_length() {
 }
 
 #[test]
+fn test_uppercase_split_length_and_index_of_without_intermediate_string() {
+    let dash = js_string_from_bytes(b"-".as_ptr(), 1);
+    let ascii = js_string_from_bytes(b"item-9".as_ptr(), 6);
+    let nine = js_string_from_bytes(b"9".as_ptr(), 1);
+    assert_eq!(
+        super::split::js_string_to_upper_case_split_part_utf16_length(ascii, dash, 1),
+        1.0
+    );
+    assert_eq!(
+        super::slice_ops::js_string_to_upper_case_index_of(ascii, nine),
+        5
+    );
+
+    let unicode = js_string_from_str("straße-😀");
+    let ss = js_string_from_bytes(b"SS".as_ptr(), 2);
+    assert_eq!(
+        super::split::js_string_to_upper_case_split_part_utf16_length(unicode, dash, 1),
+        2.0
+    );
+    assert_eq!(
+        super::slice_ops::js_string_to_upper_case_index_of(unicode, ss),
+        4
+    );
+}
+
+#[test]
 fn test_string_append_inplace() {
     // First append: creates new string with 2x capacity and refcount=1
     let a = js_string_from_bytes(b"hello".as_ptr(), 5);
