@@ -579,8 +579,25 @@ pub fn collect_pointer_typed_locals(
         })
         .collect();
 
+    // The `local_value_types` refinement below is NOT monotonic — a local's
+    // inferred type can flip between rounds (insert a different type at the
+    // `!= Some(&ty)` check), each flip re-arming `changed`. On a closure body
+    // with a data-flow cycle (mutually-referential locals whose inferred types
+    // oscillate) this fixed point never settles and the codegen hangs forever
+    // — reproduced as a wedged `perry compile` on a large esbuild-bundled CLI
+    // app: ~4GB of IR built, then one pathological closure spins here. Bound
+    // the iteration count; `non_pointer_locals` (the only fact `out` actually
+    // consumes) grows monotonically, so a genuine fixed point converges in at
+    // most ~one round per local. Anything past that generous cap is
+    // oscillation — stop and keep the current state, which is conservatively
+    // SAFE: an unresolved local stays pointer-typed and gets a shadow slot
+    // (over-rooting a non-pointer is harmless; under-rooting a pointer is the
+    // GC bug this analysis exists to prevent).
+    let max_rounds = writes.len().saturating_mul(2).saturating_add(32);
     let mut changed = true;
-    while changed {
+    let mut rounds = 0usize;
+    while changed && rounds < max_rounds {
+        rounds += 1;
         changed = false;
         for (id, local_writes) in &writes {
             let mut inferred_ty: Option<Type> = None;
