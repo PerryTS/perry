@@ -221,9 +221,9 @@ export async function checkForUpdate(opts: UpdaterOptions): Promise<Update | nul
  *                       hook so a quick close-and-reopen pattern doesn't
  *                       look like a crash loop.
  *  - Sentinel armed and `restartCount >= crashLoopThreshold`:
- *                       crash loop detected → `performRollback()` and
- *                       `process.exit(0)` so the launcher restarts us at
- *                       the rolled-back binary.
+ *                       crash loop detected → roll back, clear the captured
+ *                       sentinel, and exit only if both operations succeed.
+ *                       A failed rollback leaves the sentinel for recovery.
  *
  * The graceful-exit hook is the difference between "user closed the app
  * within 60s" (legitimate, shouldn't bump the count) and "the new version
@@ -236,6 +236,11 @@ export async function initUpdater(options: InitOptions = {}): Promise<void> {
   const healthCheckMs = options.healthCheckMs ?? 60_000;
   const threshold = options.crashLoopThreshold ?? 2;
 
+  // A second initialization (or a disabled re-initialization) supersedes any
+  // callbacks registered by the previous generation. Exit hooks cannot be
+  // reliably removed on every target, so they also carry this validity bit.
+  invalidateActiveLifecycle();
+
   if (!autoRollback) return;
 
   const sentinelPath = getSentinelPath();
@@ -247,7 +252,7 @@ export async function initUpdater(options: InitOptions = {}): Promise<void> {
     state = JSON.parse(raw) as SentinelPayload;
   } catch {
     // Malformed sentinel — clear it so we don't retry forever.
-    clearSentinel(sentinelPath);
+    clearSentinelOrThrow(sentinelPath, "malformed sentinel");
     return;
   }
 
@@ -257,8 +262,13 @@ export async function initUpdater(options: InitOptions = {}): Promise<void> {
 
   if (state.restartCount >= threshold) {
     // Crash loop — roll back and bail.
-    nativePerformRollback(getExePath());
-    clearSentinel(sentinelPath);
+    // Do not clear or exit when rollback fails: the armed sentinel is the
+    // recoverable evidence needed for a later/manual retry. Exiting here
+    // would merely recreate the crash loop without restoring the old binary.
+    if (nativePerformRollback(getExePath()) !== 1) {
+      throw new Error("updater: rollback failed; sentinel retained for recovery");
+    }
+    clearSentinelIfCurrentOrThrow(sentinelPath, raw, "after rollback");
     (globalThis as any).process?.exit?.(0);
     return;
   }
@@ -270,8 +280,26 @@ export async function initUpdater(options: InitOptions = {}): Promise<void> {
   //  2. The user gracefully exits before the timer fires — close-and-reopen
   //     is a normal pattern for CLIs and quick-launch GUIs and shouldn't
   //     count toward crash-loop detection.
-  writeSentinel(sentinelPath, JSON.stringify(state));
-  setTimeout(() => clearSentinel(sentinelPath), healthCheckMs);
+  // Older sentinels did not include a generation. Upgrade them while writing
+  // the bumped restart count so their callbacks get the same protection.
+  state.generation = validGeneration(state.generation)
+    ? state.generation
+    : nextGeneration();
+  const capturedSentinel = JSON.stringify(state);
+  if (writeSentinel(sentinelPath, capturedSentinel) !== 1) {
+    throw new Error("updater: failed to persist crash-loop sentinel");
+  }
+
+  const lifecycle: ActiveLifecycle = {
+    sentinelPath,
+    capturedSentinel,
+    active: true,
+    timer: undefined,
+  };
+  activeLifecycle = lifecycle;
+  lifecycle.timer = setTimeout(() => {
+    clearLifecycleQuietly(lifecycle, "health check");
+  }, healthCheckMs);
 
   // Register a graceful-exit hook if `process.on` is wired in this build.
   // The check keeps initUpdater portable across UI / CLI / minimal targets
@@ -279,12 +307,13 @@ export async function initUpdater(options: InitOptions = {}): Promise<void> {
   // path and the user can call `markHealthy()` explicitly instead.
   const proc = (globalThis as any).process;
   if (proc && typeof proc.on === "function") {
-    proc.on("exit", () => clearSentinel(sentinelPath));
+    proc.on("exit", () => clearLifecycleQuietly(lifecycle, "graceful exit"));
   }
 }
 
 /**
- * Explicitly mark the running version as healthy and clear the sentinel.
+ * Explicitly mark the running version as healthy and clear its owned
+ * sentinel. Calling this after the sentinel was already cleared is a no-op.
  *
  * `initUpdater` already arms a timer + a graceful-exit hook, so most apps
  * never need to call this. Reach for it when:
@@ -297,7 +326,13 @@ export async function initUpdater(options: InitOptions = {}): Promise<void> {
  *    rather than relying on the generic exit hook.
  */
 export function markHealthy(): void {
-  clearSentinel(getSentinelPath());
+  const lifecycle = activeLifecycle;
+  if (lifecycle?.active) {
+    clearLifecycleOrThrow(lifecycle, "markHealthy");
+  }
+  // No owned lifecycle is also a successful no-op. In particular, an old
+  // process must not guess that a sentinel created by a newer install is its
+  // own merely because markHealthy was invoked late.
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +346,80 @@ interface SentinelPayload {
   targetVersion: string;
   restartCount: number;
   state: "installing" | "armed";
+  /** Opaque install nonce used to reject stale timer and exit callbacks. */
+  generation?: string;
+}
+
+interface ActiveLifecycle {
+  sentinelPath: string;
+  /** Exact on-disk payload this process is allowed to clear. */
+  capturedSentinel: string;
+  active: boolean;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+let activeLifecycle: ActiveLifecycle | undefined;
+let generationCounter = 0;
+
+function nextGeneration(): string {
+  generationCounter += 1;
+  return `${Date.now().toString(36)}-${generationCounter.toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function validGeneration(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function invalidateActiveLifecycle(): void {
+  const lifecycle = activeLifecycle;
+  if (!lifecycle) return;
+  lifecycle.active = false;
+  if (lifecycle.timer !== undefined) clearTimeout(lifecycle.timer);
+  activeLifecycle = undefined;
+}
+
+/**
+ * Compare-and-clear the exact sentinel captured by this lifecycle. This
+ * prevents an old timer/exit hook from deleting a newer install's sentinel.
+ */
+function clearSentinelIfCurrentOrThrow(
+  sentinelPath: string,
+  expected: string,
+  context: string,
+): boolean {
+  if (readSentinel(sentinelPath) !== expected) return false;
+  clearSentinelOrThrow(sentinelPath, context);
+  return true;
+}
+
+function clearSentinelOrThrow(sentinelPath: string, context: string): void {
+  if (clearSentinel(sentinelPath) !== 1) {
+    throw new Error(`updater: failed to clear sentinel ${context}`);
+  }
+}
+
+function clearLifecycleOrThrow(lifecycle: ActiveLifecycle, context: string): void {
+  if (!lifecycle.active || activeLifecycle !== lifecycle) return;
+  clearSentinelIfCurrentOrThrow(
+    lifecycle.sentinelPath,
+    lifecycle.capturedSentinel,
+    context,
+  );
+  // A different generation owns the file now, so this lifecycle must never
+  // attempt to clear it again. A clear failure intentionally stays active so
+  // markHealthy can retry and the sentinel remains recoverable.
+  invalidateActiveLifecycle();
+}
+
+function clearLifecycleQuietly(lifecycle: ActiveLifecycle, context: string): void {
+  try {
+    clearLifecycleOrThrow(lifecycle, context);
+  } catch (error) {
+    // Throwing from a timer or exit hook can turn a healthy process into the
+    // very crash loop this sentinel is meant to diagnose. Keep the sentinel
+    // for recovery and report the failed cleanup instead.
+    (globalThis as any).console?.error?.("updater:", error);
+  }
 }
 
 async function downloadAndVerify(
@@ -374,6 +483,10 @@ async function applyAndRelaunch(
   currentVersion: string,
   targetVersion: string,
 ): Promise<void> {
+  // This process may have booted the previous installation and armed timer or
+  // exit callbacks. Invalidate them before publishing the new generation.
+  invalidateActiveLifecycle();
+
   const sentinelPath = getSentinelPath();
   const prevPath = `${targetPath}.prev`;
 
@@ -387,13 +500,15 @@ async function applyAndRelaunch(
     targetVersion,
     restartCount: 0,
     state: "armed",
+    generation: nextGeneration(),
   };
-  if (writeSentinel(sentinelPath, JSON.stringify(sentinel)) !== 1) {
+  const serializedSentinel = JSON.stringify(sentinel);
+  if (writeSentinel(sentinelPath, serializedSentinel) !== 1) {
     throw new Error("updater: failed to write sentinel");
   }
 
   if (nativeInstallUpdate(stagedPath, targetPath) !== 1) {
-    clearSentinel(sentinelPath);
+    clearSentinelIfCurrentOrThrow(sentinelPath, serializedSentinel, "after install failure");
     throw new Error("updater: install failed");
   }
 
