@@ -1184,16 +1184,21 @@ pub(super) fn compile_static_method(
 
     // gh #6206 / #6081: same shadow-frame emission as compile_method — static
     // method bodies were equally invisible to the exact-roots copying minor.
+    // One extra slot roots the resolved receiver: static `this` is usually
+    // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
+    // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
+    // dynamic dispatch, and that object may be reachable only from this slot.
     let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
             crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
-        lf.enable_shadow_frame(m.len() as u32);
+        lf.enable_shadow_frame(m.len() as u32 + 1);
         m
     } else {
         std::collections::HashMap::new()
     };
+    let this_shadow_slot_idx = shadow_slot_map.len() as u32;
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
@@ -1229,6 +1234,12 @@ pub(super) fn compile_static_method(
             &[(DOUBLE, &class_ref_lit)],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
+        if super::helpers::shadow_stack_enabled() {
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
+            );
+        }
         let mut map = HashMap::new();
         for p in &f.params {
             let arg_name = format!("%arg{}", p.id);
