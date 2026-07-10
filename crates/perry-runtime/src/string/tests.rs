@@ -258,10 +258,22 @@ fn test_string_split_part_utf16_length() {
         super::split::js_string_split_part_utf16_length(ascii, comma, 3),
         0.0
     );
+    let trailing = js_string_from_bytes(b"a,".as_ptr(), 2);
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(trailing, comma, 1),
+        0.0
+    );
 
     let unicode = js_string_from_str("a,😀,d");
     assert_eq!(
         super::split::js_string_split_part_utf16_length(unicode, comma, 1),
+        2.0
+    );
+
+    let multi = js_string_from_bytes(b"a--bc".as_ptr(), 5);
+    let double_dash = js_string_from_bytes(b"--".as_ptr(), 2);
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(multi, double_dash, 1),
         2.0
     );
 }

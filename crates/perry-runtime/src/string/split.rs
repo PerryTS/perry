@@ -178,6 +178,41 @@ pub extern "C" fn js_string_split_part_utf16_length(
             .map_or(0.0, |c| c.len_utf16() as f64);
     }
 
+    // A one-byte delimiter is necessarily ASCII, so it cannot occur inside a
+    // multi-byte UTF-8 code point. Scan byte boundaries directly instead of
+    // constructing the general string-split iterator; this is the hot shape
+    // for separators such as "-" and ",".
+    if delim.len() == 1 {
+        let target = index as usize;
+        let separator = delim.as_bytes()[0];
+        let bytes = str_data.as_bytes();
+        let mut part_start = 0usize;
+        let mut part_index = 0usize;
+        for (offset, &byte) in bytes.iter().enumerate() {
+            if byte == separator {
+                if part_index == target {
+                    let part = &bytes[part_start..offset];
+                    return if is_ascii_string(s) {
+                        part.len() as f64
+                    } else {
+                        compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
+                    };
+                }
+                part_index += 1;
+                part_start = offset + 1;
+            }
+        }
+        if part_index == target {
+            let part = &bytes[part_start..];
+            return if is_ascii_string(s) {
+                part.len() as f64
+            } else {
+                compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
+            };
+        }
+        return 0.0;
+    }
+
     let Some(part) = str_data.split(delim).nth(index as usize) else {
         return 0.0;
     };
