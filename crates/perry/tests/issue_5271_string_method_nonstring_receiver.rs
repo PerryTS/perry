@@ -158,3 +158,31 @@ console.log(t.trim());
         "any-typed string trim must work (got: {stdout})"
     );
 }
+
+/// Scalar replacement of a non-escaping split result must preserve the
+/// `ToString(this)` coercion used by the normal String-method lowering. This
+/// receiver is deliberately `any`-typed and numeric: treating its boxed number
+/// as a StringHeader would otherwise produce `undefined` instead of the first
+/// split component.
+#[test]
+fn scalar_split_on_any_receiver_keeps_string_coercion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+function id(x: any): any { return x; }
+const value: any = id(12345);
+const first = value.split("2")[0];
+console.log(first);
+"#,
+    )
+    .expect("write entry");
+
+    let stdout = compile_and_run(dir.path(), &entry);
+    assert_eq!(
+        stdout.trim(),
+        "1",
+        "split must coerce an any receiver to string"
+    );
+}

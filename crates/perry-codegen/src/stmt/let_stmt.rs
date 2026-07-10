@@ -12,6 +12,7 @@ use crate::native_value::{
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
     PodLocal, SemanticKind,
 };
+use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// #5271: does `init` provably evaluate to a plain object literal? Two
@@ -421,7 +422,8 @@ pub(crate) fn lower_let(
             && matches!(
                 callee.as_ref(),
                 perry_hir::Expr::PropertyGet { object, property }
-                    if matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
+                    if is_string_expr(ctx, object)
+                        && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
                         && property == "split"
             )
         {

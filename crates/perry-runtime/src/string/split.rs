@@ -138,9 +138,10 @@ pub extern "C" fn js_string_split_part_value(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let byte_len = part.len() as u32;
+    let src_is_ascii = is_ascii_string(s);
     let (result, result_data) = string_storage_alloc(byte_len);
     unsafe {
-        let utf16_len = if is_ascii_string(s) {
+        let utf16_len = if src_is_ascii {
             byte_len
         } else {
             compute_utf16_len(part.as_ptr(), byte_len)
