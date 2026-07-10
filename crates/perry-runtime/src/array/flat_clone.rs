@@ -25,6 +25,59 @@ unsafe fn receiver_gc_type(ptr: *const ArrayHeader) -> u8 {
     (*gc_header).obj_type
 }
 
+/// Return a real `ArrayHeader` only when `value` satisfies ECMAScript's
+/// `IsArray` check. This unwraps proxy targets, rejects every other
+/// `POINTER_TAG` heap object by its GC type, and materializes lazy arrays
+/// through `clean_arr_ptr` before callers read the dense array layout.
+///
+/// The result is suitable for a flattening operation (`flat` / `flatMap`),
+/// where arrays are spread by one level but ordinary objects, closures, and
+/// other pointer-tagged values remain elements.
+#[inline]
+pub(crate) fn flattenable_array_ptr(value: f64) -> *const ArrayHeader {
+    // IsArray recurses through proxies and must throw for a revoked proxy.
+    let mut value = value;
+    while let Some(target) = crate::proxy::is_array_proxy_step(value) {
+        value = target;
+    }
+
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    let addr = if top16 == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if top16 == 0 && bits >= 0x10000 && (bits & 0x7) == 0 {
+        bits as usize
+    } else {
+        return ptr::null();
+    };
+
+    // Do not interpret a pointer-tagged handle as a heap address. The GC type
+    // check must happen before reading `ArrayHeader.length`: ObjectHeader and
+    // ClosureHeader have incompatible layouts.
+    let is_array = unsafe {
+        matches!(
+            crate::value::addr_class::try_read_gc_header(addr),
+            Some(header)
+                if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                    || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        )
+    };
+    if !is_array {
+        return ptr::null();
+    }
+
+    let array = clean_arr_ptr(addr as *const ArrayHeader);
+    if array.is_null() {
+        return ptr::null();
+    }
+    unsafe {
+        match crate::value::addr_class::try_read_gc_header(array as usize) {
+            Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => array,
+            _ => ptr::null(),
+        }
+    }
+}
+
 /// `Array.prototype.flat(depth)` — flatten up to `depth` levels deep
 /// (ECMA-262 §23.1.3.10).
 #[no_mangle]
@@ -59,49 +112,19 @@ unsafe fn js_array_flat_into(
     let elements = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
     for i in 0..len {
         let element = *elements.add(i);
-        let bits = element.to_bits();
         // Per ECMAScript FlattenIntoArray, holes are absent (HasProperty is
         // false) and are skipped, not copied as `null`/`undefined`.
-        if bits == crate::value::TAG_HOLE {
+        if element.to_bits() == crate::value::TAG_HOLE {
             continue;
         }
-        let top16 = (bits >> 48) as u16;
-        let maybe_arr_ptr = if top16 >= 0x7FF8 {
-            if top16 == 0x7FFD {
-                let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
-                if (ptr as usize) >= 0x1000 {
-                    Some(ptr)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else if top16 == 0 && bits >= 0x10000 && (bits & 0x7) == 0 {
-            Some(bits as *const ArrayHeader)
-        } else {
-            None
-        };
         let mut pushed = false;
         if depth_left > 0 {
-            if let Some(sub_arr) = maybe_arr_ptr {
-                let is_set_or_map = crate::set::is_registered_set(sub_arr as usize)
-                    || crate::map::is_registered_map(sub_arr as usize);
-                if !is_set_or_map {
-                    let obj_type = if (sub_arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-                        let hdr = (sub_arr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                            as *const crate::gc::GcHeader;
-                        (*hdr).obj_type
-                    } else {
-                        0
-                    };
-                    if obj_type == crate::gc::GC_TYPE_ARRAY {
-                        let sub_len = (*sub_arr).length as usize;
-                        if sub_len <= 1_000_000 {
-                            result = js_array_flat_into(result, sub_arr, depth_left - 1);
-                            pushed = true;
-                        }
-                    }
+            let sub_arr = flattenable_array_ptr(element);
+            if !sub_arr.is_null() {
+                let sub_len = (*sub_arr).length as usize;
+                if sub_len <= 1_000_000 {
+                    result = js_array_flat_into(result, sub_arr, depth_left - 1);
+                    pushed = true;
                 }
             }
         }
@@ -128,50 +151,12 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
 
         for i in 0..len {
             let element = *elements.add(i);
-            let bits = element.to_bits();
             // Per ECMAScript FlattenIntoArray, holes are absent and skipped.
-            if bits == crate::value::TAG_HOLE {
+            if element.to_bits() == crate::value::TAG_HOLE {
                 continue;
             }
-            let top16 = (bits >> 48) as u16;
-
-            // Check if the element is an array pointer (NaN-boxed or raw)
-            let maybe_arr_ptr = if top16 >= 0x7FF8 {
-                // NaN-boxed value - check if it's a pointer-like tag
-                if top16 == 0x7FFD {
-                    // POINTER_TAG — extract raw pointer
-                    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
-                    if (ptr as usize) >= 0x1000 {
-                        Some(ptr)
-                    } else {
-                        None
-                    }
-                } else {
-                    None // STRING_TAG, BIGINT_TAG, JS_HANDLE_TAG, undefined, NaN
-                }
-            } else if top16 == 0 && bits >= 0x10000 && (bits & 0x7) == 0 {
-                // Raw pointer without NaN-boxing (top 16 bits zero = userspace pointer,
-                // >= 64KB to exclude small integers, 8-byte aligned)
-                Some(bits as *const ArrayHeader)
-            } else {
-                None
-            };
-
-            // Only flatten when the pointer is genuinely an array. A plain
-            // object / Set / Map / string etc. is a non-array element and must
-            // be pushed as-is — `flat` only spreads arrays. Pre-fix this read
-            // an arbitrary heap object's bytes as an `ArrayHeader.length` and
-            // iterated garbage (segfault on `[{…}].flat()`). Mirrors the
-            // `GC_TYPE_ARRAY` gate in the recursive `js_array_flat_into`.
-            let is_array = match maybe_arr_ptr {
-                Some(sub_arr) if (sub_arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 => {
-                    let hdr = (sub_arr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                        as *const crate::gc::GcHeader;
-                    (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
-                }
-                _ => false,
-            };
-            if let (true, Some(sub_arr)) = (is_array, maybe_arr_ptr) {
+            let sub_arr = flattenable_array_ptr(element);
+            if !sub_arr.is_null() {
                 let sub_len = (*sub_arr).length as usize;
                 // Sanity check: if length is unreasonably large, treat as non-array.
                 if sub_len <= 1_000_000 {

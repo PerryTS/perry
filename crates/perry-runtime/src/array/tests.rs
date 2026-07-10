@@ -54,6 +54,26 @@ fn string_value(ptr: *mut crate::StringHeader) -> f64 {
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
 }
 
+#[test]
+fn flattenable_array_ptr_accepts_only_arrays_and_array_proxies() {
+    let array = js_array_alloc(0);
+    let array_value = boxed_pointer(array as *mut u8);
+    assert_eq!(flattenable_array_ptr(array_value), array);
+
+    let object = crate::object::js_object_alloc(0, 0);
+    assert!(flattenable_array_ptr(boxed_pointer(object as *mut u8)).is_null());
+
+    let closure = crate::closure::js_closure_alloc(ptr::null(), 0);
+    assert!(flattenable_array_ptr(boxed_pointer(closure as *mut u8)).is_null());
+
+    let handler = crate::object::js_object_alloc(0, 0);
+    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    assert_eq!(flattenable_array_ptr(proxy), array);
+
+    let nested_proxy = crate::proxy::js_proxy_new(proxy, boxed_pointer(handler as *mut u8));
+    assert_eq!(flattenable_array_ptr(nested_proxy), array);
+}
+
 fn array_keys_contain(keys: *mut ArrayHeader, name: &[u8]) -> bool {
     let key = string_key(name);
     for i in 0..js_array_length(keys) {
