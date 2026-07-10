@@ -461,6 +461,29 @@ pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut 
     buf
 }
 
+/// Materialize non-Array Uint8Array sources through the shared TypedArray path.
+fn js_uint8array_from_source(source: f64) -> *mut BufferHeader {
+    let raw = unsafe { crate::typedarray::typed_array_from_source_raw_values(source) };
+
+    // Coercion can collect, so retain the snapshot in runtime roots.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let raw_handles = scope.root_nanbox_f64_slice(&raw);
+    let bytes: Vec<u8> = raw_handles
+        .iter()
+        .map(|value| buffer_byte_from_js_value(value.get_nanbox_f64()))
+        .collect();
+
+    unsafe {
+        let buf = buffer_alloc(bytes.len() as u32);
+        (*buf).length = bytes.len() as u32;
+        if !bytes.is_empty() {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len());
+        }
+        mark_as_uint8array(buf as usize);
+        buf
+    }
+}
+
 /// Validate a `new Uint8Array(length)` argument with `ToIndex` semantics and
 /// throw the spec `RangeError: Invalid typed array length: <n>` on a negative
 /// or out-of-range length, matching Node (#3662). `Uint8Array` is backed by a
@@ -519,6 +542,13 @@ pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
 pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
     let bits = val.to_bits();
     let top16 = (bits >> 48) as u16;
+    // ToIndex rejects BigInt and Symbol.
+    if top16 == 0x7FFA {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    if top16 == 0x7FFD && unsafe { crate::symbol::js_is_symbol(val) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+    }
     // POINTER_TAG (0x7FFD) — an object/array/buffer pointer.
     if top16 == 0x7FFD {
         let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
@@ -572,8 +602,13 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                 return dst;
             }
         }
-        // Otherwise treat as a numeric source array.
-        return js_uint8array_from_array(raw as *const ArrayHeader);
+        // The raw helper requires an actual ArrayHeader layout.
+        if unsafe { crate::value::addr_class::try_read_gc_header(raw) }
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+        {
+            return js_uint8array_from_array(raw as *const ArrayHeader);
+        }
+        return js_uint8array_from_source(val);
     }
     // Plain IEEE double (upper16 < 0x7FFC or > 0x7FFF) — numeric length.
     // Node applies ToIndex (NaN → 0, truncate toward zero) and throws a
@@ -584,9 +619,11 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
         let len = uint8array_length_or_throw(val);
         return js_uint8array_alloc(len as i32);
     }
-    // Any other tag (undefined/null/bool/string/bigint) → empty buffer,
-    // matching the JS semantics of `new Uint8Array(undefined)` et al.
-    js_uint8array_alloc(0)
+    if bits == crate::value::TAG_UNDEFINED {
+        return js_uint8array_alloc(0);
+    }
+    let len = uint8array_length_or_throw(crate::typedarray::jsvalue_to_f64(val));
+    js_uint8array_alloc(len as i32)
 }
 
 /// `new Uint8Array(buffer, byteOffset, length)` — create a Uint8Array view

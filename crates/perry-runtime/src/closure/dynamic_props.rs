@@ -470,6 +470,10 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             }
         }
     }
+    // Function length is an own intrinsic property.
+    if prop == "length" && !closure_is_key_deleted(ptr, "length") {
+        return crate::closure::closure_length(ptr as *const ClosureHeader).unwrap_or(0) as f64;
+    }
     // #36 / #321: own prop miss — walk the closure's static prototype chain
     // (`Object.setPrototypeOf(closure, protoObj)`). Reads a string-keyed field
     // off the proto object. Lets effect's `TagClass._op` resolve to "Tag" on
