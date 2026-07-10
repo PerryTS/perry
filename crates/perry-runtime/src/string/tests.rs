@@ -234,6 +234,19 @@ fn test_string_split() {
 }
 
 #[test]
+fn test_string_split_part_value() {
+    let s = js_string_from_bytes(b"a,b,c".as_ptr(), 5);
+    let delim = js_string_from_bytes(b",".as_ptr(), 1);
+    let value = super::split::js_string_split_part_value(s, delim, 1);
+    let ptr = (value.to_bits() & crate::value::POINTER_MASK) as *const StringHeader;
+    assert_eq!(string_as_str(ptr), "b");
+    assert_eq!(
+        super::split::js_string_split_part_value(s, delim, 3).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+}
+
+#[test]
 fn test_string_append_inplace() {
     // First append: creates new string with 2x capacity and refcount=1
     let a = js_string_from_bytes(b"hello".as_ptr(), 5);

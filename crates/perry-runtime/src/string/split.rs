@@ -122,18 +122,35 @@ pub extern "C" fn js_string_split_part_value(
     }
     let str_data = string_as_str(s);
     let delim = string_as_str(delimiter);
-    let part = if delim.is_empty() {
-        str_data.chars().nth(index as usize).map(|c| {
-            let mut buf = [0u8; 4];
-            c.encode_utf8(&mut buf).to_owned()
-        })
-    } else {
-        str_data.split(delim).nth(index as usize).map(str::to_owned)
-    };
-    match part {
-        Some(part) => crate::value::js_nanbox_string(js_string_from_str(&part) as i64),
-        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    if delim.is_empty() {
+        let Some(c) = str_data.chars().nth(index as usize) else {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        };
+        let mut buf = [0u8; 4];
+        let part = c.encode_utf8(&mut buf);
+        return crate::value::js_nanbox_string(
+            js_string_from_bytes(part.as_ptr(), part.len() as u32) as i64,
+        );
     }
+
+    let part = str_data.split(delim).nth(index as usize);
+    let Some(part) = part else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let byte_len = part.len() as u32;
+    let (result, result_data) = string_storage_alloc(byte_len);
+    unsafe {
+        let utf16_len = if is_ascii_string(s) {
+            byte_len
+        } else {
+            compute_utf16_len(part.as_ptr(), byte_len)
+        };
+        init_string_header(result, utf16_len, byte_len, byte_len, 0, 0);
+        if byte_len != 0 {
+            ptr::copy_nonoverlapping(part.as_ptr(), result_data, byte_len as usize);
+        }
+    }
+    crate::value::js_nanbox_string(result as i64)
 }
 
 /// Split a string by a delimiter, with optional limit (issue #567).
