@@ -204,7 +204,48 @@ console.log(out);
     );
 }
 
+/// Same module-global-read rejection, but with the spawn callsite inside a
+/// STATIC method — `compile_static_method` seeds its FnCtx `local_types`
+/// from `module_global_types` (it didn't pre-#6185), so the classifier can
+/// see the binding's heap type there too.
+#[test]
+fn rejects_module_object_read_in_static_method_worker() {
+    compile_expect_error(
+        r#"
+import { parallelMap } from "perry/thread";
+const config = { threshold: 5 };
+class Jobs {
+  static run(data: number[]): number[] {
+    return parallelMap(data, (x: number) => x * config.threshold);
+  }
+}
+console.log(Jobs.run([1, 2, 3]));
+"#,
+        "module-scope variable",
+    );
+}
+
 // ── Positive: sanctioned patterns keep compiling and running ────────────────
+
+/// Primitive module globals stay allowed from a static-method worker
+/// closure too (the static-method FnCtx now has the type info to tell the
+/// difference, rather than allowing everything by ignorance).
+#[test]
+fn allows_primitive_module_global_in_static_method_worker() {
+    let out = compile_and_run(
+        r#"
+import { parallelMap } from "perry/thread";
+const factor = 4;
+class Jobs {
+  static run(data: number[]): number[] {
+    return parallelMap(data, (x: number) => x * factor);
+  }
+}
+console.log(Jobs.run([1, 2, 3]));
+"#,
+    );
+    assert_eq!(out.trim(), "[ 4, 8, 12 ]");
+}
 
 /// Primitive module globals (number, string) are plain 64-bit copies /
 /// immutable rooted data — reading them in a worker stays allowed.
