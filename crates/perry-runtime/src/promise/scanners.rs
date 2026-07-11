@@ -152,6 +152,7 @@ pub(crate) struct PromiseRootScanState {
     slot: usize,
     context_entry: usize,
     context_store: usize,
+    moved_context_keys: Vec<(usize, usize)>,
 }
 
 impl PromiseRootScanState {
@@ -517,12 +518,15 @@ fn scan_promise_contexts_step(
                     return false;
                 }
                 if visitor.visit_metadata_usize_slot(&mut new_key) {
-                    contexts.rekey(key, new_key);
+                    // Rekey only after every context has been scanned. A
+                    // collision may swap an unvisited key into this slot;
+                    // mutating the vector now would skip that context when
+                    // the cursor advances.
+                    state.moved_context_keys.push((key, new_key));
                 }
                 state.slot = 1;
             }
 
-            let key = new_key;
             let Some(context) = contexts.get_mut(&key) else {
                 state.index += 1;
                 state.finish_context_item();
@@ -539,6 +543,9 @@ fn scan_promise_contexts_step(
             }
             state.index += 1;
             state.finish_context_item();
+        }
+        for (old_key, new_key) in state.moved_context_keys.drain(..) {
+            contexts.rekey(old_key, new_key);
         }
         true
     })

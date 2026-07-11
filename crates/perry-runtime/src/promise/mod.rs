@@ -913,6 +913,34 @@ mod promise_context_store_tests {
         assert_eq!(store.keys, vec![100, 101, 102, 103]);
         store.assert_invariants();
     }
+
+    #[test]
+    fn deferred_rekey_collision_scans_every_context_before_swapping_keys() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+
+        let mut scanned = Vec::new();
+        let mut moved = Vec::new();
+        let mut index = 0;
+        while let Some(key) = store.key_at(index) {
+            scanned.push(key);
+            if key == 10 {
+                moved.push((key, 20));
+            }
+            index += 1;
+        }
+        assert_eq!(scanned, vec![10, 20, 30]);
+
+        for (old_key, new_key) in moved {
+            store.rekey(old_key, new_key);
+        }
+
+        assert_eq!(stored_value(&store, 20), Some(10.0));
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        store.assert_invariants();
+    }
 }
 
 pub(crate) fn set_promise_callback_context(promise: *mut Promise) {
