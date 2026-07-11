@@ -954,43 +954,29 @@ pub(super) fn init_static_fields_late(
     // init (e.g. class expressions that bypass the stmt-decl path);
     // calling it here keeps the legacy behavior of "always run, just
     // late" for those. (#2278)
+    // #5989: blocks already invoked inline at their class's evaluation point —
+    // module top level (a top-level class decl), a function body, OR a nested
+    // closure (a function-nested class decl, whose block call `lower_decl::
+    // body_stmt` emits into its factory/closure body). The module-init fallback
+    // below must NOT ALSO run those: a nested class's block would fire at module
+    // init, before its factory binds the block's captured factory-locals, so a
+    // block reading a lazy import (`class m { static { this.contextType =
+    // g.AppRouterContext } }`, `g = a.i(N)`) threw in `<module>__init` (Next.js
+    // /plain App Router chunk). Class EXPRESSIONS with no inline invocation are
+    // absent from this set and still run at module init (the fallback's purpose).
+    let inline_invoked = collect_inline_invoked_static_blocks(hir);
     for c in &hir.classes {
         for sm in &c.static_methods {
             if !sm.name.starts_with("__perry_static_init_") {
+                continue;
+            }
+            if inline_invoked.contains(&(c.name.clone(), sm.name.clone())) {
                 continue;
             }
             let key = (
                 c.name.clone(),
                 crate::codegen::static_method_registry_key(&sm.name),
             );
-            // Skip if the block is already invoked inline. The typical class-decl
-            // path emits a `StaticMethodCall` for each block at its evaluation
-            // point; a duplicate call here would double-fire side effects.
-            //
-            // #5989: check both `hir.init` (a MODULE-level class decl) AND every
-            // function body (a function-NESTED class decl — `lower_decl::body_stmt`
-            // emits the block's `StaticMethodCall` into the enclosing factory
-            // body, which lives in `hir.functions`, not `hir.init`). Without the
-            // function-body scan, a nested class's block was ALSO run here at
-            // module init — before its factory ran — so a block that reads a
-            // captured factory-local (a turbopack module factory
-            // `a=>{ var g=a.i(N); class m { static { this.contextType =
-            // g.AppRouterContext } } }`) threw "Cannot read properties of
-            // undefined (reading 'AppRouterContext')" in `<module>__init` (the
-            // Next.js /plain App Router ErrorBoundaryHandler chunk). Class
-            // EXPRESSIONS (no inline invocation) still fall through to run here.
-            let invoked_inline = hir
-                .init
-                .iter()
-                .any(|s| init_calls_static_block(s, &c.name, &sm.name))
-                || hir.functions.iter().any(|f| {
-                    f.body
-                        .iter()
-                        .any(|s| init_calls_static_block(s, &c.name, &sm.name))
-                });
-            if invoked_inline {
-                continue;
-            }
             if let Some(llvm_name) = ctx.methods.get(&key).cloned() {
                 ctx.block().call(DOUBLE, &llvm_name, &[]);
             }
@@ -1048,6 +1034,121 @@ fn init_calls_static_block(stmt: &perry_hir::Stmt, class_name: &str, method_name
         Stmt::Switch { cases, .. } => cases.iter().any(|case| any_calls(&case.body)),
         _ => false,
     }
+}
+
+/// #5989: collect every `(class, method)` invoked via a `StaticMethodCall`
+/// ANYWHERE in the module — module init, top-level function bodies, and
+/// (crucially) recursively inside nested closures. `init_calls_static_block`
+/// only walks statement-level control flow, so a block call buried in a
+/// factory/closure body (a function-nested class decl's inline invocation,
+/// emitted by `lower_decl::body_stmt`) is invisible to it.
+///
+/// `init_static_fields_late` uses this to skip a static block that already has
+/// an inline invocation at the point its class is evaluated. Without it, such a
+/// block ALSO ran at module init — before its factory bound the block's captured
+/// factory-locals — so a nested class whose block reads a lazy import
+/// (`class m { static { this.contextType = g.AppRouterContext } }`, `g = a.i(N)`)
+/// threw in `<module>__init` (Next.js /plain App Router chunk). Class EXPRESSIONS
+/// with no inline invocation are NOT collected and still run at module init.
+fn collect_inline_invoked_static_blocks(
+    hir: &HirModule,
+) -> std::collections::HashSet<(String, String)> {
+    use perry_hir::{Expr, Stmt};
+    let mut out: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+
+    fn walk_expr(e: &Expr, out: &mut std::collections::HashSet<(String, String)>) {
+        if let Expr::StaticMethodCall {
+            class_name,
+            method_name,
+            ..
+        } = e
+        {
+            out.insert((class_name.clone(), method_name.clone()));
+        }
+        if let Expr::Closure { body, .. } = e {
+            for s in body {
+                walk_stmt(s, out);
+            }
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| walk_expr(c, out));
+    }
+
+    fn walk_stmt(s: &Stmt, out: &mut std::collections::HashSet<(String, String)>) {
+        match s {
+            Stmt::Let { init: Some(e), .. } => walk_expr(e, out),
+            Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, out),
+            Stmt::Return(Some(e)) => walk_expr(e, out),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                walk_expr(condition, out);
+                then_branch.iter().for_each(|s| walk_stmt(s, out));
+                if let Some(eb) = else_branch {
+                    eb.iter().for_each(|s| walk_stmt(s, out));
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                walk_expr(condition, out);
+                body.iter().for_each(|s| walk_stmt(s, out));
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    walk_stmt(i, out);
+                }
+                if let Some(c) = condition {
+                    walk_expr(c, out);
+                }
+                if let Some(u) = update {
+                    walk_expr(u, out);
+                }
+                body.iter().for_each(|s| walk_stmt(s, out));
+            }
+            Stmt::Labeled { body, .. } => walk_stmt(body, out),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                body.iter().for_each(|s| walk_stmt(s, out));
+                if let Some(c) = catch {
+                    c.body.iter().for_each(|s| walk_stmt(s, out));
+                }
+                if let Some(f) = finally {
+                    f.iter().for_each(|s| walk_stmt(s, out));
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                walk_expr(discriminant, out);
+                cases.iter().for_each(|case| {
+                    if let Some(t) = &case.test {
+                        walk_expr(t, out);
+                    }
+                    case.body.iter().for_each(|s| walk_stmt(s, out));
+                });
+            }
+            _ => {}
+        }
+    }
+
+    for s in &hir.init {
+        walk_stmt(s, &mut out);
+    }
+    for f in &hir.functions {
+        for s in &f.body {
+            walk_stmt(s, &mut out);
+        }
+    }
+    out
 }
 
 /// Issue #100: emit the IR that populates this module's
