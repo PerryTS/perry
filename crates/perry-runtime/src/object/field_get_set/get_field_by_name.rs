@@ -60,6 +60,29 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // A receiver that LOOKS like a bare heap pointer (top 16 bits clear) but does
+    // not land in the platform heap range is a MIS-decoded primitive, not an
+    // object. The common case is a `number` whose raw f64 bits alias a sub-heap
+    // address: a dynamic `arr[i]` read (`js_dyn_index_get`) returns the element's
+    // JSValue bits, codegen forwards them straight to the object field-read ABI
+    // on the type-erased path, and a denormal such as `0x0000_0090_8000_0201`
+    // (~620 GB) arrives here as `obj`. It clears the `>> 48 == 0` check and sits
+    // ABOVE the 1 MB handle band, so the `is_above_handle_band`-only guards on the
+    // special-case reads below (and the `own_key_present` / `js_object_get_class_id`
+    // ObjectHeader derefs they call) passed it straight through — and the read
+    // dereferenced it as a GcHeader → KERN_INVALID_ADDRESS (real macOS allocations
+    // sit at ~3–5 TB, never 620 GB). Pair the band check with `is_valid_obj_ptr`
+    // (the canonical heap-range predicate) and treat a non-heap receiver as a
+    // property miss: reading any data property off a primitive is `undefined`, and
+    // the primitive-prototype methods are resolved on the by-name f64 wrapper's own
+    // path, which never reaches this pointer dereference.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+        && !crate::value::addr_class::is_valid_obj_ptr(obj as *const u8)
+    {
+        return JSValue::undefined();
+    }
     // `class X extends Map | Set` instance — `.size` reads the hidden backing
     // collection's size. A subclass CAN still define an own `size` (class field
     // or `Object.defineProperty`), so check own-property precedence first and
