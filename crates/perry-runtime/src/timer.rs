@@ -169,6 +169,37 @@ fn drain_expired_timers<T>(
     expired
 }
 
+/// Order an expired callback batch the way Node's event loop does (#6287).
+///
+/// The queue is in creation order, but firing it in creation order is wrong on
+/// two counts once several timers come due in the same turn:
+///
+/// 1. **Deadline order.** Node's timers phase walks lists by expiry, so a 5 ms
+///    timer created *after* a 10 ms one still fires first. Perry fired them in
+///    creation order (`setTimeout(f,10); setTimeout(g,5)` ran `f` then `g`).
+/// 2. **Timers before immediates.** `setImmediate` runs in the *check* phase,
+///    which comes after the timers phase — so an expired `setTimeout` fires
+///    ahead of an immediate that was scheduled earlier. Perry interleaved both
+///    kinds in one creation-ordered queue.
+///
+/// Both are fixed by ordering the batch as (timeouts by deadline) then
+/// (immediates in FIFO order). The sort is **stable**, which is what preserves
+/// the two orderings Perry already got right: same-deadline timers keep firing
+/// in creation order, and immediates keep firing in scheduling order.
+fn order_expired_callback_batch(expired: &mut [CallbackTimer]) {
+    use std::cmp::Ordering as CmpOrdering;
+    expired.sort_by(|a, b| match (a.kind, b.kind) {
+        // Timers phase before check phase.
+        (CallbackTimerKind::Timeout, CallbackTimerKind::Immediate) => CmpOrdering::Less,
+        (CallbackTimerKind::Immediate, CallbackTimerKind::Timeout) => CmpOrdering::Greater,
+        // Within the timers phase: earliest deadline first. Equal deadlines
+        // compare Equal, and a stable sort leaves them in creation order.
+        (CallbackTimerKind::Timeout, CallbackTimerKind::Timeout) => a.deadline.cmp(&b.deadline),
+        // Within the check phase: FIFO — stable sort keeps insertion order.
+        (CallbackTimerKind::Immediate, CallbackTimerKind::Immediate) => CmpOrdering::Equal,
+    });
+}
+
 /// Process any expired timers, resolving their promises
 /// Returns the number of timers that fired
 #[no_mangle]
@@ -179,7 +210,7 @@ pub extern "C" fn js_timer_tick() -> i32 {
 
     // Collect expired timers (single-pass stable partition, see
     // `drain_expired_timers`).
-    let expired: Vec<Timer> = {
+    let mut expired: Vec<Timer> = {
         let mut queue = TIMER_QUEUE.lock().unwrap();
         drain_expired_timers(
             &mut queue,
@@ -187,6 +218,10 @@ pub extern "C" fn js_timer_tick() -> i32 {
             |timer| timer.deadline <= now && (timer.has_ref || allow_unref),
         )
     };
+    // #6287: fire the batch in deadline order, not creation order — a 5 ms
+    // timer created after a 10 ms one must still fire first. The sort is
+    // stable, so same-deadline timers keep firing in creation order.
+    expired.sort_by_key(|timer| timer.deadline);
 
     // Resolve the expired timers' promises
     for timer in expired {
@@ -1084,7 +1119,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
 
     // Collect expired, non-cleared timers (single-pass stable partition,
     // see `drain_expired_timers`; cleared timers are discarded).
-    let expired: Vec<CallbackTimer> = {
+    let mut expired: Vec<CallbackTimer> = {
         let mut queue = CALLBACK_TIMERS.lock().unwrap();
         drain_expired_timers(
             &mut queue,
@@ -1092,6 +1127,8 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             |timer| timer.deadline <= now && (timer_has_ref_state(timer.id) || allow_unref),
         )
     };
+    // #6287: timers phase (by deadline) before check phase (FIFO immediates).
+    order_expired_callback_batch(&mut expired);
 
     let mut fired = 0;
     // Call the callbacks, forwarding any trailing args captured at
