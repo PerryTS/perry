@@ -720,7 +720,15 @@ pub unsafe extern "C" fn js_native_call_method(
         )
     {
         let ns_ptr = jsval.as_pointer::<ObjectHeader>();
-        if !ns_ptr.is_null()
+        // The POINTER_TAG payload reaching here can be a small registry handle
+        // (zlib stream, fetch Request/Response, net.Socket, …) rather than a
+        // heap address. `is_valid_obj_ptr` alone does NOT reject the handle
+        // band on Linux/Windows/Android/iOS — its heap floor is 0x1000, far
+        // below HANDLE_BAND_MAX — so without the band check this dereferences
+        // unmapped low memory. macOS masks it behind a 2 TB heap floor, which
+        // is why `gz.on("data", …)` on a `zlib.createGzip()` handle segfaulted
+        // only on Linux.
+        if crate::value::addr_class::is_above_handle_band(ns_ptr as usize)
             && crate::object::is_valid_obj_ptr(ns_ptr as *const u8)
             && (*ns_ptr).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
         {
