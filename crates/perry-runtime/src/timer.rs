@@ -9,7 +9,6 @@
 
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use std::any::Any;
-use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -110,7 +109,7 @@ fn timer_has_ref_state(id: i64) -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|map| map.get(&id).copied())
+        .and_then(|s| s.states.get(&id).copied())
         .unwrap_or(true)
 }
 
@@ -328,7 +327,13 @@ static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
 // id collisions across queues could cause `clearTimeout(intId)` to also
 // clobber an unrelated Timeout with the same numeric id.
 static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
-static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
+
+// #6084: the bounded ref-state registry lives in a submodule to keep this file
+// under the 2000-line lint cap.
+mod ref_states;
+use ref_states::{TimerRefStates, TIMER_REF_STATES_CAP};
+
+static TIMER_REF_STATES: Mutex<Option<TimerRefStates>> = Mutex::new(None);
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 
@@ -503,8 +508,8 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
     let mut slot = TIMER_REF_STATES.lock().unwrap();
-    let map = slot.get_or_insert_with(HashMap::new);
-    map.insert(id, has_ref);
+    slot.get_or_insert_with(TimerRefStates::default)
+        .insert_bounded(id, has_ref, TIMER_REF_STATES_CAP);
 }
 
 /// Whether `id` corresponds to a timer that was scheduled by this runtime
@@ -527,7 +532,7 @@ pub fn is_known_timer_id(id: i64) -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|map| map.contains_key(&id))
+        .map(|s| s.states.contains_key(&id))
         .unwrap_or(false)
 }
 
@@ -790,7 +795,7 @@ pub extern "C" fn js_timer_has_ref(timer_id: i64) -> i32 {
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|map| map.get(&timer_id).copied())
+        .and_then(|s| s.states.get(&timer_id).copied())
         .unwrap_or(true) as i32
 }
 

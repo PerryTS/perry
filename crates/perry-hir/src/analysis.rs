@@ -1061,7 +1061,16 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             }
         }
         Expr::TypeOf(o) | Expr::Void(o) => replace_this_in_expr(o, this_id),
-        Expr::InstanceOf { expr: inner, .. } => replace_this_in_expr(inner, this_id),
+        Expr::InstanceOf {
+            expr: inner,
+            ty_expr,
+            ..
+        } => {
+            replace_this_in_expr(inner, this_id);
+            if let Some(t) = ty_expr {
+                replace_this_in_expr(t, this_id);
+            }
+        }
         Expr::In { property, object } => {
             replace_this_in_expr(property, this_id);
             replace_this_in_expr(object, this_id);

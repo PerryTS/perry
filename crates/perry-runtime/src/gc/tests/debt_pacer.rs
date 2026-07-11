@@ -592,3 +592,44 @@ fn atomic_finalize_remark_rescues_pointer_hidden_in_shadow_slot_after_root_scan(
         "remark must keep the shadow-slot-only pointer off the sweep free list"
     );
 }
+
+/// #6228: array growth installs a PERMANENT forwarding stub at the old
+/// address; a stale pre-growth pointer held as the ONLY reference (the
+/// deforestation pass manufactures exactly this for direct calls) must keep
+/// the live post-growth array alive — the tracer hops the forwarding edge
+/// and MARKS the target instead of treating the stub as zero-children.
+#[test]
+fn forwarded_array_stub_propagates_liveness_to_grown_array() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let arr = crate::array::js_array_alloc(4);
+    let pre_growth = arr as usize;
+    // Push past capacity: js_array_grow reallocates and installs the
+    // forwarding stub at `pre_growth`.
+    for i in 0..64 {
+        crate::array::js_array_push(
+            pre_growth as *mut crate::array::ArrayHeader,
+            crate::JSValue::number(i as f64),
+        );
+    }
+    let header = unsafe { header_from_user_ptr(pre_growth as *const u8) };
+    assert!(
+        unsafe { (*header).gc_flags } & GC_FLAG_FORWARDED != 0,
+        "growth past capacity must leave a forwarding stub at the old address"
+    );
+
+    // The stale pre-growth pointer is the ONLY root.
+    js_shadow_slot_set(0, ptr_bits(pre_growth));
+
+    trigger_guard.make_arena_trigger_due();
+    gc_check_trigger();
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+
+    // Reads through the stale pointer must still see the full array.
+    let live = pre_growth as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_length(live), 64);
+    assert_eq!(crate::array::js_array_get_f64_unchecked(live, 63), 63.0);
+}
