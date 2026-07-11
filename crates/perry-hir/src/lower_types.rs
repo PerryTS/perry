@@ -215,6 +215,11 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
     match callee {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
+            // #6233: a user class of this name shadows the built-in — let the
+            // generic user-class inference type it instead.
+            if ctx.classes_index.contains_key(name) {
+                return None;
+            }
             if let Some(ty) = class_type(name) {
                 return Some(ty);
             }
@@ -559,6 +564,12 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                     }
                 }
                 match name.as_str() {
+                    // #6233: a user class of this name lexically shadows the
+                    // same-named built-in, so `new Map()` constructs the USER
+                    // class — typing it as the builtin Generic would send its
+                    // method calls (`m.get(...)`) down the collection fast
+                    // paths. `classes_index` holds only user classes.
+                    _ if ctx.classes_index.contains_key(name.as_str()) => Type::Named(name),
                     // Issue #533: walk the entries arg of `new Map([...])` /
                     // `new WeakMap([...])` so K/V are populated when no explicit
                     // <K, V> is given. Without this, downstream `m.get(k)`
