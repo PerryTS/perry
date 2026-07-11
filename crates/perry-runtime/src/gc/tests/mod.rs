@@ -3,6 +3,7 @@ mod barrier;
 mod budgeted_step_api;
 mod contract;
 mod copying;
+mod copying_side_tables;
 mod cycle_state;
 mod dead_owner_side_tables;
 mod debt_pacer;
