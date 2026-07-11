@@ -1471,6 +1471,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
         local_generator_funcs,
+        async_step_closures: hir.async_step_closures.iter().copied().collect(),
         funcs_reading_dynamic_this,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,

@@ -95,7 +95,10 @@ pub(super) use ui_tables::{
 pub(super) use native_module_dispatch::{lower_native_module_dispatch, native_module_lookup};
 // And the closure-analysis helpers — `native.rs` uses them via
 // `super::` for the perry/thread thread-safety check.
-pub(super) use closure_analysis::{collect_closure_introduced_ids, find_outer_writes_stmt};
+pub(super) use closure_analysis::{
+    collect_closure_introduced_ids, find_outer_writes_stmt, find_thread_hazard_in_body,
+    hazardous_module_global_ids, ThreadClosureHazard,
+};
 
 // Re-export pub(crate) so callers outside this module (e.g.
 // `crate::expr::use crate::lower_call::lower_native_method_call;`)

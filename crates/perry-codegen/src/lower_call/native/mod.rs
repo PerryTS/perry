@@ -38,12 +38,13 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 // scoped to mod.rs only and `super::*` from siblings can't see it.
 pub(super) use super::{
     apply_inline_style, collect_closure_introduced_ids, extract_options_fields,
-    find_outer_writes_stmt, get_raw_string_ptr, lower_fetch_native_method,
-    lower_native_module_dispatch, lower_notification_schedule, lower_perry_ui_table_call,
-    native_module_lookup, perry_audio_table_lookup, perry_i18n_table_lookup,
-    perry_media_table_lookup, perry_plugin_instance_method_lookup, perry_plugin_table_lookup,
-    perry_system_table_lookup, perry_ui_instance_method_lookup, perry_ui_table_lookup,
-    perry_updater_table_lookup,
+    find_outer_writes_stmt, find_thread_hazard_in_body, get_raw_string_ptr,
+    hazardous_module_global_ids, lower_fetch_native_method, lower_native_module_dispatch,
+    lower_notification_schedule, lower_perry_ui_table_call, native_module_lookup,
+    perry_audio_table_lookup, perry_i18n_table_lookup, perry_media_table_lookup,
+    perry_plugin_instance_method_lookup, perry_plugin_table_lookup, perry_system_table_lookup,
+    perry_ui_instance_method_lookup, perry_ui_table_lookup, perry_updater_table_lookup,
+    ThreadClosureHazard,
 };
 
 mod box_style;
@@ -152,7 +153,13 @@ pub(crate) fn lower_native_method_call(
                 };
                 if let Some(callback) = closure_arg {
                     match callback {
-                        Expr::Closure { params, body, .. } => {
+                        Expr::Closure {
+                            func_id,
+                            is_async,
+                            params,
+                            body,
+                            ..
+                        } => {
                             let mut inner_ids: std::collections::HashSet<perry_types::LocalId> =
                                 params.iter().map(|p| p.id).collect();
                             for stmt in body {
@@ -173,6 +180,76 @@ pub(crate) fn lower_native_method_call(
                                      See docs/src/threading/overview.md#no-shared-mutable-state.",
                                     method, first_outer,
                                 );
+                            }
+                            // #6185 Tier-1 containment: reject async work,
+                            // nested thread primitives, and reads of
+                            // heap-typed module globals inside the worker
+                            // body. Each is a cross-heap unsoundness: the
+                            // await loop drains process-global queues on
+                            // whatever thread runs it, and module globals
+                            // are process-wide slots read in place
+                            // (bypassing the capture deep-copy).
+                            let worker_is_async =
+                                *is_async || ctx.async_step_closures.contains(func_id);
+                            let hazard = if worker_is_async {
+                                Some(ThreadClosureHazard::AsyncClosure)
+                            } else {
+                                let hazardous_ids = hazardous_module_global_ids(
+                                    ctx.module_globals,
+                                    &ctx.local_types,
+                                );
+                                find_thread_hazard_in_body(
+                                    body,
+                                    &hazardous_ids,
+                                    ctx.async_step_closures,
+                                )
+                            };
+                            match hazard {
+                                None => {}
+                                Some(
+                                    ThreadClosureHazard::AsyncClosure | ThreadClosureHazard::Await,
+                                ) => {
+                                    anyhow::bail!(
+                                        "perry/thread: closure passed to `{}` must be synchronous — it is \
+                                         (or contains) an async closure or `await`. An `await` inside a \
+                                         worker runs the process-wide completion/timer pump on the worker \
+                                         thread: it can steal another thread's completion, fire foreign-heap \
+                                         timer callbacks, and resolve main-heap promises with pointers into \
+                                         the worker's arena, which is unmapped when the worker exits \
+                                         (use-after-free; issue #6185). Do the async work on the main thread \
+                                         and pass plain data into the worker, or return a value from the \
+                                         worker and `await` the {} result on the main thread instead.",
+                                        method, method,
+                                    );
+                                }
+                                Some(ThreadClosureHazard::NestedThreadCall(inner)) => {
+                                    anyhow::bail!(
+                                        "perry/thread: `{}` may not be called inside a closure passed to \
+                                         `{}` — nested thread primitives make the worker pump the \
+                                         process-global thread-completion queue, which can deserialize \
+                                         another thread's result into the wrong arena (issue #6185). \
+                                         Restructure so all `spawn`/`parallelMap`/`parallelFilter` calls \
+                                         happen on the main thread.",
+                                        inner, method,
+                                    );
+                                }
+                                Some(ThreadClosureHazard::ModuleGlobalAccess(id)) => {
+                                    anyhow::bail!(
+                                        "perry/thread: closure passed to `{}` accesses a module-scope \
+                                         variable (LocalId {}) whose value is a heap object (object, array, \
+                                         function, Map/Set, class instance, ...). Module-level bindings are \
+                                         process-wide slots read in place — they do NOT go through the \
+                                         capture deep-copy — so the worker thread would alias objects on the \
+                                         main thread's heap with no synchronization (issue #6185). Bind the \
+                                         value to a function-scope local first (`const copy = theGlobal;`) so \
+                                         the closure captures it and it is deep-copied to the worker, or \
+                                         declare module-level helpers with `function name(...)` instead of \
+                                         `const name = (...) => ...`. Primitive module globals (numbers, \
+                                         strings, booleans) are unaffected. \
+                                         See docs/src/threading/overview.md#no-shared-mutable-state.",
+                                        method, id,
+                                    );
+                                }
                             }
                         }
                         // Named-function callback bypass: `function worker(n) { counter++; }
