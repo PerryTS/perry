@@ -48,7 +48,13 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         // lowering time when we recognise the receiver.
         if let ast::Expr::Ident(class_ident) = bin.right.as_ref() {
             let class_name = class_ident.sym.as_ref();
-            if class_name == "WeakRef" || class_name == "FinalizationRegistry" {
+            // #6233: only fold when the RHS really is the GLOBAL WeakRef /
+            // FinalizationRegistry — a user `class WeakRef {}` (or a local/
+            // function/import of that name) shadows the global, and its
+            // instances must take the generic instanceof path below.
+            if (class_name == "WeakRef" || class_name == "FinalizationRegistry")
+                && !ctx.shadows_unqualified_global(class_name)
+            {
                 if let ast::Expr::Ident(left_ident) = bin.left.as_ref() {
                     let local_name = left_ident.sym.to_string();
                     let is_match = (class_name == "WeakRef"

@@ -172,6 +172,39 @@ pub fn i64_val(cx: &mut I64Cx<'_>, e: &Expr) -> String {
             }
             "0".to_string()
         }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            // Must be real control flow, not `select`: a branch can hold the
+            // self-recursive call, and evaluating both sides unconditionally
+            // would recurse past the base case.
+            let slot = cx.f.block_mut(cx.cur).unwrap().alloca(I64);
+            let cond = i64_cond(cx, condition);
+            let _ = cx.f.create_block("i64.cond.then");
+            let ti = cx.f.num_blocks() - 1;
+            let tl = cx.f.blocks()[ti].label.clone();
+            let _ = cx.f.create_block("i64.cond.else");
+            let ei = cx.f.num_blocks() - 1;
+            let el = cx.f.blocks()[ei].label.clone();
+            let _ = cx.f.create_block("i64.cond.merge");
+            let mi = cx.f.num_blocks() - 1;
+            let ml = cx.f.blocks()[mi].label.clone();
+            cx.f.block_mut(cx.cur).unwrap().cond_br(&cond, &tl, &el);
+            cx.cur = ti;
+            let tv = i64_val(cx, then_expr);
+            let blk = cx.f.block_mut(cx.cur).unwrap();
+            blk.store(I64, &tv, &slot);
+            blk.br(&ml);
+            cx.cur = ei;
+            let ev = i64_val(cx, else_expr);
+            let blk = cx.f.block_mut(cx.cur).unwrap();
+            blk.store(I64, &ev, &slot);
+            blk.br(&ml);
+            cx.cur = mi;
+            cx.f.block_mut(cx.cur).unwrap().load(I64, &slot)
+        }
         _ => "0".to_string(),
     }
 }

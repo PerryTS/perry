@@ -71,7 +71,12 @@ fn arena_pressure_budgeted_step_starts_bounded_minor_cycle() {
 }
 
 #[test]
-fn synchronous_only_registered_scanner_blocks_budgeted_step_start() {
+fn synchronous_only_registered_scanner_runs_inline_under_default_incremental() {
+    // #6180 flip: incremental is the DEFAULT. Unbudgeted mutable scanners no
+    // longer block the budgeted stepper — they run synchronously inside the
+    // initial root-scan step (a bounded initial-mark pause). The meaningful
+    // contract is that the cycle starts, completes, and roots the scanner
+    // sees survive.
     let _guard = CopyingNurseryTestGuard::new(1);
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     reset_old_reclaim_pressure();
@@ -84,11 +89,12 @@ fn synchronous_only_registered_scanner_blocks_budgeted_step_start() {
     let mut result = JsGcStepResult::default();
     assert_eq!(
         js_gc_step_work_units(1, &mut result),
-        JS_GC_STEP_STATUS_SKIPPED
+        JS_GC_STEP_STATUS_ACTIVE,
+        "budgeted stepper must start despite unbudgeted mutable scanners"
     );
-    assert_eq!(result.active, 0);
-    assert_eq!(result.completed, 0);
-    assert_eq!(js_gc_step_status(&mut result), JS_GC_STEP_STATUS_IDLE);
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }
 
 #[test]
