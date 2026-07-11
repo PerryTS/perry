@@ -45,8 +45,11 @@ pub(crate) use header::{
 };
 
 // ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
-pub(crate) use detach::array_buffer_transfer;
-pub use detach::{detach_array_buffer, is_detached_buffer};
+// `detach_array_buffer` dereferences the raw address it is given, so it stays
+// crate-internal; only the side-effect-free `is_detached_buffer` probe is
+// part of the public surface.
+pub use detach::is_detached_buffer;
+pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{

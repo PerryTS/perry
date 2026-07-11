@@ -507,13 +507,14 @@ fn record_transfer_clone(src: usize, cloned: usize) {
     });
 }
 
-fn detach_unseen_transferables() {
+/// Detach every transfer-list buffer. Runs only AFTER the whole clone
+/// succeeded (HTML structured-clone semantics): a `DataCloneError` thrown
+/// mid-walk must leave all source buffers attached, so no detachment happens
+/// during cloning itself. Idempotent per buffer.
+fn detach_transferables_after_success() {
     STRUCTURED_CLONE_TRANSFER_STATE.with(|state| {
         if let Some(state) = state.borrow().as_ref() {
             for addr in &state.transferables {
-                if state.clones.contains_key(addr) {
-                    continue;
-                }
                 crate::buffer::detach_array_buffer(*addr);
             }
         }
@@ -521,6 +522,12 @@ fn detach_unseen_transferables() {
 }
 
 fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
+    // An already-detached ArrayBuffer cannot be serialized — transferring it
+    // is rejected earlier by `collect_transfer_list`, and plain cloning must
+    // throw rather than produce a fresh empty buffer.
+    if crate::buffer::is_detached_buffer(addr) {
+        throw_data_clone_error("An ArrayBuffer is detached and could not be cloned");
+    }
     if detach_source {
         if let Some(existing) = transfer_existing_clone(addr) {
             return crate::value::js_nanbox_pointer(existing as i64);
@@ -557,8 +564,10 @@ fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
     }
 
     if detach_source {
+        // Record only — detachment is deferred to
+        // `detach_transferables_after_success` so a clone that fails later in
+        // the walk leaves the source attached.
         record_transfer_clone(addr, dst_addr);
-        crate::buffer::detach_array_buffer(addr);
     }
 
     crate::value::js_nanbox_pointer(dst_addr as i64)
@@ -628,7 +637,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
     });
     let _guard = CloneTransferStateGuard(previous);
     let cloned = js_structured_clone_inner(value);
-    detach_unseen_transferables();
+    detach_transferables_after_success();
     cloned
 }
 

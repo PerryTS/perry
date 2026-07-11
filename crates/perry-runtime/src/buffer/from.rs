@@ -809,14 +809,15 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     if addr == 0 || !is_registered_buffer(addr) {
         throw_dataview_buffer_not_object();
     }
+    // Steps 4-6: offset = ToIndex(byteOffset) (RangeError if negative). Runs
+    // BEFORE the detached check — ToIndex can execute user code (`valueOf`)
+    // that detaches the buffer, and the spec checks IsDetachedBuffer after.
+    let offset = dataview_to_index(offset_value, "byteOffset");
     if super::detach::is_detached_buffer(addr) {
         crate::collection_iter::throw_type_error(
             "Cannot perform Construct on a detached ArrayBuffer",
         );
     }
-
-    // Steps 4-6: offset = ToIndex(byteOffset) (RangeError if negative).
-    let offset = dataview_to_index(offset_value, "byteOffset");
 
     let src = addr as *const BufferHeader;
     let total_len = unsafe { (*src).length as i64 };
@@ -838,6 +839,15 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
         }
         requested
     };
+
+    // Spec step 12's second IsDetachedBuffer check: ToIndex(byteLength) above
+    // can also run user code that detaches the buffer; re-check before
+    // touching its bytes.
+    if super::detach::is_detached_buffer(addr) {
+        crate::collection_iter::throw_type_error(
+            "Cannot perform Construct on a detached ArrayBuffer",
+        );
+    }
 
     // Build a registered view so the numeric accessors index
     // relative to the view start and `.byteOffset`/`.byteLength`/`.buffer`

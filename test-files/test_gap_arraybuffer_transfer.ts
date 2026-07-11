@@ -73,3 +73,56 @@ try {
 } catch (e) {
   console.log("re-clone:", (e as Error).name);
 }
+
+// Coercion ordering: ToIndex(newLength/byteOffset) runs BEFORE the detached
+// check and can itself detach the buffer via valueOf (spec ordering).
+const vb = new ArrayBuffer(8);
+try {
+  vb.transfer({
+    valueOf() {
+      vb.transfer();
+      return 4;
+    },
+  } as any);
+} catch (e) {
+  console.log("transfer-valueof-detach:", (e as Error).name);
+}
+const dvb = new ArrayBuffer(8);
+try {
+  new DataView(dvb, {
+    valueOf() {
+      dvb.transfer();
+      return 0;
+    },
+  } as any);
+} catch (e) {
+  console.log("dataview-valueof-detach:", (e as Error).name);
+}
+const tvb = new ArrayBuffer(8);
+try {
+  new Uint8Array(tvb, {
+    valueOf() {
+      tvb.transfer();
+      return 0;
+    },
+  } as any);
+} catch (e) {
+  console.log("typedarray-valueof-detach:", (e as Error).name);
+}
+
+// Cloning an already-detached buffer (no transfer list) throws.
+const det = new ArrayBuffer(4);
+det.transfer();
+try {
+  structuredClone(det);
+} catch (e) {
+  console.log("clone-detached:", (e as Error).name);
+}
+
+// A clone that FAILS must leave transfer-list buffers attached.
+const keep = new ArrayBuffer(4);
+try {
+  structuredClone({ b: keep, f: () => 1 }, { transfer: [keep] });
+} catch (e) {
+  console.log("failed-clone-keeps:", (e as Error).name, keep.detached, keep.byteLength);
+}

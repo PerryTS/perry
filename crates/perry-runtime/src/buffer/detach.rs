@@ -130,17 +130,22 @@ fn throw_type_error(message: &str) -> ! {
 /// the current byteLength), copy `min(oldLength, newLength)` bytes, detach the
 /// source, and return the new buffer.
 pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64]) -> f64 {
+    // ES2024 ArrayBufferCopyAndDetach ordering: ToIndex(newLength) runs FIRST
+    // — it can execute user code (`valueOf`) that detaches this very buffer —
+    // and IsDetachedBuffer is checked after, so a mid-coercion detach is
+    // caught before any stale header read.
+    let requested_len = match args.first().copied() {
+        Some(v) if !crate::value::JSValue::from_bits(v.to_bits()).is_undefined() => {
+            Some(super::from::array_buffer_to_index(v))
+        }
+        _ => None,
+    };
     if is_detached_buffer(addr) {
         throw_type_error("Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer");
     }
     let src = addr as *mut BufferHeader;
     let old_len = unsafe { (*src).length } as i32;
-    let new_len = match args.first().copied() {
-        Some(v) if !crate::value::JSValue::from_bits(v.to_bits()).is_undefined() => {
-            super::from::array_buffer_to_index(v)
-        }
-        _ => old_len,
-    };
+    let new_len = requested_len.unwrap_or(old_len);
     let dst = super::from::zeroed_array_buffer_storage(new_len);
     mark_as_array_buffer(dst as usize);
     let copy_len = old_len.min(new_len);

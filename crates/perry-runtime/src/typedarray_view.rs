@@ -72,13 +72,12 @@ pub extern "C" fn js_typed_array_view(
     if !crate::buffer::is_registered_buffer(addr) || !crate::buffer::is_any_array_buffer(addr) {
         return js_typed_array_new(kind as i32, source);
     }
-    if crate::buffer::is_detached_buffer(addr) {
-        crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
-    }
     let bpe = elem_size_for_kind(kind) as i64;
-    let src = addr as *const crate::buffer::BufferHeader;
-    let total_len = unsafe { (*src).length as i64 };
 
+    // ES ordering (InitializeTypedArrayFromArrayBuffer): ToIndex(byteOffset)
+    // and ToIndex(length) run BEFORE the IsDetachedBuffer check — either can
+    // execute user code (`valueOf`) that detaches the buffer — so all buffer
+    // reads and bounds checks happen after, against post-coercion state.
     let offset = typed_array_view_to_index(offset_value);
     if bpe > 1 && offset % bpe != 0 {
         throw_range_error(
@@ -90,32 +89,44 @@ pub extern "C" fn js_typed_array_view(
             .as_bytes(),
         );
     }
+    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
+    let requested = if length_jv.is_undefined() {
+        None
+    } else {
+        Some(typed_array_view_to_index(length_value))
+    };
+    if crate::buffer::is_detached_buffer(addr) {
+        crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
+    }
+    let src = addr as *const crate::buffer::BufferHeader;
+    let total_len = unsafe { (*src).length as i64 };
     if offset > total_len {
         throw_range_error(
             format!("Start offset {offset} is outside the bounds of the buffer").as_bytes(),
         );
     }
 
-    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
-    let elem_count = if length_jv.is_undefined() {
-        let remaining = total_len - offset;
-        if bpe > 1 && remaining % bpe != 0 {
-            throw_range_error(
-                format!(
-                    "byte length of {} should be a multiple of {}",
-                    name_for_kind(kind),
-                    bpe
-                )
-                .as_bytes(),
-            );
+    let elem_count = match requested {
+        None => {
+            let remaining = total_len - offset;
+            if bpe > 1 && remaining % bpe != 0 {
+                throw_range_error(
+                    format!(
+                        "byte length of {} should be a multiple of {}",
+                        name_for_kind(kind),
+                        bpe
+                    )
+                    .as_bytes(),
+                );
+            }
+            remaining / bpe
         }
-        remaining / bpe
-    } else {
-        let requested = typed_array_view_to_index(length_value);
-        if offset + requested * bpe > total_len {
-            throw_range_error(format!("Invalid typed array length: {requested}").as_bytes());
+        Some(requested) => {
+            if offset + requested * bpe > total_len {
+                throw_range_error(format!("Invalid typed array length: {requested}").as_bytes());
+            }
+            requested
         }
-        requested
     };
 
     let count = elem_count.max(0) as u32;
