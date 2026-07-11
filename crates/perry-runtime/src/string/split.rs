@@ -15,6 +15,7 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
 
     let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
     let value_bits = STRING_TAG | (string as u64 & POINTER_MASK);
+    // GC_STORE_AUDIT(BARRIERED): split result string slot is followed by a runtime write barrier.
     std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
     // The all-pointer layout only covers the initialized prefix. Publish this
     // element before the next allocation can run a collection.
