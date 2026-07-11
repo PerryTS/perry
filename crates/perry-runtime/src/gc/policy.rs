@@ -302,9 +302,17 @@ pub(crate) fn gc_moving_safepoint_enabled() -> bool {
 pub(crate) fn gc_incremental_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        // DEFAULT ON (#6180 flip): ordinary allocation pressure is collected
+        // by the budgeted incremental stepper — debt-paced assists, sound
+        // across mutator windows (mark barrier + allocate-black + final
+        // remark + drain-before-synchronous), census-free, RSS-parity on
+        // realistic workloads with ~5x lower worst pause. Bounded pauses by
+        // default; the synchronous collector remains for manual gc(),
+        // emergency reclaim, and as the PERRY_GC_INCREMENTAL=0 escape hatch
+        // (bisection / max-throughput batch workloads).
+        !matches!(
             std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }

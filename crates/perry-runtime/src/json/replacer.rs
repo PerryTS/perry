@@ -78,7 +78,15 @@ unsafe fn root_holder(value_f64: f64) -> f64 {
 /// dereferenceable `GcHeader` — feeding it to `gc_obj_type` SIGBUSes.
 #[inline]
 fn ptr_derefable(ptr: usize) -> bool {
-    (ptr >> 48) <= 1 && ptr >= 0x10000 && (ptr & 0x7) == 0
+    // Top-16-bits check: a real heap pointer sits in the low canonical VA
+    // range (bits 48-63 are 0 or 1). On 32-bit targets (arm64_32/watchOS)
+    // `usize` has no bits above 31, so this is vacuously true — and emitting
+    // `ptr >> 48` there is a compile-time overflow. Gate it by pointer width.
+    #[cfg(target_pointer_width = "64")]
+    let high_bits_ok = (ptr >> 48) <= 1;
+    #[cfg(not(target_pointer_width = "64"))]
+    let high_bits_ok = true;
+    high_bits_ok && ptr >= 0x10000 && (ptr & 0x7) == 0
 }
 
 unsafe fn apply_to_json(value: f64) -> f64 {

@@ -150,6 +150,14 @@ unsafe fn build_content(title: &str, body: &str) -> Option<Retained<AnyObject>> 
     let _: () = msg_send![&*content, setTitle: &*ns_title];
     let ns_body = NSString::from_str(body);
     let _: () = msg_send![&*content, setBody: &*ns_body];
+    // Attach the default notification sound. On watchOS the arrival *haptic*
+    // is gated on the notification carrying a sound — without this the alert
+    // shows silently and never taps the wrist, defeating the point of a
+    // reminder. (Honored subject to the watch's Silent Mode / Haptic Strength.)
+    if let Some(sound_cls) = AnyClass::get(c"UNNotificationSound") {
+        let sound: Retained<AnyObject> = msg_send![sound_cls, defaultSound];
+        let _: () = msg_send![&*content, setSound: &*sound];
+    }
     Some(content)
 }
 

@@ -1,3 +1,49 @@
+## v0.5.1256 — fix(hir): user class shadowing a global name loses to the intrinsic in `new` expressions (#6233, PR #6270)
+
+A module-scope `class Symbol extends Base {}` legally shadows the global
+`Symbol`, but the built-in constructor arms in `lower_new`
+(perry-hir `lower/expr_new.rs`) fired by name alone, so `new Symbol()` bound
+to the intrinsic and threw "Symbol is not a constructor" at module init —
+effect's `SchemaAST.ts` declares AST node classes named `Symbol` and `BigInt`,
+so importing the effect barrel crashed under `perry.compilePackages`.
+Depending on the name this crashed (Symbol/BigInt/Proxy/WeakRef/
+FinalizationRegistry/AggregateError) or silently constructed the wrong object
+(Map/Set/Date/Number/String/Boolean/Error/TypeError/Uint8Array/Int32Array:
+native instance, field initializers never ran, `instanceof` the user class
+false). 16 of the issue's 22 blast-radius shapes misbehaved.
+
+Same family as #5912/#5913 (`new URL()`) and #6003 (`class Headers`). Fixes:
+
+- `lower/expr_new.rs`: a `shadowed_by_user_binding` snapshot (class / local /
+  function / imported binding / forward-declared sibling class) taken once at
+  the ident-arm top now gates every built-in constructor arm; the existing
+  Object/Function/URL/URLSearchParams/URLPattern/TextEncoder/TextDecoder
+  guards are unified onto it.
+- Type inference (`lower_types.rs` + `destructuring/var_decl/type_infer.rs`):
+  `new Map()` was typed as the builtin `Generic { base: "Map" }` by name,
+  routing the binding's method calls down the collection intrinsic fast paths
+  (SIGSEGV on a user-class instance). A user class now wins; non-class
+  shadowing bindings (a local, `function Map() {}`, an import) get `Any`,
+  scoped to a conservative `builtin_constructor_inference_name` set so
+  module-export names that legitimately arrive through locals (`Buffer`, the
+  stream/event classes) keep their fast paths. The user-class check is also
+  hoisted above the explicit-type-args early return so a generic user
+  `class Map<T>` never produces the collection-recognizer `Generic` shape.
+- `lower/lower_expr/arm_bin.rs`: the `x instanceof WeakRef |
+  FinalizationRegistry` compile-time fold backs off when the name is shadowed.
+- `lower/pre_scan.rs`: the weak-locals pre-scan no longer tags
+  `const w = new WeakRef(x)` as a native weak instance when a user declaration
+  shadows the constructor name, so `w.deref()` dispatches to the user method.
+- `lower_types.rs` split into `lower_types.rs` + `lower_types/extract.rs`
+  (TS-annotation extraction + decorator lowering) to stay under the
+  2000-line lint cap; pure move with named re-exports.
+
+Regression tests `test_issue_6233_shadowed_global_class_new.ts` (issue repro +
+22-name blast-radius matrix + reserved method names + instanceof) and
+`test_issue_6233_shadowed_global_fn_new.ts` (function/const constructors named
+after builtins) match node byte-for-byte. Targeted parity sweep (~160
+collection/error/weak/url/typed-array tests): no regressions.
+
 ## v0.5.1255 — chore(deps): bump crossbeam-epoch 0.9.18 → 0.9.20 (RUSTSEC-2026-0204)
 
 RUSTSEC-2026-0204 (published 2026-07-06) flags crossbeam-epoch < 0.9.20 for an

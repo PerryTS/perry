@@ -96,6 +96,25 @@ else
 fi
 
 # Function to run with optional timeout
+# Describe an abnormal Perry exit, or print nothing when the exit is normal.
+# Bash reports a signal death as 128+signo; `timeout` reports 124.
+perry_abnormal_exit() {
+    local code=$1
+    case "$code" in
+        124) echo "TIMEOUT (killed after ${PERRY_RUN_TIMEOUT:-10}s)" ;;
+        132) echo "SIGILL (exit 132)" ;;
+        134) echo "SIGABRT (exit 134)" ;;
+        136) echo "SIGFPE (exit 136)" ;;
+        138) echo "SIGBUS (exit 138)" ;;
+        139) echo "SIGSEGV (exit 139)" ;;
+        *)
+            if [[ "$code" -gt 128 ]]; then
+                echo "signal $((code - 128)) (exit $code)"
+            fi
+            ;;
+    esac
+}
+
 run_with_timeout() {
     local seconds=$1
     shift
@@ -195,10 +214,17 @@ PARITY_FAIL=0
 COMPILE_FAIL=0
 NODE_FAIL=0
 SKIPPED=0
+# Perry died from a signal (SIGSEGV/SIGABRT/…) or hit the run timeout. Tracked
+# separately from PARITY_FAIL: a crash is a *hard* defect, not a formatting
+# nit, and reporting it as a plain "output mismatch" is how the #6271 zlib
+# SIGSEGV sat in main for days — the harness only diffed stdout, so a process
+# dying with exit 139 after printing half its output looked like a benign diff.
+CRASH_FAIL=0
 
 # Arrays for tracking
 declare -a PARITY_FAILURES=()
 declare -a COMPILE_FAILURES=()
+declare -a CRASH_FAILURES=()
 
 # Create output directories
 mkdir -p "$OUTPUT_DIR/node" "$OUTPUT_DIR/perry" "$REPORT_DIR"
@@ -733,6 +759,29 @@ for test_file in "${TEST_FILES[@]}"; do
     # Save Perry output
     echo "$perry_output" > "$perry_output_file"
 
+    # A signal death / timeout is a CRASH, not a parity mismatch. Check it
+    # before either comparison below: a crashed process usually printed a
+    # correct *prefix* of its output and then died, which diffs as a plain
+    # "output mismatch" and reads as a cosmetic gap. That is exactly how the
+    # #6271 zlib SIGSEGV hid behind a green-looking label. Node already exited
+    # 0 to reach this point (non-zero Node => node_fail + skip above), so an
+    # abnormal exit here is unambiguously Perry's.
+    #
+    # Exception: a test carrying its own expected-output file may legitimately
+    # assert a non-zero exit; only *signals*/timeouts are treated as crashes,
+    # never an ordinary non-zero exit like an uncaught throw (exit 1).
+    perry_crash=$(perry_abnormal_exit "$perry_exit")
+    if [[ -n "$perry_crash" ]]; then
+        echo -e "${RED}CRASH${NC} $test_id (${perry_crash})"
+        echo "       Perry died after printing $(printf '%s' "$perry_output" | grep -c '' || true) line(s); Node exited 0."
+        echo "       Last Perry line: $(printf '%s' "$perry_output" | tail -1)"
+        ((CRASH_FAIL++))
+        CRASH_FAILURES+=("$test_id")
+        record_result "$test_id" "crash"
+        [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
+        continue
+    fi
+
     # For tests that have a stored expected-output file (Perry-specific APIs
     # that don't map 1:1 to Node.js), compare Perry output against the file
     # instead of against Node.js.  This lets us verify Perry's behaviour
@@ -787,7 +836,7 @@ for test_file in "${TEST_FILES[@]}"; do
 done
 
 # Calculate parity percentage
-TOTAL_RUN=$((PARITY_PASS + PARITY_FAIL))
+TOTAL_RUN=$((PARITY_PASS + PARITY_FAIL + CRASH_FAIL))
 if [[ $TOTAL_RUN -gt 0 ]]; then
     PARITY_PCT=$(echo "scale=1; $PARITY_PASS * 100 / $TOTAL_RUN" | bc)
 else
@@ -802,10 +851,21 @@ echo "========================================"
 echo -e "${GREEN}Parity Pass:${NC}   $PARITY_PASS"
 echo -e "${RED}Parity Fail:${NC}   $PARITY_FAIL"
 echo -e "${RED}Compile Fail:${NC}  $COMPILE_FAIL"
+echo -e "${RED}Crashed:${NC}       $CRASH_FAIL"
 echo -e "${YELLOW}Skipped:${NC}       $SKIPPED"
 echo ""
 echo -e "${CYAN}Parity Rate:${NC}   ${PARITY_PCT}%"
 echo ""
+
+# List crashes first — these are hard defects (signal death / timeout), not
+# output nits, and must never be skimmed past as if they were.
+if [[ ${#CRASH_FAILURES[@]} -gt 0 ]]; then
+    echo -e "${RED}CRASHED (signal death / timeout — NOT an output nit):${NC}"
+    for crashed in "${CRASH_FAILURES[@]}"; do
+        echo "  - $crashed"
+    done
+    echo ""
+fi
 
 # List failures
 if [[ ${#PARITY_FAILURES[@]} -gt 0 ]]; then
@@ -834,6 +894,7 @@ cat > "$REPORT_FILE" << EOF
     "parity_pass": $PARITY_PASS,
     "parity_fail": $PARITY_FAIL,
     "compile_fail": $COMPILE_FAIL,
+    "crash_fail": $CRASH_FAIL,
     "node_fail": $NODE_FAIL,
     "skipped": $SKIPPED,
     "total_run": $TOTAL_RUN,
@@ -843,6 +904,8 @@ cat > "$REPORT_FILE" << EOF
     "parity": [$(printf '"%s",' "${PARITY_FAILURES[@]}" | sed 's/,$//')]
 ,
     "compile": [$(printf '"%s",' "${COMPILE_FAILURES[@]}" | sed 's/,$//')]
+,
+    "crash": [$(printf '"%s",' "${CRASH_FAILURES[@]}" | sed 's/,$//')]
 
   },
   "results": [${RESULTS_JSON}]

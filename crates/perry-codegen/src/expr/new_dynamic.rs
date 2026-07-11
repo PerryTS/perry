@@ -430,6 +430,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             for a in args {
                                 let _ = lower_expr(ctx, a)?;
                             }
+                            // #3142: the profiler's `start()`/`stop()` instance
+                            // methods dispatch through the generic native-module
+                            // registry (`dispatch_native_module_method` →
+                            // `("v8.GCProfiler", …)`), which only resolves once
+                            // `js_nm_install_v8()` has populated the V8 dispatch
+                            // slot. A program whose other `v8.*` calls are all
+                            // direct-lowered never emits that install, so without
+                            // this `p.start()`/`p.stop()` fall through to
+                            // `undefined`. Emit it here (mirrors the sibling
+                            // `crypto.Certificate` new-branch).
+                            if let Some(s) = crate::nm_install::nm_install_symbol("v8.GCProfiler") {
+                                ctx.block().call_void(s, &[]);
+                            }
                             return Ok(ctx.block().call(DOUBLE, "js_v8_gc_profiler_new", &[]));
                         }
                     }
