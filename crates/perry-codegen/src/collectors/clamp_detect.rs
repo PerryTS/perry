@@ -271,7 +271,11 @@ pub fn i64s_stmts(ss: &[Stmt], sid: u32) -> bool {
 }
 pub fn i64s_expr(e: &Expr, sid: u32) -> bool {
     match e {
-        Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_) => true,
+        Expr::Integer(_) | Expr::LocalGet(_) => true,
+        // The i64 emitter lowers Number literals with `as i64`, so only admit
+        // values that round-trip exactly — a fractional constant (`? 0.5 :`)
+        // would silently truncate in the specialized body.
+        Expr::Number(n) => *n as i64 as f64 == *n,
         Expr::Binary { op, left, right } => {
             matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                 && i64s_expr(left, sid)

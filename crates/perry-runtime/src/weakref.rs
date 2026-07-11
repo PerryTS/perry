@@ -1320,7 +1320,13 @@ pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
 }
 
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
+    // #6136: `js_string_from_bytes` allocates and can fire a moving minor GC,
+    // which relocates the (movable, GcHeader-backed) WeakMap/WeakSet `reg`.
+    // Root it across the allocation and re-derive before dereferencing.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reg_handle = scope.root_raw_mut_ptr(reg);
     let entries_key = crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18);
+    let reg = reg_handle.get_raw_mut_ptr::<ObjectHeader>();
     let entries_val = js_object_get_field_by_name(reg, entries_key);
     (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader
 }
@@ -1465,11 +1471,24 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
     if !is_valid_weak_target(key) {
         throw_invalid_weakmap_key();
     }
-    let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
-    if map_ptr.is_null() {
+    if js_nanbox_get_pointer(map) == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // #6136: a WeakMap is a movable, GcHeader-backed ObjectHeader (unlike
+    // Map/Set, whose plain-alloc headers never move). `weak_entry_new` and
+    // `js_array_push_f64` below can fire a moving minor GC that evacuates the
+    // WeakMap; a raw `map_ptr` captured before those allocations would dangle,
+    // and the new entry would be written into the stale (dead) copy — silently
+    // dropping the mapping (the intermittent "wm.get(node) → undefined"
+    // symptom). Root map/key/value and re-derive the pointer after every
+    // allocating call. Mirrors the #6206 `js_map_set` fix, extended to also
+    // root the movable collection object itself.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_nanbox_f64(map);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         let entries_ptr = entries_array(map_ptr);
         if entries_ptr.is_null() {
             return f64::from_bits(TAG_UNDEFINED);
@@ -1477,7 +1496,8 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
         let len = js_array_length(entries_ptr) as usize;
         // Update the existing entry if the key matches; remember the first
         // tombstone (an entry whose key the GC collected) so a new key can
-        // reuse the freed slot instead of growing the array unboundedly.
+        // reuse the freed slot instead of growing the array unboundedly. This
+        // scan performs no allocation, so `entries_ptr` stays valid throughout.
         let mut first_tomb: i64 = -1;
         for i in 0..len {
             let entry = weak_entry_at(entries_ptr, i);
@@ -1491,28 +1511,42 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
                 }
                 continue;
             }
-            if stored_key == key.to_bits() {
-                write_object_field_bits_raw(entry, WEAK_ENTRY_VALUE_FIELD, value.to_bits());
-                return map;
+            if stored_key == key_handle.get_nanbox_f64().to_bits() {
+                write_object_field_bits_raw(
+                    entry,
+                    WEAK_ENTRY_VALUE_FIELD,
+                    value_handle.get_nanbox_f64().to_bits(),
+                );
+                return map_handle.get_nanbox_f64();
             }
         }
-        // Not present — build a fresh entry. This allocation may move objects,
-        // but `map`/`key`/`value` and the pointers below are live on the
-        // conservatively-scanned stack, so they stay pinned across it (same
-        // contract the rest of this module relies on).
-        let entry = weak_entry_new(key, value);
-        let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
+        // Not present — build a fresh entry. This allocation may move the
+        // WeakMap and its entries array, so re-derive both from the rooted
+        // handle afterwards. (`js_array_push_f64` internally roots the pushed
+        // value across its own grow, so the entry pointer is safe there.)
+        let entry = weak_entry_new(key_handle.get_nanbox_f64(), value_handle.get_nanbox_f64());
+        // `entries_array` allocates (js_string_from_bytes) and can move the
+        // freshly-created `entry` — `weak_holder_register` only records its
+        // address, it does not root it. Root the entry across that call and
+        // re-read its current pointer before boxing `entry_val`, otherwise a
+        // stale address would be stored into the array.
+        let entry_handle = scope.root_raw_mut_ptr(entry);
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         let entries_ptr = entries_array(map_ptr);
+        let entry = entry_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
         if first_tomb >= 0 {
             js_array_set_f64(entries_ptr, first_tomb as u32, entry_val);
         } else {
             // js_array_push_f64 may reallocate; rebind the entries field to the
-            // (possibly new) header so the append isn't lost.
+            // (possibly new) header so the append isn't lost. Re-derive map_ptr
+            // once more — the push can move the WeakMap object too.
             let grown = js_array_push_f64(entries_ptr, entry_val);
+            let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
             js_object_set_field(map_ptr, 0, JSValue::array_ptr(grown));
         }
     }
-    map
+    map_handle.get_nanbox_f64()
 }
 
 #[no_mangle]
@@ -1575,21 +1609,33 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
-    let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
-    if map_ptr.is_null() {
+    if js_nanbox_get_pointer(map) == 0 {
         return f64::from_bits(TAG_FALSE);
     }
+    // #6136: root the movable WeakMap, the search key, and the source entries
+    // array across the js_array_alloc / js_array_push_f64 allocations below —
+    // each can fire a moving minor GC. Without this, the rebuilt array is
+    // written into a stale map copy and the loop reads relocated entries from a
+    // dangling source pointer (dropping or corrupting entries intermittently).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_nanbox_f64(map);
+    let key_handle = scope.root_nanbox_f64(key);
     unsafe {
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         let entries_ptr = entries_array(map_ptr);
         if entries_ptr.is_null() {
             return f64::from_bits(TAG_FALSE);
         }
         let len = js_array_length(entries_ptr) as usize;
+        let entries_handle = scope.root_raw_mut_ptr(entries_ptr);
         let mut found = false;
         // Rebuild without the deleted key AND without tombstones (entries whose
         // key the GC already collected), reclaiming the entry objects.
         let mut new_arr = js_array_alloc(0);
         for i in 0..len {
+            // Re-derive the source array each iteration: the previous push may
+            // have moved it.
+            let entries_ptr = entries_handle.get_raw_mut_ptr::<ArrayHeader>();
             let entry = weak_entry_at(entries_ptr, i);
             if entry.is_null() {
                 continue;
@@ -1598,13 +1644,14 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
             if stored_key == TAG_UNDEFINED {
                 continue; // drop tombstone
             }
-            if stored_key == key.to_bits() {
+            if stored_key == key_handle.get_nanbox_f64().to_bits() {
                 found = true;
                 continue;
             }
             let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
             new_arr = js_array_push_f64(new_arr, entry_val);
         }
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         js_object_set_field(map_ptr, 0, JSValue::array_ptr(new_arr));
         if found {
             f64::from_bits(TAG_TRUE)

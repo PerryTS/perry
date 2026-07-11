@@ -369,7 +369,13 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Yield { value, .. } => value
             .as_ref()
             .is_some_and(|v| expr_uses_this_as_value(v, fields)),
-        Expr::InstanceOf { expr, .. } => expr_uses_this_as_value(expr, fields),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            expr_uses_this_as_value(expr, fields)
+                || ty_expr
+                    .as_ref()
+                    .map(|t| expr_uses_this_as_value(t, fields))
+                    .unwrap_or(false)
+        }
         Expr::In { property, object } => {
             expr_uses_this_as_value(property, fields) || expr_uses_this_as_value(object, fields)
         }

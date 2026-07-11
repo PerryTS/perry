@@ -776,8 +776,11 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(property, candidates, classes, escaped);
             check_escapes_in_expr(object, candidates, classes, escaped);
         }
-        Expr::InstanceOf { expr, .. } => {
+        Expr::InstanceOf { expr, ty_expr, .. } => {
             check_escapes_in_expr(expr, candidates, classes, escaped);
+            if let Some(t) = ty_expr {
+                check_escapes_in_expr(t, candidates, classes, escaped);
+            }
         }
         Expr::ObjectRest { object, .. } => {
             check_escapes_in_expr(object, candidates, classes, escaped);

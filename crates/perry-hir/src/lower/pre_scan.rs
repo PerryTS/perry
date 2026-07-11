@@ -19,9 +19,18 @@ use crate::ir::*;
 /// without requiring type inference (Perry's existing var-decl type inference
 /// doesn't extend to WeakRef/FinalizationRegistry).
 pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut LoweringContext) {
-    fn classify_new(new_expr: &ast::NewExpr) -> Option<&'static str> {
+    fn classify_new(new_expr: &ast::NewExpr, shadowed: &HashSet<String>) -> Option<&'static str> {
         if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-            match ident.sym.as_ref() {
+            let name = ident.sym.as_ref();
+            // #6233: a user declaration of this name (`class Proxy {}`,
+            // `function WeakRef() {}`, an import, …) shadows the global, so
+            // `new <name>()` constructs the USER binding — don't track the
+            // result as a weak/proxy intrinsic instance. Name-keyed and
+            // scope-blind, matching this scan's own granularity.
+            if shadowed.contains(name) {
+                return None;
+            }
+            match name {
                 "WeakRef" => Some("WeakRef"),
                 "FinalizationRegistry" => Some("FinalizationRegistry"),
                 "WeakMap" => Some("WeakMap"),
@@ -61,12 +70,13 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
         decl: &ast::VarDeclarator,
         ctx: &mut LoweringContext,
         poison: &mut HashSet<String>,
+        shadowed: &HashSet<String>,
     ) {
         if let (ast::Pat::Ident(ident), Some(init)) = (&decl.name, decl.init.as_ref()) {
             let init_unwrapped = unwrap_init(init);
             if let ast::Expr::New(new_expr) = init_unwrapped {
                 let name = ident.id.sym.to_string();
-                match classify_new(new_expr) {
+                match classify_new(new_expr, shadowed) {
                     Some("WeakRef") => {
                         ctx.weakref_locals.insert(name);
                     }
@@ -123,16 +133,21 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
             }
         }
     }
-    fn walk_stmt(stmt: &ast::Stmt, ctx: &mut LoweringContext, poison: &mut HashSet<String>) {
+    fn walk_stmt(
+        stmt: &ast::Stmt,
+        ctx: &mut LoweringContext,
+        poison: &mut HashSet<String>,
+        shadowed: &HashSet<String>,
+    ) {
         match stmt {
             ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
                 for decl in &var_decl.decls {
-                    record_var(decl, ctx, poison);
+                    record_var(decl, ctx, poison, shadowed);
                 }
             }
             ast::Stmt::Decl(ast::Decl::Using(using_decl)) => {
                 for decl in &using_decl.decls {
-                    record_var(decl, ctx, poison);
+                    record_var(decl, ctx, poison, shadowed);
                 }
             }
             // Function declarations — descend into the body so `const
@@ -142,53 +157,160 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
             ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {
                 if let Some(body) = &fn_decl.function.body {
                     for s in &body.stmts {
-                        walk_stmt(s, ctx, poison);
+                        walk_stmt(s, ctx, poison, shadowed);
                     }
                 }
             }
             ast::Stmt::Block(block) => {
                 for s in &block.stmts {
-                    walk_stmt(s, ctx, poison);
+                    walk_stmt(s, ctx, poison, shadowed);
                 }
             }
             ast::Stmt::If(if_stmt) => {
-                walk_stmt(&if_stmt.cons, ctx, poison);
+                walk_stmt(&if_stmt.cons, ctx, poison, shadowed);
                 if let Some(alt) = &if_stmt.alt {
-                    walk_stmt(alt, ctx, poison);
+                    walk_stmt(alt, ctx, poison, shadowed);
                 }
             }
-            ast::Stmt::While(w) => walk_stmt(&w.body, ctx, poison),
-            ast::Stmt::DoWhile(w) => walk_stmt(&w.body, ctx, poison),
+            ast::Stmt::While(w) => walk_stmt(&w.body, ctx, poison, shadowed),
+            ast::Stmt::DoWhile(w) => walk_stmt(&w.body, ctx, poison, shadowed),
             ast::Stmt::For(f) => {
                 if let Some(ast::VarDeclOrExpr::VarDecl(vd)) = &f.init {
                     for decl in &vd.decls {
-                        record_var(decl, ctx, poison);
+                        record_var(decl, ctx, poison, shadowed);
                     }
                 }
-                walk_stmt(&f.body, ctx, poison);
+                walk_stmt(&f.body, ctx, poison, shadowed);
             }
-            ast::Stmt::ForIn(f) => walk_stmt(&f.body, ctx, poison),
-            ast::Stmt::ForOf(f) => walk_stmt(&f.body, ctx, poison),
+            ast::Stmt::ForIn(f) => walk_stmt(&f.body, ctx, poison, shadowed),
+            ast::Stmt::ForOf(f) => walk_stmt(&f.body, ctx, poison, shadowed),
             ast::Stmt::Try(t) => {
                 for s in &t.block.stmts {
-                    walk_stmt(s, ctx, poison);
+                    walk_stmt(s, ctx, poison, shadowed);
                 }
                 if let Some(catch) = &t.handler {
                     for s in &catch.body.stmts {
-                        walk_stmt(s, ctx, poison);
+                        walk_stmt(s, ctx, poison, shadowed);
                     }
                 }
                 if let Some(finalizer) = &t.finalizer {
                     for s in &finalizer.stmts {
-                        walk_stmt(s, ctx, poison);
+                        walk_stmt(s, ctx, poison, shadowed);
                     }
                 }
             }
             ast::Stmt::Switch(s) => {
                 for case in &s.cases {
                     for s in &case.cons {
-                        walk_stmt(s, ctx, poison);
+                        walk_stmt(s, ctx, poison, shadowed);
                     }
+                }
+            }
+            _ => {}
+        }
+    }
+    // #6233: collect user declarations that shadow one of the tracked
+    // constructor names — `class Proxy {}` / `function WeakRef() {}` /
+    // `const WeakMap = …` / `import { WeakSet } from …`. This scan is
+    // name-keyed with no scope discrimination (see the poison-set comment
+    // below), so a shadow anywhere in the module suppresses tracking
+    // module-wide and the affected locals fall back to ordinary dispatch.
+    fn record_shadow(name: &str, shadowed: &mut HashSet<String>) {
+        if matches!(
+            name,
+            "WeakRef" | "FinalizationRegistry" | "WeakMap" | "WeakSet" | "Proxy"
+        ) {
+            shadowed.insert(name.to_string());
+        }
+    }
+    fn collect_shadowing_decls(stmt: &ast::Stmt, shadowed: &mut HashSet<String>) {
+        match stmt {
+            ast::Stmt::Decl(ast::Decl::Class(cd)) => record_shadow(cd.ident.sym.as_ref(), shadowed),
+            ast::Stmt::Decl(ast::Decl::Fn(fd)) => {
+                record_shadow(fd.ident.sym.as_ref(), shadowed);
+                if let Some(body) = &fd.function.body {
+                    for s in &body.stmts {
+                        collect_shadowing_decls(s, shadowed);
+                    }
+                }
+            }
+            ast::Stmt::Decl(ast::Decl::Var(vd)) => {
+                for d in &vd.decls {
+                    if let ast::Pat::Ident(ident) = &d.name {
+                        // `const Proxy = …` — the declared NAME shadows; a
+                        // `new Proxy()` bound to an ordinary local is handled
+                        // by classify_new/poison, not here.
+                        record_shadow(ident.id.sym.as_ref(), shadowed);
+                    }
+                }
+            }
+            ast::Stmt::Block(block) => {
+                for s in &block.stmts {
+                    collect_shadowing_decls(s, shadowed);
+                }
+            }
+            ast::Stmt::If(if_stmt) => {
+                collect_shadowing_decls(&if_stmt.cons, shadowed);
+                if let Some(alt) = &if_stmt.alt {
+                    collect_shadowing_decls(alt, shadowed);
+                }
+            }
+            ast::Stmt::While(w) => collect_shadowing_decls(&w.body, shadowed),
+            ast::Stmt::DoWhile(w) => collect_shadowing_decls(&w.body, shadowed),
+            ast::Stmt::For(f) => collect_shadowing_decls(&f.body, shadowed),
+            ast::Stmt::ForIn(f) => collect_shadowing_decls(&f.body, shadowed),
+            ast::Stmt::ForOf(f) => collect_shadowing_decls(&f.body, shadowed),
+            ast::Stmt::Try(t) => {
+                for s in &t.block.stmts {
+                    collect_shadowing_decls(s, shadowed);
+                }
+                if let Some(catch) = &t.handler {
+                    for s in &catch.body.stmts {
+                        collect_shadowing_decls(s, shadowed);
+                    }
+                }
+                if let Some(finalizer) = &t.finalizer {
+                    for s in &finalizer.stmts {
+                        collect_shadowing_decls(s, shadowed);
+                    }
+                }
+            }
+            ast::Stmt::Switch(s) => {
+                for case in &s.cases {
+                    for s in &case.cons {
+                        collect_shadowing_decls(s, shadowed);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut shadowed: HashSet<String> = HashSet::new();
+    for item in &ast_module.body {
+        match item {
+            ast::ModuleItem::Stmt(stmt) => collect_shadowing_decls(stmt, &mut shadowed),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
+                match &export_decl.decl {
+                    ast::Decl::Class(cd) => record_shadow(cd.ident.sym.as_ref(), &mut shadowed),
+                    ast::Decl::Fn(fd) => record_shadow(fd.ident.sym.as_ref(), &mut shadowed),
+                    ast::Decl::Var(vd) => {
+                        for d in &vd.decls {
+                            if let ast::Pat::Ident(ident) = &d.name {
+                                record_shadow(ident.id.sym.as_ref(), &mut shadowed);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import_decl)) => {
+                for spec in &import_decl.specifiers {
+                    let local = match spec {
+                        ast::ImportSpecifier::Named(named) => named.local.sym.as_ref(),
+                        ast::ImportSpecifier::Default(default) => default.local.sym.as_ref(),
+                        ast::ImportSpecifier::Namespace(ns) => ns.local.sym.as_ref(),
+                    };
+                    record_shadow(local, &mut shadowed);
                 }
             }
             _ => {}
@@ -197,11 +319,11 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
     let mut poison: HashSet<String> = HashSet::new();
     for item in &ast_module.body {
         match item {
-            ast::ModuleItem::Stmt(stmt) => walk_stmt(stmt, ctx, &mut poison),
+            ast::ModuleItem::Stmt(stmt) => walk_stmt(stmt, ctx, &mut poison, &shadowed),
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
                 if let ast::Decl::Var(var_decl) = &export_decl.decl {
                     for decl in &var_decl.decls {
-                        record_var(decl, ctx, &mut poison);
+                        record_var(decl, ctx, &mut poison, &shadowed);
                     }
                 }
             }
