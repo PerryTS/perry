@@ -22,6 +22,9 @@ extern "C" {
 
 /// A scheduled timer
 struct Timer {
+    /// #6185: agent whose heap `promise` lives in; only it (or a pump acting for
+    /// it — see `crate::agent`) may fire this timer.
+    owner: crate::agent::AgentId,
     /// When this timer should fire
     deadline: Instant,
     /// The promise to resolve when the timer fires
@@ -32,7 +35,10 @@ struct Timer {
     has_ref: bool,
 }
 
-// SAFETY: Promise pointers are only accessed from the pump thread
+// SAFETY: `promise` points into `owner`'s arena. The pre-#6185 claim here was
+// "only accessed from the pump thread", which nothing enforced — any thread
+// running the await loop drained this queue. The `owner` tag plus the
+// owner-filtered tick is what makes that claim true.
 unsafe impl Send for Timer {}
 
 // Global timer queues (Mutex-protected for cross-thread access)
@@ -87,6 +93,8 @@ fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Prom
     let deadline = Instant::now() + delay;
 
     TIMER_QUEUE.lock().unwrap().push(Timer {
+        // #6185: tag with the scheduling agent — only it may fire this.
+        owner: crate::agent::current_agent(),
         deadline,
         promise,
         value,
@@ -96,14 +104,6 @@ fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Prom
     promise
 }
 
-fn has_refed_promise_timer() -> bool {
-    TIMER_QUEUE
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|timer| timer.has_ref)
-}
-
 fn timer_has_ref_state(id: i64) -> bool {
     TIMER_REF_STATES
         .lock()
@@ -111,22 +111,6 @@ fn timer_has_ref_state(id: i64) -> bool {
         .as_ref()
         .and_then(|s| s.states.get(&id).copied())
         .unwrap_or(true)
-}
-
-fn has_refed_callback_timer() -> bool {
-    CALLBACK_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|timer| !timer.cleared && timer_has_ref_state(timer.id))
-}
-
-fn has_refed_interval_timer() -> bool {
-    INTERVAL_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|timer| !timer.cleared && timer_has_ref_state(timer.id))
 }
 
 fn other_event_sources_keep_loop_alive() -> bool {
@@ -215,7 +199,15 @@ pub extern "C" fn js_timer_tick() -> i32 {
         drain_expired_timers(
             &mut queue,
             |_| false,
-            |timer| timer.deadline <= now && (timer.has_ref || allow_unref),
+            // #6185: never fire another agent's timer — its promise and value are
+            // pointers into that agent's arena. A non-owned entry fails the
+            // predicate, so the partition returns it to the queue for its real
+            // owner rather than firing or dropping it.
+            |timer| {
+                crate::agent::owns(timer.owner)
+                    && timer.deadline <= now
+                    && (timer.has_ref || allow_unref)
+            },
         )
     };
     // #6287: fire the batch in deadline order, not creation order — a 5 ms
@@ -266,7 +258,7 @@ pub extern "C" fn js_timer_next_deadline() -> f64 {
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| t.has_ref || allow_unref)
+        .filter(|t| (t.has_ref || allow_unref) && crate::agent::owns(t.owner))
         .map(|t| {
             if t.deadline <= now {
                 0.0
@@ -320,9 +312,15 @@ struct CallbackTimer {
     trigger_async_id: u64,
     /// Whether this timer has been cleared
     cleared: bool,
+    /// #6185: agent whose heap `callback` (and any pointer-valued `args`) live
+    /// in. Only that agent — or a pump acting for it, e.g. Android's UI thread
+    /// for the primary agent — may fire it.
+    owner: crate::agent::AgentId,
 }
 
-// SAFETY: closure pointers point to global compiled code data
+// SAFETY: the closure POINTER targets global compiled code, but the closure
+// OBJECT and any NaN-boxed `args` live in `owner`'s arena; the owner tag plus
+// the owner-filtered tick is what makes firing them sound.
 unsafe impl Send for CallbackTimer {}
 
 pub const MOCK_TIMERS_API_DATE: u32 = 1 << 0;
@@ -388,7 +386,11 @@ static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 // #6084: the bounded ref-state registry lives in a submodule to keep this file
 // under the 2000-line lint cap.
 mod gc_scan;
+mod ownership;
 mod ref_states;
+
+pub(crate) use ownership::purge_agent_timers;
+use ownership::{has_refed_callback_timer, has_refed_interval_timer, has_refed_promise_timer};
 
 pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 use ref_states::{TimerRefStates, TIMER_REF_STATES_CAP};
@@ -1047,6 +1049,8 @@ fn schedule_callback_timer(
         async_id: ids.async_id,
         trigger_async_id: ids.trigger_async_id,
         cleared: false,
+        // #6185: the scheduling agent owns the callback closure + args.
+        owner: crate::agent::current_agent(),
     });
     set_timer_ref_state(id, true);
 
@@ -1126,8 +1130,17 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
         let mut queue = CALLBACK_TIMERS.lock().unwrap();
         drain_expired_timers(
             &mut queue,
+            // Dropping a cleared timer is safe regardless of owner: nothing here
+            // dereferences its callback, we just release the entry.
             |timer| timer.cleared,
-            |timer| timer.deadline <= now && (timer_has_ref_state(timer.id) || allow_unref),
+            // #6185: only ever call back into OUR OWN agent's heap. Firing a
+            // foreign agent's closure here would run main-heap JS on a worker (or
+            // vice versa) and allocate the results in the wrong arena.
+            |timer| {
+                crate::agent::owns(timer.owner)
+                    && timer.deadline <= now
+                    && (timer_has_ref_state(timer.id) || allow_unref)
+            },
         )
     };
     // #6287: timers phase (by deadline) before check phase (FIFO immediates).
@@ -1223,17 +1236,22 @@ pub extern "C" fn js_callback_timer_has_pending() -> i32 {
 }
 
 pub fn active_timeout_resource_count() -> usize {
+    // #6185: a timer another agent scheduled is not this agent's active handle.
     let callback_count = CALLBACK_TIMERS
         .lock()
         .unwrap()
         .iter()
-        .filter(|timer| !timer.cleared && timer.kind == CallbackTimerKind::Timeout)
+        .filter(|timer| {
+            !timer.cleared
+                && timer.kind == CallbackTimerKind::Timeout
+                && crate::agent::owns(timer.owner)
+        })
         .count();
     let interval_count = INTERVAL_TIMERS
         .lock()
         .unwrap()
         .iter()
-        .filter(|timer| !timer.cleared)
+        .filter(|timer| !timer.cleared && crate::agent::owns(timer.owner))
         .count();
     let mock_count = {
         let state = MOCK_TIMERS.lock().unwrap();
@@ -1265,7 +1283,9 @@ pub extern "C" fn js_callback_timer_next_deadline() -> f64 {
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| !t.cleared && (timer_has_ref_state(t.id) || allow_unref))
+        .filter(|t| {
+            !t.cleared && crate::agent::owns(t.owner) && (timer_has_ref_state(t.id) || allow_unref)
+        })
         .map(|t| {
             if t.deadline <= now {
                 0.0
@@ -1386,9 +1406,12 @@ struct IntervalTimer {
     context: crate::async_context::AsyncContextSnapshot,
     /// Whether this interval has been cleared
     cleared: bool,
+    /// #6185: agent that owns `callback` / `args`. See `CallbackTimer::owner`.
+    owner: crate::agent::AgentId,
 }
 
-// SAFETY: closure pointers point to global compiled code data
+// SAFETY: see `CallbackTimer` — the owner tag plus owner-filtered ticking is
+// what makes the cross-thread pointers here sound.
 unsafe impl Send for IntervalTimer {}
 
 static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(Vec::new());
@@ -1420,6 +1443,8 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
         args,
         context: crate::async_context::capture_context(),
         cleared: false,
+        // #6185: the scheduling agent owns the callback closure + args.
+        owner: crate::agent::current_agent(),
     });
     set_timer_ref_state(id, true);
 
@@ -1494,7 +1519,10 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let mut callbacks = Vec::new();
 
         for timer in timers.iter_mut() {
+            // #6185: never fire a foreign agent's interval callback — the closure
+            // and its args live in that agent's arena.
             if !timer.cleared
+                && crate::agent::owns(timer.owner)
                 && timer.next_deadline <= now
                 && (timer_has_ref_state(timer.id) || allow_unref)
             {
@@ -1575,7 +1603,9 @@ pub extern "C" fn js_interval_timer_next_deadline() -> f64 {
         .lock()
         .unwrap()
         .iter()
-        .filter(|t| !t.cleared && (timer_has_ref_state(t.id) || allow_unref))
+        .filter(|t| {
+            !t.cleared && crate::agent::owns(t.owner) && (timer_has_ref_state(t.id) || allow_unref)
+        })
         .map(|t| {
             if t.next_deadline <= now {
                 0.0
@@ -1593,11 +1623,18 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
     scan_timer_roots_mut(&mut visitor);
 }
 
+/// #6185: scan ONLY this agent's timers. Every pointer in these queues belongs
+/// to the arena of the agent that scheduled the timer. A GC cycle on agent A
+/// that walked agent B's entries would mark through B's heap (racing B's
+/// collector on the same GcHeader bits) and, on an evacuating cycle, REWRITE B's
+/// slots to forwarding addresses in A's arena — corrupting a heap it does not
+/// own. Foreign timers are rooted by their own agent's collector, the only one
+/// that can see their arena. `gc_scan.rs` applies the same rule incrementally.
 pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan promise-based timers
     {
         let mut q = TIMER_QUEUE.lock().unwrap();
-        for timer in q.iter_mut() {
+        for timer in q.iter_mut().filter(|t| crate::agent::owns(t.owner)) {
             visitor.visit_raw_mut_ptr_slot(&mut timer.promise);
             visitor.visit_nanbox_f64_slot(&mut timer.value);
         }
@@ -1606,7 +1643,7 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan callback timers (closure pointers stored as i64)
     {
         let mut q = CALLBACK_TIMERS.lock().unwrap();
-        for timer in q.iter_mut() {
+        for timer in q.iter_mut().filter(|t| crate::agent::owns(t.owner)) {
             if !timer.cleared && timer.callback != 0 {
                 visitor.visit_i64_slot(&mut timer.callback);
             }
@@ -1623,7 +1660,7 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan interval timers
     {
         let mut q = INTERVAL_TIMERS.lock().unwrap();
-        for timer in q.iter_mut() {
+        for timer in q.iter_mut().filter(|t| crate::agent::owns(t.owner)) {
             if !timer.cleared && timer.callback != 0 {
                 visitor.visit_i64_slot(&mut timer.callback);
             }
@@ -1717,12 +1754,16 @@ pub(crate) fn test_seed_timer_scanner_roots(
     let context = crate::async_context::test_snapshot_with_store(context_store);
     let deadline = Instant::now() + Duration::from_secs(86_400);
     TIMER_QUEUE.lock().unwrap().push(Timer {
+        // #6185: test scaffolding runs on the primary agent.
+        owner: crate::agent::current_agent(),
         deadline,
         promise,
         value,
         has_ref: true,
     });
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
+        // #6185: test scaffolding runs on the primary agent.
+        owner: crate::agent::current_agent(),
         id: TEST_CALLBACK_TIMER_ID,
         kind: CallbackTimerKind::Timeout,
         deadline,
@@ -1735,6 +1776,8 @@ pub(crate) fn test_seed_timer_scanner_roots(
         cleared: false,
     });
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
+        // #6185: test scaffolding runs on the primary agent.
+        owner: crate::agent::current_agent(),
         id: TEST_INTERVAL_TIMER_ID,
         callback,
         interval_ms: 86_400_000,
@@ -1752,6 +1795,8 @@ pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
     q.clear();
     for &value in values {
         q.push(Timer {
+            // #6185: test scaffolding runs on the primary agent.
+            owner: crate::agent::current_agent(),
             deadline,
             promise: std::ptr::null_mut(),
             value,
@@ -1878,6 +1923,8 @@ mod expired_batch_order_tests {
 
     fn timer(id: i64, kind: CallbackTimerKind, base: Instant, delay_ms: u64) -> CallbackTimer {
         CallbackTimer {
+            // #6185: test scaffolding runs on the primary agent.
+            owner: crate::agent::current_agent(),
             id,
             kind,
             deadline: base + Duration::from_millis(delay_ms),
