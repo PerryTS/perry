@@ -416,6 +416,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // inlining can't do once the class escapes its defining scope.
             if !captured_args.is_empty() {
                 let cap_len = captured_args.len().to_string();
+                let mut lowered_caps: Vec<String> = Vec::with_capacity(captured_args.len());
                 let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
                 for arg in captured_args {
                     let v = lower_expr(ctx, arg)?;
@@ -424,6 +425,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_array_push_f64",
                         &[(I64, &caps_arr), (DOUBLE, &v)],
                     );
+                    lowered_caps.push(v);
                 }
                 let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
                 let key_idx = ctx.strings.intern("__perry_ctor_caps");
@@ -436,6 +438,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_object_set_field_by_name",
                     &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
                 );
+                // #685: ALSO register this evaluation's captures as the
+                // template's CLASS_CAPTURE_VALUES snapshot. The static blocks
+                // invoked below run compiled static-method bodies whose
+                // enclosing-scope reads resolve through
+                // `js_param_or_class_capture_value` — i.e. the name-keyed
+                // snapshot — not `__perry_ctor_caps` (that array only feeds
+                // constructor replay). Same write-right-before-use pattern
+                // (and same documented per-evaluation overwrite limitation)
+                // as the shared-template path's `RegisterClassCaptures`.
+                if template_cid != 0 {
+                    let n = lowered_caps.len();
+                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                    for (i, v) in lowered_caps.iter().enumerate() {
+                        let slot =
+                            ctx.block()
+                                .gep(DOUBLE, &buf, &[(crate::types::I64, &i.to_string())]);
+                        ctx.block().store(DOUBLE, v, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, n, buf
+                    ));
+                    let len_str = n.to_string();
+                    ctx.block().call_void(
+                        "js_class_register_capture_values",
+                        &[
+                            (crate::types::I32, &tcid_str),
+                            (crate::types::PTR, &ptr_reg),
+                            (crate::types::I64, &len_str),
+                        ],
+                    );
+                }
             }
             let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
             for (key, init) in symbol_statics {
@@ -446,6 +481,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_object_set_symbol_property",
                     &[(DOUBLE, &obj_box), (DOUBLE, &k), (DOUBLE, &v)],
                 );
+            }
+            // #685: run the class's `static { … }` blocks NOW — at the class
+            // expression's evaluation, with `this` = THIS fresh class object.
+            // The `ClassExprFresh` fast path previously never invoked them
+            // (they are also skipped by the module-init fallback when another
+            // evaluation site invokes them inline), so `return class { static
+            // { this.viaBlock = tag } }` factories produced objects whose
+            // blocks simply never ran. Arm the one-shot static-`this`
+            // override before each call so the compiled body's
+            // `js_static_this_resolve` prologue binds `this` to the fresh
+            // object (writes land as own properties of this evaluation's
+            // object, not the shared template). Blocks run after the named
+            // static fields above — the source interleaving of fields and
+            // blocks is not reproduced on this path (pre-existing limitation).
+            let block_fns: Vec<String> = ctx
+                .classes
+                .get(template)
+                .map(|c| {
+                    c.static_methods
+                        .iter()
+                        .filter(|m| m.name.starts_with("__perry_static_init_"))
+                        .filter_map(|m| {
+                            ctx.methods
+                                .get(&(
+                                    template.clone(),
+                                    crate::codegen::static_method_registry_key(&m.name),
+                                ))
+                                .cloned()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for fn_name in block_fns {
+                ctx.block()
+                    .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
+                ctx.block().call(DOUBLE, &fn_name, &[]);
             }
             Ok(obj_box)
         }
