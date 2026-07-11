@@ -545,6 +545,28 @@ pub(crate) fn string_copy_range(
     ptr
 }
 
+/// Does `bytes` contain a WTF-8 lone-surrogate sequence
+/// (`0xED 0xA0..=0xBF 0x80..=0xBF`)?
+///
+/// Used to derive `STRING_FLAG_HAS_LONE_SURROGATES` for a substring carved out
+/// of a WTF-8 source: the flag is a property of the BYTES, so a slice of a
+/// flagged string only carries it if the surrogate actually landed in that
+/// slice. Bounds-driven — never reads past the slice.
+#[inline]
+pub(crate) fn bytes_have_lone_surrogate(bytes: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if bytes[i] == 0xED
+            && (0xA0..=0xBF).contains(&bytes[i + 1])
+            && (0x80..=0xBF).contains(&bytes[i + 2])
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Count UTF-16 code units for a WTF-8 byte slice without using from_utf8.
 /// Lone surrogate sequences (0xED 0xA0..0xBF 0x80..0xBF) each count as 1 unit,
 /// same as any other BMP codepoint. Astral sequences (4-byte) count as 2.

@@ -200,6 +200,95 @@ fn split_by_empty_delimiter_does_not_read_past_payload() {
     assert_eq!(unsafe { (*arr).length }, 3);
 }
 
+/// Read back a split part's `(bytes, utf16_len, flags)`.
+fn split_part_meta(arr: *mut crate::array::ArrayHeader, i: u32) -> (Vec<u8>, u32, u32) {
+    unsafe {
+        let v = crate::array::js_array_get_f64(arr, i);
+        let p = crate::value::js_nanbox_get_pointer(v) as *const StringHeader;
+        let bytes = std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize).to_vec();
+        (bytes, (*p).utf16_len, (*p).flags)
+    }
+}
+
+/// Each split part's metadata must come from THAT PART's own bytes.
+///
+/// `is_ascii_string(s)` only compares `byte_len == utf16_len` over the whole
+/// source, and malformed bytes can satisfy that aggregate while the individual
+/// parts cannot. For `[0x80, '|', 0xF0]` the source is 3 == 3, so the old ASCII
+/// fast path stamped `utf16_len = byte_len = 1` onto BOTH parts — but a stray
+/// continuation byte is 0 code units and a 4-byte lead is 2. Wrong `.length`
+/// then propagates into every downstream index/length operation.
+#[test]
+fn split_parts_get_metadata_from_their_own_bytes() {
+    let src = [0x80u8, b'|', 0xF0];
+    let s = js_string_from_bytes(src.as_ptr(), 3);
+    // The aggregate check really does lie here — that is the whole bug.
+    assert!(
+        is_ascii_string(s),
+        "precondition: the aggregate byte_len == utf16_len check misfires"
+    );
+
+    let delim = js_string_from_bytes(b"|".as_ptr(), 1);
+    let arr = js_string_split_n(s, delim, -1);
+    assert_eq!(unsafe { (*arr).length }, 2);
+
+    // [0x80] — a stray continuation byte contributes ZERO UTF-16 units.
+    let (b0, u0, f0) = split_part_meta(arr, 0);
+    assert_eq!(b0, vec![0x80]);
+    assert_eq!(u0, 0, "stray continuation byte is 0 UTF-16 units, not 1");
+    assert_eq!(f0, 0);
+
+    // [0xF0] — a 4-byte lead counts as an astral code point: TWO units.
+    let (b1, u1, f1) = split_part_meta(arr, 1);
+    assert_eq!(b1, vec![0xF0]);
+    assert_eq!(u1, 2, "4-byte lead is 2 UTF-16 units, not 1");
+    assert_eq!(f1, 0);
+}
+
+/// A lone surrogate carved out of a WTF-8 source must keep its
+/// `HAS_LONE_SURROGATES` flag, or `isWellFormed()` on the part wrongly says
+/// true. (`js_string_from_bytes` hardcodes `flags = 0`, so the flag has to be
+/// derived from the part's own bytes.)
+#[test]
+fn split_parts_preserve_lone_surrogate_flag() {
+    // "\uD800" (ED A0 80) + '|' + 'B'
+    let src = [0xEDu8, 0xA0, 0x80, b'|', b'B'];
+    let s = js_string_from_wtf8_bytes(src.as_ptr(), 5);
+    let delim = js_string_from_bytes(b"|".as_ptr(), 1);
+
+    let arr = js_string_split_n(s, delim, -1);
+    assert_eq!(unsafe { (*arr).length }, 2);
+
+    let (b0, u0, f0) = split_part_meta(arr, 0);
+    assert_eq!(b0, vec![0xED, 0xA0, 0x80]);
+    assert_eq!(u0, 1);
+    assert_eq!(
+        f0, STRING_FLAG_HAS_LONE_SURROGATES,
+        "the part holding the lone surrogate must stay flagged"
+    );
+    let part0 = unsafe {
+        let v = crate::array::js_array_get_f64(arr, 0);
+        crate::value::js_nanbox_get_pointer(v) as *const StringHeader
+    };
+    assert_eq!(
+        js_string_is_well_formed(part0).to_bits(),
+        crate::value::TAG_FALSE,
+        "isWellFormed() must be false for a lone-surrogate part"
+    );
+
+    // The clean part must NOT inherit the flag.
+    let (b1, _, f1) = split_part_meta(arr, 1);
+    assert_eq!(b1, vec![b'B']);
+    assert_eq!(f1, 0, "a part with no surrogate must not carry the flag");
+
+    // Same for the empty-delimiter path.
+    let empty = js_string_from_bytes(b"".as_ptr(), 0);
+    let chars = js_string_split_n(s, empty, -1);
+    let (cb0, _, cf0) = split_part_meta(chars, 0);
+    assert_eq!(cb0, vec![0xED, 0xA0, 0x80]);
+    assert_eq!(cf0, STRING_FLAG_HAS_LONE_SURROGATES);
+}
+
 /// A truncated multi-byte tail must NOT be mistaken for whitespace.
 ///
 /// `wtf8_step` zero-fills continuation bytes that don't exist, so a dangling

@@ -128,6 +128,27 @@ pub extern "C" fn js_string_split_n(
 
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+    // Per-part metadata inputs, derived ONCE from the source payload.
+    //
+    // NOT `is_ascii_string(s)`: that compares `byte_len == utf16_len` over the
+    // WHOLE source, which malformed bytes can satisfy while the individual
+    // parts do not. For `[0x80, b'|', 0xF0]` the source is 3 == 3 (so the old
+    // check said "ASCII"), but the parts need utf16_len 0 and 2 — the fast path
+    // stamped 1 and 1 onto them, corrupting `.length` and every downstream
+    // index operation. Scan the bytes instead: a genuinely all-ASCII source has
+    // all-ASCII parts, which IS sound per-part.
+    //
+    // Both of these are plain `bool`s, so they stay valid even if a later
+    // allocation moves the source string.
+    let (src_all_ascii, src_has_lone_surrogates) = unsafe {
+        let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+        (
+            bytes.iter().all(|&b| b < 0x80),
+            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+        )
+    };
+
     if delim.is_empty() {
         // Empty delimiter: split into individual characters (single pass).
         //
@@ -190,7 +211,16 @@ pub extern "C" fn js_string_split_n(
                 buf[..seq_len].copy_from_slice(&src[i..end]);
                 i = end;
             }
-            let sh = js_string_from_bytes(buf.as_ptr(), seq_len as u32);
+            // `js_string_from_bytes` derives utf16_len from the bytes (correct
+            // even for a malformed sequence) but hardcodes flags = 0. A lone
+            // surrogate carved out of a WTF-8 source must keep its flag, or
+            // `isWellFormed()` on the part wrongly reports true.
+            let seq = &buf[..seq_len];
+            let sh = if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
+                js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
+            } else {
+                js_string_from_bytes(seq.as_ptr(), seq_len as u32)
+            };
             unsafe {
                 let arr_now = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
                 let elements_ptr =
@@ -224,8 +254,6 @@ pub extern "C" fn js_string_split_n(
     }
     let n = part_ranges.len();
 
-    let src_is_ascii = is_ascii_string(s);
-
     let arr = crate::array::js_array_alloc(n as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
     let s_handle = scope.root_string_ptr(s);
@@ -239,12 +267,23 @@ pub extern "C" fn js_string_split_n(
             let (sh, data_ptr) = string_storage_alloc(byte_len);
             let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
             let part_ptr = string_data(s_now).add(offset);
-            let utf16_len = if src_is_ascii {
-                byte_len
+            // Derive metadata from THIS PART's own bytes. The only shortcut
+            // taken is the all-ASCII one, which was verified by scanning the
+            // source payload (so it holds for every part).
+            let (utf16_len, flags) = if src_all_ascii {
+                (byte_len, 0)
             } else {
-                compute_utf16_len(part_ptr, byte_len)
+                let part_bytes = slice::from_raw_parts(part_ptr, byte_len as usize);
+                let flags = if src_has_lone_surrogates
+                    && crate::string::bytes_have_lone_surrogate(part_bytes)
+                {
+                    STRING_FLAG_HAS_LONE_SURROGATES
+                } else {
+                    0
+                };
+                (compute_utf16_len(part_ptr, byte_len), flags)
             };
-            init_string_header(sh, utf16_len, byte_len, byte_len, 0, 0);
+            init_string_header(sh, utf16_len, byte_len, byte_len, 0, flags);
             if byte_len > 0 {
                 ptr::copy_nonoverlapping(part_ptr, data_ptr, byte_len as usize);
             }
