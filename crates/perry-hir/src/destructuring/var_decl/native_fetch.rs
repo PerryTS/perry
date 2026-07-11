@@ -11,7 +11,6 @@ use swc_ecma_ast as ast;
 use crate::ir::*;
 use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
-use crate::lower_types::*;
 
 use crate::destructuring::helpers::{get_fetch_module, is_member_fetch_call};
 use crate::destructuring::var_decl_sources::*;

@@ -11,7 +11,7 @@ use swc_ecma_ast as ast;
 use crate::ir::*;
 use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
-use crate::lower_types::*;
+use crate::lower_types::{extract_ts_type, infer_type_from_expr};
 
 use crate::destructuring::var_decl_sources::*;
 
@@ -94,14 +94,21 @@ pub(crate) fn infer_decl_type(
                     // same-named built-in (`class Map { get(){…} }` … `const m
                     // = new Map()`), so the user-class arm must win — typing
                     // the binding as the built-in would route its method calls
-                    // (`m.get(...)`) to the native intrinsic fast paths.
+                    // (`m.get(...)`) to the native intrinsic fast paths. For a
+                    // built-in-colliding name the type stays `Named` even with
+                    // explicit type args: `Generic { base: "Map", .. }` is
+                    // exactly what the collection fast-path recognizers key
+                    // on, so a generic user `class Map<T>` must not produce
+                    // it.
                     if ctx.classes_index.contains_key(class_name) {
                         let type_args: Vec<Type> = new_expr
                             .type_args
                             .as_ref()
                             .map(|ta| ta.params.iter().map(|t| extract_ts_type(t)).collect())
                             .unwrap_or_default();
-                        if type_args.is_empty() {
+                        if type_args.is_empty()
+                            || crate::lower_types::builtin_constructor_inference_name(class_name)
+                        {
                             ty = Type::Named(class_name.to_string());
                         } else {
                             ty = Type::Generic {
@@ -109,6 +116,19 @@ pub(crate) fn infer_decl_type(
                                 type_args,
                             };
                         }
+                    } else if crate::lower_types::builtin_constructor_inference_name(class_name)
+                        && ctx.shadows_unqualified_global(class_name)
+                    {
+                        // #6233 (review follow-up): a NON-class user binding —
+                        // a local, `function Map() {}`, an import — also
+                        // shadows the built-in (mirrors the construction-side
+                        // guard in expr_new.rs). Leave `ty` as inferred (Any)
+                        // so none of the builtin arms below claims the binding
+                        // for an intrinsic fast path. Scoped to the same
+                        // conservative name set as the infer_type_from_expr
+                        // guard: module-export names that legitimately arrive
+                        // through local bindings (`Buffer`, the stream and
+                        // event classes) keep their arms.
                     } else if class_name == "Set" || class_name == "Map" {
                         // Extract type arguments from new Set<T>() or new Map<K, V>()
                         let type_args: Vec<Type> = new_expr
