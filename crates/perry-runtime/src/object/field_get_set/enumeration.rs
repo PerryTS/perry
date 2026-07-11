@@ -162,6 +162,13 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
+        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
+        // Headers/Blob, …) is not an address. It exposes no own enumerable
+        // properties — its surface lives on the prototype as accessors — so
+        // return empty instead of dereferencing unmapped low memory.
+        if crate::value::addr_class::is_handle_band(ptr) {
+            return crate::array::js_array_alloc(0);
+        }
         if crate::value::addr_class::is_small_handle(ptr) {
             if let Some(dispatch) =
                 super::super::class_registry::handle_own_property_names_dispatch()
@@ -438,12 +445,42 @@ fn for_each_string_char<F: FnMut(u32, f64)>(value: f64, mut emit: F) -> Option<u
     Some(i)
 }
 
+/// `Object.values` / `Object.entries` over a revocable Proxy: enumerate the
+/// own keys through the `ownKeys` trap (same source `Object.keys` uses), then
+/// read each value back through the `get` trap. Without this the proxy id — a
+/// handle-band payload, not an address — either got dereferenced (SIGSEGV) or,
+/// once the handle-band guard rejected it, silently reported no properties.
+unsafe fn proxy_values_or_entries(value: f64, want_pairs: bool) -> *mut ArrayHeader {
+    let keys_boxed = crate::proxy::proxy_enum_own_keys(value);
+    let keys_arr = (keys_boxed.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+    let len = crate::array::js_array_length(keys_arr);
+    let mut out = crate::array::js_array_alloc(len.max(1) as u32);
+    for i in 0..len {
+        let key = crate::array::js_array_get(keys_arr, i);
+        let val = crate::proxy::js_proxy_get(value, f64::from_bits(key.bits()));
+        if want_pairs {
+            let pair = crate::array::js_array_alloc(2);
+            let pair = crate::array::js_array_push(pair, key);
+            let pair = crate::array::js_array_push_f64(pair, val);
+            out = crate::array::js_array_push(out, JSValue::array_ptr(pair));
+        } else {
+            out = crate::array::js_array_push_f64(out, val);
+        }
+    }
+    out
+}
+
 /// Tag-dispatching `Object.values(value)` — see [`js_object_keys_value`].
 /// A string yields its characters (`Object.values("hi") === ["h","i"]`);
 /// objects/arrays delegate to `js_object_values`; primitives yield `[]`.
 #[no_mangle]
 pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        return unsafe {
+            proxy_values_or_entries(value, /*want_pairs=*/ false)
+        };
+    }
     // #2818: ToObject(null/undefined) throws TypeError, matching Node.
     if jv.is_null() || jv.is_undefined() {
         super::super::has_own_helpers::throw_to_object_nullish_type_error();
@@ -469,6 +506,13 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
+        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
+        // Headers/Blob, …) is not an address. It exposes no own enumerable
+        // properties — its surface lives on the prototype as accessors — so
+        // return empty instead of dereferencing unmapped low memory.
+        if crate::value::addr_class::is_handle_band(ptr) {
+            return crate::array::js_array_alloc(0);
+        }
         if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_enumerable_values(
@@ -491,6 +535,11 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
 #[no_mangle]
 pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        return unsafe {
+            proxy_values_or_entries(value, /*want_pairs=*/ true)
+        };
+    }
     // #2818: ToObject(null/undefined) throws TypeError, matching Node.
     if jv.is_null() || jv.is_undefined() {
         super::super::has_own_helpers::throw_to_object_nullish_type_error();
@@ -521,6 +570,13 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
+        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
+        // Headers/Blob, …) is not an address. It exposes no own enumerable
+        // properties — its surface lives on the prototype as accessors — so
+        // return empty instead of dereferencing unmapped low memory.
+        if crate::value::addr_class::is_handle_band(ptr) {
+            return crate::array::js_array_alloc(0);
+        }
         if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
                 crate::typedarray_props::typed_array_own_enumerable_entries(

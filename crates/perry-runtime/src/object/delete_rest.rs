@@ -54,7 +54,13 @@ pub extern "C" fn js_object_delete_field(
             }
         }
     }
-    if (obj as usize) < 0x10000 {
+    // The hand-typed 0x10000 floor here was an order of magnitude below the real
+    // boundary (HANDLE_BAND_MAX = 0x100000), so the fetch (0x40000..0xE0000) and
+    // zlib (0xE0000..0xF0000) handle bands fell through to the heap path below
+    // and got dereferenced -> SIGSEGV on Linux. Use the centralized predicate.
+    // A handle simply misses `class_name_for_id` and returns 1, which is the
+    // correct result for `delete request.foo` (Node: true).
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         unsafe {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
