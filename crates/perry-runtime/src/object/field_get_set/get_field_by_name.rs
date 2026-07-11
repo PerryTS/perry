@@ -405,6 +405,36 @@ pub extern "C" fn js_object_get_field_by_name(
         let is_primitive_number =
             (top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16)) || (top16 == 0 && bits == 0);
         if is_primitive_number {
+            // #5989: a live Web Stream handle is itself a finite positive float
+            // (`id as f64`, stream band [0x100000, 0x200000)), so it classifies
+            // as a primitive number HERE and returned `undefined` for every
+            // property — the dedicated stream arm further down never ran.
+            // React's `renderToReadableStream` reads back the `allReady`
+            // expando it attached (`stream.allReady`), got `undefined`, and the
+            // Next.js dynamic render 500'd on `undefined.finally`. Route a
+            // registered stream id to the handle property dispatcher (getter /
+            // bound-method / expando arms) before the primitive-number return.
+            {
+                let f = f64::from_bits(bits);
+                if !key.is_null() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
+                    let id = f as usize;
+                    if crate::value::addr_class::is_stream_id_band(id) {
+                        if let Some(probe) = crate::object::stream_handle_probe() {
+                            unsafe {
+                                if probe(id) {
+                                    if let Some(dispatch) = handle_property_dispatch() {
+                                        let key_ptr = (key as *const u8)
+                                            .add(std::mem::size_of::<crate::StringHeader>());
+                                        let key_len = (*key).byte_len as usize;
+                                        let v = dispatch(id as i64, key_ptr, key_len);
+                                        return JSValue::from_bits(v.to_bits());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // #2138: auto-box the primitive number for the inherited
             // `.constructor` read so `n.constructor === Number` (and the
             // duck-type `value.constructor.name === "Number"` lodash/date-fns
