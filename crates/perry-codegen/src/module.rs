@@ -58,6 +58,75 @@ fn promote_global_for_units(line: &str) -> String {
     }
 }
 
+/// Attribute-group suffix for a runtime-helper `declare` line, keyed by
+/// helper name (#6082 tranche 1).
+///
+/// Without attributes, -O3 must treat every `js_*` call as "may read and
+/// write all memory, may not return" — no CSE/LICM/DCE across any helper
+/// call. The two groups below re-enable those optimizations for a small,
+/// individually audited allowlist:
+///
+/// * `#2` (PURE) = `nounwind willreturn memory(none)`. Invariant: the
+///   helper's Rust body (transitively) performs NaN-box BIT manipulation
+///   only — no loads, no stores, no allocation, no GC trigger, no
+///   `js_throw`/longjmp, and it is total over arbitrary input bits (no
+///   panic, no UB), so LLVM may CSE/hoist/sink/delete it freely.
+/// * `#3` (READONLY) = `nounwind willreturn memory(read)`. Invariant: the
+///   helper may READ heap memory (string headers, BigInt limbs) but never
+///   writes, never allocates, never triggers GC, never takes a lock, and
+///   never throws. LLVM may CSE/LICM it across write-free regions and
+///   delete unused calls, but must still order it against any
+///   possibly-writing call — which keeps it correct w.r.t. the moving GC,
+///   because every GC-capable helper stays maximally clobbering.
+///
+/// SOUNDNESS NOTES (read before adding an entry):
+/// * Deliberately `memory(read)`, NOT `memory(argmem: read)`: helper args
+///   are f64 NaN-boxes, not LLVM pointer arguments, so `argmem` would mean
+///   "reads no memory at all" and license CSE/DSE across real heap reads.
+/// * Anything that can allocate or trigger GC gets NO group — the moving
+///   GC's shadow-stack reload discipline depends on those calls staying
+///   maximally clobbering.
+/// * Anything that can reach `js_throw` (setjmp/longjmp) gets NO group —
+///   `willreturn` would let DCE delete a throwing call whose result is
+///   unused, silently dropping the exception.
+///
+/// Audited and rejected (do not re-add without a new audit):
+/// `js_nanbox_string` (allocates an empty string for null input),
+/// `js_get_string_pointer_unified` / `js_typed_string_arg_to_raw`
+/// (materialize SSO strings onto the heap = allocation),
+/// `js_typed_f64_arg_to_raw` (routes through `js_number_coerce`, whose
+/// string/object paths read+parse and reach ToPrimitive),
+/// `js_value_length_f64` (Buffer/TypedArray registry lookups take locks —
+/// a lock acquisition writes memory).
+fn helper_decl_attrs(name: &str) -> &'static str {
+    match name {
+        // PURE — each verified: pure bit tests/masking on the f64/i64 args,
+        // total over arbitrary bits, no memory access anywhere in the body.
+        //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL
+        //   js_nanbox_get_pointer    value/nanbox.rs — mask ladder, no deref
+        //   js_typed_f64_arg_guard   native_abi.rs — tag-band check
+        //   js_typed_i32_arg_guard   native_abi.rs — tag check + finite/fract/range
+        //   js_typed_i1_arg_guard    native_abi.rs — bits == TAG_TRUE|TAG_FALSE
+        //   js_typed_i1_arg_to_raw   native_abi.rs — bits == TAG_TRUE
+        //   js_typed_i32_arg_to_raw  native_abi.rs — bit extract / saturating cast
+        //   js_typed_string_arg_guard native_abi.rs — STRING/SHORT_STRING tag check
+        "js_nanbox_pointer"
+        | "js_nanbox_get_pointer"
+        | "js_typed_f64_arg_guard"
+        | "js_typed_i32_arg_guard"
+        | "js_typed_i1_arg_guard"
+        | "js_typed_i1_arg_to_raw"
+        | "js_typed_i32_arg_to_raw"
+        | "js_typed_string_arg_guard" => " #2",
+        // READONLY — verified: tag ladder plus reads of StringHeader.utf16_len
+        // (via is_valid_string_ptr, a pure magnitude check) and BigInt limbs
+        // (js_bigint_is_zero via clean_bigint_ptr, pure bit cleanup). No
+        // registry/lock access, no allocation, no throw, no writes.
+        "js_is_truthy" => " #3",
+        _ => "",
+    }
+}
+
 /// Synthesize an external `declare` line matching a locally-defined function's
 /// signature, so a codegen unit that calls it (but does not define it) resolves
 /// the call at link time.
@@ -163,10 +232,15 @@ impl LlModule {
         // the setjmp boundary. Without it, local variables modified
         // between setjmp and longjmp are clobbered when the second
         // return (via longjmp) happens.
+        //
+        // Verified-pure runtime helpers get the #2/#3 optimization groups
+        // (#6082) — see `helper_decl_attrs` for the audit invariants. The
+        // lookup is name-keyed here in the single declaration funnel so
+        // every declaration path agrees on the attributes.
         let attrs = if name == "setjmp" || name == "_setjmp" {
             " #0"
         } else {
-            ""
+            helper_decl_attrs(name)
         };
         self.declarations.push((
             name.to_string(),
@@ -367,6 +441,24 @@ impl LlModule {
             // (else try-body mutations are invisible to catch after longjmp);
             // `noinline` keeps the constraint from being lost via inlining.
             ir.push_str("attributes #1 = { noinline optnone }\n");
+        }
+        // Verified runtime-helper groups (#6082) — emitted only when a
+        // declaration actually references them (mirrors the setjmp gating
+        // above). See `helper_decl_attrs` for the audit invariants.
+        let mut used_pure = false;
+        let mut used_readonly = false;
+        for name in &self.declared_names {
+            match helper_decl_attrs(name) {
+                " #2" => used_pure = true,
+                " #3" => used_readonly = true,
+                _ => {}
+            }
+        }
+        if used_pure {
+            ir.push_str("\nattributes #2 = { nounwind willreturn memory(none) }\n");
+        }
+        if used_readonly {
+            ir.push_str("\nattributes #3 = { nounwind willreturn memory(read) }\n");
         }
         // Issue #52: `!0 = !{}` referenced by `!invariant.load !0`, plus the
         // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
@@ -619,6 +711,82 @@ mod tests {
         let f = m.define_function("main", I32, vec![]);
         f.create_block("entry").ret(I32, "0");
         assert_eq!(m.render_codegen_units(1), vec![m.to_ir()]);
+    }
+
+    #[test]
+    fn helper_attr_groups_on_verified_declarations_only() {
+        // #6082: allowlisted helpers carry the #2 (pure) / #3 (readonly)
+        // group refs; a non-allowlisted helper (js_nanbox_string ALLOCATES)
+        // must not; each attributes line is emitted exactly once.
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        m.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
+        m.declare_function("js_is_truthy", I32, &[DOUBLE]);
+        m.declare_function("js_nanbox_string", DOUBLE, &[I64]);
+        let f = m.define_function("main", I32, vec![]);
+        f.create_block("entry").ret(I32, "0");
+
+        let ir = m.to_ir();
+        assert!(
+            ir.contains("declare i64 @js_nanbox_get_pointer(double) #2"),
+            "pure helper must carry the #2 group ref"
+        );
+        assert!(
+            ir.contains("declare i32 @js_is_truthy(double) #3"),
+            "readonly helper must carry the #3 group ref"
+        );
+        assert!(
+            ir.contains("declare double @js_nanbox_string(i64)\n"),
+            "allocating helper must stay attribute-free"
+        );
+        assert!(!ir.contains("js_nanbox_string(i64) #"));
+        assert_eq!(
+            ir.matches("attributes #2 = { nounwind willreturn memory(none) }")
+                .count(),
+            1
+        );
+        assert_eq!(
+            ir.matches("attributes #3 = { nounwind willreturn memory(read) }")
+                .count(),
+            1
+        );
+        // No setjmp declared → the setjmp-only groups stay out.
+        assert!(!ir.contains("attributes #0"));
+        assert!(!ir.contains("attributes #1"));
+    }
+
+    #[test]
+    fn helper_attr_groups_omitted_when_unused() {
+        // A module that declares no allowlisted helper must not emit the
+        // #2/#3 attributes lines (mirrors the setjmp #0/#1 gating).
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        m.declare_function("js_console_log_number", VOID, &[DOUBLE]);
+        let f = m.define_function("main", I32, vec![]);
+        f.create_block("entry").ret(I32, "0");
+        let ir = m.to_ir();
+        assert!(!ir.contains("attributes #2"));
+        assert!(!ir.contains("attributes #3"));
+    }
+
+    #[test]
+    fn helper_attr_groups_replicated_in_codegen_units() {
+        // Every codegen unit re-emits the declaration (with its group ref)
+        // and the attributes line, so #2/#3 references resolve per-unit.
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        m.declare_function("js_is_truthy", I32, &[DOUBLE]);
+        for k in 0..2 {
+            let f = m.define_function(format!("perry_fn_m__f{k}"), DOUBLE, vec![]);
+            f.create_block("entry").ret(DOUBLE, "0.0");
+        }
+        let units = m.render_codegen_units(2);
+        assert_eq!(units.len(), 2);
+        for u in &units {
+            assert!(u.contains("declare i32 @js_is_truthy(double) #3"));
+            assert_eq!(
+                u.matches("attributes #3 = { nounwind willreturn memory(read) }")
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]
