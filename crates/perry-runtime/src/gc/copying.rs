@@ -661,9 +661,9 @@ impl CopyingNurseryCollector {
             self.visit_slot_with_parent(slot.slot, header, slot.external);
             changed |= *slot.slot != before;
         });
-        if changed && gc_type_rewrite_hook_kind((*header).obj_type) == GcRewriteHookKind::SetIndex {
+        if changed {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-            crate::set::rebuild_set_index_for_gc(user_ptr as *mut crate::set::SetHeader);
+            run_gc_rewrite_hook((*header).obj_type, user_ptr as usize);
         }
     }
 
@@ -723,8 +723,8 @@ pub(super) fn scan_remembered_dirty_slots_copying(
             changed |= *slot != before;
         };
         scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
-        if changed && gc_type_rewrite_hook_kind((*header).obj_type) == GcRewriteHookKind::SetIndex {
-            crate::set::rebuild_set_index_for_gc(user as *mut crate::set::SetHeader);
+        if changed {
+            run_gc_rewrite_hook((*header).obj_type, user);
         }
     };
 
