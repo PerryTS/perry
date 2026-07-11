@@ -9,7 +9,6 @@ use crate::lower::{
     collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
-use crate::lower_types::*;
 
 use super::*;
 
