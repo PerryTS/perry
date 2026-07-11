@@ -842,8 +842,15 @@ pub fn transform_expr(
         Expr::TypeOf(inner) => {
             transform_expr(inner, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::InstanceOf { expr: inner, .. } => {
+        Expr::InstanceOf {
+            expr: inner,
+            ty_expr,
+            ..
+        } => {
             transform_expr(inner, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(t) = ty_expr {
+                transform_expr(t, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
         }
         Expr::Await(inner) => {
             transform_expr(inner, js_imports, extern_func_to_js, local_name_to_js, tracker);
