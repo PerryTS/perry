@@ -169,6 +169,7 @@
 # Internals
 
 - [Memory Model](internals/memory-model.md)
+- [Explicit Memory Control](internals/explicit-memory.md)
 
 # Contributing
 
