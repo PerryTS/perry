@@ -290,9 +290,100 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
         js_promise_reject(promise, f64::from_bits(error_bits));
         return promise;
     }
-    if !handled_native && flush_cb != 0 && readable_id != 0 {
-        js_closure_call1(flush_cb as *const ClosureHeader, readable_id as f64);
+    // Invoke the user `flush(controller)`. It may return a promise: e.g.
+    // Next.js' `createBufferedTransformStream` buffers chunks in `transform()`
+    // and enqueues the coalesced chunk from a `setImmediate`, with `flush()`
+    // returning a promise that resolves only once that deferred enqueue runs.
+    // Per the WHATWG spec the transformer's flush completion is awaited before
+    // the readable side is closed; closing early drops the not-yet-enqueued
+    // chunk (the #5989 Next.js `bytes=0` empty-body bug — the buffered HTML
+    // never reached `res.write`). So when flush returns a still-pending
+    // promise, defer the readable close until it settles.
+    let flush_result = if !handled_native && flush_cb != 0 && readable_id != 0 {
+        Some(js_closure_call1(
+            flush_cb as *const ClosureHeader,
+            readable_id as f64,
+        ))
+    } else {
+        None
+    };
+
+    if let Some(fv) = flush_result {
+        if perry_runtime::promise::js_value_is_promise(fv) != 0 {
+            let inner = js_nanbox_get_pointer(fv) as *mut Promise;
+            if !inner.is_null() {
+                match perry_runtime::promise::js_promise_state(inner) {
+                    // Already fulfilled — nothing deferred; close synchronously.
+                    1 => {}
+                    // Rejected — error the readable and reject the close request.
+                    2 => {
+                        let reason = perry_runtime::promise::js_promise_reason(inner);
+                        error_transform_close(writable_id, readable_id, promise, reason.to_bits());
+                        return promise;
+                    }
+                    // Pending — chain the close onto flush's settlement so the
+                    // deferred enqueue lands on the still-open readable first.
+                    _ => {
+                        let fulfill = perry_runtime::closure::js_closure_alloc(
+                            transform_flush_fulfilled as *const u8,
+                            3,
+                        );
+                        let reject = perry_runtime::closure::js_closure_alloc(
+                            transform_flush_rejected as *const u8,
+                            3,
+                        );
+                        perry_runtime::closure::js_closure_set_capture_ptr(
+                            fulfill,
+                            0,
+                            writable_id as i64,
+                        );
+                        perry_runtime::closure::js_closure_set_capture_ptr(
+                            fulfill,
+                            1,
+                            readable_id as i64,
+                        );
+                        perry_runtime::closure::js_closure_set_capture_ptr(
+                            fulfill,
+                            2,
+                            promise as i64,
+                        );
+                        perry_runtime::closure::js_closure_set_capture_ptr(
+                            reject,
+                            0,
+                            writable_id as i64,
+                        );
+                        perry_runtime::closure::js_closure_set_capture_ptr(
+                            reject,
+                            1,
+                            readable_id as i64,
+                        );
+                        perry_runtime::closure::js_closure_set_capture_ptr(
+                            reject,
+                            2,
+                            promise as i64,
+                        );
+                        let _ = perry_runtime::promise::js_promise_then(inner, fulfill, reject);
+                        return promise;
+                    }
+                }
+            }
+        }
     }
+
+    finish_transform_close(writable_id, readable_id, promise);
+    promise
+}
+
+/// Close a TransformStream's writable side once `flush()` has settled: close
+/// the readable (delivering any chunk flush enqueued, possibly from a deferred
+/// `setImmediate`), mark the writable closed, and resolve both its closed
+/// promise and the close-request promise the caller (pipeTo/writer.close) is
+/// awaiting.
+unsafe fn finish_transform_close(
+    writable_id: usize,
+    readable_id: usize,
+    close_promise: *mut Promise,
+) {
     if readable_id != 0 {
         js_readable_stream_controller_close(readable_id as f64);
     }
@@ -301,8 +392,56 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
         let cp = s.closed_promise;
         js_promise_resolve(cp, f64::from_bits(TAG_UNDEFINED));
     }
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
-    promise
+    js_promise_resolve(close_promise, f64::from_bits(TAG_UNDEFINED));
+}
+
+/// Error a TransformStream's writable side when `flush()` rejected: error the
+/// readable, mark the writable errored, and reject both the closed promise and
+/// the close-request promise.
+unsafe fn error_transform_close(
+    writable_id: usize,
+    readable_id: usize,
+    close_promise: *mut Promise,
+    reason_bits: u64,
+) {
+    if readable_id != 0 {
+        js_readable_stream_controller_error(readable_id as f64, f64::from_bits(reason_bits));
+    }
+    if let Some(s) = WRITABLE_STREAMS.lock().unwrap().get_mut(&writable_id) {
+        s.state = WritableState::Errored;
+        s.error_value = reason_bits;
+        let cp = s.closed_promise;
+        js_promise_reject(cp, f64::from_bits(reason_bits));
+    }
+    js_promise_reject(close_promise, f64::from_bits(reason_bits));
+}
+
+extern "C" fn transform_flush_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
+        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let close_promise =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as *mut Promise;
+        finish_transform_close(writable_id, readable_id, close_promise);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn transform_flush_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
+        let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let close_promise =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as *mut Promise;
+        error_transform_close(writable_id, readable_id, close_promise, reason.to_bits());
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 pub(super) fn split_utf8_prefix(bytes: &[u8]) -> Result<(usize, bool), ()> {
