@@ -641,6 +641,13 @@ impl Drop for ThisGuard {
 
 #[no_mangle]
 pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64 {
+    // #5989: a Set/Map reaching this array-like fallback (a member-access
+    // `<expr>.forEach(cb, thisArg)` receiver codegen couldn't prove a
+    // collection) has no `.length`; delegate to its real `forEach` — see
+    // `super::generic_mutators::arraylike_collection_foreach`.
+    if super::generic_mutators::arraylike_collection_foreach(recv, cb, this_arg) {
+        return undef();
+    }
     let recv = to_object(recv);
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
@@ -837,13 +844,6 @@ pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) 
 // reduce / reduceRight — accumulator, optional initial value.
 // ---------------------------------------------------------------------------
 
-fn throw_reduce_empty() -> ! {
-    let msg = b"Reduce of empty array with no initial value";
-    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let recv = to_object(recv);
@@ -858,7 +858,7 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
         // Seed from the first present element.
         loop {
             if k >= len {
-                throw_reduce_empty();
+                super::generic_mutators::throw_reduce_empty();
             }
             if al_has(recv, k) {
                 acc = al_get(recv, k);
@@ -891,7 +891,7 @@ pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, in
     if has_init == 0 {
         loop {
             if k < 0 {
-                throw_reduce_empty();
+                super::generic_mutators::throw_reduce_empty();
             }
             if al_has(recv, k) {
                 acc = al_get(recv, k);
