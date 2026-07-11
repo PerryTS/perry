@@ -499,18 +499,25 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcRewriteDescriptorKind::Leaf,
         GcLayoutSlotKind::None,
-        // Non-movable: like Date, a Temporal value is referenced by a NaN-boxed
-        // pointer kept in a plain f64/DOUBLE local that codegen does NOT
-        // shadow-root. The conservative stack scan keeps it alive; a stable
-        // address means that un-rooted pointer never goes stale across a GC.
-        false,
+        // Movable (#6186, completing the Date change from #6214 — the
+        // non-movable rationale above it was disproven there): `movable`
+        // only gates OLD-PAGE DEFRAG, which runs solely inside moving
+        // collections at stack-unwound safepoints; the nursery copied-minor
+        // already relocates Temporal cells. The embedded `temporal_rs` value
+        // survives memcpy (its owned allocations live on the Rust heap and
+        // move by value); from-space bulk resets skip per-object finalizers,
+        // so a moved cell is never double-dropped — `TemporalCleanup` fires
+        // once, wherever the cell finally dies.
+        true,
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::NotApplicable,
         // pointer_free: the embedded `temporal_rs` value is plain integers +
         // `'static` calendar data, never a JSValue. Any Rust-heap it owns is
         // released by the TemporalCleanup finalize hook, not GC tracing.
         true,
-        GcMoveHookKind::None,
+        // Expando rekey on relocation, mirroring Date: no-op when the cell
+        // has no expando entry.
+        GcMoveHookKind::ExoticExpandoOwner,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::TemporalCleanup,
     )),

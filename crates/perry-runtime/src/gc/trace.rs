@@ -705,6 +705,27 @@ pub(super) fn trace_one_worklist_header(
 ) {
     unsafe {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        // #6228: a FORWARDED header (array growth installs PERMANENT
+        // forwarding stubs — types.rs set_forwarding_address — so stale
+        // pre-growth pointers keep resolving for reads) must propagate
+        // liveness to its target instead of tracing as zero-children. The
+        // deforestation pass manufactures exactly such a stale pointer as
+        // the ONLY reference (direct-call `var b = build(n)`), and without
+        // this hop the live post-growth array was swept: length 0 / NaN
+        // reads past 32 MiB. Mirrors the (previously dead-code) trace_array
+        // path, plus MARKING the target — worklist membership alone does
+        // not protect it from the sweep.
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            let new_user = forwarding_address(header) as usize;
+            if new_user >= 0x1000 && valid_ptrs.contains(&new_user) {
+                let new_header = header_from_user_ptr(new_user as *const u8);
+                if (*new_header).gc_flags & GC_FLAG_MARKED == 0 {
+                    (*new_header).gc_flags |= GC_FLAG_MARKED;
+                    worklist.push(new_header);
+                }
+            }
+            return;
+        }
         // C3b/C4 generational skip: in minor mode, an object
         // is treated as a black leaf when it lives in OLD_ARENA
         // (Phase B physical region) OR carries GC_FLAG_TENURED

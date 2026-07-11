@@ -530,10 +530,18 @@ pub fn walk_writes_in_expr_for_strict(
             );
         }
         Expr::Update { id, .. } => {
-            // Update (i++/i--) is always strictly i32-bounded — it's a
-            // bitwise mod-2^32 wrap operation in JS semantics. Mark as
-            // a write but don't disqualify.
+            // #6072: `x++`/`x--` is `x = x + 1` with full f64 semantics — NOT a
+            // mod-2^32 wrap (only `| 0` / `>>> 0` are ToInt32/ToUint32). An i32
+            // accumulator incremented past 2^31-1 silently wraps to a negative
+            // value, corrupting every later read (reads prefer the i32 shadow).
+            // So an increment/decrement write is NOT strictly i32-bounded:
+            // record it and disqualify the local, dropping it to the correct
+            // f64 slot. Loop counters still get their i32 slot via the
+            // loop-bound path, and index-used accumulators via
+            // `index_used_locals` — this only removes the unsound path that let
+            // a bare `let big = 2147483640; ...; big++` overflow silently.
             saw_any.insert(*id);
+            disqualified.insert(*id);
         }
         _ => {
             // Recurse via the centralized walker so any future Expr
