@@ -543,7 +543,7 @@ fn budgeted_reclaim_slices_conservative_pin_cleanup() {
 }
 
 #[test]
-fn budgeted_reclaim_skips_process_malloc_trim() {
+fn budgeted_reclaim_runs_process_malloc_trim() {
     let _trace_guard = TestGcTraceCaptureGuard::force_enabled();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -561,23 +561,23 @@ fn budgeted_reclaim_skips_process_malloc_trim() {
 
     let completed = complete_budgeted_gc_cycle();
     assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
-    assert_eq!(
-        test_malloc_trim_call_count(),
-        0,
-        "ordinary budgeted reclaim must not invoke process-wide malloc_trim"
+    assert!(
+        test_malloc_trim_call_count() >= 1,
+        "budgeted reclaim must invoke allocator trim (#6180 RSS floor)"
     );
     assert!(gc_collection_count() > before);
     assert_eq!(tracked_malloc_headers_matching(&dead_headers), 0);
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 
     let event = take_test_last_gc_trace_json().expect("budgeted reclaim should emit trace JSON");
-    assert_eq!(
-        event["allocator_maintenance"]["malloc_trim"]["status"].as_str(),
-        Some("skipped")
-    );
-    assert_eq!(
-        event["allocator_maintenance"]["malloc_trim"]["reason"].as_str(),
-        Some("ordinary_budgeted")
-    );
-    assert_eq!(event["phase_us"]["malloc_trim"].as_u64(), Some(0));
+    // #6180 RSS floor: budgeted cycles now RUN allocator trim (the audit
+    // found long-lived incremental processes never returned freed allocator
+    // pages to the OS). Outcome is platform-dependent (executed on glibc,
+    // unsupported elsewhere) — never the old budgeted skip.
+    let trim = &event["allocator_maintenance"]["malloc_trim"];
+    assert_ne!(trim["reason"].as_str(), Some("ordinary_budgeted"));
+    assert!(matches!(
+        trim["status"].as_str(),
+        Some("executed") | Some("unsupported")
+    ));
 }

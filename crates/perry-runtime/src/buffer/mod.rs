@@ -1,6 +1,6 @@
 //! Buffer module - provides binary data handling similar to Node.js Buffer
 
-use std::alloc::{alloc, Layout};
+use std::alloc::Layout;
 use std::ptr;
 
 use crate::array::ArrayHeader;
@@ -24,7 +24,7 @@ mod query;
 mod transcode;
 mod u8_codec;
 pub mod validate;
-mod view;
+pub(crate) mod view;
 
 // ---- Re-exports: types & constants ----
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
@@ -38,6 +38,9 @@ pub use header::{
     is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer, mark_as_asymmetric_key,
     mark_as_crypto_key, mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer,
     mark_as_uint8array, register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
+};
+pub(crate) use header::{
+    collect_dead_registered_buffers_post_trace, finalize_collected_dead_buffer,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
@@ -171,23 +174,33 @@ mod tests {
         }
     }
 
-    // #5226: every off-heap buffer (incl. `new Uint8Array(n)`, which lowers to
-    // a slab Buffer) must reserve a zeroed 8-byte sentinel before its pointer,
-    // so the runtime's many `*(ptr - GC_HEADER_SIZE)` type probes read a mapped
-    // `0` (matching no GC_TYPE) instead of crossing into the unmapped page
-    // before a freshly mapped slab/block and segfaulting. The sentinel must be
-    // `0`, never a real type tag.
+    // #5226 successor (2026-07-09 audit): every buffer — including the
+    // formerly slab-allocated small tier — now carries a REAL GcHeader with
+    // `GC_TYPE_BUFFER`, so the runtime's `*(ptr - GC_HEADER_SIZE)` type
+    // probes read a genuine header (matching no other GC_TYPE) instead of
+    // the old zeroed off-heap sentinel. The classification property the
+    // sentinel protected must keep holding.
     #[test]
     fn small_buffer_reserves_zeroed_header_sentinel() {
         for cap in [0u32, 1, 3, 16, 255] {
             let buf = buffer_alloc(cap);
             assert!(is_registered_buffer(buf as usize), "cap={cap}");
             unsafe {
-                let sentinel = *(buf as *const u8).sub(crate::gc::GC_HEADER_SIZE);
-                assert_eq!(sentinel, 0, "cap={cap}: header sentinel must be zero");
+                let header =
+                    (buf as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                assert_eq!(
+                    (*header).obj_type,
+                    crate::gc::GC_TYPE_BUFFER,
+                    "cap={cap}: buffers must carry a real GC_TYPE_BUFFER header"
+                );
+                assert_ne!(
+                    (*header).gc_flags & crate::gc::GC_FLAG_TENURED,
+                    0,
+                    "cap={cap}: buffers are born tenured in the old arena"
+                );
             }
-            // The header-probing classifiers must read the sentinel and answer
-            // "not my type" without faulting.
+            // The header-probing classifiers must answer "not my type"
+            // without faulting.
             let v = crate::value::js_nanbox_pointer(buf as i64);
             assert_eq!(crate::promise::js_value_is_promise(v), 0, "cap={cap}");
             assert!(!crate::date::is_date_cell_addr(buf as usize), "cap={cap}");

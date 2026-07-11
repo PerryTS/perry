@@ -258,15 +258,27 @@ pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHe
     // Conditions: finite, magnitude < 1e15 (so value * 10^dp fits safely
     // in i64), dp <= 6 (limits 10^dp to 1_000_000 — `value * 10^dp` then
     // stays under 1e21, well inside i64's ~9.2e18 range).
-    if value.abs() < 1e15 && dp <= 6 {
+    // The fast path multiplies `value * 10^dp` in f64 and extracts integer
+    // digits, so it is only exact while that product stays below 2^53 (every
+    // integer representable). `|value| < 1e15 && dp <= 6` alone permits products
+    // up to 1e21 — e.g. `(94626641270.99636).toFixed(5)` computed `9.46e15`,
+    // past 2^53, and the f64 rounding of the product corrupted the last digits.
+    // Gate on the actual product so those defer to the exact `spec_to_fixed`
+    // slow path. Refs #6079.
+    if value.abs() < 1e15
+        && dp <= 6
+        && value.abs() * (10u64.pow(dp as u32) as f64) < 9_007_199_254_740_992.0
+    {
         if let Some(n) = fmt_fixed_int(value, dp) {
             return n;
         }
     }
 
-    // Slow path: Rust formatter handles NaN/Infinity, very large values,
-    // and high-precision cases.
-    let s = format!("{:.prec$}", value, prec = dp);
+    // Slow path (dp > 6 or |value| >= 1e15): spec digit generation with
+    // round-half-away-from-zero. Rust's `format!("{:.N}")` rounds half-to-even,
+    // so `(0.00390625).toFixed(7)` gave "0.0039062" (V8 "0.0039063") and
+    // `(1000000000000000.5).toFixed(0)` gave "…000" (V8 "…001"). Refs #6079.
+    let s = spec_to_fixed(value, dp);
     let bytes = s.as_bytes();
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
@@ -329,7 +341,12 @@ fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
     if scaled.abs() >= 9_000_000_000_000_000_000.0 {
         return None;
     }
-    let neg = scaled < 0.0;
+    // ECMA-262 §21.1.3.3 step 6 applies the sign from the ORIGINAL `x < 0`, not
+    // the rounded result: a negative that rounds to zero magnitude keeps its
+    // minus (`(-0.0001).toFixed(3)` → "-0.000"). Using `scaled` here dropped it,
+    // because `round(-0.1)` is `-0.0` and `-0.0 < 0.0` is false. Strict `< 0.0`
+    // still excludes an actual `-0` input (`(-0).toFixed(2)` → "0.00"). Refs #6079.
+    let neg = value < 0.0;
     let abs_n = scaled.abs() as u64;
 
     // Buffer big enough for: '-' + up to 19 integer digits + '.' + 6
@@ -417,20 +434,29 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
                     format!("0.{}", "0".repeat(p - 1))
                 }
             } else {
-                // Find the decimal exponent: floor(log10(|x|))
-                let abs = value.abs();
-                let exp = abs.log10().floor() as i32;
-                // JS uses exponential notation when exp < -6 or exp >= precision
+                // ECMA-262 §21.1.3.5 selects the decimal exponent `e` from the
+                // value ROUNDED to `p` significant digits (round half away from
+                // zero), not the raw value. This matters at power-of-ten
+                // boundaries in two ways: `log10(1e-6)` floors to -7 (float
+                // error) so `(1e-6).toPrecision(1)` gave "1e-6" not "0.000001";
+                // and a value that rounds UP across a power of ten (9.99e-7 →
+                // 1e-6) must use the higher exponent. `spec_to_exponential`
+                // performs the spec rounding and emits `[-]d.ddde±N`, so its `N`
+                // IS the rounded exponent — parse it and decide fixed vs.
+                // exponential from that. Also fixes `(25).toPrecision(1)` → "3e+1"
+                // (Rust's `{:.*e}` rounds half-to-even). Refs #6079.
+                let sci = spec_to_exponential(value, p.saturating_sub(1));
+                let exp: i32 = sci
+                    .rfind('e')
+                    .and_then(|i| sci[i + 1..].parse().ok())
+                    .unwrap_or(0);
                 if exp < -6 || exp >= p as i32 {
-                    // Exponential: precision-1 digits after decimal, e+/-exp
-                    let mantissa_digits = p.saturating_sub(1);
-                    let formatted = format!("{:.*e}", mantissa_digits, value);
-                    // Rust's "{:e}" format produces "1.23e4"; JS uses "1.23e+4"
-                    fix_exponent_format(&formatted)
+                    sci
                 } else {
-                    // Fixed: precision - exp - 1 digits after decimal
+                    // Fixed: precision - exp - 1 digits after decimal, spec
+                    // half-away-from-zero rounding (`(1.25).toPrecision(2)` = "1.3").
                     let dp = (p as i32 - exp - 1).max(0) as usize;
-                    format!("{:.prec$}", value, prec = dp)
+                    spec_to_fixed(value, dp)
                 }
             }
         }
@@ -549,6 +575,68 @@ fn spec_to_exponential(value: f64, dp: usize) -> String {
     let sign = if neg { "-" } else { "" };
     let esign = if exp >= 0 { "+" } else { "-" };
     format!("{sign}{mantissa}e{esign}{}", exp.abs())
+}
+
+/// `Number.prototype.toFixed` / `toPrecision` FIXED-notation digit generation
+/// with ECMA-262 rounding (round half away from zero on a tie). `value` is
+/// finite with `|value| < 1e21`; `dp` is the fraction-digit count.
+///
+/// Rounds the TRUE IEEE-754 value via an exact ≤1100-digit expansion, so both a
+/// genuine tie (`(1.25).toPrecision(2)` → `1.3`, `(1000000000000000.5).toFixed(0)`
+/// → `…001`) AND a precision artifact (`(0.015).toFixed(2)` → `0.01`, because the
+/// stored double is `0.01499…`) resolve on the real value — matching V8. Replaces
+/// Rust's `format!("{:.N}")`, which rounds half-to-even (banker's rounding).
+fn spec_to_fixed(value: f64, dp: usize) -> String {
+    let neg = value.is_sign_negative() && value != 0.0;
+    let x = value.abs();
+    // Exact expansion: an f64 needs ≤767 significant decimal digits, and `dp`
+    // is range-checked to ≤100, so 1100 fraction digits always covers the
+    // rounding position (frac[dp]) exactly. Mirrors `spec_to_exponential`.
+    let full = format!("{x:.1100}");
+    let dot = full.find('.').unwrap_or(full.len());
+    let int_str = &full[..dot];
+    let frac_str = full.get(dot + 1..).unwrap_or("");
+    let mut digits: Vec<u8> = Vec::with_capacity(int_str.len() + dp + 1);
+    for b in int_str.bytes() {
+        digits.push(b - b'0');
+    }
+    for b in frac_str.bytes().take(dp) {
+        digits.push(b - b'0');
+    }
+    let mut int_len = int_str.len();
+    // Round half away from zero: the first dropped fraction digit decides.
+    if frac_str.as_bytes().get(dp).is_some_and(|&b| b >= b'5') {
+        let mut i = digits.len();
+        loop {
+            if i == 0 {
+                // Carry past the most significant digit (`9.99…` → `10.0…`).
+                digits.insert(0, 1);
+                int_len += 1;
+                break;
+            }
+            i -= 1;
+            if digits[i] == 9 {
+                digits[i] = 0;
+            } else {
+                digits[i] += 1;
+                break;
+            }
+        }
+    }
+    let mut out = String::with_capacity(digits.len() + 2);
+    if neg {
+        out.push('-');
+    }
+    for &d in &digits[..int_len] {
+        out.push((d + b'0') as char);
+    }
+    if dp > 0 {
+        out.push('.');
+        for &d in &digits[int_len..] {
+            out.push((d + b'0') as char);
+        }
+    }
+    out
 }
 
 /// Convert Rust's `{:e}` exponential format to JS's: "1.23e4" -> "1.23e+4", "1.23e-4" stays.

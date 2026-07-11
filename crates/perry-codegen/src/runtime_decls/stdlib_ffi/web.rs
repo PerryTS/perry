@@ -102,6 +102,7 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     module.declare_function("js_ws_handle_to_i64", I64, &[DOUBLE]);
     module.declare_function("js_ws_is_open", DOUBLE, &[I64]);
     module.declare_function("js_ws_message_count", DOUBLE, &[I64]);
+    module.declare_function("js_ws_ready_state", DOUBLE, &[I64]);
     module.declare_function("js_ws_on", I64, &[I64, I64, I64]);
     module.declare_function("js_ws_receive", I64, &[I64]);
     module.declare_function("js_ws_send", VOID, &[I64, I64]);

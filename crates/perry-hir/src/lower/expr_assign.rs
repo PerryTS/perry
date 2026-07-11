@@ -7,11 +7,11 @@
 //! sequence expression of individual assignments).
 
 use anyhow::{anyhow, Result};
-use perry_types::Type;
+use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::destructuring::lower_destructuring_assignment;
-use crate::ir::{BinaryOp, Expr, LogicalOp};
+use crate::ir::{BinaryOp, Expr, LogicalOp, Stmt};
 use crate::lower_patterns::lower_assign_target_to_expr;
 
 use super::{
@@ -1159,4 +1159,147 @@ fn wrap_assign_object_prelude(prelude: Option<Expr>, e: Expr) -> Expr {
         Some(p) => Expr::Sequence(vec![p, e]),
         None => e,
     }
+}
+
+/// The `BinaryOp` a plain compound assignment (`+=`, `*=`, `<<=`, …) reads-and-
+/// writes with. Returns `None` for `=` and the logical assignments
+/// (`&&=`/`||=`/`??=`), which are not simple read-op-write.
+fn compound_binary_op(op: ast::AssignOp) -> Option<BinaryOp> {
+    use ast::AssignOp::*;
+    Some(match op {
+        AddAssign => BinaryOp::Add,
+        SubAssign => BinaryOp::Sub,
+        MulAssign => BinaryOp::Mul,
+        DivAssign => BinaryOp::Div,
+        ModAssign => BinaryOp::Mod,
+        BitAndAssign => BinaryOp::BitAnd,
+        BitOrAssign => BinaryOp::BitOr,
+        BitXorAssign => BinaryOp::BitXor,
+        LShiftAssign => BinaryOp::Shl,
+        RShiftAssign => BinaryOp::Shr,
+        ZeroFillRShiftAssign => BinaryOp::UShr,
+        ExpAssign => BinaryOp::Pow,
+        Assign | AndAssign | OrAssign | NullishAssign => return None,
+    })
+}
+
+/// #6071: statement-level compound assignment to a member/index target
+/// (`a.b op= v;`, `a[k] op= v;`). Spill the base and (computed) key into
+/// `Stmt::Let` temps so each is evaluated EXACTLY ONCE, then build the read and
+/// the write from those temps. Without this, `lower_assign` lowers the target
+/// twice (once as the read operand, once as the write target), double-evaluating
+/// the base and a side-effecting computed key (`arr[i++] += 1` was wrong).
+///
+/// Returns `None` — so the caller falls back to the ordinary expression
+/// lowering — for anything that isn't a plain member/index compound assign, or
+/// that routes through the proxy / `with` / private-brand paths (those have
+/// their own semantics and are left unchanged).
+pub(crate) fn hoist_compound_member_assign(
+    ctx: &mut LoweringContext,
+    assign: &ast::AssignExpr,
+) -> Result<Option<Vec<Stmt>>> {
+    // A plain compound (`+=`, …) or a logical (`&&=`/`||=`/`??=`) assignment;
+    // `=` is not one of these and keeps the ordinary path.
+    let bin_op = compound_binary_op(assign.op);
+    let logical_op = logical_assignment_op(assign.op);
+    if bin_op.is_none() && logical_op.is_none() {
+        return Ok(None);
+    }
+    let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) = &assign.left else {
+        return Ok(None);
+    };
+    // Private fields and proxy / `with`-scoped receivers keep the existing path.
+    if matches!(member.prop, ast::MemberProp::PrivateName(_)) {
+        return Ok(None);
+    }
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        let n = obj_ident.sym.as_ref();
+        if ctx.proxy_locals.contains(n) || !ctx.active_with_envs_for_ident(n).is_empty() {
+            return Ok(None);
+        }
+    }
+
+    let mut stmts: Vec<Stmt> = Vec::new();
+    let spill =
+        |ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, tag: &str, init: Expr| -> LocalId {
+            let id = ctx.fresh_local();
+            stmts.push(Stmt::Let {
+                id,
+                name: format!("__cmpd_{}_{}", tag, id),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(init),
+            });
+            id
+        };
+
+    // Base — always spilled (evaluated once).
+    let base = lower_expr(ctx, &member.obj)?;
+    let base_id = spill(ctx, &mut stmts, "base", base);
+
+    // Property name (static) or computed key spilled to its own temp.
+    let prop: Option<String>;
+    let key_id: Option<LocalId>;
+    match &member.prop {
+        ast::MemberProp::Ident(i) => {
+            prop = Some(i.sym.to_string());
+            key_id = None;
+        }
+        ast::MemberProp::Computed(c) => {
+            let key = lower_expr(ctx, &c.expr)?;
+            key_id = Some(spill(ctx, &mut stmts, "key", key));
+            prop = None;
+        }
+        ast::MemberProp::PrivateName(_) => unreachable!("guarded above"),
+    }
+
+    let read = match (&prop, key_id) {
+        (Some(p), _) => Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(base_id)),
+            property: p.clone(),
+        },
+        (None, Some(k)) => Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(base_id)),
+            index: Box::new(Expr::LocalGet(k)),
+        },
+        _ => unreachable!(),
+    };
+
+    // A write of `value` back to the (spilled) target.
+    let write_of = |value: Expr| -> Expr {
+        match (&prop, key_id) {
+            (Some(p), _) => Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(base_id)),
+                property: p.clone(),
+                value: Box::new(value),
+            },
+            (None, Some(k)) => Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(base_id)),
+                index: Box::new(Expr::LocalGet(k)),
+                value: Box::new(value),
+            },
+            _ => unreachable!(),
+        }
+    };
+
+    // RHS is evaluated once. Compound: unconditionally, after the read (spec
+    // order). Logical: only on the branch that writes, so short-circuit
+    // semantics are preserved (`a[k] ||= v` doesn't write when `a[k]` is truthy).
+    let rhs = lower_expr(ctx, &assign.right)?;
+    let final_expr = if let Some(op) = bin_op {
+        write_of(Expr::Binary {
+            op,
+            left: Box::new(read),
+            right: Box::new(rhs),
+        })
+    } else {
+        // `read OP (target = rhs)` — mirrors `lower_logical_assignment`.
+        Expr::Logical {
+            op: logical_op.unwrap(),
+            left: Box::new(read),
+            right: Box::new(write_of(rhs)),
+        }
+    };
+    stmts.push(Stmt::Expr(final_expr));
+    Ok(Some(stmts))
 }

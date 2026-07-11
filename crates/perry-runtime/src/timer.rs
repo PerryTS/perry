@@ -9,7 +9,6 @@
 
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use std::any::Any;
-use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -110,7 +109,7 @@ fn timer_has_ref_state(id: i64) -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|map| map.get(&id).copied())
+        .and_then(|s| s.states.get(&id).copied())
         .unwrap_or(true)
 }
 
@@ -328,7 +327,13 @@ static CALLBACK_TIMERS: Mutex<Vec<CallbackTimer>> = Mutex::new(Vec::new());
 // id collisions across queues could cause `clearTimeout(intId)` to also
 // clobber an unrelated Timeout with the same numeric id.
 static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
-static TIMER_REF_STATES: Mutex<Option<HashMap<i64, bool>>> = Mutex::new(None);
+
+// #6084: the bounded ref-state registry lives in a submodule to keep this file
+// under the 2000-line lint cap.
+mod ref_states;
+use ref_states::{TimerRefStates, TIMER_REF_STATES_CAP};
+
+static TIMER_REF_STATES: Mutex<Option<TimerRefStates>> = Mutex::new(None);
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 
@@ -503,8 +508,8 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
 
 fn set_timer_ref_state(id: i64, has_ref: bool) {
     let mut slot = TIMER_REF_STATES.lock().unwrap();
-    let map = slot.get_or_insert_with(HashMap::new);
-    map.insert(id, has_ref);
+    slot.get_or_insert_with(TimerRefStates::default)
+        .insert_bounded(id, has_ref, TIMER_REF_STATES_CAP);
 }
 
 /// Whether `id` corresponds to a timer that was scheduled by this runtime
@@ -527,7 +532,7 @@ pub fn is_known_timer_id(id: i64) -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|map| map.contains_key(&id))
+        .map(|s| s.states.contains_key(&id))
         .unwrap_or(false)
 }
 
@@ -790,7 +795,7 @@ pub extern "C" fn js_timer_has_ref(timer_id: i64) -> i32 {
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|map| map.get(&timer_id).copied())
+        .and_then(|s| s.states.get(&timer_id).copied())
         .unwrap_or(true) as i32
 }
 
@@ -1597,7 +1602,9 @@ pub fn scan_timer_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 const TIMER_SCAN_TIMEOUTS: u8 = 0;
 const TIMER_SCAN_CALLBACKS: u8 = 1;
 const TIMER_SCAN_INTERVALS: u8 = 2;
-const TIMER_SCAN_DONE: u8 = 3;
+const TIMER_SCAN_MOCK_CALLBACKS: u8 = 3;
+const TIMER_SCAN_MOCK_INTERVALS: u8 = 4;
+const TIMER_SCAN_DONE: u8 = 5;
 
 #[derive(Default)]
 pub(crate) struct TimerRootScanState {
@@ -1644,6 +1651,8 @@ pub(crate) fn scan_timer_roots_mut_step(
             TIMER_SCAN_TIMEOUTS => scan_timeout_timers_step(visitor, state, remaining),
             TIMER_SCAN_CALLBACKS => scan_callback_timers_step(visitor, state, remaining),
             TIMER_SCAN_INTERVALS => scan_interval_timers_step(visitor, state, remaining),
+            TIMER_SCAN_MOCK_CALLBACKS => scan_mock_timers_step(visitor, state, remaining, false),
+            TIMER_SCAN_MOCK_INTERVALS => scan_mock_timers_step(visitor, state, remaining, true),
             TIMER_SCAN_DONE => true,
             _ => true,
         };
@@ -1779,6 +1788,67 @@ fn scan_interval_timers_step(
         }
         state.index += 1;
         state.finish_timer();
+    }
+    true
+}
+
+// Step twin of the MOCK_TIMERS block in `scan_timer_roots_mut`. Cycle-based
+// collections run only the step scanner, so before these phases existed,
+// `node:test` mocked-timer callbacks/args/contexts reachable only through
+// MOCK_TIMERS were swept while scheduled — `.tick()` then invoked a freed
+// closure. One function serves both lists (distinct structs, same fields).
+fn scan_mock_timers_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut TimerRootScanState,
+    remaining: &mut usize,
+    intervals: bool,
+) -> bool {
+    let mut guard = MOCK_TIMERS.lock().unwrap();
+    macro_rules! scan_mock_list {
+        ($list:expr) => {{
+            while state.index < $list.len() {
+                let timer = &mut $list[state.index];
+                if state.slot == 0 {
+                    if !consume_timer_root_work(remaining) {
+                        return false;
+                    }
+                    if !timer.cleared && timer.callback != 0 {
+                        visitor.visit_i64_slot(&mut timer.callback);
+                    }
+                    state.slot = 1;
+                }
+                if state.slot == 1 {
+                    while state.arg_index < timer.args.len() {
+                        if !consume_timer_root_work(remaining) {
+                            return false;
+                        }
+                        visitor.visit_nanbox_f64_slot(&mut timer.args[state.arg_index]);
+                        state.arg_index += 1;
+                    }
+                    state.slot = 2;
+                    state.arg_index = 0;
+                }
+                if state.slot == 2 {
+                    if !crate::async_context::scan_snapshot_roots_mut_step(
+                        &mut timer.context,
+                        visitor,
+                        &mut state.context_entry,
+                        &mut state.context_store,
+                        remaining,
+                    ) {
+                        return false;
+                    }
+                    state.slot = 3;
+                }
+                state.index += 1;
+                state.finish_timer();
+            }
+        }};
+    }
+    if intervals {
+        scan_mock_list!(guard.intervals)
+    } else {
+        scan_mock_list!(guard.callbacks)
     }
     true
 }

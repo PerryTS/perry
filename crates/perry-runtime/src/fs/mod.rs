@@ -92,6 +92,35 @@ fn scan_filehandle_object_fd_metadata_roots_mut(visitor: &mut crate::gc::Runtime
     });
 }
 
+/// Death pruning (2026-07-09 GC audit wave 2): `FILEHANDLE_OBJECT_FDS` maps
+/// FileHandle OBJECT addresses to synthetic fds and was move-rekeyed but
+/// never death-pruned — one entry per abandoned FileHandle forever, plus fd
+/// misattribution when a new object landed on the recycled address.
+/// `is_dead_owner` is one of the GC's deadness predicates
+/// (`gc::dead_owner`). Note `DIR_REGISTRY` is NOT covered here: it is keyed
+/// by a monotonic id (`NEXT_DIR_ID`), not by an object address, so
+/// dead-owner pruning cannot apply (same class as `CONTEXT_SNAPSHOTS`).
+pub(crate) fn prune_dead_filehandle_fd_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
+    FILEHANDLE_OBJECT_FDS.with(|fds| {
+        let mut fds = fds.borrow_mut();
+        if !fds.is_empty() {
+            fds.retain(|owner, _| !is_dead_owner(*owner));
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_filehandle_fd_entry(owner: usize, fd: i32) {
+    FILEHANDLE_OBJECT_FDS.with(|fds| {
+        fds.borrow_mut().insert(owner, fd);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_filehandle_fd_entry_exists(owner: usize) -> bool {
+    FILEHANDLE_OBJECT_FDS.with(|fds| fds.borrow().contains_key(&owner))
+}
+
 pub(crate) fn allocate_synthetic_fd() -> i32 {
     NEXT_FD.fetch_add(1, Ordering::Relaxed)
 }

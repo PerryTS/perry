@@ -198,6 +198,25 @@ pub fn apply_i18n(
         }
     }
 
+    // Closed-shape object literals are rewritten during HIR lowering — i.e.
+    // BEFORE this transform ever sees them — into `Expr::New` on a synthesized
+    // `__AnonShape_<hash>` class whose constructor takes the field values as
+    // positional args in field-declaration order (see perry-hir
+    // lower/context.rs::synthesize_anon_shape_class). So a params literal like
+    // `t("Hi {name}", { name })` reaches extract_params as New, not
+    // Expr::Object. Map each anon-shape class to its ordered field names so
+    // extract_params can recover the `name → value` pairs from that form.
+    let mut anon_shape_fields: HashMap<String, Vec<String>> = HashMap::new();
+    for (_, module) in modules.iter() {
+        for class in &module.classes {
+            if class.name.starts_with("__AnonShape_") {
+                anon_shape_fields
+                    .entry(class.name.clone())
+                    .or_insert_with(|| class.fields.iter().map(|f| f.name.clone()).collect());
+            }
+        }
+    }
+
     // Second pass: replace Expr::String with Expr::I18nString in all modules
     for (_, module) in modules.iter_mut() {
         replace_in_stmts(
@@ -205,9 +224,16 @@ pub fn apply_i18n(
             &key_to_idx,
             &plural_info,
             &plural_param_map,
+            &anon_shape_fields,
         );
         for func in &mut module.functions {
-            replace_in_stmts(&mut func.body, &key_to_idx, &plural_info, &plural_param_map);
+            replace_in_stmts(
+                &mut func.body,
+                &key_to_idx,
+                &plural_info,
+                &plural_param_map,
+                &anon_shape_fields,
+            );
         }
         for class in &mut module.classes {
             for method in &mut class.methods {
@@ -216,10 +242,17 @@ pub fn apply_i18n(
                     &key_to_idx,
                     &plural_info,
                     &plural_param_map,
+                    &anon_shape_fields,
                 );
             }
             if let Some(ctor) = &mut class.constructor {
-                replace_in_stmts(&mut ctor.body, &key_to_idx, &plural_info, &plural_param_map);
+                replace_in_stmts(
+                    &mut ctor.body,
+                    &key_to_idx,
+                    &plural_info,
+                    &plural_param_map,
+                    &anon_shape_fields,
+                );
             }
         }
     }
@@ -465,14 +498,34 @@ fn is_localizable_widget(method: &str) -> bool {
     LOCALIZABLE_WIDGETS.contains(&method)
 }
 
-/// Extract named parameters from an object literal expression.
+/// Extract named parameters from a params-object argument.
 /// `Text("Hello, {name}!", { name: user.name })` → [("name", Expr::PropertyGet(user, "name"))]
-fn extract_params(expr: &Expr) -> Vec<(String, Box<Expr>)> {
+///
+/// Two lowered forms reach us:
+/// - `Expr::Object` — open-shape literals that survived HIR lowering;
+/// - `Expr::New { class_name: "__AnonShape_…", args }` — closed-shape
+///   literals, rewritten by HIR lowering into a constructor call whose args
+///   are the field values in field-declaration order. `anon_shapes` maps the
+///   class name back to those field names.
+fn extract_params(
+    expr: &Expr,
+    anon_shapes: &HashMap<String, Vec<String>>,
+) -> Vec<(String, Box<Expr>)> {
     match expr {
         Expr::Object(fields) => fields
             .iter()
             .map(|(name, value)| (name.clone(), Box::new(value.clone())))
             .collect(),
+        Expr::New {
+            class_name, args, ..
+        } => match anon_shapes.get(class_name) {
+            Some(field_names) => field_names
+                .iter()
+                .zip(args.iter())
+                .map(|(name, value)| (name.clone(), Box::new(value.clone())))
+                .collect(),
+            None => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }
@@ -484,9 +537,10 @@ fn replace_in_stmts(
     key_to_idx: &HashMap<String, u32>,
     plural_info: &HashMap<String, Vec<(u8, u32)>>,
     plural_param_map: &HashMap<String, String>,
+    anon_shapes: &HashMap<String, Vec<String>>,
 ) {
     for stmt in stmts.iter_mut() {
-        replace_in_stmt(stmt, key_to_idx, plural_info, plural_param_map);
+        replace_in_stmt(stmt, key_to_idx, plural_info, plural_param_map, anon_shapes);
     }
 }
 
@@ -495,6 +549,7 @@ fn replace_in_stmt(
     key_to_idx: &HashMap<String, u32>,
     plural_info: &HashMap<String, Vec<(u8, u32)>>,
     plural_param_map: &HashMap<String, String>,
+    anon_shapes: &HashMap<String, Vec<String>>,
 ) {
     match stmt {
         Stmt::Let {
@@ -503,22 +558,46 @@ fn replace_in_stmt(
         | Stmt::Expr(expr)
         | Stmt::Return(Some(expr))
         | Stmt::Throw(expr) => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            replace_in_expr(condition, key_to_idx, plural_info, plural_param_map);
-            replace_in_stmts(then_branch, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_stmts(
+                then_branch,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             if let Some(else_b) = else_branch {
-                replace_in_stmts(else_b, key_to_idx, plural_info, plural_param_map);
+                replace_in_stmts(
+                    else_b,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
         }
         Stmt::While { condition, body } => {
-            replace_in_expr(condition, key_to_idx, plural_info, plural_param_map);
-            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Stmt::For {
             init,
@@ -527,44 +606,69 @@ fn replace_in_stmt(
             body,
         } => {
             if let Some(init_stmt) = init {
-                replace_in_stmt(init_stmt, key_to_idx, plural_info, plural_param_map);
+                replace_in_stmt(
+                    init_stmt,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
             if let Some(cond) = condition {
-                replace_in_expr(cond, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(cond, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
             if let Some(upd) = update {
-                replace_in_expr(upd, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(upd, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
-            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
+            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
-            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
+            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
             if let Some(catch_clause) = catch {
                 replace_in_stmts(
                     &mut catch_clause.body,
                     key_to_idx,
                     plural_info,
                     plural_param_map,
+                    anon_shapes,
                 );
             }
             if let Some(finally_body) = finally {
-                replace_in_stmts(finally_body, key_to_idx, plural_info, plural_param_map);
+                replace_in_stmts(
+                    finally_body,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
         }
         Stmt::Switch {
             discriminant,
             cases,
         } => {
-            replace_in_expr(discriminant, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                discriminant,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             for case in cases {
                 if let Some(test) = &mut case.test {
-                    replace_in_expr(test, key_to_idx, plural_info, plural_param_map);
+                    replace_in_expr(test, key_to_idx, plural_info, plural_param_map, anon_shapes);
                 }
-                replace_in_stmts(&mut case.body, key_to_idx, plural_info, plural_param_map);
+                replace_in_stmts(
+                    &mut case.body,
+                    key_to_idx,
+                    plural_info,
+                    plural_param_map,
+                    anon_shapes,
+                );
             }
         }
         _ => {}
@@ -576,6 +680,7 @@ fn replace_in_expr(
     key_to_idx: &HashMap<String, u32>,
     plural_info: &HashMap<String, Vec<(u8, u32)>>,
     plural_param_map: &HashMap<String, String>,
+    anon_shapes: &HashMap<String, Vec<String>>,
 ) {
     match expr {
         Expr::NativeMethodCall {
@@ -594,7 +699,7 @@ fn replace_in_expr(
                     if let Some(&idx) = key_to_idx.get(key) {
                         // Extract params from second argument if it's an object literal
                         let params = if args.len() > 1 {
-                            extract_params(&args[1])
+                            extract_params(&args[1], anon_shapes)
                         } else {
                             Vec::new()
                         };
@@ -612,73 +717,133 @@ fn replace_in_expr(
                 }
             }
             if let Some(obj) = object {
-                replace_in_expr(obj, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(obj, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
             for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
-            replace_in_expr(left, key_to_idx, plural_info, plural_param_map);
-            replace_in_expr(right, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(left, key_to_idx, plural_info, plural_param_map, anon_shapes);
+            replace_in_expr(
+                right,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::Unary { operand, .. } => {
-            replace_in_expr(operand, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                operand,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            replace_in_expr(condition, key_to_idx, plural_info, plural_param_map);
-            replace_in_expr(then_expr, key_to_idx, plural_info, plural_param_map);
-            replace_in_expr(else_expr, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                condition,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                then_expr,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                else_expr,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::Call { callee, args, .. } => {
-            replace_in_expr(callee, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                callee,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::CallSpread { callee, args, .. } => {
-            replace_in_expr(callee, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                callee,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
             for arg in args.iter_mut() {
                 match arg {
                     perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
-                        replace_in_expr(e, key_to_idx, plural_info, plural_param_map);
+                        replace_in_expr(e, key_to_idx, plural_info, plural_param_map, anon_shapes);
                     }
                 }
             }
         }
         Expr::Array(elements) => {
             for e in elements.iter_mut() {
-                replace_in_expr(e, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(e, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::Object(fields) => {
             for (_, val) in fields.iter_mut() {
-                replace_in_expr(val, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(val, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::ObjectSpread { parts } => {
             for (_, val) in parts.iter_mut() {
-                replace_in_expr(val, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(val, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } => {
-            replace_in_expr(object, key_to_idx, plural_info, plural_param_map);
-            replace_in_expr(index, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                object,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                index,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::PropertyGet { object, .. } | Expr::PropertySet { object, .. } => {
-            replace_in_expr(object, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                object,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::LocalSet(_, expr) | Expr::GlobalSet(_, expr) => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Expr::Closure { body, .. } => {
-            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map);
+            replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Expr::New { args, .. }
         | Expr::NewDynamic { args, .. }
@@ -688,27 +853,39 @@ fn replace_in_expr(
         | Expr::MathMin(args)
         | Expr::MathMax(args) => {
             for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         Expr::Await(expr) | Expr::TypeOf(expr) | Expr::Void(expr) | Expr::Delete(expr) => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Expr::Yield {
             value: Some(expr), ..
         } => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Expr::In { property, object } => {
-            replace_in_expr(property, key_to_idx, plural_info, plural_param_map);
-            replace_in_expr(object, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(
+                property,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
+            replace_in_expr(
+                object,
+                key_to_idx,
+                plural_info,
+                plural_param_map,
+                anon_shapes,
+            );
         }
         Expr::InstanceOf { expr, .. } => {
-            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map);
+            replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
         Expr::SuperMethodCall { args, .. } => {
             for arg in args.iter_mut() {
-                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map);
+                replace_in_expr(arg, key_to_idx, plural_info, plural_param_map, anon_shapes);
             }
         }
         _ => {}

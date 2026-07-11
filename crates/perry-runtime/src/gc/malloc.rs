@@ -84,6 +84,11 @@ pub(crate) struct MallocState {
     /// already-active exact registry, but must never rebuild it on the fast
     /// path because that would scale with total malloc churn.
     pub(super) registry_state: MallocRegistryState,
+    /// One-shot latch for the small-start → heavy-capacity growth (see
+    /// `MALLOC_STATE_INITIAL_CAPACITY`). Stays latched even if a sweep
+    /// later drops `objects.len()` back under the threshold — a thread
+    /// that was malloc-heavy once keeps the reserved capacity.
+    pub(super) heavy_capacity_reserved: bool,
     pub(super) kind_telemetry: [MallocKindTelemetry; MALLOC_KIND_BUCKET_COUNT],
 }
 
@@ -93,21 +98,103 @@ pub(super) enum MallocRegistryState {
     ActiveConsistent,
 }
 
+impl MallocState {
+    /// Reclaim every malloc-tracked object block this state still owns.
+    ///
+    /// Runs at thread exit via `Drop`. Returns the number of bytes freed
+    /// (surfaced for tests). Empties `objects` and `set` so the drop is
+    /// idempotent.
+    ///
+    /// # Why this is sound at thread exit (2026-07-09 GC audit §6 / #6185)
+    /// `MALLOC_STATE` is `thread_local!`, so this only runs while the owning
+    /// thread is being torn down:
+    /// - **Worker threads** (`spawn` / `parallelMap` / `parallelFilter`): by
+    ///   the time TLS is destroyed the worker's result has already crossed the
+    ///   boundary as an owned `SerializedValue` deep-copy — no other thread
+    ///   holds a raw pointer into this heap — so freeing these blocks cannot
+    ///   create a dangling reference elsewhere. Without this, every
+    ///   promise/map/error/large-closure a worker allocated leaked at exit (the
+    ///   first malloc-count GC needs 100k objects, so per-request workers never
+    ///   collected once).
+    /// - **The main thread**: its `MALLOC_STATE` is not dropped until process
+    ///   teardown, never mid-program, so this cannot yank live objects out from
+    ///   under running code.
+    ///
+    /// # Why finalizers are deliberately NOT run here
+    /// The sweep path pairs `dealloc` with `gc_type_finalize_unmarked_payload` /
+    /// `layout_clear_for_ptr`, which reach into *other* thread-locals
+    /// (`MAP_REGISTRY`, `MAP_INDEX`, `PROMISE_CONTEXTS`, the async-hooks queues,
+    /// …). Thread-local destruction order is unspecified, so touching one of
+    /// those during this Drop could hit an already-destroyed TLS and panic
+    /// ("cannot access a Thread Local Storage value during or after
+    /// destruction"), aborting the thread. We therefore reclaim only the object
+    /// blocks themselves — the audit's primary worker-exit leak. Any external
+    /// side-allocations those objects own (a Map's entry table, an error's side
+    /// tables) are out of scope for this mechanical fix. This also avoids the
+    /// re-entrant `MALLOC_STATE.with(...)` the sweep bookkeeping performs.
+    ///
+    /// Pinned objects are skipped, mirroring `process_sweep_header`, so a
+    /// cross-thread promise pinned for an in-flight result is never yanked.
+    fn free_all_tracked_objects(&mut self) -> u64 {
+        let mut freed_bytes: u64 = 0;
+        for header in self.objects.drain(..) {
+            if header.is_null() {
+                continue;
+            }
+            // SAFETY: every entry in `objects` is a live `gc_malloc` header
+            // (GcHeader-prefixed block) until freed here; this loop frees each
+            // exactly once and the thread is exiting, so no concurrent access.
+            unsafe {
+                if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+                    continue;
+                }
+                let total_size = (*header).size as usize;
+                if total_size == 0 {
+                    continue;
+                }
+                let layout = Layout::from_size_align(total_size, 8).unwrap();
+                dealloc(header as *mut u8, layout);
+                freed_bytes = freed_bytes.saturating_add(total_size as u64);
+            }
+        }
+        self.set.clear();
+        freed_bytes
+    }
+}
+
+impl Drop for MallocState {
+    fn drop(&mut self) {
+        // Free the worker thread's malloc objects instead of leaking them at
+        // exit (audit §6 / #6185). See `free_all_tracked_objects` for the
+        // thread-exit soundness and TLS-destruction-order argument.
+        self.free_all_tracked_objects();
+    }
+}
+
 /// Pre-allocated capacity for `MallocState.objects` and `.set`.
 ///
-/// On promise-heavy kernels (`promise_all_chains` allocates ~200 k
-/// strings/closures/promises before the first GC) the set grows from
-/// 0 → 128 → … → 256 k buckets across the allocation history. Each
-/// hashbrown doubling re-inserts every existing key, and at the
-/// ~100 k mark those rehashes were the single hottest leaf in the
-/// profile (15.6 % self-time on `gc_malloc`'s caller chain). Starting
-/// at 256 k buckets covers the kernel's full pre-GC working set
-/// (200 k entries at hashbrown's 7/8 load factor) in one allocation —
-/// subsequent kernel iterations re-use the slots that sweep re-emptied,
-/// so we never pay the rehash tax. Cost: one upfront ~4 MB allocation
-/// per thread (vs ~2 MB at 128 k); pays for itself on the first 100
-/// allocations.
-pub(super) const MALLOC_STATE_INITIAL_CAPACITY: usize = 256 * 1024;
+/// History: this used to be a flat 256 k (`MALLOC_STATE_HEAVY_CAPACITY`
+/// below), sized for promise-heavy kernels (`promise_all_chains`
+/// allocates ~200 k strings/closures/promises before the first GC)
+/// where hashbrown's doubling rehashes at the ~100 k mark were the
+/// single hottest leaf in the profile (15.6 % self-time on
+/// `gc_malloc`'s caller chain). But that pre-sized a ~2 MB Vec plus a
+/// ~4 MB PtrHashSet on EVERY JS-touching thread — spawn workers and
+/// tokio callers that allocate a few hundred malloc objects paid a
+/// ~6 MB floor for a benchmark they never run. Now: start small, and
+/// the first time a thread's tracked-object count crosses
+/// `MALLOC_STATE_HEAVY_LEN_THRESHOLD` (a genuinely malloc-heavy
+/// thread), reserve straight to the heavy capacity in one step —
+/// preserving the rehash-amortization rationale exactly where it
+/// mattered while cutting the per-thread floor everywhere else.
+pub(super) const MALLOC_STATE_INITIAL_CAPACITY: usize = 4096;
+/// One-time growth trigger: a thread whose live tracked-object count
+/// reaches this is on the promise-heavy profile — reserve the rest.
+pub(super) const MALLOC_STATE_HEAVY_LEN_THRESHOLD: usize = 64 * 1024;
+/// Capacity reserved once the heavy threshold trips (the old flat
+/// pre-size; covers the 200 k-entry pre-GC working set at hashbrown's
+/// 7/8 load factor without further rehashes).
+pub(super) const MALLOC_STATE_HEAVY_CAPACITY: usize = 256 * 1024;
 
 thread_local! {
     pub(crate) static MALLOC_STATE: RefCell<MallocState> = RefCell::new(MallocState {
@@ -119,6 +206,7 @@ thread_local! {
         realloc_forwarding: crate::fast_hash::new_ptr_hash_map(),
         realloc_snapshot_headers: crate::fast_hash::new_ptr_hash_set(),
         registry_state: MallocRegistryState::Inactive,
+        heavy_capacity_reserved: false,
         kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
     });
 
@@ -146,14 +234,20 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
     gc_check_trigger();
 
     unsafe {
-        let raw = alloc(layout);
+        let mut raw = alloc(layout);
+        if raw.is_null() && super::gc_try_emergency_reclaim() {
+            raw = alloc(layout);
+        }
         if raw.is_null() {
-            panic!("gc_malloc: failed to allocate {} bytes", total);
+            panic!(
+                "gc_malloc: failed to allocate {} bytes (heap exhausted after emergency GC)",
+                total
+            );
         }
 
         let header = raw as *mut GcHeader;
         (*header).obj_type = obj_type;
-        (*header).gc_flags = 0; // not arena
+        (*header).gc_flags = super::barrier::gc_birth_extra_flags(); // not arena; allocate-black while a budgeted cycle marks
         (*header)._reserved = 0;
         (*header).size = total as u32;
 
@@ -167,6 +261,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
             if s.malloc_registry_available() {
                 s.set.insert(header as usize);
             }
+            s.maybe_reserve_heavy_capacity();
         });
         GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
 
@@ -195,11 +290,17 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             let layout = Layout::from_size_align(total, 8).unwrap();
             let raw = alloc(layout);
             if raw.is_null() {
-                panic!("gc_malloc_batch: failed to allocate {} bytes", total);
+                // Inside the IN_ALLOC window the emergency reclaim refuses
+                // to run (re-entrancy); batch callers are rare and small,
+                // so just report exhaustion.
+                panic!(
+                    "gc_malloc_batch: failed to allocate {} bytes (heap exhausted)",
+                    total
+                );
             }
             let header = raw as *mut GcHeader;
             (*header).obj_type = obj_type;
-            (*header).gc_flags = 0;
+            (*header).gc_flags = super::barrier::gc_birth_extra_flags();
             (*header)._reserved = 0;
             (*header).size = total as u32;
 
@@ -215,6 +316,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             if s.malloc_registry_available() {
                 s.set.extend(headers.iter().map(|&h| h as usize));
             }
+            s.maybe_reserve_heavy_capacity();
         });
 
         GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_IN_ALLOC));
@@ -227,6 +329,23 @@ impl MallocState {
     #[inline]
     pub(super) fn malloc_registry_available(&self) -> bool {
         self.registry_state == MallocRegistryState::ActiveConsistent
+    }
+
+    /// One-time jump from the small per-thread start to the heavy
+    /// pre-size once this thread proves malloc-heavy. Called after the
+    /// tracked-object push on the allocation paths; `>=` (rather than
+    /// an exact-crossing check) keeps `gc_malloc_batch`'s multi-entry
+    /// extends from skipping over the threshold.
+    #[inline]
+    pub(super) fn maybe_reserve_heavy_capacity(&mut self) {
+        if self.heavy_capacity_reserved || self.objects.len() < MALLOC_STATE_HEAVY_LEN_THRESHOLD {
+            return;
+        }
+        self.heavy_capacity_reserved = true;
+        self.objects
+            .reserve(MALLOC_STATE_HEAVY_CAPACITY.saturating_sub(self.objects.len()));
+        self.set
+            .reserve(MALLOC_STATE_HEAVY_CAPACITY.saturating_sub(self.set.len()));
     }
 
     #[inline]
@@ -497,5 +616,108 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
         });
 
         new_raw.add(GC_HEADER_SIZE)
+    }
+}
+
+#[cfg(test)]
+impl MallocState {
+    /// Build an empty, TLS-independent `MallocState` for unit tests.
+    fn new_empty_for_test() -> Self {
+        MallocState {
+            objects: Vec::new(),
+            set: crate::fast_hash::PtrHashSet::with_capacity_and_hasher(
+                0,
+                crate::fast_hash::PtrHasher,
+            ),
+            realloc_forwarding: crate::fast_hash::new_ptr_hash_map(),
+            realloc_snapshot_headers: crate::fast_hash::new_ptr_hash_set(),
+            registry_state: MallocRegistryState::Inactive,
+            heavy_capacity_reserved: false,
+            kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
+        }
+    }
+
+    /// Allocate a raw GcHeader-prefixed block (as `gc_malloc` would) and push
+    /// it into this state's tracking, WITHOUT touching the thread-local
+    /// `MALLOC_STATE`. Returns the header so a test can assert on / manually
+    /// reclaim it. `flags` seeds `gc_flags` (e.g. `GC_FLAG_PINNED`).
+    unsafe fn push_test_object(&mut self, payload: usize, flags: u8) -> *mut GcHeader {
+        let total = GC_HEADER_SIZE + payload;
+        let layout = Layout::from_size_align(total, 8).unwrap();
+        let raw = alloc(layout);
+        assert!(!raw.is_null(), "test allocation failed");
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = GC_TYPE_STRING;
+        (*header).gc_flags = flags;
+        (*header)._reserved = 0;
+        (*header).size = total as u32;
+        self.objects.push(header);
+        self.set.insert(header as usize);
+        header
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+
+    /// `free_all_tracked_objects` (the body of `Drop for MallocState`) reclaims
+    /// every tracked block and reports the exact byte total — the worker-exit
+    /// leak fix (#6185 / GC audit §6). TLS-Drop itself can't be exercised
+    /// directly from a unit test (it fires only at real thread teardown), so we
+    /// drive the shared free path on a TLS-independent `MallocState`.
+    #[test]
+    fn free_all_tracked_objects_reclaims_every_block() {
+        let mut state = MallocState::new_empty_for_test();
+        let payloads = [8usize, 24, 100, 4096];
+        let expected: u64 = payloads.iter().map(|&p| (GC_HEADER_SIZE + p) as u64).sum();
+
+        unsafe {
+            for &p in &payloads {
+                state.push_test_object(p, 0);
+            }
+        }
+        assert_eq!(state.objects.len(), payloads.len());
+
+        let freed = state.free_all_tracked_objects();
+        assert_eq!(
+            freed, expected,
+            "must free the exact total size of every tracked block"
+        );
+        assert!(
+            state.objects.is_empty(),
+            "tracked-object list must be drained after free"
+        );
+
+        // Idempotent: the subsequent real Drop must be a no-op (no double free).
+        let freed_again = state.free_all_tracked_objects();
+        assert_eq!(freed_again, 0);
+    }
+
+    /// Pinned objects are skipped (mirrors `process_sweep_header`) so a
+    /// cross-thread promise pinned for an in-flight result is never yanked.
+    #[test]
+    fn free_all_tracked_objects_skips_pinned() {
+        let mut state = MallocState::new_empty_for_test();
+        let (pinned, unpinned_size);
+        unsafe {
+            pinned = state.push_test_object(64, GC_FLAG_PINNED);
+            state.push_test_object(32, 0);
+        }
+        unpinned_size = (GC_HEADER_SIZE + 32) as u64;
+
+        let freed = state.free_all_tracked_objects();
+        assert_eq!(
+            freed, unpinned_size,
+            "only the unpinned block's bytes are reclaimed"
+        );
+
+        // The pinned block was skipped, not freed — reclaim it manually so the
+        // test itself doesn't leak.
+        unsafe {
+            let total = (*pinned).size as usize;
+            let layout = Layout::from_size_align(total, 8).unwrap();
+            dealloc(pinned as *mut u8, layout);
+        }
     }
 }

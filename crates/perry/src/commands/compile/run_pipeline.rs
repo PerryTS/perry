@@ -5747,6 +5747,8 @@ pub fn run_with_parse_cache(
             target.as_deref(),
             &args.input,
             &ctx,
+            i18n_table.as_ref(),
+            i18n_config.as_ref(),
             format,
         )?;
         result_bundle_id = Some(bundle_id);

@@ -1,9 +1,40 @@
 use super::*;
 
+/// Number of most-recent pause samples retained per thread (#6187).
+pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
+
 pub struct GcStats {
     pub collection_count: u64,
     pub total_freed_bytes: u64,
     pub last_pause_us: u64,
+    /// 2026-07-09 audit (#6187): always-on pause observability. A frame
+    /// scheduler or an ops dashboard needs more than the last sample; the
+    /// max-since-start plus a small ring of recent pauses costs a few
+    /// stores per collection and a few hundred bytes of TLS. The rich
+    /// per-phase traces stay behind PERRY_GC_TRACE.
+    pub max_pause_us: u64,
+    pub recent_pauses_us: [u64; GC_RECENT_PAUSE_WINDOW],
+    pub recent_cursor: u8,
+    pub recent_len: u8,
+}
+
+impl GcStats {
+    /// Single funnel for per-collection accounting: last/max pause and the
+    /// recent-pause ring advance together with the counters, so no future
+    /// collection path can update one without the others.
+    pub(super) fn record_collection(&mut self, freed_bytes: u64, elapsed_us: u64) {
+        self.collection_count += 1;
+        self.total_freed_bytes = self.total_freed_bytes.saturating_add(freed_bytes);
+        self.last_pause_us = elapsed_us;
+        if elapsed_us > self.max_pause_us {
+            self.max_pause_us = elapsed_us;
+        }
+        self.recent_pauses_us[self.recent_cursor as usize] = elapsed_us;
+        self.recent_cursor = ((self.recent_cursor as usize + 1) % GC_RECENT_PAUSE_WINDOW) as u8;
+        if (self.recent_len as usize) < GC_RECENT_PAUSE_WINDOW {
+            self.recent_len += 1;
+        }
+    }
 }
 
 thread_local! {
@@ -11,6 +42,10 @@ thread_local! {
         collection_count: 0,
         total_freed_bytes: 0,
         last_pause_us: 0,
+        max_pause_us: 0,
+        recent_pauses_us: [0; GC_RECENT_PAUSE_WINDOW],
+        recent_cursor: 0,
+        recent_len: 0,
     }) };
 }
 
@@ -35,6 +70,11 @@ pub(super) struct OldYoungEdgeMissing {
     pub(super) parent: usize,
     pub(super) slot: usize,
     pub(super) child: usize,
+    // gh #6206: edge-type diagnostics for the verifier panic.
+    pub(super) parent_obj_type: u8,
+    pub(super) child_obj_type: u8,
+    pub(super) parent_is_old_arena: bool,
+    pub(super) parent_marked: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -44,17 +84,49 @@ pub(super) struct OldYoungEdgeVerifyStats {
     pub(super) checked_old_to_young_edges: usize,
     pub(super) missing_edges: usize,
     pub(super) first_missing: Option<OldYoungEdgeMissing>,
+    // gh #6206: per-type histograms of missing edges
+    pub(super) missing_by_parent_type: [u32; 32],
+    pub(super) missing_by_child_type: [u32; 32],
+    pub(super) missing_parent_malloc: u32,
+    pub(super) missing_parent_unmarked: u32,
 }
 
 impl OldYoungEdgeVerifyStats {
     #[inline]
     pub(super) fn record_missing(&mut self, parent: usize, slot: usize, child: usize) {
+        self.record_missing_diag(parent, slot, child, 0, 0, false, false);
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_missing_diag(
+        &mut self,
+        parent: usize,
+        slot: usize,
+        child: usize,
+        parent_obj_type: u8,
+        child_obj_type: u8,
+        parent_is_old_arena: bool,
+        parent_marked: bool,
+    ) {
         self.missing_edges = self.missing_edges.saturating_add(1);
+        self.missing_by_parent_type[(parent_obj_type as usize) & 31] += 1;
+        self.missing_by_child_type[(child_obj_type as usize) & 31] += 1;
+        if !parent_is_old_arena {
+            self.missing_parent_malloc += 1;
+        }
+        if !parent_marked {
+            self.missing_parent_unmarked += 1;
+        }
         if self.first_missing.is_none() {
             self.first_missing = Some(OldYoungEdgeMissing {
                 parent,
                 slot,
                 child,
+                parent_obj_type,
+                child_obj_type,
+                parent_is_old_arena,
+                parent_marked,
             });
         }
     }
@@ -579,6 +651,11 @@ pub(super) struct GcCycleTrace {
     pub(super) malloc_before: usize,
     pub(super) remembered_set_before: usize,
     pub(super) remembered_set: RememberedSetTraceStats,
+    /// Objects visited by the whole-heap old→young remembered-set rebuild
+    /// (#6181). Full cycles walk every arena+malloc object here; minors skip
+    /// the walk entirely (0) — their RS is maintained by the barriers plus
+    /// evacuation_sticky + restore_surviving_dirty_coverage.
+    pub(super) old_to_young_rebuild_objects_scanned: usize,
     pub(super) old_young_edge_verifier: OldYoungEdgeVerifyStats,
     pub(super) old_pages: crate::arena::OldPageSummary,
     pub(super) conservative_root_count: usize,
@@ -639,6 +716,7 @@ impl GcCycleTrace {
             malloc_before: malloc_object_count(),
             remembered_set_before: remembered_set_size(),
             remembered_set: RememberedSetTraceStats::default(),
+            old_to_young_rebuild_objects_scanned: 0,
             old_young_edge_verifier: OldYoungEdgeVerifyStats::default(),
             old_pages: crate::arena::OldPageSummary::default(),
             conservative_root_count: 0,
@@ -759,6 +837,7 @@ impl GcCycleTrace {
             "dirty_slot_pages_considered": self.remembered_set.dirty_slot_pages_considered,
             "dirty_slot_ranges_scanned": self.remembered_set.dirty_slot_ranges_scanned,
             "dirty_slots_scanned": self.remembered_set.dirty_slots_scanned,
+            "rebuild_objects_scanned": self.old_to_young_rebuild_objects_scanned,
         });
         let old_pages_json = serde_json::json!({
             "pages": self.old_pages.pages,
@@ -859,6 +938,7 @@ impl GcCycleTrace {
             "reclaimable_candidate_bytes": self.evacuation_policy.snapshot.reclaimable_candidate_bytes,
             "reclaimable_candidate_objects": self.evacuation_policy.snapshot.reclaimable_candidate_objects,
             "reclaimable_candidate_ratio_pct": self.evacuation_policy.snapshot.reclaimable_candidate_ratio_pct(),
+            "releasable_block_bytes": self.evacuation_policy.snapshot.releasable_block_bytes,
             "old_page_candidate_pages": self.evacuation_policy.snapshot.old_page_candidate_pages,
             "old_page_selected_pages": self.evacuation_policy.snapshot.old_page_selected_pages,
             "old_page_selected_live_bytes": self.evacuation_policy.snapshot.old_page_selected_live_bytes,

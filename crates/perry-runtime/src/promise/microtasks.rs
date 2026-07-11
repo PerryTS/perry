@@ -109,6 +109,13 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
 
+    // FinalizationRegistry cleanup jobs recorded by AUTOMATIC collection
+    // cycles (the explicit-`gc()` path delivers its own immediately). This
+    // converts each job into a nextTick callback invocation, which the tick
+    // drain later in this same pump runs — matching the spec's "cleanup
+    // callbacks run as their own jobs" timing.
+    ran += crate::weakref::drain_pending_finalization_jobs();
+
     // Native async tokens settle only through the main-thread handoff path.
     ran += super::native_async::js_native_async_process_pending();
 
@@ -779,6 +786,19 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     crate::exception::js_try_end();
 
     let _ = crate::gc::gc_runtime_safepoint();
+
+    // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
+    // the OUTERMOST microtask-pump boundary the JS stack has fully unwound, so
+    // there are no live register temporaries and the copying (moving) minor runs
+    // with precise, rewritable roots — no forced conservative scan. Run it when
+    // nursery pressure is due so programs that yield to the event loop get
+    // compacting, O(survivors) young collection instead of the non-moving
+    // alloc-point fallback. Gated (default off); additive.
+    if crate::gc::gc_moving_safepoint_enabled()
+        && MICROTASK_RUN_DEPTH.with(|depth| depth.get()) == 1
+    {
+        crate::gc::gc_safepoint_moving_minor();
+    }
 
     MICROTASK_RUN_DEPTH.with(|depth| {
         depth.set(depth.get().saturating_sub(1));

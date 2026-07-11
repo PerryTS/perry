@@ -243,11 +243,17 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
     // Interleave expressions and remaining quasis
     for (i, expr) in tpl.exprs.iter().enumerate() {
         let lowered = lower_expr(ctx, expr)?;
-        // Concatenate: result + toString(expr)
+        // #6078: template substitutions use ToString, NOT the `+` operator's
+        // ToPrimitive(default) hint. `+` with a string operand coerces the other
+        // side valueOf-first, so `` `${obj}` `` (obj with both valueOf+toString)
+        // disagreed with `String(obj)`. Wrap each substitution in `StringCoerce`
+        // (the same `js_string_coerce`/ToString that `String(x)` uses), so it is
+        // toString-first and the concat sees a plain string. No-op for
+        // string/number substitutions; fixes the object case.
         result = Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(result),
-            right: Box::new(lowered),
+            right: Box::new(Expr::StringCoerce(Box::new(lowered))),
         };
 
         // Add the next quasi (if it's non-empty)

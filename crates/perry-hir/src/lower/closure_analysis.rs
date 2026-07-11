@@ -258,7 +258,12 @@ fn widen_mutable_captures_expr(
         Expr::Await(inner) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
             widen_mutable_captures_expr(inner, scope_mutable);
         }
-        Expr::InstanceOf { expr, .. } => widen_mutable_captures_expr(expr, scope_mutable),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            widen_mutable_captures_expr(expr, scope_mutable);
+            if let Some(t) = ty_expr {
+                widen_mutable_captures_expr(t, scope_mutable);
+            }
+        }
         Expr::In { property, object } => {
             widen_mutable_captures_expr(property, scope_mutable);
             widen_mutable_captures_expr(object, scope_mutable);
@@ -566,7 +571,12 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::Await(inner) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
             collect_closure_assigned_expr(inner, out);
         }
-        Expr::InstanceOf { expr, .. } => collect_closure_assigned_expr(expr, out),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            collect_closure_assigned_expr(expr, out);
+            if let Some(t) = ty_expr {
+                collect_closure_assigned_expr(t, out);
+            }
+        }
         Expr::In { property, object } => {
             collect_closure_assigned_expr(property, out);
             collect_closure_assigned_expr(object, out);
@@ -953,6 +963,12 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_captures_expr(arg, out);
             }
         }
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            collect_closure_captures_expr(expr, out);
+            if let Some(t) = ty_expr {
+                collect_closure_captures_expr(t, out);
+            }
+        }
         Expr::JsCreateCallback { closure, .. } => collect_closure_captures_expr(closure, out),
         Expr::Sequence(exprs) => {
             for e in exprs {
@@ -1291,7 +1307,12 @@ fn collect_closure_assigned_in_body_expr(
         Expr::Await(inner) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
             collect_closure_assigned_in_body_expr(inner, out);
         }
-        Expr::InstanceOf { expr, .. } => collect_closure_assigned_in_body_expr(expr, out),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            collect_closure_assigned_in_body_expr(expr, out);
+            if let Some(t) = ty_expr {
+                collect_closure_assigned_in_body_expr(t, out);
+            }
+        }
         Expr::In { property, object } => {
             collect_closure_assigned_in_body_expr(property, out);
             collect_closure_assigned_in_body_expr(object, out);

@@ -1,6 +1,7 @@
 package com.perry.app
 
 import android.app.Activity
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -195,6 +196,39 @@ class PerryActivity : Activity() {
     override fun onLowMemory() {
         super.onLowMemory()
         PerryBridge.forwardMapsLifecycle("lowMemory")
+        // #6184: a system low-memory notice is the last warning before the
+        // low-memory killer targets us → force a full collect + trigger clamp.
+        forwardMemoryPressure(2)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // #6184 (2026-07-09 GC audit): map Android trim levels onto the GC
+        // memory-pressure API. RUNNING_CRITICAL (imminent kill while running)
+        // and COMPLETE / MODERATE (background, high reclaim priority) are the
+        // severe levels → full collect + trigger clamp (2). Every lighter
+        // trim (RUNNING_LOW / RUNNING_MODERATE / BACKGROUND / UI_HIDDEN) is
+        // advisory → minor collect (1). The constants aren't monotonic by
+        // severity, so match the severe set explicitly rather than by range.
+        val pressure = when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+            ComponentCallbacks2.TRIM_MEMORY_COMPLETE,
+            ComponentCallbacks2.TRIM_MEMORY_MODERATE -> 2
+            else -> 1
+        }
+        forwardMemoryPressure(pressure)
+    }
+
+    /// Forward an OS memory-pressure signal to the native GC. Guarded against
+    /// UnsatisfiedLinkError because a warning can arrive before the native
+    /// library finishes loading (permission gate / cold start).
+    private fun forwardMemoryPressure(level: Int) {
+        try {
+            PerryBridge.nativeMemoryPressure(level)
+        } catch (_: UnsatisfiedLinkError) {
+            // Native library not loaded yet — the arena isn't live, nothing
+            // to collect.
+        }
     }
 
     override fun onDestroy() {

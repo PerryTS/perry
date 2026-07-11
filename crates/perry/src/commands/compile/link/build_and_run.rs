@@ -660,6 +660,8 @@ pub(crate) fn build_and_run_link(
             .arg("CoreFoundation")
             .arg("-framework")
             .arg("Security")
+            .arg("-framework")
+            .arg("UserNotifications") // UNUserNotificationCenter (perry/system notificationSend/Schedule/OnTap)
             // AVFAudio: AVAudioEngine / AVAudioSession / AVAudioApplication for
             // microphone capture + the record-permission API (perry/system
             // audioStart, getLevel, recording). Without this the audio classes

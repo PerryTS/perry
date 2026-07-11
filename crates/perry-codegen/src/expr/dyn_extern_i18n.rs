@@ -195,6 +195,144 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
     Ok(ctx.block().load(DOUBLE, &result_slot))
 }
 
+/// Emit one resolved i18n template (a single locale's translation row) and
+/// return the NaN-boxed string result.
+///
+/// Builds a `(fragment, Option<param_name>)` plan from the template: each
+/// `{name}` placeholder splits a fragment; text between/around placeholders
+/// is a literal piece. `{{` / `}}` are tolerated as literal braces (matches
+/// common i18n conventions and avoids quirks if a translation contains a
+/// literal `{`).
+///
+/// - No placeholders → intern the template and load the static handle.
+/// - Otherwise walk the plan and emit a `js_string_concat` chain,
+///   accumulating an i64 string handle (NOT a NaN-boxed double — saves the
+///   bitcast/mask cycle on every concat):
+///     - Lit(s): intern via StringPool, load the handle, mask.
+///     - Param(name): look up the pre-lowered value in `lowered_params`,
+///       coerce via `js_string_coerce` (which already returns a handle). A
+///       placeholder naming an unknown param falls back to the literal
+///       `{name}` text so the user can see the bug.
+///
+/// Params must already be lowered by the caller (exactly once, in source
+/// order) — this function only *references* them, so it is safe to call
+/// once per locale branch without duplicating side effects.
+fn emit_i18n_template(
+    ctx: &mut FnCtx<'_>,
+    template: &str,
+    lowered_params: &std::collections::HashMap<String, String>,
+) -> Result<String> {
+    #[derive(Debug)]
+    enum Part {
+        Lit(String),
+        Param(String),
+    }
+    let mut plan: Vec<Part> = Vec::new();
+    {
+        let bytes = template.as_bytes();
+        let mut i = 0usize;
+        // Buffer literal fragments as raw bytes and decode once per fragment.
+        // Pushing `b as char` would re-encode each byte as its own Unicode
+        // scalar, mangling any non-ASCII text in a placeholder-containing
+        // template (e.g. `für {name}`). We only ever special-case the ASCII
+        // bytes `{`/`}`, so multi-byte UTF-8 sequences stay intact.
+        let mut buf: Vec<u8> = Vec::new();
+        let flush = |buf: &mut Vec<u8>| String::from_utf8_lossy(&std::mem::take(buf)).into_owned();
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'{' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    buf.push(b'{');
+                    i += 2;
+                    continue;
+                }
+                // Find the matching `}`.
+                let end = bytes[i + 1..]
+                    .iter()
+                    .position(|&c| c == b'}')
+                    .map(|p| i + 1 + p);
+                match end {
+                    Some(close) => {
+                        if !buf.is_empty() {
+                            plan.push(Part::Lit(flush(&mut buf)));
+                        }
+                        let name = std::str::from_utf8(&bytes[i + 1..close])
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        plan.push(Part::Param(name));
+                        i = close + 1;
+                    }
+                    None => {
+                        // Unterminated `{` — treat as literal.
+                        buf.push(b);
+                        i += 1;
+                    }
+                }
+            } else if b == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
+                buf.push(b'}');
+                i += 2;
+            } else {
+                buf.push(b);
+                i += 1;
+            }
+        }
+        if !buf.is_empty() {
+            plan.push(Part::Lit(flush(&mut buf)));
+        }
+    }
+
+    // Fast path: no `{name}` placeholders → just emit the literal.
+    let has_placeholders = plan.iter().any(|p| matches!(p, Part::Param(_)));
+    if !has_placeholders {
+        let key_idx = ctx.strings.intern(template);
+        let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        return Ok(ctx.block().load(DOUBLE, &handle_global));
+    }
+
+    let mut acc_handle: Option<String> = None;
+    for part in &plan {
+        let part_handle: String = match part {
+            Part::Lit(s) => {
+                let key_idx = ctx.strings.intern(s);
+                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let blk = ctx.block();
+                let lit_box = blk.load(DOUBLE, &handle_global);
+                unbox_to_i64(blk, &lit_box)
+            }
+            Part::Param(name) => {
+                let v_box = match lowered_params.get(name) {
+                    Some(v) => v.clone(),
+                    None => {
+                        let placeholder = format!("{{{}}}", name);
+                        let key_idx = ctx.strings.intern(&placeholder);
+                        let handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        ctx.block().load(DOUBLE, &handle_global)
+                    }
+                };
+                let blk = ctx.block();
+                blk.call(I64, "js_string_coerce", &[(DOUBLE, &v_box)])
+            }
+        };
+        acc_handle = Some(match acc_handle {
+            None => part_handle,
+            Some(prev) => {
+                let blk = ctx.block();
+                blk.call(
+                    I64,
+                    "js_string_concat",
+                    &[(I64, &prev), (I64, &part_handle)],
+                )
+            }
+        });
+    }
+    // `plan` had at least one placeholder so it can't be empty;
+    // `acc_handle` is therefore Some. Box the final handle.
+    let final_handle = acc_handle.expect("template plan was non-empty");
+    Ok(nanbox_string_inline(ctx.block(), &final_handle))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::WorkerNew {
@@ -864,107 +1002,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             params,
             ..
         } => {
-            let resolved: Option<String> = ctx.i18n.as_ref().and_then(|t| {
-                let idx = t.default_locale_idx * t.key_count + (*string_idx as usize);
-                t.translations.get(idx).cloned()
-            });
-            // An empty translation cell means the locale file is missing
-            // this key — fall back to the source key so the user at
-            // least sees the English text instead of `""`.
-            let template: String = match resolved {
-                Some(s) if !s.is_empty() => s,
-                _ => key.clone(),
-            };
-            // Build a `(fragment, Option<param_name>)` plan from the
-            // template. Each `{name}` placeholder splits a fragment;
-            // text between/around placeholders is a literal piece. We
-            // tolerate `{{` / `}}` as literal braces (matches common
-            // i18n conventions and avoids quirks if a translation
-            // contains a literal `{`).
-            //
-            // The plan is a list of (literal_text, optional_param_name)
-            // pairs where the param name (if any) follows the literal.
-            // The trailing literal has no param.
-            #[derive(Debug)]
-            enum Part {
-                Lit(String),
-                Param(String),
-            }
-            let mut plan: Vec<Part> = Vec::new();
-            {
-                let bytes = template.as_bytes();
-                let mut i = 0usize;
-                let mut buf = String::new();
-                while i < bytes.len() {
-                    let b = bytes[i];
-                    if b == b'{' {
-                        if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                            buf.push('{');
-                            i += 2;
-                            continue;
-                        }
-                        // Find the matching `}`.
-                        let end = bytes[i + 1..]
-                            .iter()
-                            .position(|&c| c == b'}')
-                            .map(|p| i + 1 + p);
-                        match end {
-                            Some(close) => {
-                                if !buf.is_empty() {
-                                    plan.push(Part::Lit(std::mem::take(&mut buf)));
+            // Resolve every locale's template for this key from the flat
+            // 2D table. An empty translation cell means the locale file
+            // is missing this key — fall back to the source key so the
+            // user at least sees the English text instead of `""`.
+            let (mut templates, default_idx, locale_codes): (Vec<String>, usize, Vec<String>) =
+                match ctx.i18n.as_ref() {
+                    Some(t) if t.key_count > 0 => {
+                        let locale_count = t.translations.len() / t.key_count;
+                        let rows = (0..locale_count)
+                            .map(|li| {
+                                match t.translations.get(li * t.key_count + *string_idx as usize) {
+                                    Some(s) if !s.is_empty() => s.clone(),
+                                    _ => key.clone(),
                                 }
-                                let name = std::str::from_utf8(&bytes[i + 1..close])
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string();
-                                plan.push(Part::Param(name));
-                                i = close + 1;
-                            }
-                            None => {
-                                // Unterminated `{` — treat as literal.
-                                buf.push(b as char);
-                                i += 1;
-                            }
-                        }
-                    } else if b == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
-                        buf.push('}');
-                        i += 2;
-                    } else {
-                        // Push the byte as-is. UTF-8 multi-byte chars
-                        // pass through cleanly because we never split
-                        // inside one (we only act on `{` and `}` which
-                        // are ASCII).
-                        buf.push(b as char);
-                        i += 1;
+                            })
+                            .collect();
+                        (rows, t.default_locale_idx, t.locale_codes.clone())
                     }
-                }
-                if !buf.is_empty() {
-                    plan.push(Part::Lit(buf));
-                }
+                    _ => (Vec::new(), 0, Vec::new()),
+                };
+            if templates.is_empty() {
+                templates.push(key.clone());
             }
+            let default_idx = default_idx.min(templates.len() - 1);
 
-            // Fast path: no `{name}` placeholders → just emit the
-            // literal. Still lower the params for side effects in case
-            // the template parser misses something exotic, but the
-            // result is a single static string handle.
-            let has_placeholders = plan.iter().any(|p| matches!(p, Part::Param(_)));
-            if !has_placeholders {
-                for (_, v) in params {
-                    let _ = lower_expr(ctx, v)?;
-                }
-                let key_idx = ctx.strings.intern(&template);
-                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                return Ok(ctx.block().load(DOUBLE, &handle_global));
-            }
-
-            // Build a name → lowered value map for params we'll
-            // reference. We lower each param exactly once so closures
-            // and side effects in arg expressions fire in source order
-            // — even if a placeholder appears multiple times in the
-            // template (we'll reuse the cached value in that case).
-            //
-            // Params declared in the HIR but not referenced in the
-            // resolved template still get lowered for side effects.
+            // Lower each param exactly once, up front, so closures and
+            // side effects in arg expressions fire in source order — no
+            // matter which locale branch runs (or whether the template
+            // references the param at all).
             let mut lowered_params: std::collections::HashMap<String, String> =
                 std::collections::HashMap::with_capacity(params.len());
             for (name, v) in params {
@@ -972,64 +1038,71 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered_params.insert(name.clone(), v_box);
             }
 
-            // Walk the plan and emit a chain of string concats. We
-            // accumulate the result in `acc_handle` (i64 string
-            // handle, NOT a NaN-boxed double — saves the
-            // bitcast/mask cycle on every concat).
-            //
-            // For each Part:
-            //   - Lit(s): intern via StringPool, load the handle, mask.
-            //   - Param(name): look up the lowered value, coerce via
-            //     `js_string_coerce` (which already returns a handle).
-            // Then concat with `js_string_concat(left_handle, right_handle)`.
-            //
-            // For the very first part, just initialize acc_handle from
-            // it (no concat needed).
-            let mut acc_handle: Option<String> = None;
-            for part in &plan {
-                let part_handle: String = match part {
-                    Part::Lit(s) => {
-                        let key_idx = ctx.strings.intern(s);
-                        let handle_global =
-                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                        let blk = ctx.block();
-                        let lit_box = blk.load(DOUBLE, &handle_global);
-                        unbox_to_i64(blk, &lit_box)
-                    }
-                    Part::Param(name) => {
-                        // If the placeholder names a param we don't
-                        // know about, fall back to the literal `{name}`
-                        // text so the user can see the bug.
-                        let v_box = match lowered_params.get(name) {
-                            Some(v) => v.clone(),
-                            None => {
-                                let placeholder = format!("{{{}}}", name);
-                                let key_idx = ctx.strings.intern(&placeholder);
-                                let handle_global =
-                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                                ctx.block().load(DOUBLE, &handle_global)
-                            }
-                        };
-                        let blk = ctx.block();
-                        blk.call(I64, "js_string_coerce", &[(DOUBLE, &v_box)])
-                    }
-                };
-                acc_handle = Some(match acc_handle {
-                    None => part_handle,
-                    Some(prev) => {
-                        let blk = ctx.block();
-                        blk.call(
-                            I64,
-                            "js_string_concat",
-                            &[(I64, &prev), (I64, &part_handle)],
-                        )
-                    }
-                });
+            // Compile-time fast path: single-locale build, or a key whose
+            // resolved template is identical in every locale (incl. the
+            // untranslated-key fallback) — no runtime selection needed.
+            let all_same = templates.iter().all(|t| t == &templates[default_idx]);
+            if all_same || locale_codes.len() != templates.len() {
+                return emit_i18n_template(ctx, &templates[default_idx], &lowered_params);
             }
-            // `plan` had at least one placeholder so it can't be empty;
-            // `acc_handle` is therefore Some. Box the final handle.
-            let final_handle = acc_handle.expect("template plan was non-empty");
-            Ok(nanbox_string_inline(ctx.block(), &final_handle))
+
+            // Multi-locale: select the translation row at RUNTIME.
+            // `perry_i18n_locale_index_for` lazily detects the system
+            // locale on first call (NSBundle/CFLocale on Apple, Win32 /
+            // Android props / env vars elsewhere), matches it against the
+            // configured locale list (one interned "en,de,fr" literal),
+            // and caches the row index — an explicit
+            // `perry_i18n_set_locale_index` beats it. Then branch per
+            // locale and emit that row's template plan; the default
+            // locale's row is the fallthrough.
+            let locales_joined = locale_codes.join(",");
+            let locales_key_idx = ctx.strings.intern(&locales_joined);
+            let locales_handle_global =
+                format!("@{}", ctx.strings.entry(locales_key_idx).handle_global);
+            let blk = ctx.block();
+            let locales_box = blk.load(DOUBLE, &locales_handle_global);
+            let locales_handle = unbox_to_i64(blk, &locales_box);
+            let locale_idx = blk.call(
+                I32,
+                "perry_i18n_locale_index_for",
+                &[(I64, &locales_handle), (I32, &default_idx.to_string())],
+            );
+
+            let result_slot = ctx.block().alloca(DOUBLE);
+            let join_block_idx = ctx.new_block("i18n_locale_join");
+
+            for li in 0..templates.len() {
+                if li == default_idx {
+                    continue; // default row is the fallthrough below
+                }
+                let blk = ctx.block();
+                let cond = blk.icmp_eq(I32, &locale_idx, &li.to_string());
+                let match_block_idx = ctx.new_block(&format!("i18n_locale_{}", li));
+                let next_block_idx = ctx.new_block(&format!("i18n_locale_next_{}", li));
+                let match_label = ctx.block_label(match_block_idx);
+                let next_label = ctx.block_label(next_block_idx);
+                ctx.block().cond_br(&cond, &match_label, &next_label);
+
+                ctx.current_block = match_block_idx;
+                let val = emit_i18n_template(ctx, &templates[li], &lowered_params)?;
+                let join_label = ctx.block_label(join_block_idx);
+                let blk = ctx.block();
+                blk.store(DOUBLE, &val, &result_slot);
+                blk.br(&join_label);
+
+                ctx.current_block = next_block_idx;
+            }
+
+            // Fallthrough: the default locale's row (also covers a stale
+            // out-of-range index from perry_i18n_set_locale_index).
+            let val = emit_i18n_template(ctx, &templates[default_idx], &lowered_params)?;
+            let join_label = ctx.block_label(join_block_idx);
+            let blk = ctx.block();
+            blk.store(DOUBLE, &val, &result_slot);
+            blk.br(&join_label);
+
+            ctx.current_block = join_block_idx;
+            Ok(ctx.block().load(DOUBLE, &result_slot))
         }
 
         // -------- Child Process --------

@@ -379,6 +379,41 @@ fn dom_exception_errors() -> &'static Mutex<HashSet<usize>> {
     DOM_EXCEPTION_ERRORS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Latched true by the first `DOMException` construction, so the per-dead-
+/// error GC cleanup below skips the mutex entirely in the (overwhelmingly
+/// common) processes that never create one.
+static DOM_EXCEPTIONS_CREATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Death cleanup (2026-07-09 GC audit wave 2): `DOM_EXCEPTION_ERRORS` is a
+/// raw-address HashSet with zero removals, so it grew per DOMException and
+/// misidentified recycled addresses as DOMExceptions. Errors already run the
+/// `ErrorSideTables` finalize hook on death — this is called from
+/// `error_side_tables_clear_dead` for every dead error.
+pub(crate) fn dom_exception_error_clear_dead(err_addr: usize) {
+    if !DOM_EXCEPTIONS_CREATED.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut set) = dom_exception_errors().lock() {
+        set.remove(&err_addr);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_dom_exception_error(err_addr: usize) {
+    DOM_EXCEPTIONS_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut set) = dom_exception_errors().lock() {
+        set.insert(err_addr);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_dom_exception_error_registered(err_addr: usize) -> bool {
+    dom_exception_errors()
+        .lock()
+        .is_ok_and(|set| set.contains(&err_addr))
+}
+
 fn dom_exception_code(name: &str) -> f64 {
     let code = match name {
         "IndexSizeError" => 1,
@@ -424,6 +459,7 @@ pub extern "C" fn js_dom_exception_new(message: f64, name: f64) -> *mut crate::e
     let err =
         crate::error::js_error_new_with_name_message_bytes(name_string.as_bytes(), message_ptr);
     if !err.is_null() {
+        DOM_EXCEPTIONS_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut set) = dom_exception_errors().lock() {
             set.insert(err as usize);
         }

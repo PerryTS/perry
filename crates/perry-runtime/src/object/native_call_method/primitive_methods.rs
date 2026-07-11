@@ -212,7 +212,9 @@ pub(super) unsafe fn dispatch_primitive(
                         } else {
                             payload
                         };
-                        let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                        let s = if n.fract() == 0.0
+                            && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT
+                        {
                             (n as i64).to_string()
                         } else {
                             n.to_string()

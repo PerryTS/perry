@@ -377,9 +377,15 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // (which is the update block for `for`, the cond block for
         // `while`/`do-while`).
         Stmt::Continue => {
+            // Scan outward past switch frames: a switch pushes a loop_targets
+            // entry with an EMPTY cont slot (it is a break target only), so
+            // `continue` inside a switch must resolve to the innermost real
+            // LOOP, not the switch exit (#5989 — see switch_stmt.rs).
             let (cont_label, target_depth) = ctx
                 .loop_targets
-                .last()
+                .iter()
+                .rev()
+                .find(|(c, _b, _d)| !c.is_empty())
                 .map(|(c, _b, d)| (c.clone(), *d))
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
             // Pop try frames escaped by jumping back to the loop header
@@ -472,9 +478,12 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 if let Some((cont, _brk, depth)) = ctx.label_targets.get(label).cloned() {
                     (cont, depth)
                 } else {
-                    // Fallback: use innermost loop.
+                    // Fallback: innermost real LOOP — skip switch frames, whose
+                    // cont slot is the empty break-only sentinel (#5989).
                     ctx.loop_targets
-                        .last()
+                        .iter()
+                        .rev()
+                        .find(|(c, _b, _d)| !c.is_empty())
                         .map(|(c, _b, d)| (c.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
                 };

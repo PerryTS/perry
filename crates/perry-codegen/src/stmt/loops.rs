@@ -2654,6 +2654,7 @@ fn lower_for_after_init_with_i32_bound(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
+        emit_gc_loop_safepoint(ctx);
         ctx.block().br(&update_label);
     }
 
@@ -2705,6 +2706,45 @@ fn lower_for_after_init_with_i32_bound(
     // Exit block — subsequent statements continue here.
     ctx.current_block = exit_idx;
     Ok(())
+}
+
+/// Whether to emit loop back-edge safepoint polls — OPT-IN, default OFF
+/// (`PERRY_GC_MOVING_LOOP_POLLS=1`). The moving GC is the default at the
+/// event-loop safepoint, but the loop poll emits a `js_gc_loop_safepoint()`
+/// CALL at every loop back-edge, which defeats LLVM auto-vectorization and
+/// violates the native-region "no runtime calls in hot loop" proofs. Until the
+/// poll is emitted only in loops that actually ALLOCATE (so numeric/vectorizable
+/// loops stay call-free), it is opt-in and a tight allocating loop defers to the
+/// event-loop safepoint instead.
+fn moving_safepoint_polls_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
+/// Emit a `js_gc_loop_safepoint()` poll at a loop back-edge. Call this AFTER
+/// `clear_loop_body_shadow_slots` and only where the block is not terminated:
+/// at that point the loop-body expression has completed, so every live heap
+/// value is a named local on the shadow stack (no unspilled register temps) —
+/// a precise-root safepoint where a deferred copying minor can MOVE survivors.
+///
+/// COVERAGE (Phase 2, follow-up): currently wired into the generic `while`,
+/// `do..while`, and `for` back-edges. The specialized/versioned `for`-loop
+/// lowering paths in this file (i32-bound-optimized, packed-f64/i32/u32,
+/// bulk-fill) and `for-of`/`for-in` do NOT yet emit it, so a hot allocating
+/// loop that takes one of those paths won't drain a deferred moving minor until
+/// the next event-loop safepoint. Adding the poll to every back-edge across
+/// those paths is the remaining Phase 2 codegen work.
+pub(crate) fn emit_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
+    if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
+        return;
+    }
+    ctx.block().call_void("js_gc_loop_safepoint", &[]);
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
@@ -4454,6 +4494,7 @@ pub(crate) fn lower_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
+        emit_gc_loop_safepoint(ctx);
         ctx.block().br(&cond_label);
     }
     ctx.active_region_id = previous_region_id;
@@ -4511,6 +4552,7 @@ pub(crate) fn lower_do_while(
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
+        emit_gc_loop_safepoint(ctx);
         ctx.block().br(&cond_label);
     }
 

@@ -39,6 +39,23 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     if let Some(bytes) = unsafe { body_value_buffer_bytes(value) } {
         return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
     }
+    // A Blob / File body contributes its raw bytes. Blob handles are handle-band
+    // ids (>= FETCH_HANDLE_BAND_START, 0x40000), NOT real pointers, so they must
+    // be recognized here: otherwise the object-body fallback below runs
+    // `js_jsvalue_to_string` on the id and dereferences it → SIGSEGV. This is the
+    // Response-constructor twin of the nested-Blob crash (#6231).
+    {
+        let jsval = JSValue::from_bits(value.to_bits());
+        if jsval.is_pointer() {
+            let addr = jsval.as_pointer::<u8>() as usize;
+            if perry_runtime::value::addr_class::is_handle_band(addr) {
+                if let Some(bytes) = crate::fetch::blob_bytes_clone(addr) {
+                    return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) }
+                        as i64;
+                }
+            }
+        }
+    }
     // A non-integral or out-of-range value can't be a stream, so skip the
     // registry probe for the common cases.
     if value.is_finite()
@@ -97,7 +114,13 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     // `toString`/`[Symbol.toPrimitive]`) — for a boxed `String` that yields its
     // underlying primitive, the result is always a real `StringHeader`.
     if JSValue::from_bits(value.to_bits()).is_pointer() {
-        return js_jsvalue_to_string(value) as i64;
+        let addr = JSValue::from_bits(value.to_bits()).as_pointer::<u8>() as usize;
+        // A handle-band id that wasn't a Blob (a Headers/Request/… handle used
+        // as a body) has no byte payload and is not a real heap object — don't
+        // deref it via ToString (that was the crash path); fall through instead.
+        if !perry_runtime::value::addr_class::is_handle_band(addr) {
+            return js_jsvalue_to_string(value) as i64;
+        }
     }
     js_get_string_pointer_unified(value)
 }

@@ -504,6 +504,18 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
         let ns_value = if matches!(name, "console" | "process") {
+            // #6230: install the module's runtime dispatch bucket so dynamic
+            // method calls on the namespace *value* resolve — `const p = process;
+            // p.exit(1)`, `process["exit"](1)`, `p.cwd()`, dynamic `console.log`.
+            // These globals are never `import`ed, so nothing else emits the
+            // `js_nm_install_<module>()` call; `import`ed modules get theirs from
+            // the import. Reached only when the globalThis singleton is
+            // materialized — i.e. exactly when process/console are used as values.
+            match name {
+                "process" => crate::object::native_module_registry::js_nm_install_process(),
+                "console" => crate::object::native_module_registry::js_nm_install_console(),
+                _ => {}
+            }
             js_create_native_module_namespace(name_bytes.as_ptr(), name_bytes.len())
         } else if name == "WebAssembly" {
             super::global_this_webassembly::create_webassembly_namespace()

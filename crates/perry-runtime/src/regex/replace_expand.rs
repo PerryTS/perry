@@ -118,78 +118,88 @@ pub(super) fn expand_js_replacement(
     out
 }
 
-/// Fancy-regex fallback for `js_string_replace_regex_fn`: used when the pattern
-/// needs lookahead/backreferences that the `regex` crate can't compile. Mirrors
-/// the standard-engine loop below (full ECMAScript callback argument list,
-/// char-based offset, named-group `groups` object) but drives the match loop
-/// with `fancy_regex`.
-pub(super) unsafe fn replace_regex_fn_fancy(
-    str_data: &str,
-    fre: &fancy_regex::Regex,
-    global: bool,
+/// Owned, GC-inert snapshot of one match: everything the callback-argument
+/// builder needs, copied OUT of the subject string BEFORE any JS allocation
+/// or callback runs. The old code kept `Captures` (borrows of the heap
+/// subject) alive across the callback loop: from the 2nd match on, every
+/// `.as_str()` read through the ORIGINAL base address, which a moving GC
+/// during an earlier callback had already retired (2026-07-09 audit, wave 1).
+struct OwnedMatchData {
+    /// Full-match byte range in the subject.
+    start: usize,
+    end: usize,
+    /// Char offset of the match start (the callback's `offset` argument).
+    char_offset: usize,
+    /// Group 0 (full match) + capture groups (None = non-participating).
+    groups: Vec<Option<String>>,
+    /// Named groups in declaration order: (name, text).
+    named: Vec<(String, Option<String>)>,
+}
+
+/// Shared callback-replace loop over pre-snapshotted matches. The subject is
+/// rooted (`s_handle`) and re-derived after every callback; the callback
+/// closure is rooted too, so a GC it triggers relocates — not strands — it.
+unsafe fn replace_fn_run_matches(
+    s_handle: &crate::gc::RuntimeHandle<'_>,
+    matches: &[OwnedMatchData],
     closure_ptr: *const crate::closure::ClosureHeader,
+    has_named_groups: bool,
 ) -> *mut StringHeader {
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-
-    let has_named_groups = fre.capture_names().any(|n| n.is_some());
-
-    // Collect captures up front so a GC during callback dispatch can't disturb
-    // the iterator's borrow of `str_data`.
-    let mut captures_list: Vec<fancy_regex::Captures> = Vec::new();
-    let mut iter = fre.captures_iter(str_data);
-    while let Some(Ok(caps)) = iter.next() {
-        captures_list.push(caps);
-        if !global {
-            break;
-        }
+    let cur_str = || string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
+    if matches.is_empty() {
+        return js_string_from_str(cur_str());
     }
+    let outer = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = outer.root_raw_const_ptr(closure_ptr);
 
     let mut result = String::new();
     let mut last_end = 0usize;
 
-    for caps in &captures_list {
-        let full_match = caps.get(0).unwrap();
-        result.push_str(&str_data[last_end..full_match.start()]);
+    for m in matches {
+        // Between-match text is re-sliced from the CURRENT subject address
+        // (the previous callback may have moved the string).
+        result.push_str(&cur_str()[last_end..m.start]);
 
-        let char_offset = str_data[..full_match.start()].chars().count();
-
+        // Build the full ECMAScript callback argument list:
+        //   (match, p1, ..., pN, offset, string, groups?)
+        // Every NaN-boxed heap value is rooted as it is created, so the next
+        // allocation can't reclaim (or silently move) an earlier argument.
         let scope = crate::gc::RuntimeHandleScope::new();
         let mut arg_handles: Vec<crate::gc::RuntimeHandle<'_>> = Vec::new();
 
-        let match_nanboxed = js_nanbox_string(js_string_from_str(full_match.as_str()) as i64);
-        arg_handles.push(scope.root_nanbox_f64(match_nanboxed));
-
-        let num_groups = caps.len() - 1; // exclude full match
-        for gi in 1..=num_groups {
-            let group_val = if let Some(m) = caps.get(gi) {
-                js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-            } else {
-                f64::from_bits(TAG_UNDEFINED)
+        for group in &m.groups {
+            let group_val = match group {
+                Some(text) => js_nanbox_string(js_string_from_str(text) as i64),
+                None => f64::from_bits(crate::value::TAG_UNDEFINED),
             };
             arg_handles.push(scope.root_nanbox_f64(group_val));
         }
 
-        arg_handles.push(scope.root_nanbox_f64(char_offset as f64));
-        let string_nanboxed = js_nanbox_string(js_string_from_str(str_data) as i64);
-        arg_handles.push(scope.root_nanbox_f64(string_nanboxed));
+        arg_handles.push(scope.root_nanbox_f64(m.char_offset as f64));
+        // The `string` argument is the subject itself — pass the rooted
+        // original (same string value, current address) instead of
+        // allocating a fresh copy per match.
+        arg_handles.push(scope.root_nanbox_f64(js_nanbox_string(
+            s_handle.get_raw_const_ptr::<StringHeader>() as i64,
+        )));
 
         if has_named_groups {
             let groups_obj = crate::object::js_object_alloc(0, 0);
             let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-            let group_names: Vec<(&str, Option<fancy_regex::Match>)> = fre
-                .capture_names()
-                .enumerate()
-                .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-                .collect();
-            for (name, m) in &group_names {
-                let val = if let Some(m) = m {
-                    js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                } else {
-                    f64::from_bits(TAG_UNDEFINED)
+            for (name, text) in &m.named {
+                let val = match text {
+                    Some(t) => js_nanbox_string(js_string_from_str(t) as i64),
+                    None => f64::from_bits(crate::value::TAG_UNDEFINED),
                 };
+                // Root the value across the key allocation below.
+                let val_handle = scope.root_nanbox_f64(val);
                 let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                 let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
+                crate::object::js_object_set_field_by_name(
+                    groups_obj,
+                    key_ptr,
+                    val_handle.get_nanbox_f64(),
+                );
             }
             let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
             let groups_value = crate::value::js_nanbox_pointer(groups_ptr as i64);
@@ -197,15 +207,61 @@ pub(super) unsafe fn replace_regex_fn_fancy(
         }
 
         let call_args: Vec<f64> = arg_handles.iter().map(|h| h.get_nanbox_f64()).collect();
-        let callback_value =
-            f64::from_bits(crate::value::JSValue::pointer(closure_ptr as *mut u8).bits());
+        let callback_value = f64::from_bits(
+            crate::value::JSValue::pointer(closure_handle.get_raw_const_ptr::<u8>()).bits(),
+        );
         result.push_str(&call_replace_callback(callback_value, &call_args));
 
-        last_end = full_match.end();
+        last_end = m.end;
     }
 
-    result.push_str(&str_data[last_end..]);
+    result.push_str(&cur_str()[last_end..]);
     js_string_from_str(&result)
+}
+
+/// Fancy-regex fallback for `js_string_replace_regex_fn`: used when the pattern
+/// needs lookahead/backreferences that the `regex` crate can't compile. Mirrors
+/// the standard-engine loop below (full ECMAScript callback argument list,
+/// char-based offset, named-group `groups` object) but drives the match loop
+/// with `fancy_regex`.
+pub(super) unsafe fn replace_regex_fn_fancy(
+    s_handle: &crate::gc::RuntimeHandle<'_>,
+    fre: &fancy_regex::Regex,
+    global: bool,
+    closure_ptr: *const crate::closure::ClosureHeader,
+) -> *mut StringHeader {
+    let has_named_groups = fre.capture_names().any(|n| n.is_some());
+    let named_names: Vec<(usize, String)> = fre
+        .capture_names()
+        .enumerate()
+        .filter_map(|(i, name)| name.map(|n| (i, n.to_string())))
+        .collect();
+
+    // Snapshot every match into owned data BEFORE the first callback (see
+    // `OwnedMatchData`).
+    let str_data = string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
+    let mut matches: Vec<OwnedMatchData> = Vec::new();
+    let mut iter = fre.captures_iter(str_data);
+    while let Some(Ok(caps)) = iter.next() {
+        let full_match = caps.get(0).unwrap();
+        matches.push(OwnedMatchData {
+            start: full_match.start(),
+            end: full_match.end(),
+            char_offset: str_data[..full_match.start()].chars().count(),
+            groups: (0..caps.len())
+                .map(|gi| caps.get(gi).map(|m| m.as_str().to_string()))
+                .collect(),
+            named: named_names
+                .iter()
+                .map(|(gi, n)| (n.clone(), caps.get(*gi).map(|m| m.as_str().to_string())))
+                .collect(),
+        });
+        if !global {
+            break;
+        }
+    }
+
+    replace_fn_run_matches(s_handle, &matches, closure_ptr, has_named_groups)
 }
 
 /// string.replace(regex, replacerFn) — replace with a callback function.
@@ -226,13 +282,19 @@ pub extern "C" fn js_string_replace_regex_fn(
     if !is_valid_ptr(s) {
         return js_string_from_str("");
     }
-    let str_data = string_as_str(s);
+
+    // Root the subject for the whole replace: the replacer callback is user
+    // code — it can allocate → trigger a minor GC → the subject is swept
+    // (bare Rust locals are invisible without a conservative stack scan) or
+    // moved. Match data is snapshotted into owned Rust strings BEFORE the
+    // first callback, and the `&str` view is re-derived from this handle
+    // after every callback.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
 
     if !is_valid_regex_ptr(re) {
-        return js_string_from_str(str_data);
+        return js_string_from_str(string_as_str(s));
     }
-
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
     unsafe {
         let regex = &*(*re).regex_ptr;
@@ -242,7 +304,7 @@ pub extern "C" fn js_string_replace_regex_fn(
         let closure_ptr =
             crate::value::js_nanbox_get_pointer(callback) as *const crate::closure::ClosureHeader;
         if closure_ptr.is_null() {
-            return js_string_from_str(str_data);
+            return js_string_from_str(string_as_str(s));
         }
 
         // If the `regex` crate couldn't compile this pattern (lookahead,
@@ -253,98 +315,47 @@ pub extern "C" fn js_string_replace_regex_fn(
         // silently match nothing and return the input unchanged. (get-intrinsic's
         // `stringToPath` relies on `String.prototype.replace(/…(?=…)…/g, fn)`.)
         if let Some(fre) = lookup_fancy_regex(re) {
-            return replace_regex_fn_fancy(str_data, &fre, global, closure_ptr);
+            return replace_regex_fn_fancy(&s_handle, &fre, global, closure_ptr);
         }
-
-        let mut result = String::new();
-        let mut last_end = 0usize;
-        let captures_iter: Vec<regex::Captures> = if global {
-            regex.captures_iter(str_data).collect()
-        } else {
-            match regex.captures(str_data) {
-                Some(caps) => vec![caps],
-                None => vec![],
-            }
-        };
 
         // Does the pattern declare any named capture groups? If so we pass a
         // trailing `groups` object to the callback (matching Node). Computed
         // once outside the match loop.
         let has_named_groups = regex.capture_names().any(|n| n.is_some());
+        let named_names: Vec<(usize, String)> = regex
+            .capture_names()
+            .enumerate()
+            .filter_map(|(i, name)| name.map(|n| (i, n.to_string())))
+            .collect();
 
-        for caps in &captures_iter {
+        // Snapshot every match into owned data BEFORE the first callback (see
+        // `OwnedMatchData`).
+        let str_data = string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
+        let mut matches: Vec<OwnedMatchData> = Vec::new();
+        let mut push_caps = |caps: regex::Captures<'_>| {
             let full_match = caps.get(0).unwrap();
-            result.push_str(&str_data[last_end..full_match.start()]);
-
-            // Calculate char offset for the offset parameter.
-            let char_offset = str_data[..full_match.start()].chars().count();
-
-            // Build the full ECMAScript callback argument list:
-            //   (match, p1, ..., pN, offset, string, groups?)
-            // Root every NaN-boxed value as we go so a GC triggered by a
-            // subsequent string/object/array allocation (or by the callback
-            // dispatch itself) can't reclaim earlier arguments.
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let mut arg_handles: Vec<crate::gc::RuntimeHandle<'_>> = Vec::new();
-
-            let match_nanboxed = js_nanbox_string(js_string_from_str(full_match.as_str()) as i64);
-            arg_handles.push(scope.root_nanbox_f64(match_nanboxed));
-
-            // Capture groups 1..=N (undefined for non-participating groups).
-            let num_groups = caps.len() - 1; // exclude full match
-            for gi in 1..=num_groups {
-                let group_val = if let Some(m) = caps.get(gi) {
-                    js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                } else {
-                    f64::from_bits(TAG_UNDEFINED)
-                };
-                arg_handles.push(scope.root_nanbox_f64(group_val));
+            matches.push(OwnedMatchData {
+                start: full_match.start(),
+                end: full_match.end(),
+                char_offset: str_data[..full_match.start()].chars().count(),
+                groups: (0..caps.len())
+                    .map(|gi| caps.get(gi).map(|m| m.as_str().to_string()))
+                    .collect(),
+                named: named_names
+                    .iter()
+                    .map(|(gi, n)| (n.clone(), caps.get(*gi).map(|m| m.as_str().to_string())))
+                    .collect(),
+            });
+        };
+        if global {
+            for caps in regex.captures_iter(str_data) {
+                push_caps(caps);
             }
-
-            // offset (number) then the whole input string.
-            arg_handles.push(scope.root_nanbox_f64(char_offset as f64));
-            let string_nanboxed = js_nanbox_string(js_string_from_str(str_data) as i64);
-            arg_handles.push(scope.root_nanbox_f64(string_nanboxed));
-
-            // groups object (only when the pattern has named captures).
-            if has_named_groups {
-                let groups_obj = crate::object::js_object_alloc(0, 0);
-                let groups_handle = scope.root_raw_mut_ptr(groups_obj);
-                let group_names: Vec<(&str, Option<regex::Match>)> = regex
-                    .capture_names()
-                    .enumerate()
-                    .filter_map(|(i, name)| name.map(|n| (n, caps.get(i))))
-                    .collect();
-                for (name, m) in &group_names {
-                    let val = if let Some(m) = m {
-                        js_nanbox_string(js_string_from_str(m.as_str()) as i64)
-                    } else {
-                        f64::from_bits(TAG_UNDEFINED)
-                    };
-                    let key_ptr =
-                        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                    let groups_obj = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                    crate::object::js_object_set_field_by_name(groups_obj, key_ptr, val);
-                }
-                // Re-root the (possibly-moved) groups object as a NaN-boxed
-                // pointer value so it lands in the uniform `arg_handles` list
-                // alongside the other NaN-boxed callback args.
-                let groups_ptr = groups_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-                let groups_value = crate::value::js_nanbox_pointer(groups_ptr as i64);
-                arg_handles.push(scope.root_nanbox_f64(groups_value));
-            }
-
-            let call_args: Vec<f64> = arg_handles.iter().map(|h| h.get_nanbox_f64()).collect();
-            let callback_value =
-                f64::from_bits(crate::value::JSValue::pointer(closure_ptr as *mut u8).bits());
-            result.push_str(&call_replace_callback(callback_value, &call_args));
-
-            last_end = full_match.end();
+        } else if let Some(caps) = regex.captures(str_data) {
+            push_caps(caps);
         }
 
-        // Append remaining text
-        result.push_str(&str_data[last_end..]);
-        js_string_from_str(&result)
+        replace_fn_run_matches(&s_handle, &matches, closure_ptr, has_named_groups)
     }
 }
 

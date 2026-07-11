@@ -13,6 +13,8 @@ use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::apple_codesign::{codesign_apple_bundle, read_watch_signing_config};
+use super::apple_info_plist::inject_app_group_entitlement;
 use super::i18n_emit::write_lproj_localized_strings;
 use super::resources::{
     copy_bundle_resource_dirs, find_project_root_for_resources, stage_native_library_artifacts,
@@ -184,7 +186,14 @@ pub(super) fn apple_dt_plist_block(
 /// Create a watchOS `.app` bundle: copy the linked binary into the
 /// bundle, write `Info.plist` (CFBundleExecutable / CFBundleIdentifier
 /// / WKApplication), copy project asset directories, then run the
-/// shared metallib compile for any `.metal` sources.
+/// shared metallib compile for any `.metal` sources. When the project
+/// has `[i18n]` config, the plist additionally declares
+/// CFBundleLocalizations / CFBundleDevelopmentRegion and per-locale
+/// `<locale>.lproj/Localizable.strings` bundles are emitted — without
+/// declared localizations, `NSBundle.preferredLocalizations` (the
+/// primary source in `perry_runtime::i18n::detect_apple_locale`)
+/// filters the user's languages against the bundle and always answers
+/// the development language, so a German watch still rendered English.
 ///
 /// Returns `(app_dir, bundle_id)` so the caller can wire them into
 /// the final `CompileResult` (`result_app_dir`, `result_bundle_id`).
@@ -194,6 +203,8 @@ pub(super) fn bundle_for_watchos(
     target: Option<&str>,
     input: &Path,
     ctx: &CompilationContext,
+    i18n_table: Option<&perry_transform::i18n::I18nStringTable>,
+    i18n_config: Option<&perry_transform::i18n::I18nConfig>,
     format: OutputFormat,
 ) -> Result<(PathBuf, String)> {
     let app_dir = exe_path.with_extension("app");
@@ -228,6 +239,27 @@ pub(super) fn bundle_for_watchos(
         "26.0"
     };
 
+    // Declare the app's localizations so NSBundle's language negotiation
+    // can pick a non-default locale (and per-app language settings appear
+    // in the watch Settings app / App Store Connect "Languages" listing).
+    let i18n_plist_block = i18n_config
+        .map(|config| {
+            let mut block = format!(
+                "    <key>CFBundleDevelopmentRegion</key>\n    <string>{}</string>\n",
+                xml_escape(&config.default_locale)
+            );
+            block.push_str("    <key>CFBundleLocalizations</key>\n    <array>\n");
+            for locale in &config.locales {
+                block.push_str(&format!(
+                    "        <string>{}</string>\n",
+                    xml_escape(locale)
+                ));
+            }
+            block.push_str("    </array>\n");
+            block
+        })
+        .unwrap_or_default();
+
     let info_plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -243,7 +275,7 @@ pub(super) fn bundle_for_watchos(
     <string>{app_build_number}</string>
     <key>CFBundleShortVersionString</key>
     <string>{app_version}</string>
-    <key>MinimumOSVersion</key>
+{i18n_plist_block}    <key>MinimumOSVersion</key>
     <string>{min_os}</string>
     <key>UIDeviceFamily</key>
     <array>
@@ -319,6 +351,32 @@ pub(super) fn bundle_for_watchos(
 
     compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
     stage_native_library_artifacts(ctx, &app_dir, format)?;
+
+    // Emit `<locale>.lproj/Localizable.strings` — the .lproj directories
+    // are what NSBundle actually scans during language negotiation (the
+    // plist keys alone are advisory), same as the iOS / visionOS bundlers.
+    // Must run before codesign below, which seals the bundle contents.
+    write_lproj_localized_strings(&app_dir, i18n_table, i18n_config);
+
+    // #675 — App Group entitlement + codesign. Only when `[watchos]
+    // app_group` is set: `inject_app_group_entitlement` writes
+    // `<app>.app/app.entitlements` (shared with the iOS bundler) and
+    // returns `Some(())`; a plain watch app has no app_group, so nothing is
+    // written and the bundle stays unsigned exactly as before. This must be
+    // the last mutation of the bundle — codesign seals its contents.
+    let is_watch_sim = target == Some("watchos-simulator");
+    if inject_app_group_entitlement(&app_dir, ctx.app_metadata.app_group.as_deref(), format)
+        .is_some()
+    {
+        let signing_cfg = read_watch_signing_config(input);
+        codesign_apple_bundle(
+            &app_dir,
+            &app_dir.join("app.entitlements"),
+            is_watch_sim,
+            &signing_cfg,
+            format,
+        )?;
+    }
 
     match format {
         OutputFormat::Text => {

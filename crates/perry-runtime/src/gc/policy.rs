@@ -1,140 +1,5 @@
+use super::heap_budget::*;
 use super::*;
-
-/// Hard work budget for ordinary automatic GC steps once the collector is
-/// split into resumable phases.
-pub const GC_NORMAL_INCREMENTAL_WORK_UNITS: usize = 2_048;
-/// Soft telemetry target for ordinary automatic GC steps.
-pub const GC_NORMAL_INCREMENTAL_SOFT_PAUSE_US: u64 = 2_000;
-/// Hard work budget for allocation-side mutator assist steps.
-pub const GC_MUTATOR_ASSIST_WORK_UNITS: usize = 256;
-/// Soft telemetry target for allocation-side mutator assist steps.
-pub const GC_MUTATOR_ASSIST_SOFT_PAUSE_US: u64 = 500;
-
-/// Runtime-visible classification for GC progress.
-///
-/// Only `NormalIncremental` and `MutatorAssist` satisfy the low-pause
-/// invariant today defined by this contract: bounded by work units, not heap
-/// size. Explicit synchronous work and emergency full collections are allowed
-/// to be unbounded only because they are separately requested or separately
-/// reported.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GcProgressKind {
-    NormalIncremental,
-    MutatorAssist,
-    ExplicitSynchronous,
-    ExplicitFull,
-    EmergencyFull,
-    LegacySynchronous,
-}
-
-impl GcProgressKind {
-    #[inline]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NormalIncremental => "normal_incremental",
-            Self::MutatorAssist => "mutator_assist",
-            Self::ExplicitSynchronous => "explicit_synchronous",
-            Self::ExplicitFull => "explicit_full",
-            Self::EmergencyFull => "emergency_full",
-            Self::LegacySynchronous => "legacy_synchronous",
-        }
-    }
-
-    #[inline]
-    pub const fn is_budgeted(self) -> bool {
-        matches!(self, Self::NormalIncremental | Self::MutatorAssist)
-    }
-
-    #[inline]
-    pub const fn report_class(self) -> &'static str {
-        match self {
-            Self::NormalIncremental | Self::MutatorAssist => "ordinary_budgeted",
-            Self::ExplicitSynchronous | Self::ExplicitFull => "explicit",
-            Self::EmergencyFull => "emergency",
-            Self::LegacySynchronous => "legacy",
-        }
-    }
-}
-
-/// Hard work-unit limit plus a soft pause target for telemetry.
-///
-/// `None` means the path is intentionally unbounded and must be labeled by its
-/// `GcProgressKind`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GcPauseBudget {
-    pub work_units: Option<usize>,
-    pub pause_us: Option<u64>,
-}
-
-impl GcPauseBudget {
-    #[inline]
-    pub const fn bounded(work_units: usize, pause_us: u64) -> Self {
-        Self {
-            work_units: Some(work_units),
-            pause_us: Some(pause_us),
-        }
-    }
-
-    #[inline]
-    pub const fn unbounded() -> Self {
-        Self {
-            work_units: None,
-            pause_us: None,
-        }
-    }
-
-    #[inline]
-    pub const fn is_bounded(self) -> bool {
-        self.work_units.is_some()
-    }
-}
-
-/// GC progress policy exposed to runtime and trace consumers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GcProgressContract {
-    pub normal_step_budget: GcPauseBudget,
-    pub assist_budget: GcPauseBudget,
-    pub explicit_synchronous_policy: GcPauseBudget,
-    pub explicit_full_policy: GcPauseBudget,
-    pub emergency_policy: GcPauseBudget,
-}
-
-impl GcProgressContract {
-    #[inline]
-    pub const fn budget_for(self, kind: GcProgressKind) -> GcPauseBudget {
-        match kind {
-            GcProgressKind::NormalIncremental => self.normal_step_budget,
-            GcProgressKind::MutatorAssist => self.assist_budget,
-            GcProgressKind::ExplicitSynchronous => self.explicit_synchronous_policy,
-            GcProgressKind::ExplicitFull => self.explicit_full_policy,
-            GcProgressKind::EmergencyFull => self.emergency_policy,
-            GcProgressKind::LegacySynchronous => GcPauseBudget::unbounded(),
-        }
-    }
-}
-
-impl Default for GcProgressContract {
-    fn default() -> Self {
-        Self {
-            normal_step_budget: GcPauseBudget::bounded(
-                GC_NORMAL_INCREMENTAL_WORK_UNITS,
-                GC_NORMAL_INCREMENTAL_SOFT_PAUSE_US,
-            ),
-            assist_budget: GcPauseBudget::bounded(
-                GC_MUTATOR_ASSIST_WORK_UNITS,
-                GC_MUTATOR_ASSIST_SOFT_PAUSE_US,
-            ),
-            explicit_synchronous_policy: GcPauseBudget::unbounded(),
-            explicit_full_policy: GcPauseBudget::unbounded(),
-            emergency_policy: GcPauseBudget::unbounded(),
-        }
-    }
-}
-
-/// Return Perry's process-wide GC progress contract.
-pub fn gc_progress_contract() -> GcProgressContract {
-    GcProgressContract::default()
-}
 
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
@@ -204,6 +69,24 @@ pub(super) const GC_THRESHOLD_MAX_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
 /// which is exactly the bench-RSS scenario this is targeting.
 pub(super) const GC_TRIGGER_ABSOLUTE_CEILING: usize = 128 * 1024 * 1024;
 
+// Device-derived heap budget: see gc/heap_budget.rs (split out for the
+// 2000-line file lint).
+
+/// The arena-bytes trigger as the collector should compare it: the raw
+/// cell while armed (explicit re-arms/bumps may legitimately exceed the
+/// ceiling — headroom floor over a big live set, medium-parse bumps), the
+/// device-derived ceiling while the cell still holds its desktop-default
+/// const initializer.
+pub(super) fn effective_next_arena_trigger() -> usize {
+    if GC_TRIGGER_ARMED.with(|a| a.get()) {
+        GC_NEXT_TRIGGER_BYTES.with(|c| c.get())
+    } else {
+        GC_NEXT_TRIGGER_BYTES
+            .with(|c| c.get())
+            .min(gc_trigger_absolute_ceiling_bytes())
+    }
+}
+
 thread_local! {
     /// Lower bound for the next GC trigger. Bumped after each
     /// `gc_collect_inner` based on collection effectiveness (see the
@@ -225,6 +108,15 @@ thread_local! {
     /// set unboundedly between collections.
     pub(super) static GC_NEXT_TRIGGER_BYTES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(GC_THRESHOLD_INITIAL_BYTES) };
+
+    /// Whether GC_NEXT_TRIGGER_BYTES has been explicitly set on this thread
+    /// (re-arm after a collection, parse bump, tiny-parse lowering). While
+    /// false the cell still holds the desktop-default const initializer and
+    /// `effective_next_arena_trigger` substitutes the device-derived ceiling
+    /// instead — an ARMED trigger above the ceiling is legitimate (big live
+    /// set headroom floor, medium-parse bumps) and must not be clamped.
+    pub(super) static GC_TRIGGER_ARMED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 
     /// Per-program adaptive GC step. Doubles (up to MAX) when sweeps
     /// are mostly-garbage; halves (down to 16MB) when sweeps reclaim
@@ -275,10 +167,10 @@ pub(super) fn gc_bump_arena_trigger_target(
     step: usize,
     is_tiny_parse: bool,
 ) -> usize {
-    let bytes_step = step.min(GC_THRESHOLD_INITIAL_BYTES);
+    let bytes_step = step.min(gc_trigger_absolute_ceiling_bytes());
     let target = bytes_now.saturating_add(bytes_step);
     if is_tiny_parse {
-        target.min(GC_TRIGGER_ABSOLUTE_CEILING)
+        target.min(gc_trigger_absolute_ceiling_bytes())
     } else {
         target
     }
@@ -375,6 +267,73 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 }
 
 #[inline]
+/// The moving (copying) minor at the precise-root event-loop safepoint —
+/// **Perry's default GC.** At the outermost microtask-pump boundary the JS stack
+/// has unwound, so the copying minor runs with precise, rewritable roots and
+/// moves survivors (compacting, O(survivors), no sweep). `PERRY_GC_MOVING_SAFEPOINT=0`
+/// is a kill switch that reverts to the non-moving path (for bisecting a
+/// regression while we harden). Making the moving minor primary INSIDE loops
+/// (back-edge polls + alloc-point deferral) is the separate opt-in
+/// `PERRY_GC_MOVING_LOOP_POLLS` — off by default because the poll defeats loop
+/// vectorization until it is emitted only for allocating loops.
+pub(crate) fn gc_moving_safepoint_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_GC_MOVING_SAFEPOINT").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
+/// budgeted stepper). **EXPERIMENTAL — default OFF.** Perry has a full budgeted
+/// mark/sweep stepper but it never runs, because every compiled program
+/// registers unbudgeted mutable root scanners and
+/// `registered_root_scanners_block_budgeted_gc()` blocks the cycle from ever
+/// starting. When this is on, the stepper is allowed to start and runs those
+/// unbudgeted scanners SYNCHRONOUSLY in its initial root-scan step (a bounded
+/// initial-mark pause), then marks/sweeps the old gen incrementally across
+/// safepoints — the standard "initial-mark + incremental-mark" design. Off ⇒
+/// exactly today's non-incremental GC (the whole path is skipped). Independent
+/// of `PERRY_GC_MOVING_SAFEPOINT`; this is the concurrency layer that reduces
+/// old-gen pause time.
+pub(crate) fn gc_incremental_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        // DEFAULT ON (#6180 flip): ordinary allocation pressure is collected
+        // by the budgeted incremental stepper — debt-paced assists, sound
+        // across mutator windows (mark barrier + allocate-black + final
+        // remark + drain-before-synchronous), census-free, RSS-parity on
+        // realistic workloads with ~5x lower worst pause. Bounded pauses by
+        // default; the synchronous collector remains for manual gc(),
+        // emergency reclaim, and as the PERRY_GC_INCREMENTAL=0 escape hatch
+        // (bisection / max-throughput batch workloads).
+        !matches!(
+            std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Phase 2/3 (opt-in, default OFF): also make the moving minor PRIMARY inside
+/// loops — defer the alloc-point nursery collection to a codegen loop back-edge
+/// poll (`js_gc_loop_safepoint`) instead of collecting non-moving mid-expression.
+/// Off by default because the poll emits a call in every loop, defeating
+/// vectorization; when it's emitted only for allocating loops this can flip on.
+/// Must match the codegen `moving_safepoint_polls_enabled` (same env) so the
+/// deferral and the polls that drain it stay coherent.
+pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_MOVING_LOOP_POLLS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 pub(super) fn gc_trace_enabled() -> bool {
     #[cfg(test)]
     if GC_TRACE_TEST_FORCE.with(Cell::get) {
@@ -578,7 +537,23 @@ thread_local! {
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
     pub(super) static GC_OLD_RECLAIM_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+    /// Phase 2/3 of the moving-GC project: set when an alloc-point nursery
+    /// trigger fires while moving mode is on, deferring the collection to the
+    /// next precise-root safepoint (event-loop boundary or a codegen loop
+    /// back-edge poll) so the copying minor can MOVE survivors instead of the
+    /// conservative non-moving minor running mid-expression.
+    pub(super) static GC_SAFEPOINT_PENDING: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Hard cap on committed arena bytes before which a nursery trigger may be
+/// deferred to a safepoint (Phase 2/3). Loop back-edge polls drain the pending
+/// flag every iteration, so the arena never grows near this in normal code; the
+/// cap bounds RSS for code that reaches no safepoint before the next trigger —
+/// a synchronous loop on a specialized lowering path that doesn't yet emit the
+/// poll, or a single mega-expression — where the alloc-point non-moving minor
+/// runs as the safety valve. Kept modest so those cases don't balloon under the
+/// default-on moving GC (raise once poll coverage is complete).
+pub(super) const GC_MOVING_DEFER_HARD_CAP_BYTES: usize = 128 * 1024 * 1024;
 
 /// RAII guard that marks a #5476 direct old-gen reclaim in progress so a nested
 /// `gc_check_trigger` can't re-enter it. See `GC_OLD_RECLAIM_IN_PROGRESS`.
@@ -652,8 +627,7 @@ pub(super) fn flush_deferred_gc_request() {
 
 pub fn gc_suppress() {
     if !gen_gc_enabled()
-        && crate::arena::arena_in_use_bytes()
-            >= GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+        && crate::arena::arena_in_use_bytes() >= gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
     {
         crate::arena::arena_start_fresh_general_block();
     }
@@ -694,9 +668,9 @@ pub fn gc_bump_malloc_trigger() {
     if is_tiny_parse {
         let use_gen_gc = gen_gc_enabled();
         let in_use_trigger = if use_gen_gc {
-            GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES
+            gc_tiny_parse_in_use_trigger_dyn_bytes()
         } else {
-            GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES
+            gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
         };
         if crate::arena::arena_in_use_bytes() < in_use_trigger {
             return;
@@ -710,6 +684,7 @@ pub fn gc_bump_malloc_trigger() {
             GC_NEXT_TRIGGER_BYTES.with(|trigger| {
                 if trigger.get() > bytes_now {
                     trigger.set(bytes_now);
+                    GC_TRIGGER_ARMED.with(|a| a.set(true));
                 }
             });
             gc_check_trigger();
@@ -746,6 +721,7 @@ pub fn gc_collect_pending_suppressed_parse() {
     GC_NEXT_TRIGGER_BYTES.with(|trigger| {
         if trigger.get() > total {
             trigger.set(total);
+            GC_TRIGGER_ARMED.with(|a| a.set(true));
         }
     });
     gc_check_trigger();
@@ -763,7 +739,7 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if !gen_gc_enabled() {
         return;
     }
-    if crate::arena::arena_in_use_bytes() < GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES {
+    if crate::arena::arena_in_use_bytes() < gc_tiny_parse_in_use_trigger_dyn_bytes() {
         return;
     }
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
@@ -771,9 +747,9 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
 
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
-    (old_in_use >= GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
-        && baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES)
-        || old_in_use.saturating_sub(baseline) >= GC_OLD_GEN_RECLAIM_GROWTH_BYTES
+    (old_in_use >= gc_old_gen_reclaim_threshold_dyn_bytes()
+        && baseline < gc_old_gen_reclaim_threshold_dyn_bytes())
+        || old_in_use.saturating_sub(baseline) >= gc_old_gen_reclaim_growth_dyn_bytes()
 }
 
 #[inline]
@@ -782,7 +758,7 @@ pub(super) fn copied_minor_promotion_handoff_pressure_due(
     old_in_use: usize,
     baseline: usize,
 ) -> bool {
-    promotable_bytes >= GC_COPY_PROMOTION_HANDOFF_MIN_BYTES
+    promotable_bytes >= gc_copy_promotion_handoff_min_dyn_bytes()
         && old_reclaim_pressure_due(old_in_use.saturating_add(promotable_bytes), baseline)
 }
 
@@ -816,7 +792,9 @@ pub(super) fn copied_minor_promotion_handoff_due(trigger_kind: GcTriggerKind) ->
     ) {
         return false;
     }
-    if crate::arena::copying_active_survivor_in_use_bytes() < GC_COPY_PROMOTION_HANDOFF_MIN_BYTES {
+    if crate::arena::copying_active_survivor_in_use_bytes()
+        < gc_copy_promotion_handoff_min_dyn_bytes()
+    {
         return false;
     }
     let promotable = copied_minor_promotable_active_survivor_bytes();
@@ -896,8 +874,12 @@ pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: us
     // Only raise — never lower — so this can't accidentally trip a
     // pending collection that the existing trigger had already armed.
     GC_NEXT_TRIGGER_BYTES.with(|c| {
-        if bytes_trigger > c.get() {
+        // Compare against the effective (budget-clamped) trigger, not the
+        // raw cell: on a small-budget device the cell's un-armed default
+        // (128 MB) would otherwise swallow every legitimate parse bump.
+        if bytes_trigger > effective_next_arena_trigger() {
             c.set(bytes_trigger);
+            GC_TRIGGER_ARMED.with(|a| a.set(true));
             if !is_tiny_parse {
                 GC_TRIGGER_BUMPED.with(|b| b.set(true));
             }
@@ -1022,10 +1004,11 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     // approaches the ceiling doesn't thrash on every fresh
     // allocation.
     let stepped = new_total.saturating_add(step);
-    let capped = stepped.min(GC_TRIGGER_ABSOLUTE_CEILING);
-    let floor = new_total.saturating_add(16 * 1024 * 1024);
+    let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
+    let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
     let next_trigger = std::cmp::max(capped, floor);
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
+    GC_TRIGGER_ARMED.with(|a| a.set(true));
     // Rebaseline the malloc-count trigger only if this collection
     // actually swept malloc objects. Copied-minor arena collections
     // may skip the malloc sweep while count pressure is still below
@@ -1161,6 +1144,19 @@ pub fn gc_check_trigger() {
             _ => None,
         };
         if let Some(kind) = direct_kind {
+            // Phase 2/3: with moving mode on, DEFER this alloc-point collection
+            // to the next precise-root safepoint (event-loop boundary or a
+            // codegen loop back-edge poll) so the copying minor MOVES survivors
+            // instead of the conservative non-moving minor running here at a
+            // register-imprecise point. Safety valve: once committed arena bytes
+            // pass the hard cap (a mega-expression that reached no poll), fall
+            // through and collect non-moving here so growth stays bounded.
+            if gc_moving_loop_polls_enabled()
+                && crate::arena::arena_total_bytes() < gc_moving_defer_hard_cap_dyn_bytes()
+            {
+                GC_SAFEPOINT_PENDING.with(|p| p.set(true));
+                return;
+            }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
             let _scan = super::roots::ManualGcScanGuard::force_full_scan();
@@ -1200,9 +1196,43 @@ pub fn gc_check_trigger() {
     }
 
     let _ = gc_mutator_assist_step_work_units_inner_with_progress(
-        GC_MUTATOR_ASSIST_WORK_UNITS,
+        gc_mutator_assist_scaled_work_units(),
         GcProgressKind::MutatorAssist,
     );
+}
+
+/// Debt-proportional assist pacing (#6180 Stage 2, measured 2026-07-10).
+///
+/// A FIXED per-assist budget lets a tight allocation loop outrun the
+/// collector: on a 10M-allocation ring benchmark the budgeted cycle NEVER
+/// completed (0 collections vs the synchronous default's 7) and RSS grew
+/// unbounded (6-22× the synchronous collector's) — the cycle crawled at 256
+/// units per arena-block allocation against a heap growing by ~16k objects
+/// per block. `GcDebtSnapshot` already measured exactly this shortfall but
+/// fed telemetry only.
+///
+/// Scale the budget linearly with the measured debt instead. Debt is how far
+/// allocation has run past the armed triggers, so between two block-alloc
+/// assists it grows by ~one block while the budget grows with total debt —
+/// the controller self-stabilizes at the equilibrium where collection keeps
+/// pace with allocation, instead of falling behind forever.
+///
+/// No explicit cap is needed: the budget is a CEILING on work, not a pause
+/// floor — `GcCycleState::step` stops the moment the cycle completes, and a
+/// cycle's remaining work is bounded by the heap. The worst case is therefore
+/// finishing the whole cycle in one assist: exactly the pause the synchronous
+/// collector takes on every collection today. Under extreme allocation
+/// pressure incremental degrades gracefully toward synchronous behavior
+/// rather than toward unbounded memory.
+pub(super) fn gc_mutator_assist_scaled_work_units() -> usize {
+    let debt = GcDebtSnapshot::current();
+    let arena_units = (debt.arena_debt_bytes / GC_ASSIST_DEBT_BYTES_PER_WORK_UNIT) as usize;
+    // Malloc-registry work is per-object (mark/sweep touches each header
+    // once), so malloc debt converts 1:1.
+    let malloc_units = debt.malloc_debt_objects as usize;
+    GC_MUTATOR_ASSIST_WORK_UNITS
+        .saturating_add(arena_units)
+        .saturating_add(malloc_units)
 }
 
 pub const JS_GC_STEP_STATUS_IDLE: u32 = 0;
@@ -1270,10 +1300,10 @@ fn gc_budgeted_resume_blocked() -> bool {
 }
 
 pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
-    let trigger = if baseline < GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES {
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES
+    let trigger = if baseline < gc_old_gen_reclaim_threshold_dyn_bytes() {
+        gc_old_gen_reclaim_threshold_dyn_bytes()
     } else {
-        baseline.saturating_add(GC_OLD_GEN_RECLAIM_GROWTH_BYTES)
+        baseline.saturating_add(gc_old_gen_reclaim_growth_dyn_bytes())
     };
     old_in_use.saturating_sub(trigger) as u64
 }
@@ -1289,8 +1319,7 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     }
 
     let total = crate::arena::arena_total_bytes();
-    let next_arena_trigger = GC_NEXT_TRIGGER_BYTES.with(|c| c.get());
-    if total >= next_arena_trigger {
+    if total >= effective_next_arena_trigger() {
         return Some(BudgetedGcTrigger::ArenaBytes);
     }
 
@@ -1301,6 +1330,70 @@ fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
     }
 
     None
+}
+
+/// Phase 1 of the moving-GC project: run a copying (moving) minor at a
+/// precise-root safepoint — the outermost microtask-pump boundary, where the
+/// JS stack has fully unwound so no live heap pointer sits in an unspilled
+/// register. Unlike the alloc-point nursery-churn arm, NO `force_full_scan` is
+/// taken: `conservative_stack_scan_decision()` stays `SkipDisabled`, so the
+/// copying minor is eligible with precise, rewritable roots and actually MOVES
+/// (compacting, O(survivors), no sweep) instead of falling back to the
+/// non-moving minor. Trigger detection + re-baseline mirror the nursery-churn
+/// arm; this is purely additive (the alloc-point fallback is untouched) and
+/// gated by `gc_moving_safepoint_enabled` (default off).
+pub(crate) fn gc_safepoint_moving_minor() {
+    // Same start guards the budgeted collector uses, minus the (here
+    // irrelevant) scanner block: never collect mid-allocation, inside a
+    // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
+    if GC_FLAGS.with(|f| f.get()) & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0
+        || gc_blocked_by_unsafe_zone()
+        || GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
+        || gc_budgeted_cycle_active()
+    {
+        // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
+        // retries; do not clear it here.
+        return;
+    }
+    // We are handling this safepoint (collect or find nothing due): clear the
+    // deferral flag set by the alloc-point arm (Phase 2/3).
+    GC_SAFEPOINT_PENDING.with(|p| p.set(false));
+    // Only nursery-pressure triggers take the moving minor here; OldReclaim
+    // stays on its existing full mark-sweep path.
+    let kind = match gc_budgeted_due_trigger() {
+        Some(BudgetedGcTrigger::ArenaBytes) => GcTriggerKind::ArenaBytes,
+        Some(BudgetedGcTrigger::MallocCount) => GcTriggerKind::MallocCount,
+        _ => return,
+    };
+    let pre_in_use = crate::arena::arena_in_use_bytes();
+    let pre_malloc_count = malloc_object_count();
+    // No `force_full_scan`: roots are precise at this safepoint.
+    let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
+    match kind {
+        GcTriggerKind::MallocCount => {
+            gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+        }
+        _ => {
+            gc_finish_arena_trigger_collection(pre_in_use, outcome);
+        }
+    }
+}
+
+/// Phase 2 of the moving-GC project: codegen emits a call to this at loop
+/// back-edges — but ONLY when the compiler was invoked with the moving-safepoint
+/// opt-in, so default binaries carry zero loop overhead. At a back-edge the
+/// loop-body expression has completed, so no heap value lives in an unspilled
+/// register (every live value is a named local on the shadow stack): a
+/// precise-root safepoint. If moving mode is on and an alloc-point nursery
+/// trigger deferred a collection (`GC_SAFEPOINT_PENDING`), drain it here so the
+/// copying minor MOVES survivors. Cheap no-op otherwise (one cached-bool load +
+/// one thread-local read).
+#[no_mangle]
+pub extern "C" fn js_gc_loop_safepoint() {
+    if !gc_moving_loop_polls_enabled() || !GC_SAFEPOINT_PENDING.with(Cell::get) {
+        return;
+    }
+    gc_safepoint_moving_minor();
 }
 
 struct BudgetedGcStepGuard;
@@ -1570,18 +1663,46 @@ enum BudgetedStepOutcome {
     Completed(BudgetedGcCycle),
 }
 
+/// Finish any parked budgeted cycle through its own machinery before a
+/// synchronous (direct/manual/emergency) collection constructs a fresh
+/// `GcCycleState`. Two cycles must never be alive at once: they share
+/// `GC_FLAG_MARKED`, the mark-seed queue, the incremental-barrier TLS, and
+/// the allocate-black birth-flag lifecycle — a synchronous full mark-sweep
+/// landing mid-budgeted-cycle erases the parked cycle's marks, so its
+/// eventual sweep frees whatever the interloper didn't re-mark (measured as
+/// the manual-`gc()` SIGSEGV escalation of the #6224 stress). One unbounded
+/// step drives the parked cycle to completion via the normal finisher.
+pub(super) fn gc_drain_active_budgeted_cycle() {
+    if !gc_budgeted_cycle_active() {
+        return;
+    }
+    // One `step()` call advances only the CURRENT phase (even with an
+    // unbounded budget) — completing the whole cycle takes one call per
+    // remaining phase, exactly like `run_to_completion`'s loop. Bound the
+    // loop defensively: 8 phases, and a blocked stepper (suppression /
+    // unsafe zone / reentrancy guard) returns without progress — bail then
+    // rather than spin.
+    for _ in 0..64 {
+        let result = gc_budgeted_step_work_units_inner(usize::MAX);
+        if !gc_budgeted_cycle_active() {
+            return;
+        }
+        if result.status == JS_GC_STEP_STATUS_SKIPPED {
+            break;
+        }
+    }
+    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        eprintln!("[gc-drain] WARNING: parked budgeted cycle could not be drained before synchronous collection");
+    }
+}
+
 fn gc_budgeted_step_work_units_inner(work_units: usize) -> JsGcStepResult {
-    gc_budgeted_step_work_units_inner_with_progress(
-        work_units,
-        GcProgressKind::NormalIncremental,
-        false,
-    )
+    gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
 }
 
 fn gc_budgeted_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
-    mutator_assist_only: bool,
 ) -> JsGcStepResult {
     if work_units == 0 {
         return gc_budgeted_status_result();
@@ -1617,14 +1738,6 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             return BudgetedStepOutcome::Result(gc_idle_step_result());
         };
 
-        if mutator_assist_only && !cycle.state.phase().mutator_assist_honors_budget() {
-            return BudgetedStepOutcome::Result(gc_cycle_step_result(
-                JS_GC_STEP_STATUS_ACTIVE,
-                cycle,
-                false,
-            ));
-        }
-
         let step = cycle.state.step(GcWorkBudget::bounded(work_units));
         if step.completed {
             BudgetedStepOutcome::Completed(slot.take().expect("active budgeted GC cycle exists"))
@@ -1643,11 +1756,23 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     }
 }
 
+/// Allocation-side mutator assist: a bounded (`GC_MUTATOR_ASSIST_WORK_UNITS`)
+/// slice of GC work performed from the allocator (`gc_check_trigger`) rather
+/// than from a host safepoint. Assists drive **every** resumable phase of the
+/// active budgeted cycle, exactly like a host safepoint — the only difference
+/// is the smaller per-step budget carried in `work_units`. This is what closes
+/// the incremental sweep-parking hole (#6180): a pure compute loop that never
+/// reaches the event pump still finishes the cycle (and disables the mark
+/// barrier / reclaims memory) purely from the allocations it keeps making, so
+/// RSS stays bounded. `AtomicFinalizeSubphase::WeakProcessing` is the one
+/// phase step that is not yet internally sliced, so the assist that lands on it
+/// runs it whole — a single O(live-weak-holders) spike per cycle; slicing it is
+/// a tracked follow-up (pause-quality, not correctness).
 fn gc_mutator_assist_step_work_units_inner_with_progress(
     work_units: usize,
     start_progress_kind: GcProgressKind,
 ) -> JsGcStepResult {
-    gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind, true)
+    gc_budgeted_step_work_units_inner_with_progress(work_units, start_progress_kind)
 }
 
 pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
@@ -1655,11 +1780,7 @@ pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
     let Some(work_units) = budget.work_units else {
         return gc_budgeted_status_result();
     };
-    gc_budgeted_step_work_units_inner_with_progress(
-        work_units,
-        GcProgressKind::NormalIncremental,
-        false,
-    )
+    gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
 }
 
 fn write_gc_step_result(out: *mut JsGcStepResult, result: JsGcStepResult) -> u32 {
@@ -1747,7 +1868,10 @@ pub extern "C" fn js_gc_collect() {
 /// forces the conservative native-stack scan (#4977); see `ManualGcScanGuard`.
 fn manual_gc_collect_now() {
     let _scan = super::roots::ManualGcScanGuard::force_full_scan();
-    crate::weakref::clear_pending_finalization_jobs();
+    // NOTE: pending finalization jobs from earlier AUTOMATIC cycles are NOT
+    // cleared here — each record enqueues exactly once (its pending flag is
+    // reset at enqueue time), so dropping the vec would lose those callbacks
+    // forever. The delivery below simply takes whatever is queued.
     // An explicit `gc()` runs a FULL mark-sweep rather than the generational
     // fast path. With gen-GC on (the default), `gc_collect_inner_with_trigger`
     // dispatches a MINOR cycle, whose sweep skips dead-old-block reclamation

@@ -10,7 +10,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::helpers::scoped_static_method_name;
 use super::opts::CrossModuleCtx;
@@ -291,6 +291,28 @@ pub(super) fn compile_method(
     if typed_public_trampoline.is_some() || force_generic_body {
         lf.linkage = "internal".to_string();
     }
+
+    // gh #6206 / #6081: methods were compiled WITHOUT a shadow frame — same
+    // exact-roots liveness hole as closures (see compile_closure). One extra
+    // slot roots the receiver (`this` is a pointer value reachable from
+    // nothing else when the caller holds it only in a register temp).
+    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+        let flat_const_ids: std::collections::HashSet<u32> =
+            cross_module.flat_const_arrays.keys().copied().collect();
+        let m = crate::collectors::collect_pointer_typed_locals(
+            &method.params,
+            &method.body,
+            &flat_const_ids,
+        );
+        lf.enable_shadow_frame(m.len() as u32 + 1);
+        m
+    } else {
+        std::collections::HashMap::new()
+    };
+    let this_shadow_slot_idx = shadow_slot_map.len() as u32;
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&method.body, &shadow_slot_map);
+
     let _ = lf.create_block("entry");
 
     let mut method_boxed_vars = module_boxed_vars.clone();
@@ -302,10 +324,22 @@ pub(super) fn compile_method(
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
         blk.store(DOUBLE, "%this_arg", &this_slot);
+        if super::helpers::shadow_stack_enabled() {
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
+            );
+        }
         let mut map = HashMap::new();
         for p in &method.params {
             let arg_name = format!("%arg{}", p.id);
             let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
+            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                );
+            }
             map.insert(p.id, slot);
         }
         (this_slot, map)
@@ -422,8 +456,8 @@ pub(super) fn compile_method(
         pending_declares: Vec::new(),
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
-        shadow_slot_map: std::collections::HashMap::new(),
-        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
+        shadow_slot_map,
+        shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
@@ -1147,6 +1181,27 @@ pub(super) fn compile_static_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+
+    // gh #6206 / #6081: same shadow-frame emission as compile_method — static
+    // method bodies were equally invisible to the exact-roots copying minor.
+    // One extra slot roots the resolved receiver: static `this` is usually
+    // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
+    // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
+    // dynamic dispatch, and that object may be reachable only from this slot.
+    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+        let flat_const_ids: std::collections::HashSet<u32> =
+            cross_module.flat_const_arrays.keys().copied().collect();
+        let m =
+            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        lf.enable_shadow_frame(m.len() as u32 + 1);
+        m
+    } else {
+        std::collections::HashMap::new()
+    };
+    let this_shadow_slot_idx = shadow_slot_map.len() as u32;
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
+
     let _ = lf.create_block("entry");
 
     let mut static_boxed_vars = module_boxed_vars.clone();
@@ -1179,10 +1234,22 @@ pub(super) fn compile_static_method(
             &[(DOUBLE, &class_ref_lit)],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
+        if super::helpers::shadow_stack_enabled() {
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
+            );
+        }
         let mut map = HashMap::new();
         for p in &f.params {
             let arg_name = format!("%arg{}", p.id);
             let slot = super::arguments::store_param_slot(blk, p, &static_boxed_vars, &arg_name);
+            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                );
+            }
             map.insert(p.id, slot);
         }
         (this_slot, map)
@@ -1298,8 +1365,8 @@ pub(super) fn compile_static_method(
         pending_declares: Vec::new(),
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
-        shadow_slot_map: std::collections::HashMap::new(),
-        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
+        shadow_slot_map,
+        shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),

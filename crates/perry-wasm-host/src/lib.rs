@@ -41,8 +41,10 @@ impl WasmVal {
         match self {
             WasmVal::I32(x) => Val::I32(x),
             WasmVal::I64(x) => Val::I64(x),
-            WasmVal::F32(x) => Val::F32(wasmi::core::F32::from_bits(x.to_bits())),
-            WasmVal::F64(x) => Val::F64(wasmi::core::F64::from_bits(x.to_bits())),
+            // wasmi 1.x re-exports F32/F64 at the crate root; `wasmi::core`
+            // is private there (0.x accepted `wasmi::core::F32/F64`).
+            WasmVal::F32(x) => Val::F32(wasmi::F32::from_bits(x.to_bits())),
+            WasmVal::F64(x) => Val::F64(wasmi::F64::from_bits(x.to_bits())),
         }
     }
 }

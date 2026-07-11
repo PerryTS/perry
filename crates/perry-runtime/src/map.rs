@@ -747,7 +747,22 @@ pub extern "C" fn js_map_size(map: *const MapHeader) -> u32 {
 /// the perf-comprehensive sync-heavy benchmarks.
 const SIDE_TABLE_THRESHOLD: u32 = 8;
 
-unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
+/// C-ABI: current entries-array index of `key` (SameValueZero), or `-1.0` if
+/// absent. Used by the delete-safe `for-of` fast path (#6075) to re-derive the
+/// cursor after a mid-iteration delete compacts the entries array. Only invoked
+/// from generated IR, so `#[used]` keeps it linked on the default compile path.
+#[no_mangle]
+pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
+    let map = clean_map_ptr(crate::value::js_nanbox_get_pointer(map_boxed) as *const MapHeader);
+    if map.is_null() {
+        return -1.0;
+    }
+    unsafe { find_key_index(map, normalize_zero(key)) as f64 }
+}
+#[used]
+static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
+
+pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     let size = (*map).size;
     let key_bits = key.to_bits();
 
@@ -932,7 +947,15 @@ unsafe fn map_set_string_key_value(
         return map;
     }
 
+    // See js_map_set: ensure_capacity can fire a MOVING minor; root the key
+    // (a heap string, which CAN move) and value across it and re-derive the
+    // `*const StringHeader` before boxing. gh #6206.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_handle = scope.root_string_ptr(key);
+    let value_handle = scope.root_nanbox_f64(value);
     let grew = ensure_capacity(map);
+    let key = key_handle.get_raw_const_ptr::<StringHeader>();
+    let value = value_handle.get_nanbox_f64();
     let size = (*map).size;
     let entries = entries_ptr_mut(map);
     if grew && size > 0 {
@@ -999,8 +1022,18 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
             return map;
         }
 
-        // Key doesn't exist, append a new entry
+        // Key doesn't exist, append a new entry. `ensure_capacity` can fire a
+        // MOVING minor (via gc_note_external_side_alloc) — its "conservative +
+        // non-moving" comment is false under evacuation. `key`/`value` are held
+        // only in these native-stack params (a freshly-built, not-yet-inserted
+        // object is reachable via nothing else), which an evacuating minor does
+        // not scan, so root them across the grow and re-derive after. gh #6206.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key_handle = scope.root_nanbox_f64(key);
+        let value_handle = scope.root_nanbox_f64(value);
         let grew = ensure_capacity(map);
+        let key = key_handle.get_nanbox_f64();
+        let value = value_handle.get_nanbox_f64();
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
         if grew && size > 0 {
@@ -1929,6 +1962,9 @@ fn js_map_foreach_impl(
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
+            // Root the visited key so the post-callback slot comparison below
+            // stays valid across a GC move during the callback.
+            let key_handle = scope.root_nanbox_f64(key);
             let args = [value, key, map_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
@@ -1938,7 +1974,19 @@ fn js_map_foreach_impl(
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
-            i += 1;
+            // Deleting an entry compacts the backing vector (later entries
+            // shift left). If the callback deleted the just-visited entry (or
+            // an earlier one), slot `i` now holds the NEXT unvisited entry —
+            // advancing would skip it (ECMA-262 visits every not-yet-deleted
+            // entry; mirrors the `js_set_foreach_impl` fix). Only advance when
+            // slot `i` still holds the key just visited.
+            let map = map_handle.get_raw_const_ptr::<MapHeader>();
+            if i < (*map).size as usize {
+                let now_key = ptr::read(entries_ptr(map).add(i * 2));
+                if now_key.to_bits() == key_handle.get_nanbox_f64().to_bits() {
+                    i += 1;
+                }
+            }
         }
     }
 }

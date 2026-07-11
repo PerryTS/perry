@@ -1041,6 +1041,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // would do. (Map ptr, entry idx) → key / value.
     module.declare_function("js_map_entry_key_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_map_entry_value_at", DOUBLE, &[I64, I32]);
+    // #6075: current index of a key/value (or -1) for the delete-safe for-of
+    // fast path. Takes the NaN-boxed collection + key; strips internally.
+    module.declare_function("js_map_find_key_index", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_set_find_value_index", DOUBLE, &[DOUBLE, DOUBLE]);
     // Map/Set forEach: (collection_ptr, callback_nanboxed_f64, thisArg_f64) -> void (#2830)
     module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE, DOUBLE]);

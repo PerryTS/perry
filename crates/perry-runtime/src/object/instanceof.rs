@@ -343,7 +343,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         let class_id = global_builtin_constructor_class_id(name);
         if class_id != 0 {
-            return js_instanceof(value, class_id);
+            let r = js_instanceof(value, class_id);
+            if r.to_bits() == crate::value::TAG_TRUE {
+                return r;
+            }
+            // #5989: an object that inherits a builtin's prototype via
+            // `Fn.prototype = Object.create(Builtin.prototype)` is `instanceof
+            // Builtin` per the spec even though it carries no builtin class id —
+            // react-server-dom's flight Chunk inherits `Promise.prototype` this
+            // way, so `chunk instanceof Promise` must be true. Walk the real
+            // [[Prototype]] chain against `Builtin.prototype` before answering
+            // false.
+            if ordinary_has_instance_prototype_walk(value, type_ref) {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+            return f64::from_bits(TAG_FALSE);
         }
     }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
@@ -450,7 +464,22 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
     // inside a `new`-invoked body instead of recursing forever (#838 followup).
     let synthetic_cid = synthetic_class_id_for_function(type_ref);
     if synthetic_cid != 0 {
-        return js_instanceof(value, synthetic_cid);
+        let r = js_instanceof(value, synthetic_cid);
+        if r.to_bits() == crate::value::TAG_TRUE {
+            return r;
+        }
+        // #5989: the synthetic class-id chain is stamped at construction and does
+        // NOT reflect a prototype installed later via
+        // `Fn.prototype = Object.create(Base.prototype)` — the classic ES5
+        // inheritance idiom react-server-dom's flight Chunk uses to inherit
+        // `Promise.prototype` (so `chunk instanceof Promise` wrongly returned
+        // false). Fall back to the spec `OrdinaryHasInstance` prototype-chain
+        // walk: Perry already walks the real chain for method lookup and
+        // `getPrototypeOf`, so only this id-based shortcut missed it.
+        if ordinary_has_instance_prototype_walk(value, type_ref) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        return f64::from_bits(TAG_FALSE);
     }
     // #2909: nothing recognized the RHS as a constructor/class. Per the
     // ECMAScript `InstanceofOperator`, the right operand must be an object
@@ -471,6 +500,62 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
     throw_invalid_instanceof_rhs(type_ref)
+}
+
+/// Spec `OrdinaryHasInstance(C, O)` prototype-chain walk (ECMA-262 7.3.20 steps
+/// 4-7): `P = Get(C, "prototype")`; walk `O`'s `[[Prototype]]` chain and return
+/// `true` iff some link is identical to `P`. Used as a fallback for the
+/// synthetic class-id shortcut, which is stamped at construction and misses a
+/// prototype installed via `Fn.prototype = Object.create(Base.prototype)`.
+fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
+    extern "C" {
+        fn js_object_get_prototype_of(obj_value: f64) -> f64;
+    }
+    // P = type_ref.prototype (the constructor's `.prototype` data property).
+    let proto = unsafe {
+        crate::value::js_dynamic_object_get_property(
+            type_ref,
+            b"prototype".as_ptr() as *const i8,
+            9,
+        )
+    };
+    let target = proto_identity_addr(proto);
+    if target == 0 {
+        return false; // non-object `.prototype` can never be on the chain
+    }
+    // Walk `value`'s real [[Prototype]] chain looking for identity with P.
+    let mut cur = unsafe { js_object_get_prototype_of(value) };
+    let mut depth = 0usize;
+    while depth < 100_000 {
+        if crate::value::JSValue::from_bits(cur.to_bits()).is_null() {
+            return false;
+        }
+        let cur_addr = proto_identity_addr(cur);
+        if cur_addr == 0 {
+            return false;
+        }
+        if cur_addr == target {
+            return true;
+        }
+        cur = unsafe { js_object_get_prototype_of(cur) };
+        depth += 1;
+    }
+    false
+}
+
+/// Normalize a value to its heap-pointer address for prototype identity
+/// comparison — a NaN-boxed `POINTER_TAG` value or a raw heap pointer both
+/// resolve to their address; any non-pointer yields 0.
+fn proto_identity_addr(v: f64) -> usize {
+    let bits = v.to_bits();
+    let top16 = bits >> 48;
+    if top16 == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if top16 == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    }
 }
 
 #[cold]

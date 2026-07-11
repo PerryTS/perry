@@ -280,6 +280,15 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                 return super::super::js_class_method_bind(this_f64, key_ptr, key_len);
             }
+            // TextDecoder/TextEncoder registry handles — IC-miss mirror of
+            // the arms in `js_object_get_field_by_name` /
+            // `get_field_by_name_object_tail`; static-name reads (`td.decode`,
+            // `td.encoding`) funnel here. See `text_handle_property`.
+            if let Some(v) =
+                crate::text::text_handle_property(obj as usize, key_bytes, key_ptr, key_len)
+            {
+                return f64::from_bits(v.bits());
+            }
         }
         // Drizzle-sqlite blocker: synth `data.constructor` for small-handle
         // receivers — IC-miss path mirror of the constructor intercept in

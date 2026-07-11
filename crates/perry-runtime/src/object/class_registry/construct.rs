@@ -784,6 +784,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let encoder = crate::text::js_text_encoder_new();
                 return crate::value::js_nanbox_pointer(encoder);
             }
+            // `new P(executor)` where `P` holds the global Promise constructor
+            // VALUE (`const P = Promise;` / a polyfill alias). Without this arm
+            // the match fell through to the closure fallback, which CALLED
+            // `promise_constructor_call_thunk` as a plain function — throwing
+            // "Constructor Promise requires 'new'". Route to the same executor
+            // construction as the static literal lowering.
+            "Promise" => {
+                let executor = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let bits = executor.to_bits();
+                let exec_ptr = if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+                    (bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader
+                } else {
+                    // Non-callable executor: `js_promise_new_with_executor`
+                    // validates and throws the spec TypeError synchronously.
+                    std::ptr::null()
+                };
+                let promise = crate::promise::js_promise_new_with_executor(exec_ptr);
+                return crate::value::js_nanbox_pointer(promise as i64);
+            }
             "TextDecoder" => {
                 let label = args
                     .first()

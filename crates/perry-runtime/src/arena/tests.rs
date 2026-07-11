@@ -168,6 +168,10 @@ fn synthetic_old_block_range() -> (usize, usize) {
 #[test]
 fn old_page_metadata_registers_old_block_pages() {
     run_with_fresh_arenas(|| {
+        // Old-arena blocks are lazily materialized: force the first
+        // block with a raw (non-GC-header) old alloc, which registers
+        // the block's pages without registering any object bytes.
+        let _ = arena_alloc_old(8, 8);
         OLD_ARENA.with(|a| unsafe {
             let arena = &*a.get();
             let block = &arena.blocks[arena.current];
@@ -931,16 +935,28 @@ fn old_arena_block_reuse_does_not_repoint_eden_inline_state() {
         );
 
         // Drive the OLD_ARENA into a forward-scan-reuse state: a reusable
-        // earlier block (offset 0) plus a full current block.
+        // earlier block (offset 0) plus a full current block. The old
+        // arena starts with a lazy tombstone, so materialize block 0
+        // with a real allocation first.
         OLD_ARENA.with(|a| unsafe {
             let arena = &mut *a.get();
+            let _ = arena.alloc(64, 8); // materialize block 0
+            assert_eq!(arena.current, 0, "first old alloc should fill slot 0");
             arena.install_fresh_block(BLOCK_SIZE); // >=2 blocks, current = newest
             let cur = arena.current;
             assert!(cur > 0, "fresh block should advance current past block 0");
             arena.blocks[cur].offset = arena.blocks[cur].size; // current is full
             arena.blocks[0].offset = 0; // block 0 reusable
-                                        // Current full → forward-scan reuses block 0 → current = 0 →
-                                        // resync_inline_to_current(OLD_ARENA).
+        });
+        // The hand-mutated offsets above bypassed the tracked alloc
+        // paths — resync the delta-maintained old-gen in-use cache so
+        // the debug cross-check in `old_gen_in_use_bytes()` (reached
+        // via the next alloc's gc_check_trigger) sees a consistent pair.
+        old_gen_in_use_bytes_resync();
+        OLD_ARENA.with(|a| unsafe {
+            let arena = &mut *a.get();
+            // Current full → forward-scan reuses block 0 → current = 0 →
+            // resync_inline_to_current(OLD_ARENA).
             let _ = arena.alloc(64, 8);
             assert_eq!(arena.current, 0, "forward-scan should have reused block 0");
         });
@@ -957,6 +973,48 @@ fn old_arena_block_reuse_does_not_repoint_eden_inline_state() {
         assert_eq!(
             after_size, eden_size,
             "Eden INLINE_STATE.size must be intact"
+        );
+    });
+}
+
+/// The survivor/longlived/old arenas start with a lazy tombstone block:
+/// a fresh JS-touching thread pays only Eden's eager 1 MB, and each
+/// lazy region materializes its first real block on first allocation.
+#[test]
+fn lazy_regions_defer_initial_block_allocation() {
+    run_with_fresh_arenas(|| {
+        let before = arena_telemetry_snapshot();
+        assert!(
+            before.arena.reserved_bytes >= BLOCK_SIZE,
+            "Eden must stay eagerly materialized for the inline allocator"
+        );
+        assert_eq!(before.survivor0.reserved_bytes, 0);
+        assert_eq!(before.survivor1.reserved_bytes, 0);
+        assert_eq!(before.longlived.reserved_bytes, 0);
+        assert_eq!(before.old.reserved_bytes, 0);
+        assert_eq!(old_gen_in_use_bytes(), 0);
+
+        // First allocation in each lazy region materializes its block.
+        let old_ptr = arena_alloc_gc_old(40, 8, GC_TYPE_STRING);
+        assert!(!old_ptr.is_null());
+        let ll_ptr = arena_alloc_gc_longlived(40, 8, GC_TYPE_STRING);
+        assert!(!ll_ptr.is_null());
+        let survivor_ptr = arena_alloc_gc_survivor(40, 8, GC_TYPE_STRING);
+        assert!(!survivor_ptr.is_null());
+
+        let after = arena_telemetry_snapshot();
+        assert!(after.old.reserved_bytes >= BLOCK_SIZE);
+        assert!(after.longlived.reserved_bytes >= BLOCK_SIZE);
+        assert!(
+            after.survivor0.reserved_bytes >= BLOCK_SIZE
+                || after.survivor1.reserved_bytes >= BLOCK_SIZE,
+            "the inactive survivor semispace should have materialized"
+        );
+        assert!(after.old.in_use_bytes > 0);
+        assert_eq!(
+            old_gen_in_use_bytes(),
+            old_gen_in_use_bytes_recomputed(),
+            "cached old-gen in-use bytes must match the recompute after lazy materialization"
         );
     });
 }

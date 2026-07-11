@@ -65,9 +65,16 @@ pub(crate) fn lower_switch(
         }
     }
 
-    // Push break target. Switch has no continue, so we use exit for both.
+    // Push break target. A switch has NO continue target — the cont slot is an
+    // empty sentinel so `Stmt::Continue` skips this entry and resolves to the
+    // innermost enclosing LOOP. (It previously pushed the exit label for both,
+    // so `continue` inside a switch-in-loop branched to the switch EXIT — i.e.
+    // it behaved like `break` and fell into the post-switch tail. react-server-
+    // dom's flight row parser is a for-loop state machine whose case arms end
+    // in `continue`; every row-boundary step executed the row-commit tail with
+    // a stale slice index, mis-framing every RSC row — #5989.)
     ctx.loop_targets
-        .push((exit_label.clone(), exit_label.clone(), ctx.try_depth));
+        .push((String::new(), exit_label.clone(), ctx.try_depth));
 
     // If this switch carries a pending label (from an enclosing
     // `a: switch (...)`), register it so `break a;` resolves to THIS

@@ -3,6 +3,22 @@
 
 use super::*;
 
+/// Lexicographic comparison of two UTF-8 byte slices by **UTF-16 code unit**,
+/// matching ECMAScript string relational comparison (`<`/`>` and the default
+/// `Array.prototype.sort` order), which compares UTF-16 code units — NOT Unicode
+/// code points. The two orders agree for BMP-only strings but diverge once an
+/// astral character (code point > U+FFFF) is involved: its UTF-16 surrogate pair
+/// leads with 0xD800–0xDBFF, sorting it *before* BMP characters in 0xE000–0xFFFF,
+/// whereas raw UTF-8 byte order (= code-point order) sorts it after. Falls back
+/// to raw byte order if either side is not valid UTF-8 (WTF-8 lone surrogates —
+/// a known categorical gap).
+pub(crate) fn utf16_cmp_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    match (std::str::from_utf8(a), std::str::from_utf8(b)) {
+        (Ok(a_str), Ok(b_str)) => a_str.encode_utf16().cmp(b_str.encode_utf16()),
+        _ => a.cmp(b),
+    }
+}
+
 /// Compare two strings lexicographically.
 /// Returns -1 if a < b, 0 if a == b, 1 if a > b.
 #[no_mangle]
@@ -26,7 +42,7 @@ pub extern "C" fn js_string_compare(a: *const StringHeader, b: *const StringHead
         let data_b = string_data(b);
         let a_bytes = std::slice::from_raw_parts(data_a, len_a);
         let b_bytes = std::slice::from_raw_parts(data_b, len_b);
-        match a_bytes.cmp(b_bytes) {
+        match utf16_cmp_bytes(a_bytes, b_bytes) {
             std::cmp::Ordering::Less => -1,
             std::cmp::Ordering::Equal => 0,
             std::cmp::Ordering::Greater => 1,

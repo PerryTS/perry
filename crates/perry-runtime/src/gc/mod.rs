@@ -38,6 +38,12 @@ pub use types::*;
 mod policy;
 pub(crate) use policy::gc_runtime_safepoint;
 pub use policy::*;
+mod progress;
+pub use progress::*;
+mod heap_budget;
+pub use heap_budget::*;
+mod pressure;
+pub use pressure::*;
 mod telemetry;
 pub use telemetry::*;
 mod malloc;
@@ -52,6 +58,10 @@ mod barrier;
 pub use barrier::*;
 mod copying;
 use copying::*;
+// The copied-minor pointer classifier is consumed by the weak-holder registry
+// pass in `crate::weakref` (#6182), which lives outside the gc module.
+pub(crate) use copying::{CopyingPointer, CopyingPointerSet};
+mod dead_owner;
 mod oldgen;
 use oldgen::*;
 mod cycle;
@@ -72,6 +82,14 @@ pub fn gc_collect_minor() -> u64 {
 }
 
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    gc_drain_active_budgeted_cycle();
+    // Barriers-off ⇒ the remembered set is not being maintained, and a
+    // minor's black-leafed old parents would hide live children. Route
+    // every caller (direct arm, moving-safepoint arm, public FFI) to the
+    // full collection instead of trusting an empty RS.
+    if !gen_gc_enabled() {
+        return gc_collect_full_mark_sweep_with_trigger(trigger);
+    }
     // Phase C4b-γ-3: re-entrancy guard. Without this, the evacuation
     // pass's `arena_alloc_gc_old` can trigger `gc_check_trigger` (via
     // `arena.alloc`'s slow-path block-fill) DURING the outer collection
@@ -127,10 +145,9 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
         let freed_bytes = fast_path.freed_bytes;
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
-            let mut stats = stats.borrow_mut();
-            stats.collection_count += 1;
-            stats.total_freed_bytes += freed_bytes;
-            stats.last_pause_us = elapsed_us;
+            stats
+                .borrow_mut()
+                .record_collection(freed_bytes, elapsed_us);
         });
         restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut() {
@@ -167,6 +184,17 @@ pub fn gen_gc_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
+        // Generational minors are only sound with runtime write barriers:
+        // minors black-leaf old parents and trust the remembered set for
+        // every old→young/old→malloc edge. `PERRY_WRITE_BARRIERS=0` used
+        // to disable only evacuation gating while minors kept running —
+        // the remembered set stayed empty, so a born-old (>16 KB) parent's
+        // nursery children were swept on the first minor and the
+        // "bisection" mode crashed for reasons unrelated to what was being
+        // bisected. Barriers off now means full mark-sweep only.
+        if !write_barriers_enabled() {
+            return false;
+        }
         !matches!(
             std::env::var("PERRY_GEN_GC").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -226,13 +254,45 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
-#[allow(dead_code)]
 fn gc_collect_emergency_full() -> GcCollectOutcome {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Emergency))
+}
+
+/// Last-ditch recovery for a failed heap allocation (2026-07-09 audit):
+/// run one synchronous full mark-sweep and let the caller retry the
+/// allocation once. Returns false (caller proceeds straight to its panic)
+/// when collecting here would be unsound: re-entrant emergency, inside a
+/// collection/allocation bookkeeping window, or mid-budgeted-cycle.
+///
+/// The workspace builds with `panic = "unwind"`, and these OOM panics
+/// cross `extern "C"` frames into aborts — on a memory-limited process
+/// (cgroup `memory.max`, jetsam) dying without even attempting a
+/// collection wasted the one chance to shed a heap full of garbage.
+///
+/// The conservative stack scan is forced for the same reason the
+/// alloc-point direct arm forces it: this runs at an arbitrary allocation
+/// site where locals of the current call chain may not be spilled to
+/// shadow slots.
+pub(crate) fn gc_try_emergency_reclaim() -> bool {
+    thread_local! {
+        static IN_EMERGENCY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if IN_EMERGENCY.with(|c| c.get()) {
+        return false;
+    }
+    if GC_FLAGS.with(|f| f.get()) & GC_FLAG_IN_ALLOC != 0 || gc_budgeted_cycle_active() {
+        return false;
+    }
+    IN_EMERGENCY.with(|c| c.set(true));
+    let _scan = roots::ManualGcScanGuard::force_full_scan();
+    let _ = gc_collect_emergency_full();
+    IN_EMERGENCY.with(|c| c.set(false));
+    true
 }
 
 #[cfg(test)]
@@ -383,6 +443,12 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
     gc_register_mutable_root_scanner(crate::builtins::scan_boxed_primitive_payload_roots_mut);
     gc_register_mutable_root_scanner(crate::weakref::scan_pending_finalization_jobs_roots_mut);
+    // #6182: keep the weak-holder registry's stored holder ADDRESSES current
+    // across evacuation. Metadata-only (non-rooting) — it rewrites forwarded
+    // addresses in rewrite phases and emits nothing during mark, so it never
+    // keeps a dead holder alive. Copied-minor liveness/prune is driven by
+    // `process_weak_targets_from_registry`; this covers full-cycle currency.
+    gc_register_mutable_root_scanner(crate::weakref::scan_weak_holders_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
@@ -421,6 +487,9 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
+    // #6077: keep promises tracked for an unhandled rejection alive + address-
+    // stable until reported, so the program-end report is not a stale/UAF read.
+    gc_register_mutable_root_scanner(crate::promise::scan_unhandled_rejection_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_handle_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
@@ -510,5 +579,51 @@ pub extern "C" fn js_gc_stats(
     });
 }
 
+/// FFI: always-on pause observability (#6187, 2026-07-09 audit). Fills the
+/// max pause since thread start, the max and mean over the recent-pause
+/// ring (`GC_RECENT_PAUSE_WINDOW` samples), and how many samples the ring
+/// currently holds. Cheap enough for a UI frame scheduler to poll per tick.
+#[no_mangle]
+pub extern "C" fn js_gc_pause_stats(
+    out_max_us: *mut u64,
+    out_recent_max_us: *mut u64,
+    out_recent_avg_us: *mut u64,
+    out_recent_count: *mut u64,
+) {
+    GC_STATS.with(|stats| {
+        let stats = stats.borrow();
+        let n = stats.recent_len as usize;
+        let window = &stats.recent_pauses_us[..n.min(GC_RECENT_PAUSE_WINDOW)];
+        let recent_max = window.iter().copied().max().unwrap_or(0);
+        let recent_avg = if window.is_empty() {
+            0
+        } else {
+            window.iter().copied().sum::<u64>() / window.len() as u64
+        };
+        unsafe {
+            if !out_max_us.is_null() {
+                *out_max_us = stats.max_pause_us;
+            }
+            if !out_recent_max_us.is_null() {
+                *out_recent_max_us = recent_max;
+            }
+            if !out_recent_avg_us.is_null() {
+                *out_recent_avg_us = recent_avg;
+            }
+            if !out_recent_count.is_null() {
+                *out_recent_count = n as u64;
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests;
+
+/// Crate-wide handle on the GC test-isolation lock — see
+/// `tests::support::copying_nursery_isolation_lock`. Any test OUTSIDE the gc
+/// module that populates-then-asserts a process-global side table (e.g.
+/// `CLOSURE_PROPS`) must hold this, or the gc test guards' global state reset
+/// on a parallel test thread can wipe its entries mid-test.
+#[cfg(test)]
+pub(crate) use tests::support::copying_nursery_isolation_lock as global_side_table_test_lock;

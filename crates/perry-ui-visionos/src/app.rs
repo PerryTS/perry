@@ -307,6 +307,10 @@ extern "C" {
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_frame_pump_default() -> i32;
+    // perry-runtime's embedder GC stepper: spends up to `budget_us`
+    // advancing an ACTIVE budgeted collection in bounded work units; a
+    // cheap status probe when no cycle is active (out=null is allowed).
+    fn js_gc_step_us(budget_us: u64, out: *mut u8) -> u32;
 }
 
 // ============================================
@@ -331,6 +335,14 @@ define_class!(
                     // Issue #1865: perry/ui `onFrame` display-link callbacks.
                     js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // #6183 (2026-07-09 GC audit): spend a bounded idle
+                    // budget on any active budgeted GC cycle at the pump
+                    // boundary — the JS stack is fully unwound here, so this
+                    // is a precise-root safepoint. A 2 ms slice per tick
+                    // drains collection debt incrementally instead of letting
+                    // an alloc-point collection land unbounded on this
+                    // (main/UI) thread mid-interaction.
+                    js_gc_step_us(2_000, std::ptr::null_mut());
                     #[cfg(feature = "geisterhand")]
                     {
                         extern "C" { fn perry_geisterhand_pump(); }

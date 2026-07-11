@@ -694,6 +694,54 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     };
 
+    // #6230: a native-module namespace object (globalThis.process, console, or an
+    // imported node module) reached as a dynamic value — `const p = process;
+    // p.exit(1)`, `process["exit"](1)`, `p.cwd()`, `p.nextTick(cb)`, dynamic
+    // `console.log` — lands here rather than the codegen intrinsic used for the
+    // bare `process.exit(...)` form. Route the call to the native-module dispatch
+    // with the actual args; previously every such method fell through to
+    // `undefined` (so `exit` dropped its code, `cwd()` returned undefined,
+    // dynamic `nextTick`/`console.log` no-op'd). Exclude the generic
+    // Object.prototype methods and perry-internal (`__perry_*`) hooks so they
+    // keep using the shared object dispatch below; everything else is a genuine
+    // module method whose result (incl. a legitimate `undefined`) is returned
+    // directly — returning unconditionally avoids double-invoking a void method.
+    if jsval.is_pointer()
+        && !method_name.starts_with("__perry_")
+        && !matches!(
+            method_name,
+            "toString"
+                | "toLocaleString"
+                | "valueOf"
+                | "hasOwnProperty"
+                | "isPrototypeOf"
+                | "propertyIsEnumerable"
+                | "constructor"
+        )
+    {
+        let ns_ptr = jsval.as_pointer::<ObjectHeader>();
+        // The POINTER_TAG payload reaching here can be a small registry handle
+        // (zlib stream, fetch Request/Response, net.Socket, …) rather than a
+        // heap address. `is_valid_obj_ptr` alone does NOT reject the handle
+        // band on Linux/Windows/Android/iOS — its heap floor is 0x1000, far
+        // below HANDLE_BAND_MAX — so without the band check this dereferences
+        // unmapped low memory. macOS masks it behind a 2 TB heap floor, which
+        // is why `gz.on("data", …)` on a `zlib.createGzip()` handle segfaulted
+        // only on Linux.
+        if crate::value::addr_class::is_above_handle_band(ns_ptr as usize)
+            && crate::object::is_valid_obj_ptr(ns_ptr as *const u8)
+            && (*ns_ptr).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
+        {
+            let ns_args = refreshed_args();
+            return crate::object::dispatch_native_module_method(
+                ns_ptr as *const ObjectHeader,
+                method_name,
+                ns_args.as_ptr(),
+                ns_args.len(),
+            );
+        }
+    }
+
     // #4795: `using` / `await using` desugars disposal to
     // `obj.__perry_dispose__()` / `obj.__perry_async_dispose__()`. Class
     // instances resolve these through the renamed vtable method (handled by
@@ -716,6 +764,46 @@ pub unsafe extern "C" fn js_native_call_method(
         let want_async =
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object, want_async);
+    }
+    // TextDecoder / TextEncoder registry handles on a type-erased receiver —
+    // same wall class as the URLSearchParams / AbortSignal blocks below: the
+    // statically-typed `td.decode(buf)` lowers straight to
+    // `js_text_decoder_decode_llvm`, but a fused dynamic call (through an
+    // untyped local, or via the bound method the VALUE read in
+    // `get_field_by_name_tail.rs` reifies for `K.decode.bind(K)` — the shape
+    // a minified SDK's cached decodeText helper takes) lands here, and the
+    // generic field-scan would miss and throw "is not a function".
+    if matches!(method_name, "decode" | "encode" | "encodeInto") && jsval.is_pointer() {
+        let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::value::addr_class::is_small_handle(raw) {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let arg0 = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            if method_name == "decode" && crate::text::is_known_text_decoder_id(raw as i64) {
+                let sp = crate::text::js_text_decoder_decode_llvm(object, arg0);
+                return f64::from_bits(
+                    JSValue::string_ptr(sp as *mut crate::string::StringHeader).bits(),
+                );
+            }
+            if raw as i64 == crate::text::TEXT_ENCODER_SENTINEL_ID {
+                if method_name == "encode" {
+                    let bp = crate::text::js_text_encoder_encode_llvm(arg0);
+                    return crate::value::js_nanbox_pointer(bp);
+                }
+                if method_name == "encodeInto" {
+                    let arg1 = if args_len > 1 && !args_ptr.is_null() {
+                        *args_ptr.add(1)
+                    } else {
+                        undef
+                    };
+                    let rp = crate::text::js_text_encoder_encode_into_llvm(arg0, arg1);
+                    return crate::value::js_nanbox_pointer(rp);
+                }
+            }
+        }
     }
     // #5961: native URLSearchParams is an ordinary object (class_id == 0,
     // leading `_entries` slot) whose method surface normally resolves via

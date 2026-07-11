@@ -689,13 +689,45 @@ pub(super) unsafe fn scan_dirty_object_slots(
 // HashSet behavior.
 
 thread_local! {
-    /// Active full-incremental mark barrier state.
+    /// Active incremental mark barrier state (Full AND budgeted Minor
+    /// cycles — a Minor cycle sliced across mutator turns has exactly the
+    /// same lost-store hazard as a Full one; see the #6224 pacing fix, which
+    /// made budgeted minors actually complete and thereby exposed it).
     ///
     /// The valid pointer set is owned by the current `GcCycleState`. This raw
     /// pointer is installed only after that set has been built and is cleared
     /// before sweep/reclaim or if the cycle is dropped.
     pub(super) static INCREMENTAL_MARK_BARRIER_VALID_PTRS: Cell<*const ValidPointerSet> =
         const { Cell::new(std::ptr::null()) };
+
+    /// Extra GcHeader flags stamped on RUNTIME-path allocations at birth:
+    /// `GC_FLAG_MARKED` while an incremental mark barrier is active, 0
+    /// otherwise (allocate-black). A budgeted cycle's sweep may only collect
+    /// what its own trace could have seen; an object born mid-cycle and
+    /// installed via a runtime-internal RAW store (a grown array's elements
+    /// buffer, a map entry node, a string builder's data — none of which pass
+    /// through the nanboxed value-barrier path) would otherwise sit unmarked
+    /// and be freed live. Measured: 2,890 of 32,000 live graph nodes silently
+    /// lost (checksum mismatch) the moment #6224's pacing made budgeted
+    /// cycles complete; escalates to a swept-live-key SIGSEGV with manual
+    /// `gc()` mixed in. Born-marked objects survive to the NEXT cycle —
+    /// bounded floating garbage, already priced by the debt pacer.
+    ///
+    /// Codegen's inline bump allocator (lower_call.rs IR) does NOT read this
+    /// flag; codegen-born objects are ordinary JS values whose installs all
+    /// go through codegen store barriers → `incremental_mark_barrier_value`.
+    /// The runtime choke points below cover every raw-install allocation.
+    pub(crate) static GC_BIRTH_EXTRA_FLAGS: Cell<u8> = const { Cell::new(0) };
+
+    /// True while the active barrier belongs to a MINOR cycle: the barrier
+    /// must then shade only NURSERY children. Marking an old-gen child during
+    /// a minor would leave a stray mark bit that the minor's sweep never
+    /// clears (minors don't walk the old gen), and the next full cycle would
+    /// read that stale MARKED as "already traced" and skip the object's
+    /// children — unmarking-by-omission, i.e. a live-object sweep one cycle
+    /// later. Old children need no shading in a minor anyway: minors never
+    /// collect live old-gen objects.
+    pub(super) static INCREMENTAL_MARK_BARRIER_MINOR_ONLY: Cell<bool> = const { Cell::new(false) };
 
     /// Dirty old-generation pages that have received a YOUNG-gen
     /// pointer since the last collection. This is Perry's compact
@@ -739,7 +771,8 @@ thread_local! {
 
 pub(super) static GENERATED_WRITE_BARRIERS_EMITTED: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet) {
+pub(super) fn incremental_mark_barrier_enable(valid_ptrs: &ValidPointerSet, minor_only: bool) {
+    INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.set(minor_only));
     INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
         cell.set(valid_ptrs as *const ValidPointerSet);
     });
@@ -749,6 +782,14 @@ pub(super) fn incremental_mark_barrier_disable() {
     INCREMENTAL_MARK_BARRIER_VALID_PTRS.with(|cell| {
         cell.set(std::ptr::null());
     });
+    INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.set(false));
+}
+
+/// Allocate-black birth flags for runtime-path allocations — see
+/// `GC_BIRTH_EXTRA_FLAGS`.
+#[inline(always)]
+pub fn gc_birth_extra_flags() -> u8 {
+    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get())
 }
 
 #[inline]
@@ -847,10 +888,18 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
     value_bits: u64,
     valid_ptrs: &ValidPointerSet,
 ) -> bool {
-    let Some((_addr, header)) = current_heap_header_for_heap_word(value_bits, Some(valid_ptrs))
+    let Some((addr, header)) = current_heap_header_for_heap_word(value_bits, Some(valid_ptrs))
     else {
         return false;
     };
+    // Minor cycles shade only nursery children (see the
+    // INCREMENTAL_MARK_BARRIER_MINOR_ONLY doc: stray old-gen marks survive a
+    // minor's sweep and poison the next full cycle's trace).
+    if INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.get())
+        && !crate::arena::pointer_in_nursery(addr)
+    {
+        return false;
+    }
     unsafe {
         let flags = (*header).gc_flags;
         if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED) != 0 {
@@ -1027,10 +1076,7 @@ pub(super) fn write_barrier_slot_inner(
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
     }
-    if !matches!(
-        crate::arena::classify_heap_generation(child_addr),
-        crate::arena::HeapGeneration::Nursery
-    ) {
+    if !remembered_child_needs_tracking(child_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ChildNotYoungSkips);
         return;
     }
@@ -1044,6 +1090,38 @@ pub(super) fn write_barrier_slot_inner(
     };
     if inserted {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
+    }
+}
+
+/// Which stored children must an old parent's slot be remembered for?
+/// Minor GCs sweep BOTH the nursery and the malloc registry, and old
+/// parents are black leaves in minors — so an unremembered old→nursery OR
+/// old→malloc edge leaves the child unmarked: the nursery sweep or the
+/// malloc sweep frees it while live (and a malloc child's own nursery
+/// children die with it, since marked malloc objects are the only path
+/// that traces them). Longlived and old children need no remembering:
+/// longlived is never swept individually and old is reclaimed only by
+/// full cycles that trace everything.
+#[inline]
+pub(super) fn remembered_child_needs_tracking(child_addr: usize) -> bool {
+    match crate::arena::classify_heap_generation(child_addr) {
+        crate::arena::HeapGeneration::Nursery => true,
+        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived => false,
+        crate::arena::HeapGeneration::Unknown => {
+            // Non-arena child: candidate malloc-GC object (RegExp, Symbol,
+            // hook-mode Promise, grown string, large-capture closure).
+            // EXACT malloc-registry membership — deliberately not a header
+            // sniff: barrier child values can be uninitialized slot
+            // contents (array-growth barrier replay passes raw slot bits),
+            // and a plausibility sniff on garbage dirtied pages whose
+            // dirty-scan then treated neighboring garbage slots as movable
+            // young pointers. Band ids and foreign pointers are never in
+            // the registry, so this also needs no pre-deref band guard.
+            child_addr > GC_HEADER_SIZE
+                && super::malloc::gc_malloc_header_is_tracked(
+                    (child_addr - GC_HEADER_SIZE) as *const GcHeader,
+                )
+        }
     }
 }
 

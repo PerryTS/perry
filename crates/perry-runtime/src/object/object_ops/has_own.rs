@@ -189,9 +189,11 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                                     ptr as *mut crate::error::ErrorHeader,
                                     key,
                                 ),
-                                ExoticKind::Date | ExoticKind::Temporal | ExoticKind::Promise => {
-                                    false
-                                }
+                                ExoticKind::Date
+                                | ExoticKind::Temporal
+                                | ExoticKind::Promise
+                                | ExoticKind::Map
+                                | ExoticKind::Set => false,
                             }
                     })
                     .unwrap_or(false);

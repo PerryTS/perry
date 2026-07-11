@@ -3,10 +3,16 @@
 //! Provides locale detection and a global locale index used by compiled code
 //! to select translations from the embedded i18n string table.
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 /// Global locale index. 0 = default locale. Set once at startup by perry_i18n_init().
 static LOCALE_INDEX: AtomicI32 = AtomicI32::new(0);
+
+/// Whether LOCALE_INDEX has been resolved (via `perry_i18n_init`, an explicit
+/// `perry_i18n_set_locale_index`, or the lazy `perry_i18n_locale_index_for`).
+/// Guards the lazy path so system-locale detection runs at most once and an
+/// explicit set always wins over lazy detection.
+static LOCALE_RESOLVED: AtomicBool = AtomicBool::new(false);
 
 /// Returns the current locale index. Called by compiled code to select
 /// the correct translation from the i18n string table.
@@ -19,6 +25,48 @@ pub extern "C" fn perry_i18n_get_locale_index() -> i32 {
 #[no_mangle]
 pub extern "C" fn perry_i18n_set_locale_index(idx: i32) {
     LOCALE_INDEX.store(idx, Ordering::Relaxed);
+    LOCALE_RESOLVED.store(true, Ordering::Release);
+}
+
+/// Lazily resolve the locale index for a compiled i18n string table.
+///
+/// Called by the `Expr::I18nString` lowering at each localized-string site
+/// (cheap after the first call). `locales_header` is a StringHeader whose
+/// payload is the comma-separated configured locale list in string-table
+/// row order (e.g. `"en,de,fr"` — one interned literal per binary);
+/// `default_idx` is the configured default locale's row index.
+///
+/// First call detects the system locale (platform APIs, then env vars) and
+/// matches it against the list; no match → `default_idx`. The result is
+/// cached in LOCALE_INDEX, so a preceding `perry_i18n_set_locale_index`
+/// (dynamic switching) always wins.
+#[no_mangle]
+pub extern "C" fn perry_i18n_locale_index_for(
+    locales_header: *const crate::StringHeader,
+    default_idx: i32,
+) -> i32 {
+    if !LOCALE_RESOLVED.load(Ordering::Acquire) {
+        let resolved = (|| -> Option<i32> {
+            if locales_header.is_null() {
+                return None;
+            }
+            let payload = unsafe {
+                let len = (*locales_header).byte_len as usize;
+                let data = locales_header.add(1) as *const u8;
+                std::str::from_utf8(std::slice::from_raw_parts(data, len)).ok()?
+            };
+            let locales: Vec<&str> = payload.split(',').filter(|s| !s.is_empty()).collect();
+            if locales.is_empty() {
+                return None;
+            }
+            let system_locale = detect_system_locale()?;
+            match_locale(&system_locale, &locales).map(|idx| idx as i32)
+        })()
+        .unwrap_or(default_idx);
+        LOCALE_INDEX.store(resolved, Ordering::Relaxed);
+        LOCALE_RESOLVED.store(true, Ordering::Release);
+    }
+    LOCALE_INDEX.load(Ordering::Relaxed)
 }
 
 /// Initialize the i18n system. Detects the system locale and matches it against
@@ -73,6 +121,7 @@ pub extern "C" fn perry_i18n_init(
     } else {
         log += "[i18n] no system locale detected, using default (index 0)\n";
     }
+    LOCALE_RESOLVED.store(true, Ordering::Release);
     log += &format!(
         "[i18n] final LOCALE_INDEX: {}\n",
         LOCALE_INDEX.load(Ordering::Relaxed)
@@ -87,7 +136,13 @@ pub extern "C" fn perry_i18n_init(
 /// Detect the system locale from environment or platform APIs.
 fn detect_system_locale() -> Option<String> {
     // 1. Platform-native APIs first (most reliable on GUI apps)
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "watchos",
+        target_os = "tvos",
+        target_os = "visionos"
+    ))]
     {
         if let Some(locale) = detect_apple_locale() {
             return Some(locale);
@@ -173,10 +228,17 @@ fn match_locale(system_locale: &str, locales: &[&str]) -> Option<usize> {
 // Platform-native locale detection
 // ============================================================================
 
-/// Apple platforms (macOS + iOS): use NSBundle.mainBundle.preferredLocalizations
-/// to respect per-app language settings in iOS Settings.
-/// Falls back to CFLocaleCopyCurrent if NSBundle is unavailable.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+/// Apple platforms (macOS, iOS, watchOS, tvOS, visionOS): use
+/// NSBundle.mainBundle.preferredLocalizations to respect per-app language
+/// settings in Settings. Falls back to CFLocaleCopyCurrent if NSBundle is
+/// unavailable. Both APIs exist on every Apple OS.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "watchos",
+    target_os = "tvos",
+    target_os = "visionos"
+))]
 fn detect_apple_locale() -> Option<String> {
     type CFTypeRef = *const std::ffi::c_void;
     type CFStringRef = CFTypeRef;

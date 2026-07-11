@@ -471,6 +471,21 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("perry/system", "keychainDelete", false, None),
     method("perry/system", "preferencesGet", false, None),
     method("perry/system", "preferencesSet", false, None),
+    // Haptic feedback: hapticPlay("success" | "warning" | "error" |
+    // "light" | "medium" | "heavy" | "click" | "selection" |
+    // "directionUp" | "directionDown" | "start" | "stop"). Maps to
+    // WKInterfaceDevice playHaptic: (watchOS), UIFeedbackGenerator
+    // (iOS), VibrationEffect (Android), NSHapticFeedbackManager
+    // (macOS), navigator.vibrate (Web); no-op on platforms without a
+    // haptic engine (tvOS, visionOS, GTK4, Windows).
+    method_sig(
+        "perry/system",
+        "hapticPlay",
+        false,
+        None,
+        &[p_str("type")],
+        TypeSpec::Void,
+    ),
     method("perry/system", "notificationSend", false, None),
     method("perry/system", "notificationCancel", false, None),
     method("perry/system", "notificationOnTap", false, None),

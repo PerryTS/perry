@@ -3,6 +3,74 @@
 
 use super::*;
 
+/// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
+/// (#6160). Covers the registration schemes the generic symbol resolver
+/// (`js_object_get_symbol_property`, which only reads the data-valued
+/// CLASS_STATIC_SYMBOLS table) skips:
+///   * user computed-symbol methods/accessors (`static [S]() {}`,
+///     `static get [S]()`) → CLASS_SYMBOL_METHODS / CLASS_SYMBOL_ACCESSORS;
+///   * `static [Symbol.hasInstance]` → the lifted per-class has-instance hook;
+///   * `static [Symbol.iterator]` / `[Symbol.asyncIterator]` → the synthetic
+///     `@@iterator` / `@@asyncIterator` static-method names the HIR renames them
+///     to.
+/// Presence-only — never invokes a getter or method (`in` is [[HasProperty]]).
+/// `Symbol.toStringTag` is deliberately excluded: its getter lives on the
+/// prototype (instance side), so `Symbol.toStringTag in Class` is false in Node.
+unsafe fn class_ref_has_symbol_member(class_id: u32, sym_f64: f64) -> bool {
+    let sym_key = crate::symbol::sym_key_from_f64(sym_f64);
+    if sym_key == 0 {
+        return false;
+    }
+    if crate::object::class_registry::class_has_symbol_member_in_chain(class_id, sym_key, true) {
+        return true;
+    }
+    let wk_key = |name: &str| -> usize {
+        let s = crate::symbol::well_known_symbol(name);
+        if s.is_null() {
+            0
+        } else {
+            crate::symbol::sym_key_from_f64(f64::from_bits(
+                crate::value::JSValue::pointer(s as *const u8).bits(),
+            ))
+        }
+    };
+    let hi = wk_key("hasInstance");
+    if hi != 0 && sym_key == hi && crate::object::lookup_has_instance_hook(class_id).is_some() {
+        return true;
+    }
+    for (wk, name) in [
+        ("iterator", "@@iterator"),
+        ("asyncIterator", "@@asyncIterator"),
+    ] {
+        let k = wk_key(wk);
+        if k != 0
+            && sym_key == k
+            && crate::object::class_registry::lookup_static_method_in_chain(class_id, name)
+                .is_some()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Is `name` a CanonicalNumericIndexString (ECMA-262 §7.1.21)? True for `"-0"`
+/// and any string that round-trips through `ToString(ToNumber(s))` — `"0"`,
+/// `"100"`, `"-1"`, `"1.5"`, `"NaN"`, `"Infinity"` — but NOT `"00"`, `"1e3"`,
+/// `"0x1"`, `"+1"`, or whitespace-padded forms (`ToNumber` of those does not
+/// stringify back to the original). The typed-array/Buffer `in` path uses this
+/// to short-circuit a canonical numeric index to the IntegerIndexed
+/// [[HasProperty]] result without ever consulting the prototype chain.
+fn is_canonical_numeric_index_string(name: &str) -> bool {
+    if name == "-0" {
+        return true;
+    }
+    match name.parse::<f64>() {
+        Ok(n) => crate::string::js_format_f64(n) == name,
+        Err(_) => false,
+    }
+}
+
 /// Render a value the way V8 does inside the `in`-operator TypeError message.
 /// Only the primitive RHS shapes that reach `throw_in_operator_non_object` need
 /// handling: `null`/`undefined` render literally, a Symbol as `Symbol(desc)`,
@@ -155,6 +223,21 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         }
     }
 
+    // #6160: `Symbol in Class` where the member is a Symbol-keyed STATIC member
+    // that registers through a scheme the generic symbol resolver below
+    // (`js_object_get_symbol_property`) does not consult — it only sees the
+    // data-valued CLASS_STATIC_SYMBOLS table. `class_ref_has_symbol_member`
+    // presence-checks the method/accessor and well-known static registrations,
+    // so `sym in Class` matches Node even though those members dispatch through
+    // dedicated call paths. Presence-only: `in` is [[HasProperty]], never [[Get]].
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        if let Some(class_id) = crate::object::class_ref_id(obj) {
+            if unsafe { class_ref_has_symbol_member(class_id, key) } {
+                return nanbox_true;
+            }
+        }
+    }
+
     // #1758: a SYMBOL key. The class-ref path below + the keys_array scan
     // (string keys only) can't see a class-object's static `[Sym]` props nor
     // ones inherited from a class-expression parent. Delegate to the symbol
@@ -182,10 +265,34 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if crate::symbol::class_static_symbol_lookup(class_id, key).is_some() {
                 return nanbox_true;
             }
-            // String key path: check CLASS_DYNAMIC_PROPS via the get-by-name fn.
-            if !key_val.is_pointer() && key_val.is_string() {
-                // is_string covers heap StringHeader. Route through the
-                // CLASS_DYNAMIC_PROPS-aware get fn.
+            // #6149: string key on a class ref (`"prototype" in C`,
+            // `"staticField" in C`, `"staticMethod" in C`). Check the
+            // constructor's own static members WITHOUT reading them, so a static
+            // getter is never invoked (`in` is [[HasProperty]], not [[Get]]).
+            // Inherited `Function.prototype` methods (`"call" in C`) and
+            // inherited static *data* fields are not covered — the latter mirror
+            // the get-by-name gap for the same shape.
+            if key_val.is_any_string() {
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    let present = matches!(name, "prototype" | "name" | "length")
+                        || (!super::super::class_registry::class_is_key_deleted(class_id, name)
+                            && (super::super::class_registry::class_has_own_dynamic_prop(
+                                class_id, name,
+                            ) || super::super::class_registry::lookup_static_method_in_chain(
+                                class_id, name,
+                            )
+                            .is_some()
+                                || super::super::class_registry::class_own_static_accessor_ptrs(
+                                    class_id, name,
+                                )
+                                .is_some()));
+                    if present {
+                        return nanbox_true;
+                    }
+                }
             }
             // Fallback: emit false for class refs that aren't in either table.
             return nanbox_false;
@@ -247,7 +354,13 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             // Temporal built-in fields (year/month/calendar/…) are prototype
             // getters, not own data properties (like Date). Promise's
             // then/catch/finally are prototype methods, not own props.
-            ExoticKind::Date | ExoticKind::Temporal | ExoticKind::Promise => false,
+            // Map/Set entries are internal slots; `size` and methods are
+            // prototype members, not own props.
+            ExoticKind::Date
+            | ExoticKind::Temporal
+            | ExoticKind::Promise
+            | ExoticKind::Map
+            | ExoticKind::Set => false,
         };
         if builtin_own {
             return nanbox_true;
@@ -295,6 +408,78 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                         && (f as u32) < (*ta).length
                 };
                 return if present { nanbox_true } else { nanbox_false };
+            }
+            return nanbox_false;
+        }
+        // #6148: `Uint8Array` / `Buffer` are backed by a header-less registered
+        // buffer (not `TYPED_ARRAY_REGISTRY`), so the typed-array arm above misses
+        // them. A Buffer is a `Uint8Array`, so `in` consults numeric indices
+        // (bounds) and the own/inherited members property-get can resolve.
+        if crate::buffer::is_registered_buffer(obj_addr as usize) {
+            let buf = obj_addr as *const crate::buffer::BufferHeader;
+            let len = unsafe { crate::buffer::js_buffer_length(buf) };
+            if key_val.is_int32() {
+                let idx = key_val.as_int32();
+                return if idx >= 0 && idx < len {
+                    nanbox_true
+                } else {
+                    nanbox_false
+                };
+            }
+            if key_val.is_number() {
+                let f = f64::from_bits(key_val.bits());
+                let present = f.is_finite()
+                    && f >= 0.0
+                    && f.fract() == 0.0
+                    && f <= i32::MAX as f64
+                    && (f as i32) < len;
+                return if present { nanbox_true } else { nanbox_false };
+            }
+            if key_val.is_any_string() {
+                let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    // Own view slots, always present.
+                    if matches!(
+                        name,
+                        "length" | "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" | "buffer"
+                    ) {
+                        return nanbox_true;
+                    }
+                    // A CanonicalNumericIndexString (`"0"`, `"100"`, `"-1"`,
+                    // `"1.5"`, `"-0"`, `"NaN"`) is resolved ENTIRELY by the
+                    // IntegerIndexed [[HasProperty]] (ECMA-262 §10.4.9.2): present
+                    // iff it is a valid in-bounds integer index, absent otherwise,
+                    // and it NEVER consults the prototype. So an out-of-bounds
+                    // (`"100"` on a length-5 view), negative, or fractional
+                    // canonical index short-circuits to false here rather than
+                    // falling through to the prototype scan below. Non-canonical
+                    // forms (`"00"`, `"1e3"`, `"0x1"`) stay ordinary string keys.
+                    if is_canonical_numeric_index_string(name) {
+                        if let Ok(idx) = name.parse::<u32>() {
+                            if idx.to_string() == name && idx < len as u32 {
+                                return nanbox_true;
+                            }
+                        }
+                        return nanbox_false;
+                    }
+                    // A Buffer / `Uint8Array` is a `%TypedArray%`, so inherited
+                    // prototype members (`subarray`, `map`, `join`, `toString`, …)
+                    // count. `typed_array_prototype_chain_has` builds the shared
+                    // prototype intrinsic on demand, so this is order-independent
+                    // (#6164). Buffer-specific `Buffer.prototype` methods
+                    // (`readUInt8`, …) are not covered here.
+                    if unsafe {
+                        crate::typedarray_props::typed_array_prototype_chain_has(
+                            obj_addr as usize,
+                            name,
+                        )
+                    } {
+                        return nanbox_true;
+                    }
+                }
+                return nanbox_false;
             }
             return nanbox_false;
         }
@@ -675,9 +860,31 @@ unsafe fn ordinary_has_property(
                 }
                 cur = p as *const ObjectHeader;
             }
-            // No explicit prototype recorded — the default `Object.prototype`
-            // applies (handled below), so stop the explicit walk here.
-            None => break,
+            // No explicit static `[[Prototype]]` recorded. But `Object.create(proto)`
+            // and `Function.prototype = obj` model the prototype link via a synthetic
+            // class_id → prototype object (`CLASS_PROTOTYPE_OBJECTS`), which the
+            // recorded-static-prototype walk above can't see. Without hopping it,
+            // `key in Object.create({ key: … })` — and even inherited
+            // `Object.prototype` members on such a receiver (its synthetic class_id
+            // makes the `Object.prototype` tail below bail) — were wrongly reported
+            // absent. Hop through that synthetic prototype object and continue; the
+            // field-GET path resolves the same chain via `resolve_proto_chain_field`.
+            None => {
+                // A prototype hop can land on a real `ArrayHeader` (`Foo.prototype
+                // = [1,2,3]`), whose layout has no `class_id` field — reading one
+                // would misinterpret the array's `length`/`capacity` as a class id
+                // and could spuriously hop. Arrays never model a synthetic
+                // prototype, so skip the lookup for them.
+                if !cur_is_array {
+                    let synth_proto =
+                        crate::object::class_prototype_object(unsafe { (*cur).class_id });
+                    if !synth_proto.is_null() && synth_proto as *const ObjectHeader != cur {
+                        cur = synth_proto as *const ObjectHeader;
+                        continue;
+                    }
+                }
+                break;
+            }
         }
     }
     // Wall 10 — a class instance's prototype METHODS / GETTERS / SETTERS live in

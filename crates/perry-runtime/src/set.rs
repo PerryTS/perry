@@ -580,7 +580,21 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
 
 /// Find the index of a value in the set, or -1 if not found.
 /// Uses the O(1) hash index side-table.
-unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
+/// C-ABI: current elements-array index of `value` (SameValueZero), or `-1.0` if
+/// absent. Companion to `js_map_find_key_index` for the delete-safe Set `for-of`
+/// fast path (#6075). Only invoked from generated IR, so `#[used]` keeps it.
+#[no_mangle]
+pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
+    let set = clean_set_ptr(crate::value::js_nanbox_get_pointer(set_boxed) as *const SetHeader);
+    if set.is_null() {
+        return -1.0;
+    }
+    unsafe { find_value_index(set, normalize_zero(value)) as f64 }
+}
+#[used]
+static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_value_index;
+
+pub(crate) unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
     SET_INDEX.with(|idx| {
         let idx = idx.borrow();
         if let Some(map) = idx.get(&(set as usize)) {
@@ -1334,13 +1348,28 @@ fn js_set_foreach_impl(
             };
             let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
+            // Root the visited value so the post-callback slot comparison below
+            // stays valid across a GC move during the callback.
+            let value_handle = scope.root_nanbox_f64(value);
             let args = [value, value, set_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
-            i += 1;
+            // Deleting an entry compacts the backing vector (later entries
+            // shift left). If the callback deleted the just-visited entry (or
+            // an earlier one), slot `i` now holds the NEXT unvisited value —
+            // advancing would skip it (react-server-dom's task sweeps delete
+            // while iterating; ECMA-262 visits every not-yet-deleted entry).
+            // Only advance when slot `i` still holds the value just visited.
+            let set = set_handle.get_raw_const_ptr::<SetHeader>();
+            if i < (*set).size as usize {
+                let now = ptr::read(elements_ptr(set).add(i));
+                if now.to_bits() == value_handle.get_nanbox_f64().to_bits() {
+                    i += 1;
+                }
+            }
         }
     }
 }

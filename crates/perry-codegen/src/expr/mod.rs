@@ -1047,6 +1047,11 @@ pub struct I18nLowerCtx {
     pub translations: Vec<String>,
     pub key_count: usize,
     pub default_locale_idx: usize,
+    /// Configured locale codes in string-table row order (e.g.
+    /// `["en", "de", "fr"]`). Used by the `Expr::I18nString` lowering to
+    /// emit the runtime locale-index lookup for keys whose translations
+    /// differ between locales.
+    pub locale_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

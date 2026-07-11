@@ -339,6 +339,175 @@ fn test_evacuation_policy() {
     assert_eq!(disabled.reason, "disabled");
 }
 
+/// 2026-07-09 GC audit W3: the volume gate must pass on the block-granule
+/// metric (`releasable_block_bytes`) even when the candidate OBJECTS' own
+/// bytes are far below `MIN_CANDIDATE_BYTES` — the "500 blocks pinned by a
+/// few hundred bytes of scattered tenured survivors each" shape — and hard
+/// RSS pressure must bypass the candidate-volume/ratio/pause gates
+/// entirely whenever any movable candidate exists.
+#[test]
+fn test_evacuation_policy_releasable_block_bytes_gate_and_hard_rss_bypass() {
+    fn decide(snapshot: EvacuationPolicySnapshot) -> EvacuationPolicyDecision {
+        evacuation_policy_final_decision(
+            EvacuationPolicyDecision {
+                allowed: true,
+                considered: true,
+                force: false,
+                enabled: false,
+                reason: "test",
+                snapshot,
+            },
+            snapshot,
+        )
+    }
+
+    // Scattered-survivor shape: ~500 blocks each pinned by ~1 KB of
+    // movable tenured candidates. Object-bytes metric (~512 KB) is far
+    // below the 8 MB bar, but evacuating the candidates releases
+    // ~500 MB of block granules.
+    let scattered = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes: 512 * 1024,
+        candidate_bytes: 512 * 1024,
+        candidate_objects: 500,
+        reclaimable_candidate_bytes: 512 * 1024,
+        reclaimable_candidate_objects: 500,
+        releasable_block_bytes: 500 * 1024 * 1024,
+        ..EvacuationPolicySnapshot::default()
+    };
+    let scattered_decision = decide(scattered);
+    assert!(
+        scattered_decision.enabled,
+        "block-granule metric must clear the volume gate on its own"
+    );
+    assert_eq!(scattered_decision.reason, "releasable_block_bytes");
+
+    // The granule metric also skips the object-bytes ratio gate: same
+    // shape with a huge tenured denominator would fail the 25% ratio.
+    let low_ratio = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes: MIN_TENURED_NURSERY_BYTES * 8,
+        ..scattered
+    };
+    let low_ratio_decision = decide(low_ratio);
+    assert!(
+        low_ratio_decision.enabled,
+        "ratio gate must not veto a block-granule pass"
+    );
+    assert_eq!(low_ratio_decision.reason, "releasable_block_bytes");
+
+    // Both metrics below the bar still refuses, preserving the existing
+    // telemetry reason.
+    let both_small = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes: MIN_TENURED_NURSERY_BYTES,
+        candidate_bytes: 64 * 1024,
+        candidate_objects: 8,
+        reclaimable_candidate_bytes: 64 * 1024,
+        reclaimable_candidate_objects: 8,
+        releasable_block_bytes: MIN_CANDIDATE_BYTES - 1,
+        ..EvacuationPolicySnapshot::default()
+    };
+    let both_small_decision = decide(both_small);
+    assert!(!both_small_decision.enabled);
+    assert_eq!(
+        both_small_decision.reason,
+        "reclaimable_candidate_bytes_below_threshold"
+    );
+
+    // Hard RSS pressure bypasses the volume/ratio/pause gates: candidate
+    // volume below every bar, zero reclaimable/releasable bytes, pause
+    // budget blown — still evacuates, because movable candidates exist
+    // and RSS is past the hard threshold.
+    let hard_rss_bypass = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes: 64 * 1024,
+        candidate_bytes: 4096,
+        candidate_objects: 4,
+        reclaimable_candidate_bytes: 0,
+        reclaimable_candidate_objects: 0,
+        releasable_block_bytes: 0,
+        rss_bytes: RSS_HARD_PRESSURE_BYTES,
+        previous_pause_us: MAX_PREVIOUS_PAUSE_US + 1,
+        ..EvacuationPolicySnapshot::default()
+    };
+    let bypass_decision = decide(hard_rss_bypass);
+    assert!(
+        bypass_decision.enabled,
+        "hard RSS pressure must bypass the candidate-volume gates"
+    );
+    assert_eq!(bypass_decision.reason, "rss_hard_pressure");
+
+    // ...but zero movable candidates still refuses even under hard RSS:
+    // there is nothing evacuation could move.
+    let no_candidates = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes: 64 * 1024,
+        candidate_bytes: 0,
+        candidate_objects: 0,
+        rss_bytes: RSS_HARD_PRESSURE_BYTES,
+        ..EvacuationPolicySnapshot::default()
+    };
+    let no_candidates_decision = decide(no_candidates);
+    assert!(!no_candidates_decision.enabled);
+    assert_eq!(no_candidates_decision.reason, "zero_candidates");
+
+    // Object-bytes pass with below-bar granule metric keeps the legacy
+    // pressure-based reason strings.
+    let object_pass = EvacuationPolicySnapshot {
+        tenured_still_in_nursery_bytes: MIN_TENURED_NURSERY_BYTES * 2,
+        candidate_bytes: MIN_CANDIDATE_BYTES * 2,
+        candidate_objects: 16,
+        reclaimable_candidate_bytes: MIN_CANDIDATE_BYTES * 2,
+        reclaimable_candidate_objects: 16,
+        releasable_block_bytes: 0,
+        ..EvacuationPolicySnapshot::default()
+    };
+    let object_pass_decision = decide(object_pass);
+    assert!(object_pass_decision.enabled);
+    assert_eq!(object_pass_decision.reason, "nursery_pressure");
+}
+
+/// The old-page defrag selection must report the page-granule bytes its
+/// selected pages would release (page size minus pinned bytes) so the
+/// policy's `releasable_block_bytes` metric sees whole granules, not
+/// just the dead object bytes.
+#[test]
+fn test_old_page_defrag_selection_reports_releasable_granule_bytes() {
+    fn meta(
+        page_base: usize,
+        allocated_bytes: usize,
+        live_bytes: usize,
+        dead_bytes: usize,
+        pinned_bytes: usize,
+    ) -> crate::arena::OldPageMeta {
+        crate::arena::OldPageMeta {
+            page_base,
+            page_end: page_base + 4096,
+            allocated_bytes,
+            live_bytes,
+            dead_bytes,
+            object_count: 1,
+            live_object_count: usize::from(live_bytes > 0),
+            dead_object_count: usize::from(dead_bytes > 0),
+            pinned_bytes,
+            pinned_object_count: usize::from(pinned_bytes > 0),
+            dirty_slots: 0,
+            dirty: false,
+            evacuation_eligible: false,
+        }
+    }
+
+    let selected_a = meta(0x2000_0000, 100, 10, 90, 0);
+    let selected_b = meta(0x2000_1000, 100, 20, 80, 0);
+    let unselected_low_dead = meta(0x2000_2000, 100, 80, 20, 0);
+    let pinned = meta(0x2000_3000, 100, 10, 90, 8);
+    let snapshot = [selected_a, selected_b, unselected_low_dead, pinned];
+
+    let selection = select_old_page_defrag_pages_from_snapshot(&snapshot, false);
+    assert_eq!(selection.selected_pages, 2);
+    assert_eq!(
+        selection.selected_releasable_block_bytes,
+        2 * 4096,
+        "each selected (unpinned) page contributes its full page granule"
+    );
+}
+
 #[test]
 fn test_evacuation_policy_snapshot_excludes_retained_forwarded_stub_blocks() {
     clear_marks();

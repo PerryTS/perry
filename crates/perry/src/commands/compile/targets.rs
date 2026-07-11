@@ -667,6 +667,48 @@ pub(super) fn compile_for_watchos_widget(
             format,
         )?;
         built_binary = Some(appex_path.clone());
+
+        // #675 — sign the widget `.appex` with the App Group entitlement so
+        // the WidgetKit extension can read the shared `NSUserDefaults` suite
+        // the app writes. Only when a widget declares `appGroup`; otherwise
+        // the appex stays unsigned (unchanged). Mirrors the watch app path:
+        // ad-hoc for the simulator, `[watchos]` identity + profile on device.
+        // One entitlement is emitted per `.appex`, so all widgets bundled in it
+        // must share a single App Group — otherwise the widgets whose group is
+        // dropped silently lose shared-suite access. Reject the conflict.
+        let widget_app_groups = widgets
+            .iter()
+            .filter_map(|w| w.app_group.as_deref())
+            .filter(|group| !group.is_empty())
+            .collect::<std::collections::BTreeSet<_>>();
+        if widget_app_groups.len() > 1 {
+            anyhow::bail!(
+                "watchOS widgets in the same extension must declare the same appGroup; found: {}",
+                widget_app_groups
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        let widget_app_group = widget_app_groups.iter().next().copied();
+        if super::apple_info_plist::inject_app_group_entitlement(
+            &appex_path,
+            widget_app_group,
+            format,
+        )
+        .is_some()
+        {
+            let signing_cfg = super::apple_codesign::read_watch_signing_config(&args.input);
+            super::apple_codesign::codesign_apple_bundle(
+                &appex_path,
+                &appex_path.join("app.entitlements"),
+                is_simulator,
+                &signing_cfg,
+                format,
+            )?;
+        }
+
         match format {
             OutputFormat::Text => {
                 println!("watchOS complication built: {}", appex_path.display());

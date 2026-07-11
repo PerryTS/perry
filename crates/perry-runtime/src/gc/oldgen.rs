@@ -21,6 +21,16 @@ pub(super) struct EvacuationPolicySnapshot {
     pub(super) old_page_selected_live_bytes: usize,
     pub(super) old_page_reclaimable_bytes: usize,
     pub(super) old_page_skipped_pinned_pages: usize,
+    /// Block/page-granule bytes a defrag would actually release: the
+    /// full size of every nursery block whose reset is blocked ONLY by
+    /// movable candidates, plus the page granule of every selected old
+    /// page. `reclaimable_candidate_bytes` counts the candidate
+    /// OBJECTS' own bytes — but memory returns to the OS in whole
+    /// blocks/pages, so 500 blocks each pinned by a few hundred bytes
+    /// of scattered tenured survivors are ~500 MB of releasable RSS
+    /// that the object-bytes metric reports as <1 MB. The policy gate
+    /// passes when EITHER metric clears `MIN_CANDIDATE_BYTES`.
+    pub(super) releasable_block_bytes: usize,
     pub(super) retained_forwarded_stub_bytes: usize,
     pub(super) retained_forwarded_stub_objects: usize,
     pub(super) conservative_pinned_bytes: usize,
@@ -80,6 +90,10 @@ pub(super) struct OldPageDefragSelection {
     pub(super) selected_pages: usize,
     pub(super) selected_live_bytes: usize,
     pub(super) selected_reclaimable_bytes: usize,
+    /// Page-granule bytes the selected pages would hand back once their
+    /// movable live objects are evacuated: page size minus pinned bytes
+    /// (selection skips pinned pages, so in practice the full granule).
+    pub(super) selected_releasable_block_bytes: usize,
     pub(super) skipped_pinned_pages: usize,
 }
 
@@ -172,13 +186,76 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
             selection.selected_reclaimable_bytes = selection
                 .selected_reclaimable_bytes
                 .saturating_add(meta.dead_bytes);
+            selection.selected_releasable_block_bytes =
+                selection.selected_releasable_block_bytes.saturating_add(
+                    (meta.page_end.saturating_sub(meta.page_base))
+                        .saturating_sub(meta.pinned_bytes),
+                );
         }
     }
 
     selection
 }
 
+/// gh #6206 test hook: the defrag machinery's unit tests exercise the
+/// selection/copy/re-remember mechanics directly and must bypass the
+/// production off-gate below. Thread-local so parallel tests don't race.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// RAII enable for the defrag unit tests: forces the off-gate open on this
+/// thread for the guard's lifetime.
+#[cfg(test)]
+pub(crate) struct OldDefragTestEnable;
+
+#[cfg(test)]
+impl OldDefragTestEnable {
+    pub(crate) fn new() -> Self {
+        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(Some(true)));
+        OldDefragTestEnable
+    }
+}
+
+#[cfg(test)]
+impl Drop for OldDefragTestEnable {
+    fn drop(&mut self) {
+        OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.set(None));
+    }
+}
+
+fn old_page_defrag_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(v) = OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    use std::sync::OnceLock;
+    static OPT_IN: OnceLock<bool> = OnceLock::new();
+    *OPT_IN.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_OLD_DEFRAG").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
 pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelection {
+    // gh #6206: old-page defrag evacuation is OFF pending a rewrite-contract
+    // fix. With defrag active, a reader can observe a pre-move address of a
+    // defrag-moved old object long after the cycle (wild-pointer crash /
+    // silently corrupt cached value); the reproducer corrupts 6/6 with defrag
+    // enabled and is clean 6/6 with it disabled, on the same binary, while
+    // every heap-payload slot (arrays in-length, object fields, Map entries)
+    // verifies as correctly rewritten — the stale reference lives on a
+    // non-heap path (address-keyed cache / IC / side table) the defrag
+    // rewrite doesn't reach. Nursery evacuation and tenured promotion (the
+    // reclaim-critical moving paths) are unaffected. Re-enable for
+    // debugging/bisection with PERRY_GC_OLD_DEFRAG=1.
+    if !old_page_defrag_enabled() {
+        return OldPageDefragSelection::default();
+    }
     let snapshot = crate::arena::old_page_meta_snapshot();
     select_old_page_defrag_pages_from_snapshot(&snapshot, force)
 }
@@ -239,7 +316,7 @@ pub(super) fn evacuation_policy_initial_decision(
             ..EvacuationPolicyDecision::default()
         };
     }
-    if rss_bytes >= RSS_PRESSURE_BYTES {
+    if rss_bytes >= gc_rss_pressure_dyn_bytes() {
         return EvacuationPolicyDecision {
             allowed,
             considered: true,
@@ -295,6 +372,7 @@ pub(super) fn evacuation_policy_snapshot_after_mark(
     snapshot.old_page_selected_live_bytes = old_page_selection.selected_live_bytes;
     snapshot.old_page_reclaimable_bytes = old_page_selection.selected_reclaimable_bytes;
     snapshot.old_page_skipped_pinned_pages = old_page_selection.skipped_pinned_pages;
+    snapshot.releasable_block_bytes = old_page_selection.selected_releasable_block_bytes;
 
     let n_blocks = crate::arena::arena_block_count();
     let general_n = crate::arena::general_block_count();
@@ -359,10 +437,21 @@ pub(super) fn evacuation_policy_snapshot_after_mark(
         }
     });
 
-    for block in blocks.iter().take(general_n) {
+    let general_block_sizes = crate::arena::general_block_sizes();
+    for (block_idx, block) in blocks.iter().enumerate().take(general_n) {
         if block.candidate_bytes > 0 && !block.retained_live {
             snapshot.reclaimable_candidate_objects += block.candidate_objects;
             snapshot.reclaimable_candidate_bytes += block.candidate_bytes;
+            // This block's reset is blocked ONLY by movable candidates:
+            // evacuating them frees the whole block granule. Exclude the
+            // caller-saved-register safety window — those blocks are not
+            // reset even when empty, so their granule can't be released
+            // this cycle regardless of what evacuation moves.
+            if !crate::arena::general_block_in_recent_window(block_idx) {
+                snapshot.releasable_block_bytes = snapshot
+                    .releasable_block_bytes
+                    .saturating_add(general_block_sizes.get(block_idx).copied().unwrap_or(0));
+            }
         }
     }
     snapshot
@@ -393,29 +482,51 @@ pub(super) fn evacuation_policy_final_decision(
         decision.reason = "force";
         return decision;
     }
-    if snapshot.effective_reclaimable_candidate_bytes() == 0 {
+    // Hard RSS pressure bypasses every candidate-volume/ratio/pause gate:
+    // at 256 MB+ of RSS with ANY movable candidate (checked above), refusing
+    // to compact because the candidates look small is exactly backwards —
+    // the small scattered candidates are what's pinning the blocks.
+    // Previously these gates `return`ed before the RSS checks, so a heap of
+    // sparsely-pinned blocks could sit above the hard threshold forever with
+    // reason `reclaimable_candidate_bytes_below_threshold`.
+    let hard_rss_pressure = snapshot.rss_bytes >= gc_rss_hard_pressure_dyn_bytes();
+    if hard_rss_pressure {
+        decision.enabled = true;
+        decision.reason = "rss_hard_pressure";
+        return decision;
+    }
+    if snapshot.effective_reclaimable_candidate_bytes() == 0 && snapshot.releasable_block_bytes == 0
+    {
         decision.reason = "zero_reclaimable_candidates";
         return decision;
     }
-    if snapshot.effective_reclaimable_candidate_bytes() < MIN_CANDIDATE_BYTES {
+    // Volume gate: pass when EITHER the candidate objects' own bytes OR the
+    // block/page granule bytes their evacuation releases clear the bar. The
+    // ratio gate stays object-bytes-scoped — the granule metric is an
+    // absolute-RSS argument, not a proportion of the tenured working set.
+    let object_bytes_pass = snapshot.effective_reclaimable_candidate_bytes() >= MIN_CANDIDATE_BYTES;
+    let block_bytes_pass = snapshot.releasable_block_bytes >= MIN_CANDIDATE_BYTES;
+    if !object_bytes_pass && !block_bytes_pass {
         decision.reason = "reclaimable_candidate_bytes_below_threshold";
         return decision;
     }
-    if snapshot.effective_reclaimable_candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT {
+    if !block_bytes_pass
+        && snapshot.effective_reclaimable_candidate_ratio_pct() < MIN_CANDIDATE_RATIO_PCT
+    {
         decision.reason = "reclaimable_candidate_ratio_below_threshold";
         return decision;
     }
-    let hard_rss_pressure = snapshot.rss_bytes >= RSS_HARD_PRESSURE_BYTES;
     let pause_budget_exceeded = snapshot.previous_pause_us > MAX_PREVIOUS_PAUSE_US
         || snapshot.pre_evac_pause_us > MAX_PREVIOUS_PAUSE_US;
-    if pause_budget_exceeded && !hard_rss_pressure {
+    if pause_budget_exceeded {
         decision.reason = "pause_budget_exceeded";
         return decision;
     }
     decision.enabled = true;
-    decision.reason = if hard_rss_pressure {
-        "rss_hard_pressure"
-    } else if snapshot.rss_bytes >= RSS_PRESSURE_BYTES {
+    decision.reason = if !object_bytes_pass && block_bytes_pass {
+        // Only the granule metric cleared the bar — the new W3 path.
+        "releasable_block_bytes"
+    } else if snapshot.rss_bytes >= gc_rss_pressure_dyn_bytes() {
         "rss_pressure"
     } else if snapshot.old_page_selected_pages > 0
         && snapshot.tenured_still_in_nursery_bytes < MIN_TENURED_NURSERY_BYTES
@@ -439,7 +550,7 @@ pub(super) fn maybe_print_evacuation_policy_diag(
     }
     let snapshot = decision.snapshot;
     eprintln!(
-        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} reclaimable_candidate_bytes={} reclaimable_candidate_objects={} reclaimable_candidate_ratio_pct={} old_page_candidate_pages={} old_page_selected_pages={} old_page_selected_live_bytes={} old_page_reclaimable_bytes={} old_page_skipped_pinned_pages={} policy_retained_forwarded_stub_bytes={} policy_retained_forwarded_stub_objects={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} moved_bytes={} moved_objects={} old_page_moved_bytes={} old_page_moved_objects={} released_original_bytes={} released_original_objects={} sweep_retained_forwarded_stub_bytes={} sweep_retained_forwarded_stub_objects={}",
+        "[gc-evac-policy] enabled={} reason={} tenured={} candidate_bytes={} candidate_objects={} candidate_ratio_pct={} reclaimable_candidate_bytes={} reclaimable_candidate_objects={} reclaimable_candidate_ratio_pct={} releasable_block_bytes={} old_page_candidate_pages={} old_page_selected_pages={} old_page_selected_live_bytes={} old_page_reclaimable_bytes={} old_page_skipped_pinned_pages={} policy_retained_forwarded_stub_bytes={} policy_retained_forwarded_stub_objects={} cons_pinned={} rss={} prev_pause_us={} pre_evac_pause_us={} moved_bytes={} moved_objects={} old_page_moved_bytes={} old_page_moved_objects={} released_original_bytes={} released_original_objects={} sweep_retained_forwarded_stub_bytes={} sweep_retained_forwarded_stub_objects={}",
         decision.enabled,
         decision.reason,
         snapshot.tenured_still_in_nursery_bytes,
@@ -449,6 +560,7 @@ pub(super) fn maybe_print_evacuation_policy_diag(
         snapshot.reclaimable_candidate_bytes,
         snapshot.reclaimable_candidate_objects,
         snapshot.reclaimable_candidate_ratio_pct(),
+        snapshot.releasable_block_bytes,
         snapshot.old_page_candidate_pages,
         snapshot.old_page_selected_pages,
         snapshot.old_page_selected_live_bytes,
@@ -799,7 +911,10 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
     // a TLS-load + RefCell borrow + HashMap remove on a missing key)
     // into a single bool test per object. ~1.4 % leaf samples → 0 on
     // the empty-map path, ~80 ms saved on perf-comprehensive.
-    let overflow_active = !crate::object::overflow_fields_is_empty();
+    // Wave 2: the same gate now also covers the closure dynamic-props
+    // dead-payload arm — checked once per sweep, not per object.
+    let overflow_active = !crate::object::overflow_fields_is_empty()
+        || crate::closure::closure_dynamic_side_tables_nonempty();
 
     crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
         let header = header_ptr as *mut GcHeader;
@@ -1060,6 +1175,8 @@ pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
     dead_maps: Vec<usize>,
     dead_sets: Vec<usize>,
+    dead_buffers: Vec<usize>,
+    dead_typed_arrays: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
     cleanup: Option<ArenaSweepCleanupState>,
@@ -1079,6 +1196,8 @@ impl IncrementalSweepState {
             subphase: SweepCycleSubphase::Malloc,
             dead_maps: Vec::new(),
             dead_sets: Vec::new(),
+            dead_buffers: Vec::new(),
+            dead_typed_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(do_age_bump, reclaim_dead_old_blocks),
             cleanup: None,
@@ -1091,10 +1210,25 @@ impl IncrementalSweepState {
     /// #6010: collect the dead registered Maps/Sets NOW (marks are fresh at
     /// sweep entry) and finalize their external buffers budget-chunked as the
     /// first sweep subphase. See `SweepCycleSubphase::CollectionSideBuffers`.
+    /// 2026-07-09 audit: buffers and typed arrays joined the same pattern —
+    /// their registry/side-table entries are pruned when the owner is
+    /// genuinely dead (full traces only; they are all tenured old residents).
     pub(super) fn with_dead_collection_finalize(mut self, full_trace: bool) -> Self {
+        // 2026-07-09 GC audit wave 2: death-prune the object-address-keyed
+        // side tables in the same marks-fresh window. Cheap (one flag-check
+        // walk over tables the root scanners already walk every cycle), so
+        // it runs eagerly here rather than budget-chunked.
+        super::dead_owner::prune_dead_owner_side_tables_post_trace(full_trace);
         self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
-        if !self.dead_maps.is_empty() || !self.dead_sets.is_empty() {
+        self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
+        self.dead_typed_arrays =
+            crate::typedarray::collect_dead_registered_typed_arrays_post_trace(full_trace);
+        if !self.dead_maps.is_empty()
+            || !self.dead_sets.is_empty()
+            || !self.dead_buffers.is_empty()
+            || !self.dead_typed_arrays.is_empty()
+        {
             self.subphase = SweepCycleSubphase::CollectionSideBuffers;
         }
         self
@@ -1109,13 +1243,21 @@ impl IncrementalSweepState {
                         crate::map::finalize_collected_dead_map(addr);
                     } else if let Some(addr) = self.dead_sets.pop() {
                         crate::set::finalize_collected_dead_set(addr);
+                    } else if let Some(addr) = self.dead_buffers.pop() {
+                        crate::buffer::finalize_collected_dead_buffer(addr);
+                    } else if let Some(addr) = self.dead_typed_arrays.pop() {
+                        crate::typedarray::finalize_collected_dead_typed_array(addr);
                     } else {
                         self.subphase = SweepCycleSubphase::Malloc;
                         break;
                     }
                     spent += 1;
                 }
-                if self.dead_maps.is_empty() && self.dead_sets.is_empty() {
+                if self.dead_maps.is_empty()
+                    && self.dead_sets.is_empty()
+                    && self.dead_buffers.is_empty()
+                    && self.dead_typed_arrays.is_empty()
+                {
                     self.subphase = SweepCycleSubphase::Malloc;
                 }
                 false
@@ -1203,7 +1345,10 @@ impl ArenaSweepObjectsState {
             block_has_live: vec![false; n_blocks],
             resettable_general_n: crate::arena::general_block_count(),
             old_block_start: crate::arena::longlived_end(),
-            overflow_active: !crate::object::overflow_fields_is_empty(),
+            // Wave 2: also arms the closure dynamic-props dead-payload arm
+            // (one gate check per sweep-state build, not per object).
+            overflow_active: !crate::object::overflow_fields_is_empty()
+                || crate::closure::closure_dynamic_side_tables_nonempty(),
             do_age_bump,
             reclaim_dead_old_blocks,
             freed_bytes: 0,

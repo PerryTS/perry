@@ -9,9 +9,15 @@ use crate::object::ObjectHeader;
 pub(super) fn push_json_number(buf: &mut String, value: f64) {
     if value.is_nan() || value.is_infinite() {
         buf.push_str("null");
-    } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+    } else if value.fract() == 0.0 && value.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
         let mut itoa_buf = itoa::Buffer::new();
         buf.push_str(itoa_buf.format(value as i64));
+    } else if value.fract() == 0.0 {
+        // #6127: a large integer (`>= 2^53`) must print its shortest round-trip
+        // decimal in POSITIONAL notation per ECMAScript Number::toString, not the
+        // exact integer and not `ryu`'s scientific form (`2.88…e17`). The shared
+        // JS formatter handles the exponent thresholds (`1e21` → `1e+21`).
+        buf.push_str(&crate::string::js_format_f64(value));
     } else {
         let mut ryu_buf = ryu::Buffer::new();
         buf.push_str(ryu_buf.format(value));

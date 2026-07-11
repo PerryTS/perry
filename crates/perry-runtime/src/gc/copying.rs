@@ -11,12 +11,12 @@ pub(super) enum CopyingPointerKind {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct CopyingPointer {
-    pub(super) header: *mut GcHeader,
+pub(crate) struct CopyingPointer {
+    pub(crate) header: *mut GcHeader,
     pub(super) kind: CopyingPointerKind,
 }
 
-pub(super) struct CopyingPointerSet {
+pub(crate) struct CopyingPointerSet {
     pub(super) malloc_registry_available: Cell<bool>,
     pub(super) malloc_registry_empty_at_start: bool,
     pub(super) malloc_validation_lookups: Cell<usize>,
@@ -39,7 +39,7 @@ impl CopyingPointerSet {
     }
 
     #[inline]
-    pub(super) fn classify(&self, addr: usize) -> Option<CopyingPointer> {
+    pub(crate) fn classify(&self, addr: usize) -> Option<CopyingPointer> {
         self.classify_arena(addr)
             .or_else(|| self.classify_malloc(addr))
     }
@@ -498,6 +498,29 @@ impl CopyingNurseryCollector {
         }
 
         let total = (*header).size as usize;
+        // Safety net (partial mitigation, NOT a full fix): a genuine
+        // young/survivor object is always small — large objects are allocated
+        // old-gen/malloc, never in the copying nursery — so a "young" object
+        // whose size is out of range is a corrupt/mis-classified header (e.g. an
+        // off-heap pointer whose preceding bytes coincidentally pass
+        // `plausible_gc_header`). Refuse to memmove through such a garbage size:
+        // that turns the worst outcome (a wild out-of-bounds copy → SIGSEGV)
+        // into a no-op, and surfaces it under PERRY_GC_DIAG. It does NOT catch a
+        // plausible-but-wrong *small* size; the root fix is stronger arena
+        // classification / page unregistration so off-heap addresses never
+        // reach here. See the copying-minor relocation issue.
+        const MAX_YOUNG_MOVE_BYTES: usize = 1 << 20; // 1 MiB, >> any real young object
+        if total < GC_HEADER_SIZE || total > MAX_YOUNG_MOVE_BYTES {
+            if std::env::var_os("PERRY_GC_DIAG").is_some() {
+                eprintln!(
+                    "[gc-move-guard] refusing wild young move user={:#x} obj_type={} size={}",
+                    old_user as usize,
+                    (*header).obj_type,
+                    total
+                );
+            }
+            return old_user as usize;
+        }
         let payload = total - GC_HEADER_SIZE;
         let prior_age = copied_survival_age((*header)._reserved, flags);
         let next_age = prior_age.saturating_add(1);
@@ -590,7 +613,11 @@ impl CopyingNurseryCollector {
             let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
             if barrier_parent_needs_remembering(parent_user, external) {
                 if let Some((child_addr, _, _)) = self.ptrs.decode_bits(*slot) {
-                    if crate::arena::pointer_in_nursery(child_addr) {
+                    // Keep old→malloc pages dirty alongside old→nursery:
+                    // the malloc child is spared by this cycle's mark
+                    // (mark_addr handles CopyingPointerKind::Malloc) but
+                    // the NEXT minor's malloc sweep needs the edge again.
+                    if crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
                         self.sticky.remember_slot(parent_header, slot, external);
                     }
                 }
@@ -903,6 +930,23 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace.root_sources.native_stack_fallback.scanned =
             matches!(decision, ConservativeStackScanDecision::Scan);
     }
+    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        let reason = match eligibility.fallback_reason {
+            CopiedMinorFallbackReason::None => "none",
+            CopiedMinorFallbackReason::NotAttempted => "not_attempted",
+            CopiedMinorFallbackReason::BarriersInactive => "barriers_inactive",
+            CopiedMinorFallbackReason::ConservativeStack => "conservative_stack",
+            CopiedMinorFallbackReason::CopyOnlyRoots => "copy_only_roots",
+            CopiedMinorFallbackReason::MallocRegistryUnavailable => "malloc_registry_unavailable",
+            CopiedMinorFallbackReason::PinnedYoungRoot => "pinned_young_root",
+            CopiedMinorFallbackReason::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
+            CopiedMinorFallbackReason::PinnedYoungTransitive => "pinned_young_transitive",
+        };
+        eprintln!(
+            "[gc-copy-minor] eligible={} fallback={}",
+            eligibility.eligible, reason
+        );
+    }
     if !eligibility.eligible {
         return None;
     }
@@ -1041,21 +1085,34 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     // operative cycle (unbounded retention in long-running servers).
     // Now the scan records weak slots without evacuating; here we repair
     // any whose target was moved via a strong edge after the slot was
-    // visited, then run the shared after-mark tombstone pass. Must run
+    // visited, then run the registry-scoped tombstone pass. Must run
     // BEFORE `copying_reset_from_spaces_and_flip` below: liveness is
     // MARKED|PINNED on pre-flip headers (to-space copies carry MARKED
-    // until `clear_marks`). Gated on the weak-holder latch so programs
-    // that never allocate a weak container skip the full arena walk.
+    // until `clear_marks`), and dead holders' from-space headers are still
+    // intact/classifiable before the flip. Gated on the weak-holder latch
+    // (now "registry non-empty") so programs that never allocate — or that
+    // once did but whose holders have all died — skip the pass entirely.
+    //
+    // 2026-07-09 GC audit (#6182): this used to build a full-heap
+    // `build_valid_pointer_set()` BTreeSet AND `arena_walk_objects` over
+    // EVERY live object to find the 3 weak-holder class_ids — two O(all
+    // objects) passes forfeited forever once any WeakMap/WeakRef/FinReg was
+    // allocated. `process_weak_targets_from_registry` instead walks only the
+    // registered holders and classifies targets with the O(1) page-metadata
+    // classifier the copy already built (`collector.ptrs`) — no BTreeSet, no
+    // arena walk. The full-cycle path (cycle.rs `WeakProcessing`) is
+    // untouched and still uses the valid-pointer set it built for its trace.
     unsafe {
         collector.repair_weak_slots();
     }
     if crate::weakref::weak_target_holders_allocated() {
         let phase_start = trace_phase_start(trace);
-        let valid_ptrs = build_valid_pointer_set();
-        crate::weakref::process_weak_targets_after_mark(
-            &valid_ptrs,
-            /* minor_only = */ true,
-            matches!(trigger_kind, GcTriggerKind::Manual),
+        // Enqueue FinalizationRegistry cleanup jobs on every trigger kind —
+        // see the matching WeakProcessing comment in cycle.rs (2026-07-09 GC
+        // audit: delivery was gated on the Manual trigger).
+        crate::weakref::process_weak_targets_from_registry(
+            &collector.ptrs,
+            /* enqueue_callbacks = */ true,
         );
         trace_phase_record(trace, "weak_processing", phase_start);
     }
@@ -1111,6 +1168,16 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
         trace.capture_layout_scans();
     }
     maybe_schedule_old_reclaim_after_copied_minor();
+    if std::env::var_os("PERRY_GC_DIAG").is_some() {
+        eprintln!(
+            "[gc-copy-minor] ran copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={}",
+            collector.stats.copied_objects,
+            collector.stats.copied_bytes,
+            collector.stats.promoted_objects,
+            collector.stats.promoted_bytes,
+            freed_bytes
+        );
+    }
     Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,
@@ -1121,4 +1188,8 @@ fn finalize_dead_copied_minor_from_space_side_allocations() {
     crate::map::finalize_dead_copied_minor_from_space_maps();
     crate::set::finalize_dead_copied_minor_from_space_sets();
     crate::node_submodules::diagnostics_gc::finalize_dead_copied_minor_from_space_errors();
+    // 2026-07-09 GC audit wave 2: the from-space flip runs no per-object
+    // finalize hooks, so entries keyed by dead from-space owners in the
+    // object-address-keyed side tables are pruned here (headers still intact).
+    super::dead_owner::prune_dead_owner_side_tables_copied_minor();
 }

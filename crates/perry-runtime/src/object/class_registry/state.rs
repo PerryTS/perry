@@ -108,6 +108,19 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
     })
 }
 
+/// True when `name` is an own static data property (a static field, or a
+/// runtime `C.x = …` assignment) recorded in `CLASS_DYNAMIC_PROPS`. Presence
+/// only — does not read the value, so it never invokes a static getter. Used by
+/// the `in` operator on a class ref (#6149).
+pub(crate) fn class_has_own_dynamic_prop(class_id: u32, name: &str) -> bool {
+    CLASS_DYNAMIC_PROPS.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .map(|props| props.contains_key(name))
+            .unwrap_or(false)
+    })
+}
+
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         if let Some(props) = m.borrow_mut().get_mut(&class_id) {

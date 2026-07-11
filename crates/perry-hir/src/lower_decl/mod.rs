@@ -54,8 +54,9 @@ pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
     append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,
     build_default_param_stmts, collect_let_decls_in_stmt, init_is_webassembly_instantiate,
-    is_inspect_custom_key, is_symbol_iterator_key, mapped_argument_parameter_ids,
-    params_are_simple_arguments_list, params_use_arguments, symbol_well_known_key,
+    is_inspect_custom_key, is_symbol_iterator_key, lower_well_known_computed_method,
+    mapped_argument_parameter_ids, params_are_simple_arguments_list, params_use_arguments,
+    symbol_well_known_key, with_static_member_context, WellKnownComputedMethod,
 };
 pub(crate) use interface_decl::lower_interface_decl;
 pub(crate) use private_members::{

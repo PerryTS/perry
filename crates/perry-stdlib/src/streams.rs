@@ -51,10 +51,14 @@ mod expando;
 mod pipe;
 mod strategy;
 mod subclass;
+mod tee;
 #[cfg(test)]
 mod tests;
 mod transform;
 mod writable;
+
+pub use tee::js_readable_stream_tee;
+use tee::{tee_branches_of, tee_close_branches, tee_deliver, tee_error_branches, tee_source_of};
 
 pub use self::byob::{
     js_readable_stream_controller_byob_request, js_readable_stream_get_byob_reader,
@@ -696,6 +700,13 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
 }
 
 pub(super) unsafe fn maybe_pull(stream_id: usize) {
+    // #5989: a read on a tee branch pulls its SOURCE — the branch carries no
+    // `pull_cb` of its own; the source's enqueue fans the chunk out to both
+    // branches. `force` so a highWaterMark-0 flight producer actually pulls.
+    if let Some(source) = tee_source_of(stream_id) {
+        maybe_pull_force(source);
+        return;
+    }
     maybe_pull_inner(stream_id, false);
 }
 
@@ -949,6 +960,13 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
     stream_handle: f64,
     options: f64,
 ) -> f64 {
+    if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            eprintln!("[STREAM] get_reader stream={:#x}", stream_handle.to_bits());
+        }
+    }
     let stream_handle = js_stream_unwrap_handle(stream_handle);
     let byob_requested = option_string_equals(options, b"mode", b"byob");
     let id = stream_handle as usize;
@@ -1472,6 +1490,17 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
     stream_handle: f64,
     chunk: f64,
 ) -> f64 {
+    if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            eprintln!(
+                "[STREAM] enqueue stream={:#x} chunk_bits={:#018x}",
+                (stream_handle as usize),
+                chunk.to_bits()
+            );
+        }
+    }
     let id = stream_handle as usize;
     let chunk_bits = chunk.to_bits();
     let is_byte_stream = {
@@ -1482,6 +1511,13 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
         throw_invalid_arg_type(
             "The \"buffer\" argument must be an instance of Buffer, TypedArray, or DataView",
         );
+    }
+    // #5989: a tee'd source never queues its own chunks — each enqueue fans out
+    // to BOTH branches (delivering to a parked read or queueing per branch).
+    if let Some((a, b)) = tee_branches_of(id) {
+        tee_deliver(a, chunk_bits, is_byte_stream);
+        tee_deliver(b, chunk_bits, is_byte_stream);
+        return f64::from_bits(TAG_UNDEFINED);
     }
     // A pending BYOB read (byte streams only) takes the chunk before the
     // default-read queue: the bytes land directly in the caller's view.
@@ -1534,6 +1570,27 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64) -> f64 {
     let id = stream_handle as usize;
+    if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            eprintln!("[STREAM] controller_close stream={id:#x}");
+        }
+    }
+    // #5989: closing a tee'd source closes both branches (each drains its queue
+    // first) rather than the source's own — absent — reader.
+    if tee_branches_of(id).is_some() {
+        {
+            let mut g = READABLE_STREAMS.lock().unwrap();
+            if let Some(s) = g.get_mut(&id) {
+                if s.state == ReadableState::Readable {
+                    s.state = ReadableState::Closed;
+                }
+            }
+        }
+        tee_close_branches(id);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&id) {
@@ -1569,6 +1626,11 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
     reason: f64,
 ) -> f64 {
     let id = stream_handle as usize;
+    // #5989: erroring a tee'd source errors both branches.
+    if tee_branches_of(id).is_some() {
+        tee_error_branches(id, reason.to_bits());
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     error_readable_stream(id, reason.to_bits());
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -1610,6 +1672,13 @@ extern "C" fn readable_from_chunk_rejected(closure: *const ClosureHeader, reason
 }
 
 unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
+    if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            eprintln!("[STREAM] read RESOLVED value_bits={value_bits:#018x}");
+        }
+    }
     let value = f64::from_bits(value_bits);
     if perry_runtime::promise::js_value_is_promise(value) == 0 {
         let result = build_iter_result(value_bits, false);
@@ -1654,6 +1723,13 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
     let promise = js_promise_new();
     let reader_handle = js_stream_unwrap_handle(reader_handle);
     let reader_id = reader_handle as usize;
+    if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            eprintln!("[STREAM] reader_read reader_id={reader_id:#x}");
+        }
+    }
     let stream_id = match READERS.lock().unwrap().get(&reader_id) {
         Some(r) if r.locked => r.stream_handle,
         Some(_) => {
@@ -1878,76 +1954,6 @@ pub unsafe extern "C" fn js_reader_cancel(reader_handle: f64, reason: f64) -> *m
 // ─────────────────────────────────────────────────────────────────────
 // tee / pipeTo / pipeThrough
 // ─────────────────────────────────────────────────────────────────────
-
-/// `stream.tee()` — returns an array of two new ReadableStreams. Both
-/// branches drain the SOURCE eagerly into separate per-branch queues at
-/// tee time. This is correct for the buffered consumers Perry exposes
-/// (`blob.stream()` / `response.body` are pre-buffered) and the "user
-/// source already enqueued everything synchronously in start" pattern.
-/// Streams that lazily produce chunks via `pull` after tee will only see
-/// chunks present at the tee call — the same trade-off Node's
-/// `Readable.from([...]).tee()` makes for already-buffered iterables.
-#[no_mangle]
-pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
-    let id = stream_handle as usize;
-    let mut was_locked = false;
-    let mut is_byte_stream = false;
-    let chunks: Vec<u64> = {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&id) {
-            Some(s) if s.reader_handle.is_none() => {
-                is_byte_stream = s.is_byte_stream;
-                let drained = s.drain_chunks();
-                s.state = ReadableState::Closed;
-                drained
-            }
-            Some(_) => {
-                was_locked = true;
-                Vec::new()
-            }
-            None => Vec::new(),
-        }
-    };
-    if was_locked {
-        throw_type_error("ReadableStream is locked");
-    }
-
-    let id_a = next_id(&NEXT_STREAM_ID);
-    let id_b = next_id(&NEXT_STREAM_ID);
-    {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        for new_id in [id_a, id_b] {
-            g.insert(
-                new_id,
-                ReadableStreamData {
-                    state: ReadableState::Closed,
-                    chunks: chunks.iter().copied().collect(),
-                    chunk_sizes: chunks.iter().map(|_| 1.0).collect(),
-                    queue_total_size: chunks.len() as f64,
-                    pending_reads: VecDeque::new(),
-                    start_cb: 0,
-                    pull_cb: 0,
-                    cancel_cb: 0,
-                    strategy_size_cb: 0,
-                    high_water_mark: 1.0,
-                    is_byte_stream,
-                    pull_returns_byte_chunk: false,
-                    pulling: false,
-                    started: true,
-                    reader_handle: None,
-                    error_value: 0,
-                    pending_error_after_chunks: None,
-                    canceled: false,
-                },
-            );
-        }
-    }
-
-    let arr = js_array_alloc(2);
-    js_array_push(arr, JSValue::from_bits(f64::to_bits(id_a as f64)));
-    js_array_push(arr, JSValue::from_bits(f64::to_bits(id_b as f64)));
-    f64::from_bits(JSValue::object_ptr(arr as *mut u8).bits())
-}
 
 /// `readable.pipeThrough({readable, writable})` — pipeTo into the
 /// transform's writable side, return its readable side. Caller already

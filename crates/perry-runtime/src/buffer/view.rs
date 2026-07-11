@@ -94,6 +94,29 @@ pub(crate) fn for_each_view<F: FnMut(usize, ViewInfo)>(backing_ptr: usize, mut f
     });
 }
 
+/// Drop every view-registry entry keyed by (or backed by) a dead buffer's
+/// address (2026-07-09 audit, registry death pruning). A recycled address
+/// would otherwise inherit stale view/backing metadata and misroute reads
+/// and mirrored writes for the next tenant.
+pub(crate) fn remove_entries_for_dead_buffer(addr: usize) {
+    VIEW_REGISTRY.with(|r| {
+        let mut r = r.borrow_mut();
+        r.remove(&addr);
+        r.retain(|_, info| info.backing != addr);
+    });
+    BACKING_TO_VIEWS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.remove(&addr);
+        for views in m.values_mut() {
+            for view in views.iter_mut() {
+                if *view == addr {
+                    *view = 0;
+                }
+            }
+        }
+    });
+}
+
 /// Register a freshly-allocated `view_ptr` as a view over `backing_ptr`
 /// at byte range `[offset, offset+length)`.  Resolves slices-of-slices
 /// to the ultimate backing so reads/writes never walk a chain.

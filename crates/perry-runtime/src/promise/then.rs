@@ -1,7 +1,12 @@
 //! Promise allocation, settlement (resolve/reject), and chaining
 //! (`then`/`catch`/`finally`). See `super` for the shared task queue
-//! and Promise type.
+//! and Promise type, and `super::reactions` for the settle-listener /
+//! overflow-reaction side tables.
 
+use super::reactions::{
+    enqueue_overflow_reactions, promise_take_overflow_reactions, promise_take_settle_listeners,
+    push_overflow_reaction,
+};
 use super::*;
 
 #[inline]
@@ -112,6 +117,25 @@ pub(crate) fn mark_rejection_handled(promise: *mut Promise) {
     });
 }
 
+/// GC root scanner for `UNHANDLED_REJECTIONS` (#6077). The set stores raw
+/// promise addresses. A regular promise is allocated in the MOVABLE arena
+/// (`js_promise_new_with_parent_impl`), so without this scanner a tracked
+/// promise could be swept or evacuated before the program-end report — making
+/// `js_promise_report_unhandled_rejections`'s `(*pr).state` / `(*pr).reason`
+/// deref a stale/use-after-free read (arena pages stay mapped, so a silent
+/// misreport is likelier than a hard fault). Visiting each address marks the
+/// promise live AND rewrites the stored pointer on evacuation, so the report
+/// always sees a valid promise. Entries are removed (and thus unrooted) as soon
+/// as a reaction is wired (`mark_rejection_handled`) or the promise settles
+/// handled, so this never keeps a genuinely-dead promise alive past its report.
+pub fn scan_unhandled_rejection_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    UNHANDLED_REJECTIONS.with(|m| {
+        for slot in m.borrow_mut().iter_mut() {
+            visitor.visit_usize_slot(slot);
+        }
+    });
+}
+
 /// Program-end hook (emitted by codegen's event-loop exit block, after the
 /// final microtask/timer drain). If any rejection went unhandled, mirror Node:
 /// print to stderr and exit with a non-zero code.
@@ -203,224 +227,6 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
 static KEEP_PROMISE_REPORT_UNHANDLED_REJECTIONS: extern "C" fn() =
     js_promise_report_unhandled_rejections;
 
-pub(super) struct PromiseSettleListener {
-    pub(super) on_fulfilled: ClosurePtr,
-    pub(super) on_rejected: ClosurePtr,
-    pub(super) context: AsyncContextSnapshot,
-}
-
-thread_local! {
-    pub(super) static PROMISE_SETTLE_LISTENERS: RefCell<Vec<(usize, PromiseSettleListener)>> =
-        const { RefCell::new(Vec::new()) };
-}
-
-pub(crate) fn js_promise_attach_settle_listener(
-    promise: *mut Promise,
-    on_fulfilled: ClosurePtr,
-    on_rejected: ClosurePtr,
-) {
-    if promise.is_null() {
-        return;
-    }
-    mark_rejection_handled(promise);
-
-    let context = capture_context();
-    unsafe {
-        match (*promise).state {
-            PromiseState::Pending => {
-                crate::gc::runtime_write_barrier_root_raw_ptr(promise);
-                crate::gc::runtime_write_barrier_root_raw_ptr(on_fulfilled);
-                crate::gc::runtime_write_barrier_root_raw_ptr(on_rejected);
-                PROMISE_SETTLE_LISTENERS.with(|listeners| {
-                    listeners.borrow_mut().push((
-                        promise as usize,
-                        PromiseSettleListener {
-                            on_fulfilled,
-                            on_rejected,
-                            context,
-                        },
-                    ));
-                });
-            }
-            PromiseState::Fulfilled => {
-                enqueue_settle_listener_task(on_fulfilled, (*promise).value, true, context);
-            }
-            PromiseState::Rejected => {
-                enqueue_settle_listener_task(on_rejected, (*promise).reason, false, context);
-            }
-        }
-    }
-}
-
-fn promise_take_settle_listeners(promise: *mut Promise) -> Vec<PromiseSettleListener> {
-    if promise.is_null() {
-        return Vec::new();
-    }
-    PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        let mut listeners = listeners.borrow_mut();
-        let key = promise as usize;
-        let mut drained = Vec::new();
-        let mut i = 0;
-        while i < listeners.len() {
-            if listeners[i].0 == key {
-                drained.push(listeners.swap_remove(i).1);
-            } else {
-                i += 1;
-            }
-        }
-        drained
-    })
-}
-
-fn enqueue_settle_listener_task(
-    callback: ClosurePtr,
-    value: f64,
-    is_fulfilled: bool,
-    context: AsyncContextSnapshot,
-) {
-    if callback.is_null() {
-        return;
-    }
-    TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Inline(
-            callback,
-            value,
-            ptr::null_mut(),
-            is_fulfilled,
-            context,
-        ));
-    });
-}
-
-pub(super) fn scan_promise_settle_listeners_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        for (key, listener) in listeners.borrow_mut().iter_mut() {
-            visitor.visit_metadata_usize_slot(key);
-            visitor.visit_raw_const_ptr_slot(&mut listener.on_fulfilled);
-            visitor.visit_raw_const_ptr_slot(&mut listener.on_rejected);
-            scan_snapshot_roots_mut(&mut listener.context, visitor);
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Multiple reactions per promise (PerformPromiseThen's [[PromiseFulfillReactions]]
-// / [[PromiseRejectReactions]] lists).
-//
-// The `Promise` struct holds ONE `on_fulfilled`/`on_rejected`/`next` triple, so
-// the FIRST `.then`/`.catch`/`.finally` reaction uses those inline slots (the
-// common, hot, zero-overhead case). A SECOND+ reaction on the same promise —
-// `p.then(a); p.then(b)`, or a user `.then` plus a combinator's per-element
-// `.then` when `Promise.resolve(p) === p` — would clobber the slot. Those
-// overflow reactions are parked here, keyed by promise pointer, and replayed in
-// FIFO registration order (after the slot reaction) when the promise settles.
-//
-// Each overflow reaction carries its OWN chained `next` promise and async
-// context, so the chained promise settles and runs in the correct realm —
-// dispatched via `Task::Inline`, which already models "invoke one handler (or
-// pass the value through when null) and resolve `next` with the result".
-// ---------------------------------------------------------------------------
-
-pub(super) struct OverflowReaction {
-    pub(super) on_fulfilled: ClosurePtr,
-    pub(super) on_rejected: ClosurePtr,
-    pub(super) next: *mut Promise,
-    pub(super) context: AsyncContextSnapshot,
-}
-
-thread_local! {
-    pub(super) static PROMISE_OVERFLOW_REACTIONS: RefCell<Vec<(usize, OverflowReaction)>> =
-        const { RefCell::new(Vec::new()) };
-}
-
-/// Park a 2nd+ reaction on a still-pending `promise`.
-fn push_overflow_reaction(
-    promise: *mut Promise,
-    on_fulfilled: ClosurePtr,
-    on_rejected: ClosurePtr,
-    next: *mut Promise,
-    context: AsyncContextSnapshot,
-) {
-    crate::gc::runtime_write_barrier_root_raw_ptr(promise);
-    crate::gc::runtime_write_barrier_root_raw_ptr(on_fulfilled);
-    crate::gc::runtime_write_barrier_root_raw_ptr(on_rejected);
-    crate::gc::runtime_write_barrier_root_raw_ptr(next);
-    PROMISE_OVERFLOW_REACTIONS.with(|r| {
-        r.borrow_mut().push((
-            promise as usize,
-            OverflowReaction {
-                on_fulfilled,
-                on_rejected,
-                next,
-                context,
-            },
-        ));
-    });
-}
-
-/// Drain (in registration order) every overflow reaction registered against
-/// `promise`. Returns `Vec::new()` for the overwhelmingly common no-overflow
-/// case without touching the table's allocation.
-fn promise_take_overflow_reactions(promise: *mut Promise) -> Vec<OverflowReaction> {
-    PROMISE_OVERFLOW_REACTIONS.with(|r| {
-        let mut r = r.borrow_mut();
-        if r.is_empty() {
-            return Vec::new();
-        }
-        let key = promise as usize;
-        let mut drained = Vec::new();
-        // Preserve FIFO order (a plain filter keeps relative order; swap_remove
-        // would not — reaction ordering is observable, see resolved-sequence).
-        r.retain(|(k, reaction)| {
-            if *k == key {
-                drained.push(OverflowReaction {
-                    on_fulfilled: reaction.on_fulfilled,
-                    on_rejected: reaction.on_rejected,
-                    next: reaction.next,
-                    context: reaction.context.clone(),
-                });
-                false
-            } else {
-                true
-            }
-        });
-        drained
-    })
-}
-
-/// Push the `Task::Inline` jobs for a settled promise's drained overflow
-/// reactions. `value` is the fulfilled value or rejection reason.
-fn enqueue_overflow_reactions(
-    reactions: Vec<OverflowReaction>,
-    value: f64,
-    is_fulfilled: bool,
-    q: &mut std::collections::VecDeque<Task>,
-) {
-    for r in reactions {
-        let cb = if is_fulfilled {
-            r.on_fulfilled
-        } else {
-            r.on_rejected
-        };
-        // A null `cb` with a non-null `next` is a pass-through (the
-        // `Task::Inline` arm resolves/rejects `next` with `value`) — exactly the
-        // `.then(onFulfilled)` rejected-side / `.catch` fulfilled-side behavior.
-        q.push_back(Task::Inline(cb, value, r.next, is_fulfilled, r.context));
-    }
-}
-
-pub(super) fn scan_promise_overflow_reactions_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        for (key, reaction) in reactions.borrow_mut().iter_mut() {
-            visitor.visit_metadata_usize_slot(key);
-            visitor.visit_raw_const_ptr_slot(&mut reaction.on_fulfilled);
-            visitor.visit_raw_const_ptr_slot(&mut reaction.on_rejected);
-            visitor.visit_raw_mut_ptr_slot(&mut reaction.next);
-            scan_snapshot_roots_mut(&mut reaction.context, visitor);
-        }
-    });
-}
-
 /// Allocate a new Promise
 #[no_mangle]
 pub extern "C" fn js_promise_new() -> *mut Promise {
@@ -430,10 +236,27 @@ pub extern "C" fn js_promise_new() -> *mut Promise {
 /// Allocate a new Promise, recording `parent` so `v8.promiseHooks` `init`
 /// callbacks (#3139) receive the parent promise.
 pub(crate) fn js_promise_new_with_parent(parent: *mut Promise) -> *mut Promise {
+    js_promise_new_with_parent_impl(parent, false)
+}
+
+/// Allocate a Promise that will cross a thread boundary as a raw address
+/// (`spawn`, `Atomics.waitAsync`): pinned by the caller and referenced only
+/// by a `usize` in the global PENDING_THREAD_RESULTS queue, which no root
+/// scanner visits. A nursery resident in that situation is destroyed by the
+/// copied-minor from-space flip regardless of its PIN flag (the flip resets
+/// eden/survivor blocks wholesale; only root-reachable pins force the
+/// fallback). Malloc space is non-moving and both sweep paths honor
+/// GC_FLAG_PINNED, so these promises are allocated there unconditionally.
+#[no_mangle]
+pub extern "C" fn js_promise_new_cross_thread() -> *mut Promise {
+    js_promise_new_with_parent_impl(ptr::null_mut(), true)
+}
+
+fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> *mut Promise {
     bump(&MT_PROMISE_NEW_COUNT);
     let async_hooks_active = crate::async_hooks::hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
-    let raw = if lifecycle_hooks_active {
+    let raw = if lifecycle_hooks_active || force_malloc {
         crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE)
     } else {
         crate::arena::arena_alloc_gc(

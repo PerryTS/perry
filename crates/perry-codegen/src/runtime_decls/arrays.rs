@@ -87,6 +87,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
     module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
     module.declare_function("js_gc_write_barriers_emitted", VOID, &[I32]);
+    // Phase 2 of the moving-GC project: emitted at loop back-edges (only when
+    // compiled with the moving-safepoint opt-in) so a deferred nursery
+    // collection can run at a precise-root safepoint. No-op at runtime unless
+    // moving mode is on and a collection is pending.
+    module.declare_function("js_gc_loop_safepoint", VOID, &[]);
 
     // Write barrier for the generational GC (Phase C per the
     // gen-GC plan). Called by codegen-emitted heap-store sites
