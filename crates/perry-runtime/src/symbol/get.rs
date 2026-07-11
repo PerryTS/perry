@@ -302,7 +302,12 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         // accessor branch (getter priority) and the static symbol-FIELD
         // lookup (a `static [S] = v` initializer runs after method
         // installation and shadows the method, matching class-init order).
-        if sym_key != 0 {
+        // USER symbols only: well-known symbol methods (`[Symbol.iterator]`,
+        // `[Symbol.toPrimitive]`, …) are lowered to synthetic `@@name`
+        // members with dedicated consumers (GetIterator, `js_to_primitive`,
+        // the using-block desugar) and established name-based resolution —
+        // keep them on those paths rather than changing their behavior here.
+        if sym_key != 0 && !crate::symbol::is_well_known_symbol(sym_key) {
             let is_proto_ref = crate::object::class_prototype_ref_id(obj_f64).is_some();
             if let Some((func_ptr, param_count, has_rest)) =
                 crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, !is_proto_ref)
@@ -533,16 +538,25 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                     // accessor branch above keeps getter priority. This also
                     // fixes instance-side `S in obj`, whose presence check
                     // (`js_object_has_property`) delegates to this resolver.
-                    if let Some((func_ptr, param_count, has_rest)) =
-                        crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, false)
-                    {
-                        return crate::object::build_symbol_bound_method_closure(
-                            obj_f64,
-                            func_ptr,
-                            param_count,
-                            has_rest,
-                            false,
-                        );
+                    // USER symbols only: a well-known computed method (e.g.
+                    // `[Symbol.toPrimitive]() {}`) is lowered to a synthetic
+                    // `@@name` vtable member and keeps resolving through the
+                    // name-based #1838 tail below, preserving the existing
+                    // behavior for every well-known symbol.
+                    if !crate::symbol::is_well_known_symbol(sym_key) {
+                        if let Some((func_ptr, param_count, has_rest)) =
+                            crate::object::lookup_class_symbol_method_in_chain(
+                                class_id, sym_key, false,
+                            )
+                        {
+                            return crate::object::build_symbol_bound_method_closure(
+                                obj_f64,
+                                func_ptr,
+                                param_count,
+                                has_rest,
+                                false,
+                            );
+                        }
                     }
                 }
             }
