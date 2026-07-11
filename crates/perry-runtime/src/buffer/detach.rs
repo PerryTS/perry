@@ -137,7 +137,11 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64]) -> f64 {
     let copy_len = old_len.min(new_len);
     if copy_len > 0 {
         unsafe {
-            std::ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(dst), copy_len as usize);
+            std::ptr::copy_nonoverlapping(
+                buffer_data(src),
+                buffer_data_mut(dst),
+                copy_len as usize,
+            );
         }
     }
     detach_array_buffer(addr);
