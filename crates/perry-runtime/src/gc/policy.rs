@@ -763,25 +763,31 @@ pub(super) fn copied_minor_promotion_handoff_pressure_due(
 }
 
 pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
+    // Pure measurement pass over the active survivor semispace only. Use the
+    // block-filtered walk so blocks outside the active range are skipped in
+    // O(n_blocks) instead of iterating every object in Eden/longlived/old-gen
+    // just to discard it (#6181) — both walkers visit the regions in the same
+    // order with the same global block-index bases, so the filter is exactly
+    // equivalent to the previous in-callback range check.
     let active_range = crate::arena::active_survivor_block_index_range();
     let mut promotable = 0usize;
-    crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
-        if !active_range.contains(&block_idx) {
-            return;
-        }
-        let header = header_ptr as *mut GcHeader;
-        unsafe {
-            let flags = (*header).gc_flags;
-            if flags & GC_FLAG_FORWARDED != 0 {
-                return;
+    crate::arena::arena_walk_objects_filtered(
+        |block_idx| active_range.contains(&block_idx),
+        |header_ptr, _block_idx| {
+            let header = header_ptr as *mut GcHeader;
+            unsafe {
+                let flags = (*header).gc_flags;
+                if flags & GC_FLAG_FORWARDED != 0 {
+                    return;
+                }
+                let prior_age = copied_survival_age((*header)._reserved, flags);
+                let next_age = prior_age.saturating_add(1);
+                if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
+                    promotable = promotable.saturating_add((*header).size as usize);
+                }
             }
-            let prior_age = copied_survival_age((*header)._reserved, flags);
-            let next_age = prior_age.saturating_add(1);
-            if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
-                promotable = promotable.saturating_add((*header).size as usize);
-            }
-        }
-    });
+        },
+    );
     promotable
 }
 

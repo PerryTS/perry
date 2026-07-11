@@ -778,3 +778,67 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
         "expando must not remain at the stale old address"
     );
 }
+
+// #6181: the promotion-handoff census switched from the unfiltered
+// `arena_walk_objects_with_block_index` (visits every object in every region,
+// discards out-of-range ones in the callback) to the block-filtered walk that
+// skips non-active blocks in O(n_blocks). Both walkers must assign the same
+// global block indices, so the filtered census must equal the old in-callback
+// range check byte-for-byte — including ignoring Eden garbage and old-gen
+// objects that sit outside the active survivor range.
+#[test]
+fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let child = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(child));
+
+    // Age the rooted object to the promotion boundary: after 3 copied minors
+    // its survival age is 3, so next_age (4) >= GC_COPY_PROMOTION_SURVIVALS
+    // and the census must count it.
+    for _ in 0..3 {
+        let _ = gc_collect_minor();
+    }
+    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert!(crate::arena::pointer_in_nursery(survivor));
+    let survivor_total = unsafe { (*header_from_user_ptr(survivor as *const u8)).size as usize };
+
+    // Populate regions OUTSIDE the active survivor range: Eden garbage and an
+    // old-gen object. The census must ignore all of them.
+    for _ in 0..64 {
+        let _ = young_leaf();
+    }
+    let _old = unsafe { alloc_old_test_symbol() };
+
+    // Reference value: the pre-#6181 implementation — the unfiltered walk
+    // with the active-range check inside the callback.
+    let active_range = crate::arena::active_survivor_block_index_range();
+    let mut expected = 0usize;
+    crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
+        if !active_range.contains(&block_idx) {
+            return;
+        }
+        let header = header_ptr as *mut GcHeader;
+        unsafe {
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
+            let prior_age = copied_survival_age((*header)._reserved, flags);
+            let next_age = prior_age.saturating_add(1);
+            if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
+                expected = expected.saturating_add((*header).size as usize);
+            }
+        }
+    });
+
+    let actual = copied_minor_promotable_active_survivor_bytes();
+    assert_eq!(
+        actual, expected,
+        "filtered census must match the unfiltered-walk reference"
+    );
+    assert!(
+        actual >= survivor_total,
+        "census must count the aged survivor ({survivor_total} bytes), got {actual} — \
+         the equivalence assert above must not be vacuously 0 == 0"
+    );
+}
