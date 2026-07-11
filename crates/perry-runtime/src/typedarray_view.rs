@@ -21,7 +21,7 @@ use crate::typedarray::{
 /// arguments (#4103): `undefined` / `NaN` → 0, otherwise `ToIntegerOrInfinity`
 /// truncated toward zero, with a `RangeError` for a negative or
 /// out-of-`[[0, 2^53-1]]` result.
-fn typed_array_view_to_index(value: f64) -> i64 {
+pub(crate) fn typed_array_view_to_index(value: f64) -> i64 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return 0;

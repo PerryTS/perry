@@ -88,7 +88,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // `new Uint8Array(x)` runtime dispatch — handles the non-literal case
     // where `x` could be a number (length) or an array (source data).
     module.declare_function("js_uint8array_new", I64, &[DOUBLE]);
-    module.declare_function("js_uint8array_view", I64, &[DOUBLE, I32, I32]);
+    // Raw NaN-boxed byteOffset/length (undefined when absent) — the runtime
+    // runs ToIndex and the spec's post-coercion detached/bounds checks.
+    module.declare_function("js_uint8array_view", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     // Generic typed array runtime (Int8/16/32, Uint16/32, Float32/64, Uint8Clamped).
     // Uint8Array piggybacks on the BufferHeader path.
     module.declare_function("js_typed_array_new_empty", I64, &[I32, I32]);

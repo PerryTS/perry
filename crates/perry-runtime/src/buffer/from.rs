@@ -597,11 +597,17 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
 /// `new Uint8Array(buffer, byteOffset, length)` — create a Uint8Array view
 /// over ArrayBuffer-like storage. Perry's BufferHeader model represents the
 /// view with a sliced buffer registered against the original backing store.
+///
+/// `offset_value` / `length_value` are the raw NaN-boxed arguments
+/// (`undefined` when absent), matching the other typed-array view kinds:
+/// ToIndex runs here — it can execute user code (`valueOf`) that detaches
+/// the source — and per spec the IsDetachedBuffer check and all bounds
+/// validation happen after both coercions.
 #[no_mangle]
 pub extern "C" fn js_uint8array_view(
     source: f64,
-    byte_offset: i32,
-    requested_length: i32,
+    offset_value: f64,
+    length_value: f64,
 ) -> *mut BufferHeader {
     let bits = source.to_bits();
     if (bits >> 48) != 0x7FFD {
@@ -611,29 +617,44 @@ pub extern "C" fn js_uint8array_view(
     if !is_registered_buffer(raw) || !is_any_array_buffer(raw) {
         return js_uint8array_new(source);
     }
+    let byte_offset = crate::typedarray_view::typed_array_view_to_index(offset_value);
+    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
+    let requested = if length_jv.is_undefined() {
+        None
+    } else {
+        Some(crate::typedarray_view::typed_array_view_to_index(
+            length_value,
+        ))
+    };
+    if super::detach::is_detached_buffer(raw) {
+        crate::collection_iter::throw_type_error(
+            "Cannot perform Construct on a detached ArrayBuffer",
+        );
+    }
     let src = raw as *const BufferHeader;
     unsafe {
-        let total_len = (*src).length as i32;
+        let total_len = (*src).length as i64;
         // #4103: spec `RangeError` for an out-of-range view. `BYTES_PER_ELEMENT`
         // is 1 for `Uint8Array`, so there is no alignment constraint — only the
         // offset and (offset + length) bounds against the backing buffer.
-        if byte_offset < 0 || byte_offset > total_len {
+        if byte_offset > total_len {
             crate::fs::validate::throw_range_error_with_code(&format!(
                 "Start offset {byte_offset} is outside the bounds of the buffer"
             ));
         }
-        if requested_length >= 0 && byte_offset.saturating_add(requested_length) > total_len {
-            crate::fs::validate::throw_range_error_with_code(&format!(
-                "Invalid typed array length: {requested_length}"
-            ));
+        if let Some(requested) = requested {
+            if byte_offset.saturating_add(requested) > total_len {
+                crate::fs::validate::throw_range_error_with_code(&format!(
+                    "Invalid typed array length: {requested}"
+                ));
+            }
         }
-        let start = byte_offset.clamp(0, total_len);
-        let len = if requested_length < 0 {
-            total_len.saturating_sub(start)
-        } else {
-            requested_length.max(0)
+        let start = byte_offset.clamp(0, total_len) as i32;
+        let len = match requested {
+            None => (total_len - byte_offset).max(0) as i32,
+            Some(requested) => requested.max(0) as i32,
         };
-        let end = start.saturating_add(len).min(total_len);
+        let end = start.saturating_add(len).min(total_len as i32);
         let view = js_buffer_slice(src, start, end);
         mark_as_uint8array(view as usize);
         set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
