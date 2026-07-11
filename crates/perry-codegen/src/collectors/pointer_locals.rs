@@ -673,6 +673,7 @@ pub fn collect_pointer_typed_locals(
         local_types.insert(p.id, pointer_analysis_type(&p.ty));
     }
     collect_facts(stmts, &mut local_types, &mut writes);
+    super::integer_locals::collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
     // #6219 perf: the type-inference fixpoint below infers each frame local's
     // type from its writes. Writes to ids NOT declared in THIS frame (a nested
     // closure's own locals, pulled in while walking the subtree for captured-
