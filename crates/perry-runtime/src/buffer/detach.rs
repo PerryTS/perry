@@ -85,14 +85,24 @@ fn decommit_payload_pages(data: *mut u8, capacity: usize) {
     if end <= start {
         return;
     }
-    // MADV_FREE keeps the mapping valid on macOS and lets the kernel reclaim
-    // lazily; MADV_DONTNEED on Linux drops the pages (and RSS) immediately.
-    #[cfg(target_os = "macos")]
-    let advice = libc::MADV_FREE;
-    #[cfg(not(target_os = "macos"))]
-    let advice = libc::MADV_DONTNEED;
     unsafe {
-        libc::madvise(start as *mut libc::c_void, end - start, advice);
+        // macOS: MADV_FREE_REUSABLE drops the pages from the process
+        // footprint immediately (plain MADV_FREE only reclaims under
+        // memory pressure, so RSS wouldn't visibly shrink). It can fail
+        // on some region types — fall back to MADV_FREE then.
+        #[cfg(target_os = "macos")]
+        {
+            let len = end - start;
+            if libc::madvise(start as *mut libc::c_void, len, libc::MADV_FREE_REUSABLE) != 0 {
+                libc::madvise(start as *mut libc::c_void, len, libc::MADV_FREE);
+            }
+        }
+        // Linux (and other unix): MADV_DONTNEED drops the pages (and RSS)
+        // immediately; later reads legally return zeros.
+        #[cfg(not(target_os = "macos"))]
+        {
+            libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_DONTNEED);
+        }
     }
 }
 
