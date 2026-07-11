@@ -2086,3 +2086,78 @@ mod drain_expired_tests {
         assert!(queue.is_empty());
     }
 }
+
+#[cfg(test)]
+mod expired_batch_order_tests {
+    use super::{order_expired_callback_batch, CallbackTimer, CallbackTimerKind};
+    use std::time::{Duration, Instant};
+
+    fn timer(id: i64, kind: CallbackTimerKind, base: Instant, delay_ms: u64) -> CallbackTimer {
+        CallbackTimer {
+            id,
+            kind,
+            deadline: base + Duration::from_millis(delay_ms),
+            delay_ms,
+            callback: 0,
+            args: Vec::new(),
+            context: crate::async_context::AsyncContextSnapshot::default(),
+            async_id: 0,
+            trigger_async_id: 0,
+            cleared: false,
+        }
+    }
+
+    /// #6287 case 1: the batch fires in DEADLINE order, not creation order —
+    /// a 5 ms timer created after a 10 ms one still fires first. Ground truth
+    /// from node: `setTimeout(f,10); setTimeout(g,5)` runs g then f.
+    #[test]
+    fn expired_timeouts_fire_in_deadline_order() {
+        let base = Instant::now();
+        let mut batch = vec![
+            timer(1, CallbackTimerKind::Timeout, base, 10),
+            timer(2, CallbackTimerKind::Timeout, base, 5),
+            timer(3, CallbackTimerKind::Timeout, base, 1),
+        ];
+        order_expired_callback_batch(&mut batch);
+        let ids: Vec<i64> = batch.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![3, 2, 1], "earliest deadline first");
+    }
+
+    /// Same-deadline timers must STILL fire in creation order — the ordering
+    /// Perry already got right, preserved by the sort being stable.
+    #[test]
+    fn same_deadline_timeouts_keep_creation_order() {
+        let base = Instant::now();
+        let mut batch = vec![
+            timer(1, CallbackTimerKind::Timeout, base, 3),
+            timer(2, CallbackTimerKind::Timeout, base, 3),
+            timer(3, CallbackTimerKind::Timeout, base, 3),
+        ];
+        order_expired_callback_batch(&mut batch);
+        let ids: Vec<i64> = batch.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![1, 2, 3], "stable sort keeps creation order");
+    }
+
+    /// #6287 case 2: setImmediate runs in the CHECK phase, so an expired
+    /// setTimeout fires ahead of an immediate scheduled earlier — and this is
+    /// exactly why a naive sort by deadline alone is wrong (an immediate's
+    /// deadline is ~now, so it would sort ahead of the timeout). Immediates
+    /// keep FIFO order among themselves.
+    #[test]
+    fn expired_timeouts_precede_immediates_which_stay_fifo() {
+        let base = Instant::now();
+        let mut batch = vec![
+            timer(1, CallbackTimerKind::Immediate, base, 0),
+            timer(2, CallbackTimerKind::Timeout, base, 5),
+            timer(3, CallbackTimerKind::Immediate, base, 0),
+            timer(4, CallbackTimerKind::Timeout, base, 1),
+        ];
+        order_expired_callback_batch(&mut batch);
+        let ids: Vec<i64> = batch.iter().map(|t| t.id).collect();
+        assert_eq!(
+            ids,
+            vec![4, 2, 1, 3],
+            "timeouts by deadline (4 then 2), then immediates FIFO (1 then 3)"
+        );
+    }
+}
