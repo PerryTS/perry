@@ -531,6 +531,11 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
             // Issue #227 (the prior memcpy branch) was about avoiding
             // f64-misinterpretation; aliasing also avoids it.
             if is_any_array_buffer(raw) {
+                if super::detach::is_detached_buffer(raw) {
+                    crate::collection_iter::throw_type_error(
+                        "Cannot perform Construct on a detached ArrayBuffer",
+                    );
+                }
                 let src = raw as *const BufferHeader;
                 unsafe {
                     let len = (*src).length as i32;
@@ -636,7 +641,7 @@ pub extern "C" fn js_uint8array_view(
     }
 }
 
-fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {
+pub(super) fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {
     let size = size.max(0) as u32;
     let buf = buffer_alloc(size);
     unsafe {
@@ -657,7 +662,7 @@ fn throw_array_buffer_range_error() -> ! {
     crate::fs::validate::throw_range_error_with_code("Invalid array buffer length")
 }
 
-fn array_buffer_to_index(value: f64) -> i32 {
+pub(super) fn array_buffer_to_index(value: f64) -> i32 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return 0;
@@ -803,6 +808,11 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     let addr = v.as_pointer::<u8>() as usize;
     if addr == 0 || !is_registered_buffer(addr) {
         throw_dataview_buffer_not_object();
+    }
+    if super::detach::is_detached_buffer(addr) {
+        crate::collection_iter::throw_type_error(
+            "Cannot perform Construct on a detached ArrayBuffer",
+        );
     }
 
     // Steps 4-6: offset = ToIndex(byteOffset) (RangeError if negative).

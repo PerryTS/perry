@@ -514,11 +514,7 @@ fn detach_unseen_transferables() {
                 if state.clones.contains_key(addr) {
                     continue;
                 }
-                unsafe {
-                    let src = *addr as *mut crate::buffer::BufferHeader;
-                    (*src).length = 0;
-                    (*src).capacity = 0;
-                }
+                crate::buffer::detach_array_buffer(*addr);
             }
         }
     });
@@ -562,10 +558,7 @@ fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
 
     if detach_source {
         record_transfer_clone(addr, dst_addr);
-        unsafe {
-            (*src).length = 0;
-            (*src).capacity = 0;
-        }
+        crate::buffer::detach_array_buffer(addr);
     }
 
     crate::value::js_nanbox_pointer(dst_addr as i64)
@@ -605,6 +598,9 @@ fn collect_transfer_list(options: f64) -> std::collections::HashSet<usize> {
             || crate::buffer::is_shared_array_buffer(item_addr)
         {
             throw_data_clone_error("Found invalid value in transferList");
+        }
+        if crate::buffer::is_detached_buffer(item_addr) {
+            throw_data_clone_error("ArrayBuffer is already detached");
         }
         if !out.insert(item_addr) {
             throw_data_clone_error("Transfer list contains duplicate ArrayBuffer");

@@ -490,6 +490,7 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     BUFFER_AB_ALIAS.with(|r| {
         r.borrow_mut().remove(&addr);
     });
+    super::detach::remove_detached_entry_for_dead_buffer(addr);
     super::view::remove_entries_for_dead_buffer(addr);
 }
 

@@ -14,6 +14,7 @@ mod coding;
 mod copy_bytes;
 mod copy_write;
 mod dataview;
+mod detach;
 mod encode;
 mod from;
 mod header;
@@ -42,6 +43,10 @@ pub use header::{
 pub(crate) use header::{
     collect_dead_registered_buffers_post_trace, finalize_collected_dead_buffer,
 };
+
+// ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
+pub(crate) use detach::array_buffer_transfer;
+pub use detach::{detach_array_buffer, is_detached_buffer};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{

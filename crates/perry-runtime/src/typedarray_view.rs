@@ -72,6 +72,9 @@ pub extern "C" fn js_typed_array_view(
     if !crate::buffer::is_registered_buffer(addr) || !crate::buffer::is_any_array_buffer(addr) {
         return js_typed_array_new(kind as i32, source);
     }
+    if crate::buffer::is_detached_buffer(addr) {
+        crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
+    }
     let bpe = elem_size_for_kind(kind) as i64;
     let src = addr as *const crate::buffer::BufferHeader;
     let total_len = unsafe { (*src).length as i64 };
@@ -182,6 +185,25 @@ static VIEW_META_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 pub(crate) fn any_view_meta() -> bool {
     VIEW_META_COUNT.load(Ordering::Relaxed) != 0
+}
+
+/// DetachArrayBuffer support (ES2024 `ArrayBuffer.prototype.transfer`): zero
+/// the length of every typed array aliasing `backing` so views over a
+/// detached buffer report length 0 and every indexed read is out-of-bounds
+/// (`undefined`), matching Node.
+pub(crate) fn zero_views_of_detached_backing(backing: usize) {
+    if !any_view_meta() {
+        return;
+    }
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        for (&ta, meta) in r.borrow().iter() {
+            if meta.backing == backing {
+                unsafe {
+                    (*(ta as *mut TypedArrayHeader)).length = 0;
+                }
+            }
+        }
+    });
 }
 
 /// Record `ta` as aliasing `backing` at `byte_offset`. After this call

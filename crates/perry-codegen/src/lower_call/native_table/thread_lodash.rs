@@ -56,6 +56,38 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // ========== perry/gc (explicit GC control: collect, minor, idleHint) ==========
+    // Zero-arg runtime calls. The runtime side returns already-NaN-boxed
+    // JSValues (undefined / a byte count / a boolean), so NR_F64 passes them
+    // through unchanged. Under Node/Bun these imports don't resolve — the
+    // module is a Perry-native pacing surface, same story as perry/thread.
+    NativeModSig {
+        module: "perry/gc",
+        has_receiver: false,
+        method: "collect",
+        class_filter: None,
+        runtime: "js_gc_module_collect",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/gc",
+        has_receiver: false,
+        method: "minor",
+        class_filter: None,
+        runtime: "js_gc_module_minor",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "perry/gc",
+        has_receiver: false,
+        method: "idleHint",
+        class_filter: None,
+        runtime: "js_gc_module_idle_hint",
+        args: &[],
+        ret: NR_F64,
+    },
     // ========== lodash (named-import form: import { chunk } from 'lodash') ==========
     // Default-import form (import _ from 'lodash'; _.chunk(...)) needs has_receiver:true
     // but would pass the module object as first arg, breaking the C signature.
