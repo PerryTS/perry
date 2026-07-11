@@ -550,8 +550,11 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(property, non_escaping_news, used);
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
         }
-        Expr::InstanceOf { expr, .. } => {
+        Expr::InstanceOf { expr, ty_expr, .. } => {
             collect_used_new_fields_in_expr(expr, non_escaping_news, used);
+            if let Some(t) = ty_expr {
+                collect_used_new_fields_in_expr(t, non_escaping_news, used);
+            }
         }
         Expr::ProcessOn { event, handler } => {
             collect_used_new_fields_in_expr(event, non_escaping_news, used);

@@ -186,6 +186,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             } else {
                 None
             };
+            // #6233: a user-declared binding — `class Symbol extends Base {}`,
+            // a local/param, a `function` declaration, or an imported binding —
+            // lexically shadows the same-named global for every reference in
+            // scope, `new` expressions included. Every built-in constructor arm
+            // below (Map/Set/Date/RegExp, the Symbol/BigInt/Math/JSON
+            // non-constructible rejection, Proxy, the boxed primitives, the
+            // Error family, WeakRef, FinalizationRegistry, AggregateError,
+            // typed arrays, …) must back off when the name is shadowed so the
+            // construct falls through to the user-class / local-dispatch paths
+            // at the bottom. Snapshotted ONCE here, next to
+            // `callee_local_at_entry`, for the same reason it is: argument
+            // lowering inside an arm can disturb the locals scope stack, so a
+            // fresh lookup later is unreliable. `forward_class_names` covers a
+            // sibling `class X` declared later in the same function body
+            // (pre-registered by the Phase-1.5 scan but not yet lowered).
+            let shadowed_by_user_binding = ctx.lookup_class(&class_name).is_some()
+                || callee_local_at_entry.is_some()
+                || ctx.lookup_func(&class_name).is_some()
+                || ctx.lookup_imported_func(&class_name).is_some()
+                || ctx.forward_class_names.contains(class_name.as_str());
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
@@ -250,9 +270,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // runtime globals delegate to the registered worker_threads
             // factories when the stdlib is present, so ports stay fully
             // functional in graphs that have it.
-            if is_worker_messaging_constructor_name(&class_name)
-                && ctx.lookup_local(&class_name).is_none()
-            {
+            if is_worker_messaging_constructor_name(&class_name) && !shadowed_by_user_binding {
                 return Ok(Expr::New {
                     class_name: class_name.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
@@ -452,11 +470,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // runtime-unknown bucket with a precise diagnostic; log the
             // const/known-codegen buckets and fall through to the existing
             // placeholder lowering.
-            if class_name == "Function"
-                && ctx.lookup_local("Function").is_none()
-                && ctx.lookup_func("Function").is_none()
-                && ctx.lookup_class("Function").is_none()
-            {
+            if class_name == "Function" && !shadowed_by_user_binding {
                 let args_slice = new_expr.args.as_deref().unwrap_or(&[]);
                 if let Some(folded) = super::const_fold_fn::try_const_fold_function_construct(
                     ctx,
@@ -529,11 +543,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             // Handle built-in types
-            if class_name == "Object"
-                && ctx.lookup_local("Object").is_none()
-                && ctx.lookup_func("Object").is_none()
-                && ctx.lookup_class("Object").is_none()
-            {
+            if class_name == "Object" && !shadowed_by_user_binding {
                 let mut args = new_expr
                     .args
                     .as_ref()
@@ -547,7 +557,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let arg = args.drain(..).next().unwrap_or(Expr::Undefined);
                 return Ok(Expr::ObjectCoerce(Box::new(arg)));
             }
-            if class_name == "Map" {
+            if class_name == "Map" && !shadowed_by_user_binding {
                 // new Map() or new Map(entries)
                 let args = new_expr
                     .args
@@ -567,7 +577,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     )));
                 }
             }
-            if class_name == "Set" {
+            if class_name == "Set" && !shadowed_by_user_binding {
                 // new Set() or new Set(iterable)
                 let args = new_expr
                     .args
@@ -587,7 +597,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     )));
                 }
             }
-            if class_name == "Date" {
+            if class_name == "Date" && !shadowed_by_user_binding {
                 // new Date() / new Date(ts) / new Date(year, month, day, h?, m?, s?, ms?).
                 // The multi-arg form is what dayjs's parseDate uses
                 // (`new Date(d[1], m, d[3] || 1, ...)`) — without it the
@@ -607,7 +617,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .unwrap_or_default();
                 return Ok(Expr::DateNew(args));
             }
-            if class_name == "RegExp" {
+            if class_name == "RegExp" && !shadowed_by_user_binding {
                 // new RegExp(pattern[, flags]) — for string-literal args,
                 // route to the same `Expr::RegExp { pattern, flags }`
                 // variant the literal `/foo/g` syntax produces. The
@@ -684,7 +694,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math" | "JSON") {
+            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math" | "JSON")
+                && !shadowed_by_user_binding
+            {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -697,7 +709,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .unwrap_or_default();
                 return Ok(nonconstructable_builtin_throw_expr(&class_name, args));
             }
-            if class_name == "Proxy" {
+            if class_name == "Proxy" && !shadowed_by_user_binding {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -716,7 +728,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     handler: Box::new(handler),
                 });
             }
-            if matches!(class_name.as_str(), "Number" | "String" | "Boolean") {
+            if matches!(class_name.as_str(), "Number" | "String" | "Boolean")
+                && !shadowed_by_user_binding
+            {
                 let mut args = new_expr
                     .args
                     .as_ref()
@@ -793,7 +807,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // throws TypeError on a missing/non-iterable argument — so a
             // missing first arg defaults to `undefined`, NOT an empty array.
             // #2836: the third `options` argument carries `{ cause }`.
-            if class_name == "AggregateError" {
+            if class_name == "AggregateError" && !shadowed_by_user_binding {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -816,12 +830,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             // Handle Error and its subclasses
-            if class_name == "Error"
+            if (class_name == "Error"
                 || class_name == "TypeError"
                 || class_name == "RangeError"
                 || class_name == "ReferenceError"
                 || class_name == "SyntaxError"
-                || class_name == "BugIndicatingError"
+                || class_name == "BugIndicatingError")
+                && !shadowed_by_user_binding
             {
                 // new Error() / new Error(message) / new Error(message, { cause })
                 //
@@ -949,29 +964,17 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
 
-            // Handle URL class. #5912: gated on `callee_local_at_entry` /
-            // `lookup_func` / `lookup_imported_func` so a local function/
-            // const/imported-binding shadowing the global name (e.g. a
-            // vendored `function URL(url?) {...}` polyfill, or `import {
-            // URL } from "./my-url-polyfill"`) routes through the generic
-            // local-dispatch fallback below instead of always binding to
-            // perry's native WHATWG URL constructor — matches the
-            // `lookup_local`/`lookup_func`/`lookup_class` shadowing guard
-            // used for `Function`/`Object` above (a named function
-            // declaration is tracked via `lookup_func`, not
-            // `lookup_local`/`callee_local_at_entry`). Deliberately doesn't
-            // use the `shadows_unqualified_global` one-liner here: that
-            // helper's `lookup_local` call is a FRESH scope lookup, but
-            // `callee_local_at_entry` must stay a pre-captured snapshot (see
-            // the comment above its definition) — the Error-type branch
-            // just above already lowers `new_expr.args`, which can disturb
-            // the locals scope stack before we get here.
-            if class_name == "URL"
-                && callee_local_at_entry.is_none()
-                && ctx.lookup_func(&class_name).is_none()
-                && ctx.lookup_imported_func(&class_name).is_none()
-                && ctx.lookup_class(&class_name).is_none()
-            {
+            // Handle URL class. #5912: gated so a local function/const/
+            // imported-binding shadowing the global name (e.g. a vendored
+            // `function URL(url?) {...}` polyfill, or `import { URL } from
+            // "./my-url-polyfill"`) routes through the generic local-dispatch
+            // fallback below instead of always binding to perry's native
+            // WHATWG URL constructor. Uses the `shadowed_by_user_binding`
+            // snapshot (NOT fresh `shadows_unqualified_global` lookups):
+            // earlier arms lower `new_expr.args`, which can disturb the
+            // locals scope stack before we get here (see the comment above
+            // `callee_local_at_entry`).
+            if class_name == "URL" && !shadowed_by_user_binding {
                 return Ok(
                     lower_url_encoding_constructor(ctx, "URL", new_expr.args.as_deref())?.unwrap(),
                 );
@@ -979,10 +982,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
             // Handle URLSearchParams / URLPattern classes
             if matches!(class_name.as_str(), "URLSearchParams" | "URLPattern")
-                && callee_local_at_entry.is_none()
-                && ctx.lookup_func(&class_name).is_none()
-                && ctx.lookup_imported_func(&class_name).is_none()
-                && ctx.lookup_class(&class_name).is_none()
+                && !shadowed_by_user_binding
             {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
@@ -994,7 +994,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
 
             // Handle WeakRef class — wraps a value (object) in a weak reference object.
             // Pragmatic implementation: stores a strong reference and `deref()` always returns it.
-            if class_name == "WeakRef" {
+            if class_name == "WeakRef" && !shadowed_by_user_binding {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1012,7 +1012,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // Handle FinalizationRegistry class — registers cleanup callbacks invoked when
             // tracked targets are GC'd. Pragmatic implementation: stores registrations but
             // never fires the callback (Perry's GC doesn't track weak references yet).
-            if class_name == "FinalizationRegistry" {
+            if class_name == "FinalizationRegistry" && !shadowed_by_user_binding {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1027,12 +1027,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 return Ok(Expr::FinalizationRegistryNew(Box::new(cb)));
             }
             // Handle TextEncoder constructor
-            if class_name == "TextEncoder"
-                && callee_local_at_entry.is_none()
-                && ctx.lookup_func(&class_name).is_none()
-                && ctx.lookup_imported_func(&class_name).is_none()
-                && ctx.lookup_class(&class_name).is_none()
-            {
+            if class_name == "TextEncoder" && !shadowed_by_user_binding {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
                     "TextEncoder",
@@ -1041,12 +1036,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .unwrap());
             }
             // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
-            if class_name == "TextDecoder"
-                && callee_local_at_entry.is_none()
-                && ctx.lookup_func(&class_name).is_none()
-                && ctx.lookup_imported_func(&class_name).is_none()
-                && ctx.lookup_class(&class_name).is_none()
-            {
+            if class_name == "TextDecoder" && !shadowed_by_user_binding {
                 return Ok(lower_url_encoding_constructor(
                     ctx,
                     "TextDecoder",
@@ -1056,7 +1046,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             // Handle Uint8Array constructor
-            if class_name == "Uint8Array" {
+            if class_name == "Uint8Array" && !shadowed_by_user_binding {
                 // new Uint8Array() or new Uint8Array(length) or new Uint8Array(array)
                 let args = new_expr
                     .args
@@ -1082,7 +1072,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // Handle other typed-array constructors (Int8/16/32, Uint16/32, Float32/64,
             // Uint8ClampedArray). Uint8Array stays on the Buffer path above.
             if let Some(kind) = crate::ir::typed_array_kind_for_name(class_name.as_str()) {
-                if class_name != "Uint8Array" {
+                if class_name != "Uint8Array" && !shadowed_by_user_binding {
                     let args = new_expr
                         .args
                         .as_ref()

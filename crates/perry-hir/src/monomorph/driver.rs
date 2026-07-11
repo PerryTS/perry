@@ -378,7 +378,12 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(v, ctx, module, idx);
             }
         }
-        Expr::InstanceOf { expr, .. } => collect_instantiations_in_expr(expr, ctx, module, idx),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            collect_instantiations_in_expr(expr, ctx, module, idx);
+            if let Some(t) = ty_expr {
+                collect_instantiations_in_expr(t, ctx, module, idx);
+            }
+        }
         Expr::Await(inner) => collect_instantiations_in_expr(inner, ctx, module, idx),
         Expr::SuperCall(args) => {
             for arg in args {

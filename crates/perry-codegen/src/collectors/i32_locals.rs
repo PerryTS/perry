@@ -1386,7 +1386,12 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(e, out);
             }
         }
-        Expr::InstanceOf { expr, .. } => walk(expr, out),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            walk(expr, out);
+            if let Some(t) = ty_expr {
+                walk(t, out);
+            }
+        }
         Expr::In { property, object } => {
             walk(property, out);
             walk(object, out);
