@@ -143,6 +143,32 @@ fn should_run_unref_callback_interval_timers() -> bool {
     has_refed_promise_timer() || other_event_sources_keep_loop_alive()
 }
 
+/// Single-pass stable partition over a timer queue (#6084): drain the queue,
+/// discard entries matching `drop_entry`, return entries matching `is_expired`
+/// (in original order), and keep everything else in the queue (also in
+/// original order). Replaces the `queue.remove(i)`-inside-a-scan pattern that
+/// shifted the whole tail once per expired timer — O(n²) on bursts of
+/// same-deadline timers. Order preservation matters: same-deadline timers
+/// must fire in creation order (Node semantics).
+fn drain_expired_timers<T>(
+    queue: &mut Vec<T>,
+    mut drop_entry: impl FnMut(&T) -> bool,
+    mut is_expired: impl FnMut(&T) -> bool,
+) -> Vec<T> {
+    let drained = std::mem::take(queue);
+    let mut expired = Vec::new();
+    for item in drained {
+        if drop_entry(&item) {
+            // Cleared entry — discard.
+        } else if is_expired(&item) {
+            expired.push(item);
+        } else {
+            queue.push(item);
+        }
+    }
+    expired
+}
+
 /// Process any expired timers, resolving their promises
 /// Returns the number of timers that fired
 #[no_mangle]
@@ -151,19 +177,15 @@ pub extern "C" fn js_timer_tick() -> i32 {
     let allow_unref = should_run_unref_promise_timers();
     let mut fired = 0;
 
-    // Collect expired timers
+    // Collect expired timers (single-pass stable partition, see
+    // `drain_expired_timers`).
     let expired: Vec<Timer> = {
         let mut queue = TIMER_QUEUE.lock().unwrap();
-        let mut expired = Vec::new();
-        let mut i = 0;
-        while i < queue.len() {
-            if queue[i].deadline <= now && (queue[i].has_ref || allow_unref) {
-                expired.push(queue.remove(i));
-            } else {
-                i += 1;
-            }
-        }
-        expired
+        drain_expired_timers(
+            &mut queue,
+            |_| false,
+            |timer| timer.deadline <= now && (timer.has_ref || allow_unref),
+        )
     };
 
     // Resolve the expired timers' promises
@@ -1060,22 +1082,15 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     let now = Instant::now();
     let allow_unref = should_run_unref_callback_interval_timers();
 
-    // Collect expired, non-cleared timers
+    // Collect expired, non-cleared timers (single-pass stable partition,
+    // see `drain_expired_timers`; cleared timers are discarded).
     let expired: Vec<CallbackTimer> = {
         let mut queue = CALLBACK_TIMERS.lock().unwrap();
-        let mut expired = Vec::new();
-        let mut i = 0;
-        while i < queue.len() {
-            if queue[i].cleared {
-                queue.remove(i);
-            } else if queue[i].deadline <= now && (timer_has_ref_state(queue[i].id) || allow_unref)
-            {
-                expired.push(queue.remove(i));
-            } else {
-                i += 1;
-            }
-        }
-        expired
+        drain_expired_timers(
+            &mut queue,
+            |timer| timer.cleared,
+            |timer| timer.deadline <= now && (timer_has_ref_state(timer.id) || allow_unref),
+        )
     };
 
     let mut fired = 0;
@@ -1995,4 +2010,42 @@ pub(crate) fn test_clear_timer_scanner_roots(promise_before: usize, promise_afte
         .lock()
         .unwrap()
         .retain(|timer| timer.id != TEST_INTERVAL_TIMER_ID);
+}
+
+#[cfg(test)]
+mod drain_expired_tests {
+    use super::drain_expired_timers;
+
+    /// The single-pass partition must preserve the original order of BOTH
+    /// halves: expired entries fire in creation order (same-deadline Node
+    /// semantics) and survivors keep queue order for the next tick.
+    #[test]
+    fn timer_drain_partition_preserves_order() {
+        // (id, cleared, expired)
+        let mut queue = vec![
+            (1, false, true),
+            (2, false, false),
+            (3, true, true),
+            (4, false, true),
+            (5, false, false),
+            (6, true, false),
+            (7, false, true),
+        ];
+        let expired = drain_expired_timers(&mut queue, |t| t.1, |t| t.2);
+        let expired_ids: Vec<i32> = expired.iter().map(|t| t.0).collect();
+        let kept_ids: Vec<i32> = queue.iter().map(|t| t.0).collect();
+        assert_eq!(expired_ids, vec![1, 4, 7], "expired keep creation order");
+        assert_eq!(kept_ids, vec![2, 5], "survivors keep queue order");
+    }
+
+    #[test]
+    fn timer_drain_partition_empty_and_all_expired() {
+        let mut empty: Vec<i32> = Vec::new();
+        assert!(drain_expired_timers(&mut empty, |_| false, |_| true).is_empty());
+
+        let mut queue = vec![10, 20, 30];
+        let expired = drain_expired_timers(&mut queue, |_| false, |_| true);
+        assert_eq!(expired, vec![10, 20, 30]);
+        assert!(queue.is_empty());
+    }
 }
