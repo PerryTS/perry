@@ -990,9 +990,7 @@ pub(crate) fn build_and_run_link(
                     match dedup_ui_lib_against_linked_libs(&trimmed, &linked_refs) {
                         Ok(deduped) => deduped,
                         Err(e) => {
-                            eprintln!(
-                                "[strip-dedup] UI linked-lib dedup skipped (non-fatal): {e}"
-                            );
+                            eprintln!("[strip-dedup] UI linked-lib dedup skipped (non-fatal): {e}");
                             trimmed
                         }
                     }

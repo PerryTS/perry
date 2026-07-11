@@ -1073,8 +1073,7 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
     // link line (auto-optimized or prebuilt stdlib + the standalone runtime
     // gap-filler). Extern-only: a local definition over there cannot satisfy
     // a reference rebound away from the bundled copy.
-    let mut linked_globals: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut linked_globals: std::collections::HashSet<String> = std::collections::HashSet::new();
     for reference in reference_libs {
         let abs_ref = std::fs::canonicalize(reference)?;
         linked_globals.extend(collect_archive_global_symbols_flat(&nm, &abs_ref));
