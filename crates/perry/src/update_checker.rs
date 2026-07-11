@@ -497,19 +497,40 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
         .user_agent(format!("perry/{}", current))
         .build()?;
     let mut release_info = None;
-    for url in get_update_servers() {
-        if let Ok(resp) = client.get(&url).send() {
-            if resp.status().is_success() {
-                if let Ok(info) = resp.json::<ReleaseInfo>() {
-                    release_info = Some(info);
-                    break;
+    let mut last_err = None;
+    let servers = get_update_servers();
+
+    for url in &servers {
+        match client.get(url).send() {
+            Ok(resp) if resp.status().is_success() => match resp.json::<ReleaseInfo>() {
+                Ok(info) => {
+                    let release_version = info.tag_name.strip_prefix('v').unwrap_or(&info.tag_name);
+                    match parse_version(release_version) {
+                        Ok(_) => {
+                            release_info = Some(info);
+                            break;
+                        }
+                        Err(error) => {
+                            last_err = Some(format!(
+                                "{}: update server returned an invalid release version: {error}",
+                                url
+                            ));
+                        }
+                    }
                 }
-            }
+                Err(error) => last_err = Some(format!("{}: JSON parse error: {error}", url)),
+            },
+            Ok(resp) => last_err = Some(format!("{}: HTTP {}", url, resp.status())),
+            Err(error) => last_err = Some(format!("{}: {error}", url)),
         }
     }
-    let info = release_info.context("Failed to fetch release info")?;
-    let release_version = info.tag_name.strip_prefix('v').unwrap_or(&info.tag_name);
-    parse_version(release_version).context("Update server returned an invalid release version")?;
+
+    let info = release_info.with_context(|| {
+        format!(
+            "Failed to fetch release info. Last error: {}",
+            last_err.unwrap_or_default()
+        )
+    })?;
 
     let manifest_name = format!("{}.update.json", artifact_name);
     let manifest_asset = info
