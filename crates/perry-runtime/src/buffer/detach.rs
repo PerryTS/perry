@@ -57,9 +57,18 @@ pub fn detach_array_buffer(addr: usize) {
     // Buffer-shaped views (`new Uint8Array(ab)`, DataView slices): zero their
     // own header lengths so `.length`/`.byteLength` report 0 and every indexed
     // access is out-of-bounds, matching Node's view-over-detached semantics.
-    super::view::for_each_view(addr, |view_ptr, _info| unsafe {
-        let view = view_ptr as *mut BufferHeader;
-        (*view).length = 0;
+    // `ArrayBuffer.prototype.slice` results also land in the view table (the
+    // Buffer.slice aliasing mechanism registers them), but they are
+    // independent COPIES per spec and must survive the source's detach —
+    // they're the only view-table entries marked as ArrayBuffers, so skip
+    // those.
+    super::view::for_each_view(addr, |view_ptr, _info| {
+        if is_array_buffer(view_ptr) {
+            return;
+        }
+        unsafe {
+            (*(view_ptr as *mut BufferHeader)).length = 0;
+        }
     });
     // Typed-array views (`new Float32Array(ab, ...)`) record their backing in
     // a separate side table; zero those lengths too.
