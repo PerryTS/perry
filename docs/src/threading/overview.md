@@ -132,6 +132,30 @@ agents, and the `Atomics` API (including a real blocking `Atomics.wait` /
 coordination. Only the `SharedArrayBuffer` itself is shared — build any typed-array
 view over it per-agent rather than capturing the view directly.
 
+### Workers Are Synchronous
+
+The closure passed to `parallelMap`, `parallelFilter`, or `spawn` cannot be
+`async`, contain `await` (directly or in a nested closure), or call another
+thread primitive — the compiler rejects all three. Async machinery is pumped
+by whichever thread runs it, so a worker doing async work would drain
+completions and timers belonging to other threads and alias their heaps.
+Do the async part on the main thread and `await` the `spawn` result there —
+the standard pattern shown above is unaffected.
+
+### Module-Scope Objects Stay Home
+
+Worker closures may read module-scope **primitives** (numbers, strings,
+booleans), but not module-scope bindings that hold heap objects — object and
+array literals, `const f = () => ...` helpers, `Map`/`Set`, class instances.
+Module-level bindings live in process-wide slots that are read in place; they
+do **not** go through the capture deep-copy, so the worker would alias the
+main thread's heap. The compiler rejects such reads. Two easy fixes: bind the
+value to a function-scope local first (`const copy = theGlobal;`) so the
+closure captures the local and it is deep-copied, or declare module-level
+helpers with `function name(...)` (static code — always fine to call from a
+worker). `SharedArrayBuffer` module globals are exempt: cross-thread sharing
+is their purpose.
+
 ### Independent Thread Arenas
 
 Each worker thread has its own memory arena. Objects created on one thread can never be accessed from another thread. Values cross thread boundaries only through deep-copy serialization, which Perry handles automatically and invisibly.

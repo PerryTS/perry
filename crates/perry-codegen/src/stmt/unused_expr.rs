@@ -63,8 +63,7 @@ fn unused_expr_is_pure_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> b
         | perry_hir::Expr::Number(_)
         | perry_hir::Expr::Integer(_)
         | perry_hir::Expr::String(_)
-        | perry_hir::Expr::WtfString(_)
-        | perry_hir::Expr::LocalGet(_) => true,
+        | perry_hir::Expr::WtfString(_) => true,
         perry_hir::Expr::Unary { operand, .. } => {
             crate::type_analysis::is_numeric_expr(ctx, operand)
                 && unused_expr_is_pure_nonthrowing(ctx, operand)

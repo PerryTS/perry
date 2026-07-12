@@ -144,7 +144,19 @@ pub fn is_stream_id_band(id: usize) -> bool {
 /// (`0x1000`) is BELOW the handle band, so this predicate alone does NOT
 /// reject small handles there — pair it with [`is_handle_band`] (or use
 /// [`try_read_gc_header`], which does both) when the input can carry a
-/// handle id.
+/// handle id. `scripts/addr_class_inventory.py` ratchets this: the
+/// `lone-valid-obj-ptr` rule fails the build on any NEW unpaired call site.
+///
+/// #6279 — DO NOT "fix" this by raising `HEAP_MIN` to [`HANDLE_BAND_MAX`].
+/// It looks like a one-character typo (the doc above says 1 MB, the constant
+/// says 4 KB) and it is tempting, but the permissive floor is load-bearing:
+/// several callers pass a handle-band id through here on purpose and rely on
+/// it answering `true` so they can route the value onward. Raising the floor
+/// was tried and measurably regressed `Object.defineProperty` on native
+/// handles (started throwing TypeError) and the Proxy `apply` trap (lost its
+/// arguments) — caught by `test_gap_handle_band_object_ops` and
+/// `test_gap_proxy_reflect` on Linux. Those dependents must be migrated to an
+/// explicit band check FIRST; only then can this floor be raised.
 #[inline(always)]
 pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     let addr = ptr as u64;

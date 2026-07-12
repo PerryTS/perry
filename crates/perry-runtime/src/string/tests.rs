@@ -279,6 +279,42 @@ fn test_string_split_part_utf16_length() {
 }
 
 #[test]
+fn test_scalar_split_parts_derive_malformed_metadata_from_part_bytes() {
+    let source_bytes = [0x80u8, b'|', 0xF0];
+    let source = js_string_from_bytes(source_bytes.as_ptr(), source_bytes.len() as u32);
+    let delimiter = js_string_from_bytes(b"|".as_ptr(), 1);
+
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(source, delimiter, 0),
+        0.0
+    );
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(source, delimiter, 1),
+        2.0
+    );
+
+    let value = super::split::js_string_split_part_value(source, delimiter, 1);
+    let part = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
+    let bytes = unsafe { slice::from_raw_parts(string_data(part), (*part).byte_len as usize) };
+    assert_eq!(bytes, &[0xF0]);
+    assert_eq!(unsafe { (*part).utf16_len }, 2);
+}
+
+#[test]
+fn test_scalar_split_part_value_preserves_lone_surrogate_flag() {
+    let source_bytes = [0xEDu8, 0xA0, 0x80, b'|', b'A'];
+    let source = js_string_from_wtf8_bytes(source_bytes.as_ptr(), source_bytes.len() as u32);
+    let delimiter = js_string_from_bytes(b"|".as_ptr(), 1);
+
+    let value = super::split::js_string_split_part_value(source, delimiter, 0);
+    let part = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
+    assert_eq!(
+        unsafe { (*part).flags & STRING_FLAG_HAS_LONE_SURROGATES },
+        STRING_FLAG_HAS_LONE_SURROGATES
+    );
+}
+
+#[test]
 fn test_uppercase_split_length_and_index_of_without_intermediate_string() {
     let dash = js_string_from_bytes(b"-".as_ptr(), 1);
     let ascii = js_string_from_bytes(b"item-9".as_ptr(), 6);
@@ -301,6 +337,13 @@ fn test_uppercase_split_length_and_index_of_without_intermediate_string() {
     assert_eq!(
         super::slice_ops::js_string_to_upper_case_index_of(unicode, ss),
         4
+    );
+
+    let malformed_bytes = [b'a', b'-', 0xF0];
+    let malformed = js_string_from_bytes(malformed_bytes.as_ptr(), malformed_bytes.len() as u32);
+    assert_eq!(
+        super::split::js_string_to_upper_case_split_part_utf16_length(malformed, dash, 1),
+        2.0
     );
 }
 

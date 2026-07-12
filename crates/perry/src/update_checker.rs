@@ -4,6 +4,7 @@
 //! Runs non-blocking background checks on CLI invocation.
 
 use anyhow::{bail, Context, Result};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fs;
@@ -92,6 +93,13 @@ pub fn is_cache_stale() -> bool {
         Some(c) => c,
         None => return true,
     };
+
+    // An invalid cached release must be refreshed rather than suppressing a
+    // check for up to 24 hours. `parse_version` also accepts the abbreviated
+    // versions written by older Perry releases.
+    if parse_version(&cache.latest_version).is_err() {
+        return true;
+    }
 
     let last_check = match chrono_parse_rfc3339(&cache.last_check) {
         Some(t) => t,
@@ -197,15 +205,27 @@ fn now_rfc3339() -> String {
     )
 }
 
-pub fn compare_versions(a: &str, b: &str) -> Ordering {
-    let a = a.strip_prefix('v').unwrap_or(a);
-    let b = b.strip_prefix('v').unwrap_or(b);
+fn parse_version(version: &str) -> Result<Version> {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let suffix_start = version.find(['-', '+']).unwrap_or(version.len());
+    let (core, suffix) = version.split_at(suffix_start);
 
-    let parse = |s: &str| -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
+    // Older update caches may contain `1` or `1.2`. Keep accepting those
+    // spellings while delegating all SemVer validation and precedence rules to
+    // the semver crate.
+    let normalized = match core.split('.').count() {
+        1 => format!("{core}.0.0{suffix}"),
+        2 => format!("{core}.0{suffix}"),
+        _ => version.to_string(),
+    };
 
-    let va = parse(a);
-    let vb = parse(b);
-    va.cmp(&vb)
+    Version::parse(&normalized).with_context(|| format!("invalid SemVer version `{version}`"))
+}
+
+pub fn compare_versions(a: &str, b: &str) -> Result<Ordering> {
+    let a = parse_version(a).context("invalid candidate update version")?;
+    let b = parse_version(b).context("invalid current version")?;
+    Ok(a.cmp_precedence(&b))
 }
 
 fn get_update_servers() -> Vec<String> {
@@ -271,6 +291,13 @@ fn fetch_latest_version() -> Result<UpdateCache> {
                         .strip_prefix('v')
                         .unwrap_or(&info.tag_name)
                         .to_string();
+                    if let Err(error) = parse_version(&version) {
+                        last_err = Some(format!(
+                            "{}: update server returned an invalid release version: {error}",
+                            url
+                        ));
+                        continue;
+                    }
                     let cache = UpdateCache {
                         last_check: now_rfc3339(),
                         latest_version: version,
@@ -304,14 +331,14 @@ pub fn spawn_background_check() -> (JoinHandle<()>, mpsc::Receiver<UpdateStatus>
         let status = match fetch_latest_version() {
             Ok(cache) => {
                 let current = env!("CARGO_PKG_VERSION");
-                if compare_versions(&cache.latest_version, current) == Ordering::Greater {
-                    UpdateStatus::UpdateAvailable {
+                match compare_versions(&cache.latest_version, current) {
+                    Ok(Ordering::Greater) => UpdateStatus::UpdateAvailable {
                         current: current.to_string(),
                         latest: cache.latest_version,
                         release_url: cache.release_url,
-                    }
-                } else {
-                    UpdateStatus::UpToDate
+                    },
+                    Ok(_) => UpdateStatus::UpToDate,
+                    Err(_) => UpdateStatus::CheckFailed,
                 }
             }
             Err(_) => UpdateStatus::CheckFailed,
@@ -325,14 +352,14 @@ pub fn check_cached_status() -> UpdateStatus {
     match load_cache() {
         Some(cache) => {
             let current = env!("CARGO_PKG_VERSION");
-            if compare_versions(&cache.latest_version, current) == Ordering::Greater {
-                UpdateStatus::UpdateAvailable {
+            match compare_versions(&cache.latest_version, current) {
+                Ok(Ordering::Greater) => UpdateStatus::UpdateAvailable {
                     current: current.to_string(),
                     latest: cache.latest_version,
                     release_url: cache.release_url,
-                }
-            } else {
-                UpdateStatus::UpToDate
+                },
+                Ok(_) => UpdateStatus::UpToDate,
+                Err(_) => UpdateStatus::CheckFailed,
             }
         }
         None => UpdateStatus::CheckFailed,
@@ -456,7 +483,10 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
         eprintln!("Fetching latest version info...");
     }
     let cache = fetch_latest_version().context("Failed to check for updates")?;
-    if compare_versions(&cache.latest_version, current) != Ordering::Greater {
+    if compare_versions(&cache.latest_version, current)
+        .context("Failed to compare update versions")?
+        != Ordering::Greater
+    {
         println!("Already up to date (v{})", current);
         return Ok(());
     }
@@ -467,17 +497,41 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
         .user_agent(format!("perry/{}", current))
         .build()?;
     let mut release_info = None;
-    for url in get_update_servers() {
-        if let Ok(resp) = client.get(&url).send() {
-            if resp.status().is_success() {
-                if let Ok(info) = resp.json::<ReleaseInfo>() {
-                    release_info = Some(info);
-                    break;
+    let mut last_err = None;
+    let servers = get_update_servers();
+
+    for url in &servers {
+        match client.get(url).send() {
+            Ok(resp) if resp.status().is_success() => match resp.json::<ReleaseInfo>() {
+                Ok(info) => {
+                    let release_version = info.tag_name.strip_prefix('v').unwrap_or(&info.tag_name);
+                    match parse_version(release_version) {
+                        Ok(_) => {
+                            release_info = Some(info);
+                            break;
+                        }
+                        Err(error) => {
+                            last_err = Some(format!(
+                                "{}: update server returned an invalid release version: {error}",
+                                url
+                            ));
+                        }
+                    }
                 }
-            }
+                Err(error) => last_err = Some(format!("{}: JSON parse error: {error}", url)),
+            },
+            Ok(resp) => last_err = Some(format!("{}: HTTP {}", url, resp.status())),
+            Err(error) => last_err = Some(format!("{}: {error}", url)),
         }
     }
-    let info = release_info.context("Failed to fetch release info")?;
+
+    let info = release_info.with_context(|| {
+        format!(
+            "Failed to fetch release info. Last error: {}",
+            last_err.unwrap_or_default()
+        )
+    })?;
+
     let manifest_name = format!("{}.update.json", artifact_name);
     let manifest_asset = info
         .assets
@@ -1029,12 +1083,70 @@ mod tests {
 
     #[test]
     fn test_compare_versions() {
-        assert_eq!(compare_versions("0.2.170", "0.2.171"), Ordering::Less);
-        assert_eq!(compare_versions("0.2.171", "0.2.171"), Ordering::Equal);
-        assert_eq!(compare_versions("0.2.172", "0.2.171"), Ordering::Greater);
-        assert_eq!(compare_versions("v0.2.171", "0.2.171"), Ordering::Equal);
-        assert_eq!(compare_versions("0.3.0", "0.2.999"), Ordering::Greater);
-        assert_eq!(compare_versions("1.0.0", "0.99.99"), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.2.170", "0.2.171").unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_versions("0.2.171", "0.2.171").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("0.2.172", "0.2.171").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("v0.2.171", "0.2.171").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("0.3.0", "0.2.999").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("1.0.0", "0.99.99").unwrap(),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_compare_versions_uses_semver_precedence() {
+        assert_eq!(
+            compare_versions("v1.0.0", "1.0.0").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("1.0.0-rc.10", "1.0.0-rc.2").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("1.0.0", "1.0.0-rc.10").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("1.0.0+build.2", "1.0.0+build.1").unwrap(),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_compare_versions_accepts_legacy_abbreviated_components() {
+        assert_eq!(compare_versions("1", "1.0.0").unwrap(), Ordering::Equal);
+        assert_eq!(compare_versions("1.2", "1.2.0").unwrap(), Ordering::Equal);
+        assert_eq!(
+            compare_versions("v1.2-rc.1", "1.2.0-rc.1").unwrap(),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_compare_versions_rejects_invalid_versions() {
+        for invalid in ["01.0.0", "1.02.0", "1.0.0.0", "not-a-version", "v"] {
+            assert!(
+                compare_versions(invalid, "1.0.0").is_err(),
+                "{invalid} should be rejected"
+            );
+        }
     }
 
     #[test]

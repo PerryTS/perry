@@ -483,6 +483,11 @@ pub(crate) struct FnCtx<'a> {
     /// Used by direct `FuncRef` calls to re-link returned iterator objects to
     /// the same closure-cached prototype that `g.prototype` reads expose.
     pub local_generator_funcs: &'a std::collections::HashSet<u32>,
+    /// FuncIds of source-`async` closures CPS-rewritten into async-step
+    /// state machines (the rewrite clears `Expr::Closure.is_async`) — see
+    /// `CrossModuleCtx::async_step_closures` (#6185). Used by the
+    /// perry/thread worker-closure safety check.
+    pub async_step_closures: &'a std::collections::HashSet<u32>,
     /// FuncIds whose body reads dynamic `this` — see
     /// `CrossModuleCtx::funcs_reading_dynamic_this` (#3576).
     pub funcs_reading_dynamic_this: &'a std::collections::HashSet<u32>,

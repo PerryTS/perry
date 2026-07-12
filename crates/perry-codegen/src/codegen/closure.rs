@@ -810,6 +810,7 @@ pub(super) fn compile_closure(
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,

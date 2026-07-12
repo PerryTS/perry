@@ -38,7 +38,7 @@ pub(crate) use saved_config::{
     check_beta_consent, config_path, is_interactive, load_config, prompt_input, report_beta_error,
     save_config, AndroidSavedConfig, AppleSavedConfig, HarmonyosSavedConfig, PerryConfig,
 };
-pub(crate) use tarball::{create_project_tarball, create_project_tarball_with_excludes};
+pub(crate) use tarball::create_project_tarball_with_filters;
 
 // Sibling-only items used by run_async and tests.
 use config_types::{resolve_build_march, PerryToml};
@@ -1424,6 +1424,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .as_ref()
         .and_then(|p| p.exclude.clone())
         .unwrap_or_default();
+    let publish_includes = config
+        .publish
+        .as_ref()
+        .and_then(|p| p.include.clone())
+        .unwrap_or_default();
 
     // #1303 — force the vendored optional-framework dir
     // (`[google_auth].framework_dir`, project-relative) into the upload set
@@ -1438,8 +1443,13 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .filter(|p| p.is_dir())
         .into_iter()
         .collect();
-    let tarball = create_project_tarball(&project_dir, &publish_excludes, &force_include_dirs)
-        .context("Failed to create project tarball")?;
+    let tarball = tarball::create_project_tarball_with_includes(
+        &project_dir,
+        &publish_excludes,
+        &force_include_dirs,
+        &publish_includes,
+    )
+    .context("Failed to create project tarball")?;
 
     let tarball_size = tarball.len();
     if let OutputFormat::Text = format {

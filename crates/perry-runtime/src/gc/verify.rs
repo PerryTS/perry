@@ -108,9 +108,9 @@ pub(super) unsafe fn rewrite_heap_object_fields(
         rewrite_slot(slot.slot, valid_ptrs);
         changed |= *slot.slot != before;
     });
-    if changed && gc_type_rewrite_hook_kind((*header).obj_type) == GcRewriteHookKind::SetIndex {
+    if changed {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
-        crate::set::rebuild_set_index_for_gc(user_ptr as *mut crate::set::SetHeader);
+        run_gc_rewrite_hook((*header).obj_type, user_ptr as usize);
     }
 }
 

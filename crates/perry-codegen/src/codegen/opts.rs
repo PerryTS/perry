@@ -588,6 +588,15 @@ pub(crate) struct CrossModuleCtx {
     /// from the lowered iterator-return body shape and used by call lowering
     /// to attach instances to the closure-owned `g.prototype`.
     pub local_generator_funcs: std::collections::HashSet<u32>,
+    /// FuncIds of closures that were `async` in the source and got CPS-
+    /// rewritten into async-step state machines. The rewrite clears
+    /// `Expr::Closure.is_async`, so the flag alone can't identify them at
+    /// codegen time. Copied from `hir.async_step_closures`. Used by the
+    /// perry/thread worker-closure safety check (#6185): an async worker
+    /// closure's await machinery would drain the process-global
+    /// completion/timer queues on the worker thread and alias the main
+    /// thread's heap.
+    pub async_step_closures: std::collections::HashSet<u32>,
     /// FuncIds of locally-defined plain functions whose body reads the
     /// dynamic `this` binding (directly or via a this-capturing arrow).
     /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS

@@ -1,3 +1,68 @@
+## v0.5.1258 — fix(thread): compile-time containment for perry/thread worker closures (#6185 Tier 1, PR #6276)
+
+The closure passed to `spawn` / `parallelMap` / `parallelFilter` is now
+rejected at compile time when it hits one of the three cross-heap
+unsoundness triggers catalogued in the 2026-07-09 GC audit (#6185):
+
+1. **Async work** — an async worker closure, a nested async closure, or a
+   stray `await`. The codegen await loop is emitted into every function
+   containing `await`, unconditional on which OS thread runs it, so a worker
+   doing async work pumps the process-global `PENDING_THREAD_RESULTS` /
+   timer queues: it can steal another thread's completion, deserialize it
+   into the worker's arena, and resolve a main-heap promise with a pointer
+   into an arena that is unmapped at worker exit (use-after-free). Detection
+   is `is_async || func_id ∈ hir.async_step_closures` — the
+   async-to-generator transform CLEARS `is_async` when it CPS-rewrites an
+   await-containing closure into a state machine, so the flag alone can't
+   identify one at codegen time; the registry is now threaded through
+   `CrossModuleCtx` into `FnCtx`.
+2. **Nested thread primitives** inside a worker body — same queue-pumping
+   problem, triggered from the worker side.
+3. **Reads of heap-typed module-scope bindings** (object/array literals,
+   `const f = () => ...` helpers, Map/Set, class instances). Module globals
+   are process-wide `@perry_global_*` slots read in place —
+   `compute_auto_captures` deliberately excludes them from capture slots —
+   so a worker aliases the main thread's heap with no synchronization and no
+   rewrite when a moving cycle relocates the object. Primitive globals
+   (number/string/boolean/bigint) stay allowed; `SharedArrayBuffer` globals
+   are exempt (process-global, never-freed `shared_sab` backing — cross-agent
+   sharing is its documented purpose, and the shipped Atomics cross-thread
+   suite reads a top-level SAB from workers).
+
+The walk (`lower_call/closure_analysis.rs::find_thread_hazard_in_body`, wired
+into the existing perry/thread check site in `lower_call/native/mod.rs`)
+recurses into nested closures — anything defined in the worker body executes
+on the worker thread — and delegates expression descent to
+`perry_hir::walker::walk_expr_children`, so a new `Expr` variant can't
+silently skip it. Best-effort by design: an AST walk cannot see through a
+named callee defined outside the worker body; the runtime serializer guards
+(#6188 / #6212) remain the backstop. Owner-tagged runtime dispatch — with the
+Android `nativePumpTick` UI-thread pump special-cased — stays open as the
+Wave-4 follow-up on #6185.
+
+Also: `compile_static_method` now seeds its `FnCtx.local_types` from
+`module_global_types` (mirroring `compile_method` / `compile_function`). It
+previously built the map from params alone, so inside a static method the new
+module-global classifier saw no type information and allowed everything;
+type-aware dispatch in static-method bodies gains the same information.
+
+Behavior change: previously-compiling worker closures doing any of the three
+now fail to compile, with diagnostics naming the sanctioned rewrite (bind the
+global to a function-scope local so it is captured and deep-copied, or declare
+module-level helpers with `function name(...)`). One in-repo casualty:
+`test-parity/node-suite/fs-promises/thread/filehandle-thread-detached-returned.ts`
+read a module-scope `FileHandle` from the worker; rewritten to capture the
+handle through a function-scope binding (byte-identical stdout against the
+checked-in expectation, matching its `-captured` sibling).
+
+New integration suite `crates/perry/tests/issue_6185_thread_worker_closure_guards.rs`
+— 7 negative-compile cases (async worker, awaiting worker, nested async
+closure, nested spawn, module-object read, module-arrow-helper read,
+static-method module-object read) and 5 sanctioned patterns (primitive
+globals, primitive global in a static method, local-copy capture, `function`
+helper, `await spawn(...)` in the enclosing scope). Docs: the threading
+overview gains "Workers Are Synchronous" and "Module-Scope Objects Stay Home".
+
 ## v0.5.1257 — feat(runtime): ArrayBuffer.prototype.transfer (ES2024) + perry/gc explicit GC control (#6273)
 
 `transfer(newLength?)` / `transferToFixedLength(newLength?)` / `detached` with

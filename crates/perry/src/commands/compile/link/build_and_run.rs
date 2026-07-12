@@ -965,11 +965,36 @@ pub(crate) fn build_and_run_link(
             let ui_lib = if is_windows || is_android || is_visionos {
                 ui_lib
             } else {
-                match strip_duplicate_objects_from_lib(&ui_lib) {
+                let trimmed = match strip_duplicate_objects_from_lib(&ui_lib) {
                     Ok(trimmed) => trimmed,
                     Err(e) => {
                         eprintln!("[strip-dedup] skipped for UI lib (non-fatal): {e}");
                         ui_lib
+                    }
+                };
+                // #5920 follow-up: the prebuilt UI lib bundles dependency
+                // copies (perry-runtime, std, itoa, …) from a foreign crate
+                // graph, so the member-name trim above can never drop them
+                // against a locally rebuilt (auto-optimized) stdlib. On Mach-O
+                // both copies then load and ld64.lld fails with duplicate
+                // `_js_*` / std externs. Localize every bundled global that
+                // the actually-linked stdlib/runtime provide, so UI references
+                // rebind to the single linked copy. Linux tolerates the
+                // duplicates via --allow-multiple-definition, so restrict to
+                // the ld64 shapes.
+                if is_linux {
+                    trimmed
+                } else {
+                    let mut linked_refs: Vec<&Path> = vec![runtime_lib];
+                    if let Some(ref s) = stdlib_lib {
+                        linked_refs.push(s.as_path());
+                    }
+                    match dedup_ui_lib_against_linked_libs(&trimmed, &linked_refs) {
+                        Ok(deduped) => deduped,
+                        Err(e) => {
+                            eprintln!("[strip-dedup] UI linked-lib dedup skipped (non-fatal): {e}");
+                            trimmed
+                        }
                     }
                 }
             };

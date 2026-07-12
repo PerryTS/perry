@@ -657,34 +657,44 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
 
 #[derive(Default)]
 pub(crate) struct PromiseContextStore {
-    entries: HashMap<usize, AsyncContextSnapshot>,
+    // The position stored with each snapshot makes removal and rekeying O(1)
+    // while `keys` remains the stable traversal surface for the GC scanners.
+    entries: HashMap<usize, (AsyncContextSnapshot, usize)>,
     keys: Vec<usize>,
 }
 
 impl PromiseContextStore {
     pub(crate) fn insert(&mut self, key: usize, snapshot: AsyncContextSnapshot) {
-        if !self.entries.contains_key(&key) {
-            self.keys.push(key);
+        if let Some((existing, _)) = self.entries.get_mut(&key) {
+            *existing = snapshot;
+            return;
         }
-        self.entries.insert(key, snapshot);
+
+        let position = self.keys.len();
+        self.keys.push(key);
+        self.entries.insert(key, (snapshot, position));
     }
 
     pub(crate) fn get(&self, key: &usize) -> Option<&AsyncContextSnapshot> {
-        self.entries.get(key)
+        self.entries.get(key).map(|(snapshot, _)| snapshot)
     }
 
     pub(crate) fn get_mut(&mut self, key: &usize) -> Option<&mut AsyncContextSnapshot> {
-        self.entries.get_mut(key)
+        self.entries.get_mut(key).map(|(snapshot, _)| snapshot)
     }
 
     pub(crate) fn remove(&mut self, key: &usize) -> Option<AsyncContextSnapshot> {
-        let removed = self.entries.remove(key);
-        if removed.is_some() {
-            if let Some(pos) = self.keys.iter().position(|candidate| candidate == key) {
-                self.keys.swap_remove(pos);
-            }
+        let (snapshot, position) = self.entries.remove(key)?;
+        debug_assert_eq!(self.keys.get(position), Some(key));
+        let removed_key = self.keys.swap_remove(position);
+        debug_assert_eq!(removed_key, *key);
+        if let Some(moved_key) = self.keys.get(position) {
+            self.entries
+                .get_mut(moved_key)
+                .expect("PromiseContextStore key vector and map must agree")
+                .1 = position;
         }
-        removed
+        Some(snapshot)
     }
 
     #[cfg(test)]
@@ -706,7 +716,7 @@ impl PromiseContextStore {
     pub(crate) fn first(&self) -> Option<(usize, &AsyncContextSnapshot)> {
         self.keys
             .first()
-            .and_then(|key| self.entries.get(key).map(|snapshot| (*key, snapshot)))
+            .and_then(|key| self.get(key).map(|snapshot| (*key, snapshot)))
     }
 
     fn retain(&mut self, mut keep: impl FnMut(usize, &mut AsyncContextSnapshot) -> bool) {
@@ -716,12 +726,12 @@ impl PromiseContextStore {
             let retain = self
                 .entries
                 .get_mut(&key)
-                .is_some_and(|snapshot| keep(key, snapshot));
+                .is_some_and(|(snapshot, _)| keep(key, snapshot));
             if retain {
                 index += 1;
             } else {
-                self.keys.swap_remove(index);
-                self.entries.remove(&key);
+                let removed = self.remove(&key);
+                debug_assert!(removed.is_some());
             }
         }
     }
@@ -730,15 +740,206 @@ impl PromiseContextStore {
         if old_key == new_key {
             return;
         }
-        let Some(context) = self.entries.remove(&old_key) else {
+        let Some((context, old_position)) = self.entries.remove(&old_key) else {
             return;
         };
-        if let Some(pos) = self.keys.iter().position(|key| *key == old_key) {
-            self.keys[pos] = new_key;
-        } else if !self.entries.contains_key(&new_key) {
-            self.keys.push(new_key);
+        debug_assert_eq!(self.keys.get(old_position), Some(&old_key));
+
+        if self.entries.contains_key(&new_key) {
+            // Preserve the moved promise's snapshot (the old key) and drop the
+            // stale target snapshot. The target key may be the last vector
+            // item, so update whichever key swap_remove relocates.
+            let removed_key = self.keys.swap_remove(old_position);
+            debug_assert_eq!(removed_key, old_key);
+            if let Some(moved_key) = self.keys.get(old_position) {
+                self.entries
+                    .get_mut(moved_key)
+                    .expect("PromiseContextStore key vector and map must agree")
+                    .1 = old_position;
+            }
+            self.entries
+                .get_mut(&new_key)
+                .expect("rekey collision target must remain present")
+                .0 = context;
+        } else {
+            self.keys[old_position] = new_key;
+            self.entries.insert(new_key, (context, old_position));
         }
-        self.entries.insert(new_key, context);
+    }
+
+    #[cfg(test)]
+    fn assert_invariants(&self) {
+        assert_eq!(self.entries.len(), self.keys.len());
+        for (position, key) in self.keys.iter().copied().enumerate() {
+            let (_, recorded_position) = self
+                .entries
+                .get(&key)
+                .expect("every key-vector entry must have a snapshot");
+            assert_eq!(*recorded_position, position);
+        }
+    }
+}
+
+#[cfg(test)]
+mod promise_context_store_bench {
+    use std::time::{Duration, Instant};
+
+    use super::{AsyncContextSnapshot, PromiseContextStore};
+
+    /// Reproducible regression probe for the former O(P²) key-vector search.
+    ///
+    /// Run with:
+    /// `cargo test -p perry-runtime --release promise_context_store_remove_front \
+    ///   -- --ignored --nocapture --test-threads=1`
+    #[test]
+    #[ignore = "manual performance regression probe"]
+    fn promise_context_store_remove_front() {
+        const BATCHES: [usize; 3] = [1_024, 4_096, 16_384];
+        const SAMPLES: usize = 5;
+
+        for batch in BATCHES {
+            let mut samples = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                let mut store = PromiseContextStore::default();
+                for key in 0..batch {
+                    store.insert(key, AsyncContextSnapshot::default());
+                }
+
+                let started = Instant::now();
+                for key in 0..batch {
+                    std::hint::black_box(store.remove(&key));
+                }
+                samples.push(started.elapsed());
+            }
+            samples.sort_unstable();
+            let median = samples[SAMPLES / 2];
+            report(batch, median);
+        }
+    }
+
+    fn report(batch: usize, elapsed: Duration) {
+        println!(
+            "promise_context_store_remove_front batch={batch} median_ns={} ns_per_remove={}",
+            elapsed.as_nanos(),
+            elapsed.as_nanos() / batch as u128,
+        );
+    }
+}
+
+#[cfg(test)]
+mod promise_context_store_tests {
+    use super::{AsyncContextSnapshot, PromiseContextStore};
+
+    fn snapshot(value: f64) -> AsyncContextSnapshot {
+        crate::async_context::test_snapshot_with_store(value)
+    }
+
+    fn stored_value(store: &PromiseContextStore, key: usize) -> Option<f64> {
+        store
+            .get(&key)
+            .and_then(crate::async_context::test_snapshot_first_store)
+    }
+
+    #[test]
+    fn duplicate_insert_missing_remove_and_last_swap_keep_index_consistent() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+        store.insert(20, snapshot(200.0));
+
+        assert_eq!(store.keys, vec![10, 20, 30]);
+        assert_eq!(stored_value(&store, 20), Some(200.0));
+        assert!(store.remove(&99).is_none());
+        store.assert_invariants();
+
+        assert!(store.remove(&10).is_some());
+        assert_eq!(store.keys, vec![30, 20]);
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        store.assert_invariants();
+
+        assert!(store.remove(&20).is_some());
+        assert_eq!(store.keys, vec![30]);
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn retain_partial_updates_positions_after_each_swap() {
+        let mut store = PromiseContextStore::default();
+        for key in 0..8 {
+            store.insert(key, snapshot(key as f64));
+        }
+
+        store.retain(|key, _| key % 2 == 0);
+
+        assert_eq!(store.entries.len(), 4);
+        for key in 0..8 {
+            assert_eq!(store.get(&key).is_some(), key % 2 == 0);
+        }
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn rekey_collision_keeps_moved_snapshot_and_removes_duplicate_key() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+
+        store.rekey(10, 20);
+
+        assert!(store.get(&10).is_none());
+        assert_eq!(stored_value(&store, 20), Some(10.0));
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        assert_eq!(store.keys.iter().filter(|&&key| key == 20).count(), 1);
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn gc_relocation_rekeys_during_traversal_without_skipping_contexts() {
+        let mut store = PromiseContextStore::default();
+        for key in 0..4 {
+            store.insert(key, snapshot(key as f64));
+        }
+
+        let mut index = 0;
+        while let Some(old_key) = store.key_at(index) {
+            let new_key = old_key + 100;
+            store.rekey(old_key, new_key);
+            assert_eq!(stored_value(&store, new_key), Some(old_key as f64));
+            index += 1;
+        }
+
+        assert_eq!(store.keys, vec![100, 101, 102, 103]);
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn deferred_rekey_collision_scans_every_context_before_swapping_keys() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+
+        let mut scanned = Vec::new();
+        let mut moved = Vec::new();
+        let mut index = 0;
+        while let Some(key) = store.key_at(index) {
+            scanned.push(key);
+            if key == 10 {
+                moved.push((key, 20));
+            }
+            index += 1;
+        }
+        assert_eq!(scanned, vec![10, 20, 30]);
+
+        for (old_key, new_key) in moved {
+            store.rekey(old_key, new_key);
+        }
+
+        assert_eq!(stored_value(&store, 20), Some(10.0));
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        store.assert_invariants();
     }
 }
 

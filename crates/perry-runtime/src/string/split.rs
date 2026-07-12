@@ -17,14 +17,15 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
     let value_bits = STRING_TAG | (string as u64 & POINTER_MASK);
     // GC_STORE_AUDIT(BARRIERED): split result string slot is followed by a runtime write barrier.
     std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
-    // The all-pointer layout only covers the initialized prefix. Publish this
-    // element before the next allocation can run a collection.
-    (*arr).length = (index + 1) as u32;
     crate::gc::runtime_write_barrier_slot(
         arr as usize,
         elements_ptr.add(index) as usize,
         value_bits,
     );
+    // The all-pointer layout only covers the initialized prefix. Publish this
+    // element after the write and barrier, before the next allocation can run
+    // a collection.
+    (*arr).length = (index + 1) as u32;
 }
 
 /// Advance to the next UTF-8 character boundary strictly after `i`.
@@ -109,6 +110,29 @@ pub extern "C" fn js_string_split(
     js_string_split_n(s, delimiter, -1)
 }
 
+/// Locate one part of a non-empty byte-delimiter split without constructing
+/// `&str` slices. Perry payloads may contain malformed WTF-8, so the scan must
+/// not rely on Rust's UTF-8 validity invariant.
+fn split_part_byte_range(source: &[u8], delimiter: &[u8], target: usize) -> Option<(usize, usize)> {
+    debug_assert!(!delimiter.is_empty());
+    let mut part_start = 0usize;
+    let mut part_index = 0usize;
+    let mut scan = 0usize;
+    while scan + delimiter.len() <= source.len() {
+        if source[scan..].starts_with(delimiter) {
+            if part_index == target {
+                return Some((part_start, scan));
+            }
+            part_index += 1;
+            scan += delimiter.len();
+            part_start = scan;
+        } else {
+            scan += 1;
+        }
+    }
+    (part_index == target).then_some((part_start, source.len()))
+}
+
 /// Materialize one element of a string-delimiter split as a boxed JS value.
 /// This is used when codegen proves the result array does not escape and only
 /// a constant element is observed. A missing element remains `undefined`.
@@ -121,35 +145,65 @@ pub extern "C" fn js_string_split_part_value(
     if index < 0 || !is_valid_string_ptr(s) || !is_valid_string_ptr(delimiter) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let str_data = string_as_str(s);
-    let delim = string_as_str(delimiter);
-    if delim.is_empty() {
-        let Some(c) = str_data.chars().nth(index as usize) else {
+    let source = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let delimiter_bytes =
+        unsafe { slice::from_raw_parts(string_data(delimiter), (*delimiter).byte_len as usize) };
+    if delimiter_bytes.is_empty() {
+        let mut byte_offset = 0usize;
+        for _ in 0..index as usize {
+            if byte_offset >= source.len() {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let (advance, _, _) = crate::string::wtf8_step(source, byte_offset);
+            byte_offset = (byte_offset + advance).min(source.len());
+        }
+        if byte_offset >= source.len() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
-        };
+        }
+        let (advance, _, _) = crate::string::wtf8_step(source, byte_offset);
+        let end = (byte_offset + advance).min(source.len());
         let mut buf = [0u8; 4];
-        let part = c.encode_utf8(&mut buf);
-        return crate::value::js_nanbox_string(
-            js_string_from_bytes(part.as_ptr(), part.len() as u32) as i64,
-        );
+        let part = &source[byte_offset..end];
+        buf[..part.len()].copy_from_slice(part);
+        let has_lone_surrogate = unsafe {
+            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0
+                && crate::string::bytes_have_lone_surrogate(part)
+        };
+        let result = if has_lone_surrogate {
+            js_string_from_wtf8_bytes(buf.as_ptr(), part.len() as u32)
+        } else {
+            js_string_from_bytes(buf.as_ptr(), part.len() as u32)
+        };
+        return crate::value::js_nanbox_string(result as i64);
     }
 
-    let part = str_data.split(delim).nth(index as usize);
-    let Some(part) = part else {
+    let Some((start, end)) = split_part_byte_range(source, delimiter_bytes, index as usize) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    let byte_len = part.len() as u32;
-    let src_is_ascii = is_ascii_string(s);
+    let byte_len = (end - start) as u32;
+    let source_all_ascii = source.iter().all(|&byte| byte < 0x80);
+    let source_has_lone_surrogates = unsafe { (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_handle = scope.root_string_ptr(s);
     let (result, result_data) = string_storage_alloc(byte_len);
     unsafe {
-        let utf16_len = if src_is_ascii {
-            byte_len
+        let source_now = source_handle.get_raw_const_ptr::<StringHeader>();
+        let part_ptr = string_data(source_now).add(start);
+        let (utf16_len, flags) = if source_all_ascii {
+            (byte_len, 0)
         } else {
-            compute_utf16_len(part.as_ptr(), byte_len)
+            let part = slice::from_raw_parts(part_ptr, byte_len as usize);
+            let flags =
+                if source_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(part) {
+                    STRING_FLAG_HAS_LONE_SURROGATES
+                } else {
+                    0
+                };
+            (compute_utf16_len(part_ptr, byte_len), flags)
         };
-        init_string_header(result, utf16_len, byte_len, byte_len, 0, 0);
+        init_string_header(result, utf16_len, byte_len, byte_len, 0, flags);
         if byte_len != 0 {
-            ptr::copy_nonoverlapping(part.as_ptr(), result_data, byte_len as usize);
+            ptr::copy_nonoverlapping(part_ptr, result_data, byte_len as usize);
         }
     }
     crate::value::js_nanbox_string(result as i64)
@@ -170,54 +224,30 @@ pub extern "C" fn js_string_split_part_utf16_length(
     if index < 0 || !is_valid_string_ptr(s) || !is_valid_string_ptr(delimiter) {
         return 0.0;
     }
-    let str_data = string_as_str(s);
-    let delim = string_as_str(delimiter);
-    if delim.is_empty() {
-        return str_data
-            .chars()
-            .nth(index as usize)
-            .map_or(0.0, |c| c.len_utf16() as f64);
-    }
-
-    // A one-byte delimiter is necessarily ASCII, so it cannot occur inside a
-    // multi-byte UTF-8 code point. Scan byte boundaries directly instead of
-    // constructing the general string-split iterator; this is the hot shape
-    // for separators such as "-" and ",".
-    if delim.len() == 1 {
-        let target = index as usize;
-        let separator = delim.as_bytes()[0];
-        let bytes = str_data.as_bytes();
-        let mut part_start = 0usize;
-        let mut part_index = 0usize;
-        for (offset, &byte) in bytes.iter().enumerate() {
-            if byte == separator {
-                if part_index == target {
-                    let part = &bytes[part_start..offset];
-                    return if is_ascii_string(s) {
-                        part.len() as f64
-                    } else {
-                        compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
-                    };
-                }
-                part_index += 1;
-                part_start = offset + 1;
+    let source = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let delimiter_bytes =
+        unsafe { slice::from_raw_parts(string_data(delimiter), (*delimiter).byte_len as usize) };
+    if delimiter_bytes.is_empty() {
+        let mut byte_offset = 0usize;
+        for _ in 0..index as usize {
+            if byte_offset >= source.len() {
+                return 0.0;
             }
+            let (advance, _, _) = crate::string::wtf8_step(source, byte_offset);
+            byte_offset = (byte_offset + advance).min(source.len());
         }
-        if part_index == target {
-            let part = &bytes[part_start..];
-            return if is_ascii_string(s) {
-                part.len() as f64
-            } else {
-                compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
-            };
+        if byte_offset >= source.len() {
+            return 0.0;
         }
-        return 0.0;
+        let (_, units, _) = crate::string::wtf8_step(source, byte_offset);
+        return units as f64;
     }
 
-    let Some(part) = str_data.split(delim).nth(index as usize) else {
+    let Some((start, end)) = split_part_byte_range(source, delimiter_bytes, index as usize) else {
         return 0.0;
     };
-    if is_ascii_string(s) {
+    let part = &source[start..end];
+    if part.iter().all(|&byte| byte < 0x80) {
         part.len() as f64
     } else {
         compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
@@ -244,27 +274,28 @@ pub extern "C" fn js_string_to_upper_case_split_part_utf16_length(
     if index < 0 || !is_valid_string_ptr(s) || !is_valid_string_ptr(delimiter) {
         return 0.0;
     }
-    let source = string_as_str(s);
-    let delim = string_as_str(delimiter);
-    if !is_ascii_string(s) {
-        let upper = source.to_uppercase();
-        if delim.is_empty() {
-            return upper
-                .chars()
-                .nth(index as usize)
-                .map_or(0.0, |c| c.len_utf16() as f64);
-        }
-        return upper.split(delim).nth(index as usize).map_or(0.0, |part| {
-            compute_utf16_len(part.as_ptr(), part.len() as u32) as f64
-        });
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let delimiter_bytes =
+        unsafe { slice::from_raw_parts(string_data(delimiter), (*delimiter).byte_len as usize) };
+    if !bytes.iter().all(|&byte| byte < 0x80) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source_handle = scope.root_string_ptr(s);
+        let delimiter_handle = scope.root_string_ptr(delimiter);
+        let upper = crate::string::js_string_to_upper_case(
+            source_handle.get_raw_const_ptr::<StringHeader>(),
+        );
+        let upper_handle = scope.root_string_ptr(upper);
+        return js_string_split_part_utf16_length(
+            upper_handle.get_raw_const_ptr::<StringHeader>(),
+            delimiter_handle.get_raw_const_ptr::<StringHeader>(),
+            index,
+        );
     }
 
-    let bytes = source.as_bytes();
-    if delim.is_empty() {
+    if delimiter_bytes.is_empty() {
         return ((index as usize) < bytes.len()) as u8 as f64;
     }
-    let delimiter = delim.as_bytes();
-    if !delim.is_ascii() {
+    if !delimiter_bytes.iter().all(|&byte| byte < 0x80) {
         return if index == 0 { bytes.len() as f64 } else { 0.0 };
     }
 
@@ -272,17 +303,17 @@ pub extern "C" fn js_string_to_upper_case_split_part_utf16_length(
     let mut part_start = 0usize;
     let mut part_index = 0usize;
     let mut scan = 0usize;
-    while scan + delimiter.len() <= bytes.len() {
-        let matches = bytes[scan..scan + delimiter.len()]
+    while scan + delimiter_bytes.len() <= bytes.len() {
+        let matches = bytes[scan..scan + delimiter_bytes.len()]
             .iter()
-            .zip(delimiter)
+            .zip(delimiter_bytes)
             .all(|(&source_byte, &delimiter_byte)| ascii_upper_byte(source_byte) == delimiter_byte);
         if matches {
             if part_index == target {
                 return (scan - part_start) as f64;
             }
             part_index += 1;
-            scan += delimiter.len();
+            scan += delimiter_bytes.len();
             part_start = scan;
         } else {
             scan += 1;
@@ -336,54 +367,153 @@ pub extern "C" fn js_string_split_n(
         string_as_str(delimiter)
     };
 
+    // Per-part metadata inputs, derived ONCE from the source payload.
+    //
+    // NOT `is_ascii_string(s)`: that compares `byte_len == utf16_len` over the
+    // WHOLE source, which malformed bytes can satisfy while the individual
+    // parts do not. For `[0x80, b'|', 0xF0]` the source is 3 == 3 (so the old
+    // check said "ASCII"), but the parts need utf16_len 0 and 2 — the fast path
+    // stamped 1 and 1 onto them, corrupting `.length` and every downstream
+    // index operation. Scan the bytes instead: a genuinely all-ASCII source has
+    // all-ASCII parts, which IS sound per-part.
+    //
+    // Both of these are plain `bool`s, so they stay valid even if a later
+    // allocation moves the source string.
+    let (src_all_ascii, src_has_lone_surrogates) = unsafe {
+        let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+        (
+            bytes.iter().all(|&b| b < 0x80),
+            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+        )
+    };
+
     if delim.is_empty() {
-        // Empty delimiter: count then materialize directly. Besides avoiding a
-        // temporary `Vec`, rooting the result before each character allocation
-        // keeps it valid if a collection runs while the array is filled.
-        let mut n = str_data.chars().count();
-        if limit > 0 {
-            n = n.min(limit as usize);
+        // Empty delimiter: split into individual characters (single pass).
+        //
+        // #6085: `str_data.chars()` decodes through std's UTF-8-validity
+        // assumption (`next_code_point` reads continuation bytes with
+        // `unwrap_unchecked`). Perry payloads are EXACT-SIZED and not
+        // guaranteed valid UTF-8 — a `Buffer`/FFI blob sliced at a byte
+        // delimiter can end in a truncated multi-byte lead — so that walk read
+        // up to 3 bytes past the end of the allocation. Step the raw bytes with
+        // the bounded WTF-8 decoder instead and emit each sequence verbatim;
+        // well-formed input yields byte-identical parts.
+        // Pass 1: count the sequences. No allocation happens here, so the
+        // source payload cannot move under us.
+        let mut n = 0usize;
+        unsafe {
+            let src = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+            let mut i = 0usize;
+            while i < src.len() {
+                let (advance, _, _) = crate::string::wtf8_step(src, i);
+                i = (i + advance).min(src.len());
+                n += 1;
+                if limit > 0 && n as i64 >= limit as i64 {
+                    break;
+                }
+            }
         }
+
+        // Pass 2: allocate the result array, then fill it slot by slot.
+        //
+        // GC safety: `js_string_from_bytes` allocates, and a collection can
+        // both RECLAIM and (under C4b evacuation) MOVE the source string and
+        // the result array. A raw `*mut StringHeader` parked in a plain `Vec`
+        // is neither a root nor rewritten, so accumulating the parts there and
+        // writing them into the array afterwards is unsound. Root the source
+        // and the array in a `RuntimeHandleScope`, re-read both after every
+        // allocation, and store each part into the (rooted) array immediately —
+        // from then on the array keeps it alive.
         let arr = crate::array::js_array_alloc_pointer_elements(n as u32);
         let scope = crate::gc::RuntimeHandleScope::new();
+        let s_handle = scope.root_string_ptr(s);
         let arr_handle = scope.root_raw_mut_ptr(arr);
-        unsafe {
-            for (i, c) in str_data.chars().take(n).enumerate() {
-                let mut buf = [0u8; 4];
-                let char_str = c.encode_utf8(&mut buf);
-                let string = js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32);
-                store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), i, string);
+
+        let mut i = 0usize;
+        for idx in 0..n {
+            // Copy the sequence into a stack buffer BEFORE allocating:
+            // `js_string_from_bytes` allocates first and copies second, so
+            // handing it a pointer into the GC heap is the #5062 dangling-source
+            // class. A WTF-8 sequence is at most 4 bytes.
+            let mut buf = [0u8; 4];
+            let seq_len;
+            unsafe {
+                let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
+                let src = slice::from_raw_parts(string_data(s_now), (*s_now).byte_len as usize);
+                if i >= src.len() {
+                    break;
+                }
+                let (advance, _, _) = crate::string::wtf8_step(src, i);
+                let end = (i + advance).min(src.len());
+                seq_len = end - i;
+                buf[..seq_len].copy_from_slice(&src[i..end]);
+                i = end;
+            }
+            // `js_string_from_bytes` derives utf16_len from the bytes (correct
+            // even for a malformed sequence) but hardcodes flags = 0. A lone
+            // surrogate carved out of a WTF-8 source must keep its flag, or
+            // `isWellFormed()` on the part wrongly reports true.
+            let seq = &buf[..seq_len];
+            let sh = if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
+                js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
+            } else {
+                js_string_from_bytes(seq.as_ptr(), seq_len as u32)
+            };
+            unsafe {
+                store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), idx, sh);
             }
         }
         return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
 
-    // Non-empty delimiter: count first, then materialize directly into the
-    // result array. Collecting `Vec<&str>` for every split made this hot path
-    // perform a separate Rust heap allocation and copy of the slice list.
-    // `matches` and `split` share the same non-overlapping delimiter semantics.
-    let mut n = str_data.matches(delim).count().saturating_add(1);
-    if limit > 0 {
-        n = n.min(limit as usize);
+    // Non-empty delimiter: record the parts as BYTE RANGES into the source
+    // payload, not as `&str` slices. `string_storage_alloc` below allocates, and
+    // a collection can move the source string — borrowed slices (and the raw
+    // pointers inside them) would dangle, and `ptr::copy_nonoverlapping` from a
+    // stale address is the #5062 class. Offsets stay valid across a move; the
+    // source address is re-read from a rooted handle on every iteration.
+    let src_base = str_data.as_ptr() as usize;
+    let mut part_ranges: Vec<(usize, usize)> = str_data
+        .split(delim)
+        .map(|part| (part.as_ptr() as usize - src_base, part.len()))
+        .collect();
+    if limit > 0 && (part_ranges.len() as i64) > (limit as i64) {
+        part_ranges.truncate(limit as usize);
     }
-
-    let src_is_ascii = is_ascii_string(s);
+    let n = part_ranges.len();
 
     let arr = crate::array::js_array_alloc_pointer_elements(n as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
     let arr_handle = scope.root_raw_mut_ptr(arr);
+
     unsafe {
-        for (i, part) in str_data.split(delim).take(n).enumerate() {
-            let byte_len = part.len() as u32;
+        for (i, &(offset, byte_len_usize)) in part_ranges.iter().enumerate() {
+            let byte_len = byte_len_usize as u32;
+            // Allocate the destination FIRST (it may move the source), then
+            // re-read the source address before touching its bytes.
             let (sh, data_ptr) = string_storage_alloc(byte_len);
-            let utf16_len = if src_is_ascii {
-                byte_len
+            let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
+            let part_ptr = string_data(s_now).add(offset);
+            // Derive metadata from THIS PART's own bytes. The only shortcut
+            // taken is the all-ASCII one, which was verified by scanning the
+            // source payload (so it holds for every part).
+            let (utf16_len, flags) = if src_all_ascii {
+                (byte_len, 0)
             } else {
-                compute_utf16_len(part.as_ptr(), byte_len)
+                let part_bytes = slice::from_raw_parts(part_ptr, byte_len as usize);
+                let flags = if src_has_lone_surrogates
+                    && crate::string::bytes_have_lone_surrogate(part_bytes)
+                {
+                    STRING_FLAG_HAS_LONE_SURROGATES
+                } else {
+                    0
+                };
+                (compute_utf16_len(part_ptr, byte_len), flags)
             };
-            init_string_header(sh, utf16_len, byte_len, byte_len, 0, 0);
+            init_string_header(sh, utf16_len, byte_len, byte_len, 0, flags);
             if byte_len > 0 {
-                ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
+                ptr::copy_nonoverlapping(part_ptr, data_ptr, byte_len as usize);
             }
             store_split_string(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), i, sh);
         }

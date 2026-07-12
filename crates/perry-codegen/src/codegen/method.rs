@@ -439,6 +439,7 @@ pub(super) fn compile_method(
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
@@ -1165,6 +1166,7 @@ pub(super) fn compile_static_method(
     classes: &HashMap<String, &perry_hir::Class>,
     methods: &HashMap<(String, String), String>,
     module_globals: &HashMap<u32, String>,
+    module_global_types: &HashMap<u32, perry_types::Type>,
     import_function_prefixes: &HashMap<String, String>,
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
@@ -1261,8 +1263,19 @@ pub(super) fn compile_static_method(
         (this_slot, map)
     };
 
-    let local_types: HashMap<u32, perry_types::Type> =
-        f.params.iter().map(|p| (p.id, p.ty.clone())).collect();
+    // Seed with module-global declared types (mirrors compile_method /
+    // compile_function): static-method bodies read module globals through
+    // `@perry_global_*` slots too, and without the types here both the
+    // type-aware dispatch sites and the #6185 perry/thread worker-closure
+    // check (`hazardous_module_global_ids`) were blind inside static
+    // methods. Param types override on collision.
+    let mut local_types: HashMap<u32, perry_types::Type> = module_global_types
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    for p in &f.params {
+        local_types.insert(p.id, p.ty.clone());
+    }
 
     let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
         .clamp3_functions
@@ -1354,6 +1367,7 @@ pub(super) fn compile_static_method(
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,

@@ -62,6 +62,49 @@ BAND_LITERAL_RE = re.compile(
 
 GC_HEADER_CAST_RE = re.compile(r"as\s+\*(?:const|mut)\s+(?:crate::gc::)?GcHeader\b")
 
+# HANDLE FLOOR (#6279) — a hand-rolled address floor that is BELOW
+# `HANDLE_BAND_MAX` (0x100000).  `0x1000` / `0x10000` are an order of magnitude
+# too low, so the fetch (0x40000..0xE0000), zlib (0xE0000..0xF0000) and proxy
+# (0xF0000..) handle bands sail straight through into a dereference.  This is
+# the *wrong-literal* case that BAND_LITERAL_RE structurally cannot see: that
+# rule only knows the CORRECT boundaries, so an invented floor is invisible to
+# it.  Two real crashes had exactly this shape (js_object_freeze's `> 0x10000`
+# and js_object_delete_field's `< 0x10000`, both fixed in #6280).
+#
+# Only flag the literal when it is compared against something address-shaped —
+# `0x10000` is also a perfectly ordinary 64 KB buffer size, and those are not
+# our problem.
+HANDLE_FLOOR_RE = re.compile(
+    r"(?:\bptr\b|\baddr\b|\bbits\b|_ptr\b|_addr\b|_bits\b|as\s+usize|as\s+u64)"
+    r"[^;]{0,60}?(?:<|>|<=|>=)\s*(?:crate::gc::GC_HEADER_SIZE\s*\+\s*)?0x1_?0?000\b"
+    r"|0x1_?0?000\b\s*(?:<|<=)\s*[A-Za-z_]*(?:ptr|addr|bits)\b",
+    re.IGNORECASE,
+)
+
+# LONE is_valid_obj_ptr (#6279) — `is_valid_obj_ptr` used as the ONLY guard
+# before a dereference.  Its own doc says it is not sufficient:
+#
+#   the platform HEAP_MIN floor on Linux/Android/iOS/Windows (0x1000) is BELOW
+#   the handle band, so this predicate alone does NOT reject small handles
+#   there — pair it with is_handle_band
+#
+# That is exactly the shape of #6271 (`gz.on("data")` deref'ing a zlib stream
+# handle): no band literal and no GcHeader cast, so neither of the original two
+# rules could see it.  A band predicate anywhere in the surrounding guard clears
+# the finding.
+VALID_OBJ_PTR_RE = re.compile(r"\bis_valid_obj_ptr\s*\(")
+BAND_PREDICATE_RE = re.compile(
+    r"is_above_handle_band|is_handle_band|is_small_handle|is_proxy_id_band"
+    r"|try_read_gc_header"
+)
+# How many lines above the call may satisfy the pairing requirement.
+BAND_PREDICATE_LOOKBACK = 5
+
+DEFAULT_RATCHET_BASELINE = REPO_ROOT / "scripts" / "addr_class_ratchet_baseline.txt"
+
+# Rules governed by the count ratchet rather than the line-substring allowlist.
+RATCHETED_RULES = ("handle-floor", "lone-valid-obj-ptr")
+
 LINE_COMMENT_RE = re.compile(r"//.*$")
 
 
@@ -101,12 +144,26 @@ def scan_text(rel_path: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
     if any(rel_path.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
         return findings
-    for line_no, raw in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    for idx, raw in enumerate(lines):
+        line_no = idx + 1
         code = strip_comment(raw)
         if BAND_LITERAL_RE.search(code):
             findings.append(Finding(rel_path, line_no, "band-literal", raw))
         if GC_HEADER_CAST_RE.search(code):
             findings.append(Finding(rel_path, line_no, "gcheader-cast", raw))
+        if HANDLE_FLOOR_RE.search(code):
+            findings.append(Finding(rel_path, line_no, "handle-floor", raw))
+        if VALID_OBJ_PTR_RE.search(code) and "fn is_valid_obj_ptr" not in code:
+            # A band predicate anywhere in the enclosing guard clears it.
+            start = max(0, idx - BAND_PREDICATE_LOOKBACK)
+            context = "\n".join(
+                strip_comment(l) for l in lines[start : idx + 2]
+            )
+            if not BAND_PREDICATE_RE.search(context):
+                findings.append(
+                    Finding(rel_path, line_no, "lone-valid-obj-ptr", raw)
+                )
     return findings
 
 
@@ -177,6 +234,80 @@ def run_self_tests() -> int:
             failures.append(message)
 
     runtime = "crates/perry-runtime/src/foo.rs"
+
+    # --- handle-floor rule (#6279) ------------------------------------------
+    # An address compared against a floor BELOW HANDLE_BAND_MAX is the bug.
+    for src in (
+        "if (obj as usize) < 0x10000 {\n",
+        "if ptr.is_null() || (ptr as usize) < 0x1000 {\n",
+        "if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {\n",
+        "} else if top16 == 0 && bits >= 0x1000 {\n",
+    ):
+        expect(
+            any(f.rule == "handle-floor" for f in scan_text(runtime, src)),
+            f"handle-floor should flag: {src.strip()}",
+        )
+
+    # 0x10000 as a plain SIZE (a 64 KB buffer, a chunk cap) is not an address
+    # guard and must not be flagged — otherwise the rule is unusable noise.
+    for src in (
+        "const CHUNK: usize = 0x10000;\n",
+        "let mut buf = vec![0u8; 0x10000];\n",
+        "if len > 0x10000 {\n",
+    ):
+        expect(
+            not any(f.rule == "handle-floor" for f in scan_text(runtime, src)),
+            f"handle-floor must NOT flag a size literal: {src.strip()}",
+        )
+
+    # The CORRECT boundary is not a handle-floor finding (band-literal owns it).
+    expect(
+        not any(
+            f.rule == "handle-floor"
+            for f in scan_text(runtime, "if (ptr as usize) < 0x100000 {\n")
+        ),
+        "handle-floor must not fire on the correct HANDLE_BAND_MAX boundary",
+    )
+
+    # Comment-only mentions are ignored, same as the other rules.
+    expect(
+        not any(
+            f.rule == "handle-floor"
+            for f in scan_text(runtime, "// the old floor was ptr < 0x10000\n")
+        ),
+        "handle-floor must ignore comments",
+    )
+
+    # --- lone-valid-obj-ptr rule (#6279) ------------------------------------
+    lone = "    if is_valid_obj_ptr(ptr as *const u8) {\n        (*ptr).class_id\n"
+    expect(
+        any(f.rule == "lone-valid-obj-ptr" for f in scan_text(runtime, lone)),
+        "lone-valid-obj-ptr should flag an unpaired is_valid_obj_ptr guard",
+    )
+    # Paired with a band predicate -> cleared. This is the fix shape, so the rule
+    # must accept it or it would just block people from fixing the bug.
+    paired = (
+        "    if crate::value::addr_class::is_above_handle_band(ptr as usize)\n"
+        "        && is_valid_obj_ptr(ptr as *const u8)\n    {\n"
+    )
+    expect(
+        not any(f.rule == "lone-valid-obj-ptr" for f in scan_text(runtime, paired)),
+        "lone-valid-obj-ptr must accept a guard paired with a band predicate",
+    )
+    # try_read_gc_header does both checks itself.
+    trg = "    if let Some(h) = try_read_gc_header(ptr) {\n        let _ = is_valid_obj_ptr(ptr);\n"
+    expect(
+        not any(f.rule == "lone-valid-obj-ptr" for f in scan_text(runtime, trg)),
+        "lone-valid-obj-ptr must accept try_read_gc_header",
+    )
+    # The definition itself is not a call site.
+    expect(
+        not any(
+            f.rule == "lone-valid-obj-ptr"
+            for f in scan_text(runtime, "pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {\n")
+        ),
+        "lone-valid-obj-ptr must not flag the definition",
+    )
 
     # Band literals in code are caught; comment-only mentions are not.
     hits = scan_text(runtime, "if addr < 0x100000 {\n")
@@ -260,10 +391,76 @@ def run_self_tests() -> int:
     return 0
 
 
+def load_ratchet_baseline(path: Path) -> dict[tuple[str, str], int]:
+    """Parse `rule | path | count` lines: KNOWN pre-existing sites per (rule, file).
+
+    A COUNT baseline, not a line-substring allowlist: these sites move on every
+    refactor, so pinning them to line text would rot immediately and give false
+    comfort. The contract is a ratchet — a file may never gain a site, and every
+    fix lowers its number.
+    """
+
+    baseline: dict[tuple[str, str], int] = {}
+    if not path.is_file():
+        return baseline
+    errors: list[str] = []
+    for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split("|", 2)]
+        if len(parts) != 3 or parts[0] not in RATCHETED_RULES or not parts[2].isdigit():
+            errors.append(
+                f"{path.name}:{line_no}: expected 'rule | path | count' with rule in "
+                f"{RATCHETED_RULES}, got: {raw}"
+            )
+            continue
+        baseline[(parts[0], parts[1])] = int(parts[2])
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        raise SystemExit(2)
+    return baseline
+
+
+def check_ratchet(
+    findings: list[Finding], baseline: dict[tuple[str, str], int]
+) -> tuple[list[Finding], list[str]]:
+    """Split ratcheted findings into regressions (a file gained sites) and debt."""
+
+    per_key: dict[tuple[str, str], list[Finding]] = {}
+    for f in findings:
+        if f.rule in RATCHETED_RULES:
+            per_key.setdefault((f.rule, f.rel_path), []).append(f)
+
+    regressions: list[Finding] = []
+    for key, hits in sorted(per_key.items()):
+        if len(hits) > baseline.get(key, 0):
+            # A count ratchet cannot know WHICH line is new, so surface them all
+            # rather than fingering an arbitrary one.
+            regressions.extend(hits)
+
+    stale: list[str] = []
+    for (rule, rel_path), allowed in sorted(baseline.items()):
+        actual = len(per_key.get((rule, rel_path), []))
+        if actual < allowed:
+            stale.append(
+                f"  {rule} | {rel_path}: baseline says {allowed}, found {actual} "
+                f"— lower it to {actual}"
+            )
+    return regressions, stale
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--allowlist", type=Path, default=DEFAULT_ALLOWLIST)
+    parser.add_argument("--baseline", type=Path, default=DEFAULT_RATCHET_BASELINE)
+    parser.add_argument(
+        "--write-baseline",
+        action="store_true",
+        help="regenerate the ratchet baseline from the current tree",
+    )
     parser.add_argument(
         "--list-unused-allowlist",
         action="store_true",
@@ -275,7 +472,61 @@ def main(argv: list[str] | None = None) -> int:
 
     findings, files_scanned = collect_inventory()
     entries = load_allowlist(args.allowlist)
-    findings, suppressed = apply_allowlist(findings, entries)
+
+    # The line-substring allowlist governs band-literal / gcheader-cast only. It
+    # must NOT be able to suppress a ratcheted finding: several of its entries are
+    # broad (`path | * | justification`), so letting them apply here would let a
+    # brand-new violation slip into an already-allowlisted file — the very blind
+    # spot #6279 is about.
+    ratcheted = [f for f in findings if f.rule in RATCHETED_RULES]
+    other = [f for f in findings if f.rule not in RATCHETED_RULES]
+    other, suppressed = apply_allowlist(other, entries)
+
+    if args.write_baseline:
+        counts: dict[tuple[str, str], int] = {}
+        for f in ratcheted:
+            key = (f.rule, f.rel_path)
+            counts[key] = counts.get(key, 0) + 1
+        header = [
+            "# addr-class ratchet baseline (#6279).",
+            "#",
+            "# Pre-existing sites for the two rules that CANNOT be fixed in one pass:",
+            "#",
+            "#   handle-floor        a hand-rolled address floor BELOW HANDLE_BAND_MAX",
+            "#                       (0x1000 / 0x10000). Does not reject the fetch, zlib",
+            "#                       or proxy handle bands, so it can deref a handle and",
+            "#                       segfault on Linux. macOS hides it behind a 2 TB floor.",
+            "#",
+            "#   lone-valid-obj-ptr  is_valid_obj_ptr used as the ONLY guard before a",
+            "#                       deref. Its own doc says that is not sufficient on",
+            "#                       Linux/Windows/Android/iOS — pair it with a band",
+            "#                       predicate. This is the exact shape of #6271.",
+            "#",
+            "# Counts, not line matches: these sites move constantly and a line-pinned",
+            "# allowlist would rot on the first refactor. The contract is a RATCHET —",
+            "# a file may never gain a site (that fails the gate), and fixing one means",
+            "# lowering its number here. The gate tells you when a count is stale.",
+            "#",
+            "# Converting a site to an addr_class predicate is always safety-monotonic:",
+            "# it can only reject MORE addresses, never dereference more.",
+            "#",
+            "# Regenerate: python3 scripts/addr_class_inventory.py --write-baseline",
+            "",
+        ]
+        body = [
+            f"{rule} | {path} | {count}"
+            for (rule, path), count in sorted(counts.items())
+        ]
+        args.baseline.write_text("\n".join(header + body) + "\n", encoding="utf-8")
+        totals: dict[str, int] = {}
+        for (rule, _), count in counts.items():
+            totals[rule] = totals.get(rule, 0) + count
+        summary = ", ".join(f"{v} {k}" for k, v in sorted(totals.items()))
+        print(f"Wrote {args.baseline} ({summary}).")
+        return 0
+
+    baseline = load_ratchet_baseline(args.baseline)
+    regressions, stale = check_ratchet(ratcheted, baseline)
 
     if args.list_unused_allowlist:
         for entry in entries:
@@ -285,7 +536,32 @@ def main(argv: list[str] | None = None) -> int:
                     f"{entry.path_prefix} | {entry.substring}"
                 )
 
-    if findings:
+    failed = False
+
+    if regressions:
+        failed = True
+        by_key: dict[tuple[str, str], list[Finding]] = {}
+        for f in regressions:
+            by_key.setdefault((f.rule, f.rel_path), []).append(f)
+        print(
+            "addr-class RATCHET FAILED — a file gained a site in a rule that is\n"
+            "frozen at its current count. Use the predicates in\n"
+            "crates/perry-runtime/src/value/addr_class.rs (is_handle_band /\n"
+            "is_above_handle_band / try_read_gc_header) instead of a hand-rolled\n"
+            "address floor or a bare is_valid_obj_ptr guard: neither rejects the\n"
+            "fetch/zlib/proxy handle bands on Linux, and dereferencing a handle\n"
+            "segfaults there while macOS silently hides it (#1843, #4004, #4665,\n"
+            "#4800, #6271).\n"
+        )
+        for (rule, rel_path), hits in sorted(by_key.items()):
+            allowed = baseline.get((rule, rel_path), 0)
+            print(f"  [{rule}] {rel_path}: {len(hits)} site(s), baseline allows {allowed}")
+            for f in hits:
+                print(f"      line {f.line_no}: {f.line.strip()}")
+        print()
+
+    if other:
+        failed = True
         print(
             "Address-classification audit failed; use the predicates/constants in\n"
             "crates/perry-runtime/src/value/addr_class.rs (is_handle_band /\n"
@@ -293,13 +569,23 @@ def main(argv: list[str] | None = None) -> int:
             "of re-typing band literals or casting to GcHeader, or add a justified\n"
             "entry to scripts/addr_class_allowlist.txt:"
         )
-        for finding in findings:
+        for finding in other:
             print(f"  {finding.render()}")
+
+    if failed:
         return 1
 
+    if stale:
+        print("Ratchet baseline is stale (sites were fixed but not recorded):")
+        for msg in stale:
+            print(msg)
+        print("Run: python3 scripts/addr_class_inventory.py --write-baseline\n")
+
+    held = sum(baseline.values())
     print(
         f"Address-classification audit passed "
-        f"({files_scanned} files scanned, {suppressed} allowlisted)."
+        f"({files_scanned} files scanned, {suppressed} allowlisted, "
+        f"{held} known sites held by the ratchet)."
     )
     return 0
 

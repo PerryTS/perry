@@ -78,22 +78,44 @@ pub extern "C" fn js_string_char_code_at(s: *const StringHeader, index: i32) -> 
         }
     }
 
-    // Non-ASCII: walk codepoints counting UTF-16 units. Allocation-free.
-    let str_data = string_as_str(s);
-    let mut utf16_pos = 0usize;
-    for ch in str_data.chars() {
-        let clen = ch.len_utf16();
-        if utf16_pos + clen > idx {
-            if clen == 1 {
-                return ch as u32 as f64;
-            }
-            let mut buf = [0u16; 2];
-            ch.encode_utf16(&mut buf);
-            return buf[idx - utf16_pos] as f64;
-        }
-        utf16_pos += clen;
+    // Non-ASCII: bounded WTF-8 walk counting UTF-16 units (#6085). The
+    // previous `str_data.chars()` loop decoded through the UTF-8-validity
+    // assumption, which over-reads an exact-sized payload ending in a
+    // truncated multi-byte lead. Allocation-free, never reads past byte_len.
+    match utf16_unit_at(s, idx) {
+        Some(unit) => unit as f64,
+        None => f64::NAN,
     }
-    f64::NAN
+}
+
+/// Bounded lookup of the UTF-16 code unit at `idx` (UTF-16 index) in a
+/// non-ASCII string's WTF-8 payload. Never reads past `byte_len` (#6085);
+/// truncated tail bytes decode from what is present (missing bytes read as 0),
+/// matching `wtf8_step`. Returns `None` when `idx` is past the last decodable
+/// unit (an invalid payload's header `utf16_len` can overcount).
+fn utf16_unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let mut utf16_pos = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (advance, units, cp) = crate::string::wtf8_step(bytes, i);
+        if units > 0 && utf16_pos + units > idx {
+            return Some(if units == 2 {
+                // Astral code point → the requested surrogate half.
+                let v = cp.wrapping_sub(0x10000);
+                if idx == utf16_pos {
+                    0xD800 + ((v >> 10) & 0x3FF) as u16
+                } else {
+                    0xDC00 + (v & 0x3FF) as u16
+                }
+            } else {
+                cp as u16
+            });
+        }
+        utf16_pos += units;
+        i += advance;
+    }
+    None
 }
 
 /// `s[key]` indexed read with ECMAScript CanonicalNumericIndexString semantics
@@ -191,58 +213,12 @@ pub extern "C" fn js_string_char_at(s: *const StringHeader, index: i32) -> *mut 
     // their surrogate halves, so `"😀"[0]` is the lone high surrogate (length
     // 1) — matching JS UTF-16 indexing (#4793). Walking bytes directly (rather
     // than `str::chars()`) keeps this sound on inputs that already hold lone
-    // surrogates.
-    let target = index as usize;
-    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
-    let mut u16_pos = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let b = bytes[i];
-        // Decode one WTF-8 sequence into its code point and UTF-16 width.
-        let (seq_len, units, cp) = if b < 0x80 {
-            (1usize, 1usize, b as u32)
-        } else if b < 0xE0 {
-            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
-            (2, 1, ((b as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F))
-        } else if b < 0xF0 {
-            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
-            let b2 = bytes.get(i + 2).copied().unwrap_or(0);
-            (
-                3,
-                1,
-                ((b as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F),
-            )
-        } else {
-            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
-            let b2 = bytes.get(i + 2).copied().unwrap_or(0);
-            let b3 = bytes.get(i + 3).copied().unwrap_or(0);
-            (
-                4,
-                2,
-                ((b as u32 & 0x07) << 18)
-                    | ((b1 as u32 & 0x3F) << 12)
-                    | ((b2 as u32 & 0x3F) << 6)
-                    | (b3 as u32 & 0x3F),
-            )
-        };
-        if target < u16_pos + units {
-            let unit = if units == 2 {
-                // Astral: emit the requested surrogate half.
-                let v = cp - 0x10000;
-                if target == u16_pos {
-                    0xD800 + (v >> 10) as u16
-                } else {
-                    0xDC00 + (v & 0x3FF) as u16
-                }
-            } else {
-                cp as u16
-            };
-            return string_from_code_unit(unit);
-        }
-        u16_pos += units;
-        i += seq_len;
+    // surrogates, and `wtf8_step` bounds every continuation-byte read so a
+    // truncated multi-byte tail can't read past the exact-sized payload (#6085).
+    match utf16_unit_at(s, index as usize) {
+        Some(unit) => string_from_code_unit(unit),
+        None => js_string_from_bytes(std::ptr::null(), 0),
     }
-    js_string_from_bytes(std::ptr::null(), 0)
 }
 
 /// Split a string into an array of single-character strings.
@@ -255,14 +231,27 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
     if str_ptr.is_null() || !is_valid_string_ptr(str_ptr) {
         return crate::array::js_array_alloc(0) as i64;
     }
-    let str_data = string_as_str(str_ptr);
-    let char_count = str_data.chars().count();
-    let arr = crate::array::js_array_alloc_with_length(char_count as u32);
+    // Bounded WTF-8 walk (#6085): `string_as_str(..).chars()` decodes through
+    // std's UTF-8-validity assumption, so a payload whose last sequence is a
+    // truncated multi-byte lead (WTF-8 / Buffer / FFI-sourced bytes are not
+    // guaranteed well-formed) reads up to 3 bytes past the exact-sized
+    // allocation. `wtf8_step` bounds every continuation read; well-formed input
+    // yields byte-identical elements.
+    let bytes =
+        unsafe { slice::from_raw_parts(string_data(str_ptr), (*str_ptr).byte_len as usize) };
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (advance, _, _) = crate::string::wtf8_step(bytes, i);
+        let end = (i + advance).min(bytes.len());
+        spans.push((i, end));
+        i = end;
+    }
+    let arr = crate::array::js_array_alloc_with_length(spans.len() as u32);
     let elements = unsafe { (arr as *mut u8).add(8) as *mut f64 };
-    for (i, ch) in str_data.chars().enumerate() {
-        let mut buf = [0u8; 4];
-        let encoded = ch.encode_utf8(&mut buf);
-        let ch_ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
+    for (i, &(start, end)) in spans.iter().enumerate() {
+        let seq = &bytes[start..end];
+        let ch_ptr = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
         let nanboxed =
             f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
         unsafe {
@@ -515,9 +504,13 @@ pub extern "C" fn js_string_at(s: *const StringHeader, index: i32) -> f64 {
     if !is_valid_string_ptr(s) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let str_data = string_as_str(s);
-    let utf16: Vec<u16> = str_data.encode_utf16().collect();
-    let len = utf16.len() as i32;
+    // #6085: the old `string_as_str(s).encode_utf16().collect()` materialized
+    // every code unit through std's UTF-8-validity assumption, reading past an
+    // exact-sized payload whose last sequence is a truncated multi-byte lead.
+    // The header's `utf16_len` already IS the code-unit count (it is computed
+    // by the WTF-8-aware `compute_utf16_len` at construction), so resolve the
+    // negative index against it and fetch the single unit with the bounded walk.
+    let len = unsafe { (*s).utf16_len } as i32;
     let resolved = if index < 0 { len + index } else { index };
     if resolved < 0 || resolved >= len {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -526,7 +519,14 @@ pub extern "C" fn js_string_at(s: *const StringHeader, index: i32) -> f64 {
     // NOT code-point based like `codePointAt`. For an astral char stored as a
     // surrogate pair, each index returns the lone surrogate code unit (Node:
     // `"😀".at(0).charCodeAt(0) === 0xd83d`), it does NOT decode the pair.
-    let unit = utf16[resolved as usize];
+    let unit = if is_ascii_string(s) {
+        unsafe { *string_data(s).add(resolved as usize) as u16 }
+    } else {
+        match utf16_unit_at(s, resolved as usize) {
+            Some(u) => u,
+            None => return f64::from_bits(crate::value::TAG_UNDEFINED),
+        }
+    };
     // Encode the single code unit. A lone surrogate (0xD800..=0xDFFF) is not a
     // valid Rust `char`, so it materializes as U+FFFD — the documented WTF-8 /
     // lone-surrogate categorical gap (same shim as `fromCharCode`). BMP units
@@ -558,23 +558,26 @@ pub extern "C" fn js_string_code_point_at(s: *const StringHeader, index: i32) ->
         }
     }
 
-    // Non-ASCII: walk codepoints without allocating a Vec<u16>.
-    let str_data = string_as_str(s);
+    // Non-ASCII: bounded WTF-8 walk (#6085) — the old `str_data.chars()` loop
+    // read continuation bytes past an exact-sized payload ending in a truncated
+    // multi-byte lead. Allocation-free either way.
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
     let mut utf16_pos = 0usize;
-    for ch in str_data.chars() {
-        let clen = ch.len_utf16();
-        if utf16_pos + clen > idx {
-            if clen == 1 || utf16_pos == idx {
-                // Either a BMP char, or the start of a surrogate pair
-                // (which is the whole codepoint per the spec).
-                return ch as u32 as f64;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (advance, units, cp) = crate::string::wtf8_step(bytes, i);
+        if units > 0 && utf16_pos + units > idx {
+            if units == 1 || utf16_pos == idx {
+                // Either a BMP code point, or the START of a surrogate pair —
+                // which per spec is the whole code point.
+                return cp as f64;
             }
-            // Index lands on the low surrogate — return the bare unit.
-            let mut buf = [0u16; 2];
-            ch.encode_utf16(&mut buf);
-            return buf[idx - utf16_pos] as f64;
+            // Index lands on the low surrogate half — return the bare unit.
+            let v = cp.wrapping_sub(0x10000);
+            return (0xDC00 + (v & 0x3FF)) as f64;
         }
-        utf16_pos += clen;
+        utf16_pos += units;
+        i += advance;
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

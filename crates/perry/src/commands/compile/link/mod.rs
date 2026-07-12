@@ -32,10 +32,10 @@ use crate::OutputFormat;
 
 use super::{
     apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3, dedup_runtime_for_tier3,
-    dedup_stdlib_for_tier3, find_geisterhand_library, find_geisterhand_runtime,
-    find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
-    find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
-    find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime,
+    dedup_stdlib_for_tier3, dedup_ui_lib_against_linked_libs, find_geisterhand_library,
+    find_geisterhand_runtime, find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link,
+    find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
+    find_stdlib_library, find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime,
     localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows, rust_target_triple,
     strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
     strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
