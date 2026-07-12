@@ -80,7 +80,6 @@ handle-floor | crates/perry-runtime/src/json/replacer.rs | 1
 handle-floor | crates/perry-runtime/src/json/reviver.rs | 1
 handle-floor | crates/perry-runtime/src/json/stringify.rs | 2
 handle-floor | crates/perry-runtime/src/jsx.rs | 4
-handle-floor | crates/perry-runtime/src/map.rs | 3
 handle-floor | crates/perry-runtime/src/native_abi.rs | 1
 handle-floor | crates/perry-runtime/src/native_arena.rs | 1
 handle-floor | crates/perry-runtime/src/native_handle.rs | 1
