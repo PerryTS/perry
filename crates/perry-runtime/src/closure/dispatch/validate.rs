@@ -16,6 +16,11 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
         if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
             return closure;
         }
+        // #5976: never probe `*(addr + 12)` on a small-handle id (see
+        // `get_valid_func_ptr` below and `value::addr_class` for the band map).
+        if crate::value::addr_class::is_handle_band(addr as usize) {
+            return closure;
+        }
         let type_tag = unsafe {
             std::ptr::read_volatile(
                 (closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32
@@ -63,6 +68,21 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
 pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     let addr = closure as u64;
     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
+        return std::ptr::null();
+    }
+    // #5976: reject the small-handle band BEFORE the `*(addr + 12)`
+    // CLOSURE_MAGIC probe. Revocable-proxy ids, Web-Fetch/zlib/net handles and
+    // the generic stdlib registry ids are all NaN-boxed `POINTER_TAG | <small
+    // id>` values, not heap pointers — a real closure is always a GC allocation
+    // above the band (`value::addr_class`). The 0x1000 floor above let every
+    // one of them through, so this probe dereferenced unmapped low memory:
+    // `new ProxyOfClass(...)` reaching the dynamic construct path passed the
+    // proxy value to `is_bound_function_closure_value` → `get_valid_func_ptr`,
+    // which faulted at `PROXY_ID_BAND_START + id + 12` before
+    // `js_new_function_construct` ever got to its Proxy branch. `is_closure_ptr`
+    // (closure/dynamic_props.rs) has carried this guard since #1843/#4800; the
+    // two validators here were the remaining hole.
+    if crate::value::addr_class::is_handle_band(addr as usize) {
         return std::ptr::null();
     }
     let type_tag = unsafe {
