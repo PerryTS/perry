@@ -738,6 +738,7 @@ pub(super) fn compile_closure(
         module_globals,
         classes,
         &cross_module.compile_time_constants,
+        &cross_module.module_dispatch,
     );
 
     let mut ctx = FnCtx {
