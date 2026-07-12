@@ -20,6 +20,7 @@ fn compile_and_run(source: &str) -> String {
         .arg(&entry)
         .arg("-o")
         .arg(&output)
+        .arg("--no-auto-optimize")
         .output()
         .expect("run perry compile");
     assert!(
