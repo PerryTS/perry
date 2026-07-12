@@ -92,7 +92,7 @@ Perry's development is backed by our sponsors. 🙏
 
 > **As of v0.5.585, fast-math is opt-in.** Perry's default mode emits no `reassoc + contract` per-instruction FMF flags, so f64 arithmetic is bit-exact with Node. `--fast-math` (CLI), `PERRY_FAST_MATH=1` (env), or `"perry": { "fastMath": true }` in `package.json` re-enables the flags. See [`docs/src/cli/fast-math.md`](docs/src/cli/fast-math.md) for the discussion of when it does and doesn't matter. The numbers below are Perry's default mode unless noted.
 
-Numbers below are from a 2026-05-14 sweep on macOS ARM64 (M1 Max, RUNS=11 medians, `taskpolicy -t 0 -l 0`) at Perry v0.5.908 on an otherwise-idle machine. All languages re-measured together this run. Source + methodology in [`benchmarks/polyglot/`](benchmarks/polyglot/).
+> **Historical native-language comparison.** The following polyglot table and commentary were measured on 2026-05-14 at Perry v0.5.908. They are retained for historical context and are not the current Node/Bun baseline. Current runtime-peer evidence appears in the generated section below.
 
 | Benchmark           | Perry |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun | What it tests |
 |---------------------|------:|------:|------:|------:|------:|------:|------:|------:|---------------|
@@ -109,25 +109,13 @@ We deliberately don't lead with the trivially-foldable accumulator microbenchmar
 
 ### vs Node.js and Bun
 
-Perry's broader benchmark suite covers workloads outside the polyglot set — closures, classes, JSON, prime sieve, etc. Numbers below from the 2026-05-14 v0.5.908 sweep via `benchmarks/suite/run_benchmarks.sh` (single-run-per-cell, not RUNS=11 medians — see [`benchmarks/polyglot/`](benchmarks/polyglot/) for the rigorous multi-run methodology).
-
-| Benchmark | Perry (v0.5.908) | Node.js | Bun | What it tests |
-|-----------|-----------------:|--------:|----:|---------------|
-| factorial | 107ms | 591ms | 97ms | Modular accumulation (integer fast path) |
-| method_calls | 9ms | 11ms | 9ms | Class method dispatch (10M calls) |
-| closure | 50ms | 304ms | 51ms | Closure creation + invocation (10M calls) |
-| binary_trees | 2ms | 10ms | 7ms | Tree allocation + traversal (1M nodes, scalar replacement) |
-| string_concat | 0ms | 3ms | 1ms | 100K string appends |
-| prime_sieve | 3ms | 8ms | 7ms | Sieve of Eratosthenes |
-| mandelbrot | 28ms | 25ms | 29ms | Complex f64 iteration (800x800) |
-| matrix_multiply | 28ms | 34ms | 34ms | 256x256 matrix multiply |
-| json_roundtrip (lazy tape, gen-gc) | 83ms | 377ms | 249ms | 50× `JSON.parse` + `JSON.stringify` on a ~1MB, 10K-item blob |
-
-`closure` and `factorial` are still slower than the older v0.5.173 baseline (10 → 50 ms, 31 → 107 ms). The v0.5.585 fast-math opt-in flip accounts for `factorial` (integer modulo plus an FP-tail reduction that the old default-on fast-math collapsed); `closure` regression is tracked as a follow-up. `method_calls` is back at baseline this sweep (9 ms) — yesterday's 25 ms reading was single-run noise from concurrent CPU load. The wins on `binary_trees` / `string_concat` / `prime_sieve` / `mandelbrot` / `matrix_multiply` against Node/Bun hold steady. Single-run cells are noisier than RUNS=11 medians; the lower-noise multi-run polyglot table above remains the canonical comparison.
+<!-- public-node-bun:start -->
+Current table pending a complete reproducible sweep.
+<!-- public-node-bun:end -->
 
 Perry compiles to native machine code via LLVM — no JIT warmup, no interpreter overhead. Key optimizations that apply in both modes: **scalar replacement** of non-escaping objects (escape analysis eliminates heap allocation entirely — object fields become registers), inline bump allocator for objects that do escape, i32 loop counters for bounded array access, integer-modulo fast path (`fptosi → srem → sitofp` instead of `fmod`), elimination of redundant `js_number_coerce` calls on numeric function returns, and i64 specialization for pure numeric recursive functions.
 
-Run benchmarks yourself: `cd benchmarks/suite && ./run_benchmarks.sh` (requires node, cargo; optional: bun, shermes).
+Run the complete public sweep with pinned Node and Bun: `./benchmarks/run_public_baseline.sh`.
 
 ## Binary Size
 

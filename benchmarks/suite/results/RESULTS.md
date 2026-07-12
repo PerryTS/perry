@@ -1,5 +1,9 @@
 # suite/ Microbenchmark Results
 
+> **Historical v0.5.908 evidence.** This single-run report is retained until a
+> complete current public sweep replaces it. It must not be presented as the
+> current Perry/Node/Bun baseline.
+
 **Run date:** 2026-05-14 · **Perry version:** v0.5.908
 **Hardware:** Apple M1 Max (10 cores), 64 GB RAM, macOS 26.4 (Darwin 25.4.0), otherwise-idle machine.
 **Runtimes:** Perry 0.5.908 / Node v25.8.0 / Bun 1.3.12. Static Hermes not installed.

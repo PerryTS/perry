@@ -48,7 +48,7 @@ done
 # ------------------------------ 1. metadata -----------------------------------
 echo "--- capturing metadata"
 python3 - <<PY > "$RESULTS_DIR/metadata.json"
-import json, subprocess, datetime, platform, os
+import json, subprocess, datetime, platform, os, shutil
 def run(cmd):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
@@ -56,6 +56,7 @@ def run(cmd):
         return f"error: {e}"
 meta = {
     "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "commit": run(["git", "-C", "$PERRY_ROOT", "rev-parse", "HEAD"]),
     "host": {
         "os_version": run(["sw_vers", "-productVersion"]),
         "kernel":     run(["uname", "-a"]),
@@ -74,6 +75,11 @@ meta = {
         "oha": run([os.environ.get("HONEST_BENCH_OHA", "/tmp/oha"), "--version"]),
         "perry": run([os.path.join("$PERRY_ROOT", "target/release/perry"), "--version"]) or "(local build)",
     },
+    "executables": {
+        "perry": os.path.realpath(os.path.join("$PERRY_ROOT", "target/release/perry")),
+        "node": shutil.which("node"),
+        "bun": shutil.which("bun"),
+    },
     "harness": {
         "warmup":   int(os.environ.get("HONEST_BENCH_WARMUP", 5)),
         "measured": int(os.environ.get("HONEST_BENCH_MEASURED", 20)),
@@ -82,6 +88,10 @@ meta = {
         "http_concurrency": int(os.environ.get("HONEST_BENCH_HTTP_CONC", 10)),
     },
     "commands": {
+        "perry": ["<compiled-workload>"],
+        "perry_compile": [os.path.join("$PERRY_ROOT", "target/release/perry"), "<source.ts>", "-o", "<compiled-workload>"],
+        "node": [shutil.which("node"), "--experimental-strip-types", "<source.ts>"],
+        "bun": [shutil.which("bun"), "run", "<source.ts>"],
         "perry_http": ["<compiled-kernel>"],
         "perry_http_compile": [os.path.join("$PERRY_ROOT", "target/release/perry"), "<kernel.ts>", "-o", "<compiled-kernel>"],
         "node_http": ["node", "--import", "tsx", "<kernel.ts>"],

@@ -70,15 +70,18 @@ measure_once() {
   if [[ "$kind" == "measured" ]]; then
     python3 - \
         "$WORKLOAD" "$LANGUAGE" "$BINARY" "$run" "$wall_ns" "$peak_kb" \
-        "$exit_code" "$stdout_first" "$stdout_last" "$tmp_out" <<'PY'
-import json, os, subprocess, sys
+        "$exit_code" "$stdout_first" "$stdout_last" "$tmp_out" "$@" <<'PY'
+import json, os, shutil, subprocess, sys
 (_, workload, lang, binary, run, wall_ns, peak_kb,
- exit_code, stdout_first, stdout_last, stdout_path) = sys.argv
+ exit_code, stdout_first, stdout_last, stdout_path, *args) = sys.argv
+
+resolved_binary = shutil.which(binary) or os.path.realpath(binary)
 
 row = {
     "workload": workload,
     "language": lang,
-    "binary": binary,
+    "binary": resolved_binary,
+    "command": [resolved_binary, *args],
     "run": int(run),
     "wall_ms": int(wall_ns) / 1_000_000.0,
     "max_rss_kb": int(peak_kb),
