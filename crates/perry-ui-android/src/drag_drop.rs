@@ -79,6 +79,7 @@ extern "C" {
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
     // Converts an arbitrary JS value to a runtime `StringHeader` (typed here as
     // `*const u8` so it feeds `str_from_header`, the same way `clipboard.rs`
     // treats runtime string pointers). Defined in
@@ -242,7 +243,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDropCallback(
     let Some(closure_f64) = callback::get(key as i64) else {
         return;
     };
-    let closure_ptr = closure_f64.to_bits() as *const u8;
+    let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
     if closure_ptr.is_null() {
         return;
     }
@@ -302,7 +303,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDragProvider<'local
 /// or returned `undefined`/`null`.
 fn drag_provider_payload(key: i64) -> Option<String> {
     let closure_f64 = callback::get(key)?;
-    let closure_ptr = closure_f64.to_bits() as *const u8;
+    let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
     if closure_ptr.is_null() {
         return None;
     }
