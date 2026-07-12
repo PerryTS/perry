@@ -166,72 +166,133 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
 }
 
 /// Get a preference value from SharedPreferences.
+///
+/// IMPORTANT: Android SharedPreferences stores typed values. Calling
+/// `getString` on a float key (or `getFloat` on a string key) throws
+/// ClassCastException and leaves a *pending* JNI exception. That poisons
+/// every subsequent JNI call in `nativeMain` (text/hstack create panics,
+/// half the UI vanishes). Always read via `getAll` and branch on type, and
+/// clear any leftover exception before returning.
 pub fn preferences_get(key_ptr: *const u8) -> f64 {
     let key = str_from_header(key_ptr);
     let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    let _ = env.push_local_frame(24);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let pref_name = env.new_string("perry_prefs").expect("pref name");
-    let prefs = env
-        .call_method(
-            &activity,
-            "getSharedPreferences",
-            "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-            &[JValue::Object(&pref_name), JValue::Int(0)],
-        )
-        .expect("getSharedPreferences")
-        .l()
-        .expect("prefs");
+    let finish = |env: &mut jni::JNIEnv, result: f64| -> f64 {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
+        result
+    };
 
-    let jkey = env.new_string(key).expect("key string");
+    let activity = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::widgets::get_activity(&mut env)
+    })) {
+        Ok(a) => a,
+        Err(_) => return finish(&mut env, 0.0),
+    };
 
-    // Try getString first, fallback to getFloat
-    let str_result = env.call_method(
-        &prefs,
-        "getString",
-        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-        &[
-            JValue::Object(&jkey),
-            JValue::Object(&jni::objects::JObject::null()),
-        ],
-    );
+    let pref_name = match env.new_string("perry_prefs") {
+        Ok(s) => s,
+        Err(_) => return finish(&mut env, 0.0),
+    };
+    let prefs = match env.call_method(
+        &activity,
+        "getSharedPreferences",
+        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
+        &[JValue::Object(&pref_name), JValue::Int(0)],
+    ) {
+        Ok(v) => match v.l() {
+            Ok(o) => o,
+            Err(_) => return finish(&mut env, 0.0),
+        },
+        Err(_) => return finish(&mut env, 0.0),
+    };
 
-    if let Ok(val) = str_result {
-        if let Ok(obj) = val.l() {
-            if !obj.is_null() {
-                let jstr: jni::objects::JString = obj.into();
-                let s: String = env.get_string(&jstr).expect("get string").into();
-                let bytes = s.as_bytes();
-                let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
-                let result = unsafe { js_nanbox_string(ptr) };
-                unsafe {
-                    env.pop_local_frame(&jni::objects::JObject::null());
-                }
-                return result;
+    let jkey = match env.new_string(key) {
+        Ok(s) => s,
+        Err(_) => return finish(&mut env, 0.0),
+    };
+
+    // getAll avoids ClassCastException from typed getters.
+    let map = match env.call_method(&prefs, "getAll", "()Ljava/util/Map;", &[]) {
+        Ok(v) => match v.l() {
+            Ok(o) => o,
+            Err(_) => return finish(&mut env, 0.0),
+        },
+        Err(_) => return finish(&mut env, 0.0),
+    };
+
+    let entry = match env.call_method(
+        &map,
+        "get",
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+        &[JValue::Object(&jkey)],
+    ) {
+        Ok(v) => match v.l() {
+            Ok(o) => o,
+            Err(_) => return finish(&mut env, 0.0),
+        },
+        Err(_) => return finish(&mut env, 0.0),
+    };
+
+    if entry.is_null() {
+        return finish(&mut env, 0.0);
+    }
+
+    // Branch on runtime type without throwing.
+    if let Ok(true) = env.is_instance_of(&entry, "java/lang/String") {
+        let jstr: jni::objects::JString = entry.into();
+        if let Ok(java_str) = env.get_string(&jstr) {
+            let s: String = java_str.into();
+            let bytes = s.as_bytes();
+            let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
+            let result = unsafe { js_nanbox_string(ptr) };
+            return finish(&mut env, result);
+        }
+        return finish(&mut env, 0.0);
+    }
+
+    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Float") {
+        if let Ok(f) = env.call_method(&entry, "floatValue", "()F", &[]) {
+            if let Ok(v) = f.f() {
+                return finish(&mut env, v as f64);
             }
         }
+        return finish(&mut env, 0.0);
     }
 
-    // Try getFloat
-    let float_result = env.call_method(
-        &prefs,
-        "getFloat",
-        "(Ljava/lang/String;F)F",
-        &[JValue::Object(&jkey), JValue::Float(0.0)],
-    );
-
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-
-    if let Ok(val) = float_result {
-        if let Ok(f) = val.f() {
-            return f as f64;
+    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Double") {
+        if let Ok(d) = env.call_method(&entry, "doubleValue", "()D", &[]) {
+            if let Ok(v) = d.d() {
+                return finish(&mut env, v);
+            }
         }
+        return finish(&mut env, 0.0);
     }
 
-    0.0
+    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Integer") {
+        if let Ok(i) = env.call_method(&entry, "intValue", "()I", &[]) {
+            if let Ok(v) = i.i() {
+                return finish(&mut env, v as f64);
+            }
+        }
+        return finish(&mut env, 0.0);
+    }
+
+    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Long") {
+        if let Ok(l) = env.call_method(&entry, "longValue", "()J", &[]) {
+            if let Ok(v) = l.j() {
+                return finish(&mut env, v as f64);
+            }
+        }
+        return finish(&mut env, 0.0);
+    }
+
+    finish(&mut env, 0.0)
 }
 
 /// Save a value to the keychain (SharedPreferences with private mode).

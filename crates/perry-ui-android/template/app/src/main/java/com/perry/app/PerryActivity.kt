@@ -34,13 +34,32 @@ class PerryActivity : Activity() {
         // Switch from splash theme to normal theme before inflating layout
         setTheme(android.R.style.Theme_Material_Light_NoActionBar)
 
-        // Go edge-to-edge (content under status/nav bars, matching iOS behavior)
-        window.setFlags(
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        )
+        // Keep content below status / nav bars.
+        // Android 15 defaults to edge-to-edge. FLAG_LAYOUT_NO_LIMITS draws
+        // under the status bar; getSafeAreaInsets() on Android still returns
+        // zeros, so pad the host FrameLayout by status_bar_height.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            @Suppress("DEPRECATION")
+            window.setDecorFitsSystemWindows(true)
+        }
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        window.statusBarColor = android.graphics.Color.WHITE
+        window.navigationBarColor = android.graphics.Color.WHITE
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
 
         rootLayout = FrameLayout(this)
+        val statusPad = try {
+            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (resId > 0) resources.getDimensionPixelSize(resId)
+            else (24 * resources.displayMetrics.density).toInt()
+        } catch (_: Exception) {
+            (24 * resources.displayMetrics.density).toInt()
+        }
+        rootLayout.setPadding(0, statusPad, 0, 0)
         setContentView(rootLayout)
 
         // Store device locale in SharedPreferences so preferencesGet("AppleLanguages") works
