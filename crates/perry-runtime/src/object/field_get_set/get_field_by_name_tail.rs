@@ -1968,6 +1968,25 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // #6301: `EventTarget`'s method surface, read as a VALUE
+        // (`typeof b.dispatchEvent`, `const add = t.addEventListener`). The
+        // methods have no prototype home — they were only ever compile-time
+        // lowerings keyed on a receiver statically named `EventTarget` — so a
+        // plain `new EventTarget()` read them as `undefined` and a
+        // `class Bus extends EventTarget {}` instance inherited nothing.
+        // Materialize a bound method for a receiver that is an event target by
+        // marker (the plain instance) or by class chain (a subclass at any
+        // depth). Deliberately LAST in the tail: an own property and a real
+        // class-vtable method (a subclass that *overrides* `dispatchEvent`)
+        // are resolved earlier and keep winning.
+        if !key.is_null() && crate::event_target::is_event_target_method_name(key_bytes) {
+            if let Some(bound) =
+                crate::event_target::event_target_method_bind(obj as *mut ObjectHeader, key_bytes)
+            {
+                return JSValue::from_bits(bound.to_bits());
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }

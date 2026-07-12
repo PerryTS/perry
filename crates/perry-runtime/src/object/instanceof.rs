@@ -432,6 +432,13 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "Event" => crate::event_target::CLASS_ID_EVENT,
         "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
         "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
+        // #6301: the `X → EventTarget` edge is what makes a user
+        // `class Bus extends EventTarget {}` instance resolve the inherited
+        // `addEventListener`/`removeEventListener`/`dispatchEvent` surface
+        // (see `event_target::class_chain_is_event_target`). Without an id
+        // here `js_register_class_parent_dynamic` left the subclass
+        // parentless and it inherited nothing.
+        "EventTarget" => crate::event_target::CLASS_ID_EVENT_TARGET,
         // TypedArray constructors used as runtime *values* (a dynamic
         // `x instanceof TA` where `TA` is a variable — e.g. test262's
         // `testWithTypedArrayConstructors`). Mirrors the per-kind synthetic

@@ -1720,6 +1720,33 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // #6301: `class Bus extends EventTarget {}` — a fused
+    // `bus.dispatchEvent(ev)` / `this.addEventListener(...)` call. The static
+    // lowering in `lower_call/event_target.rs` only fires for a receiver whose
+    // class name is literally `EventTarget`, so a subclass call landed here and
+    // threw "<m> is not a function" (cac v7's `class CAC extends EventTarget`
+    // → #5931). Runs LAST, after every own-field / vtable / prototype-chain
+    // lookup above, so a subclass that OVERRIDES one of these names keeps its
+    // own method; only a genuine miss on a real event target reaches this.
+    if jsval.is_pointer()
+        && crate::event_target::is_event_target_method_name(method_name.as_bytes())
+    {
+        // Re-read the receiver from its root handle instead of reusing the
+        // `object` snapshot taken at entry: the dispatch arms above allocate, so
+        // a moving collection may have relocated it (the same reason the args go
+        // through `refreshed_args()`).
+        let receiver = object_handle.get_nanbox_f64();
+        let recv = (receiver.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        if !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) {
+            if let Some(bound) =
+                crate::event_target::event_target_method_bind(recv, method_name.as_bytes())
+            {
+                let args = refreshed_args();
+                return crate::closure::js_native_call_value(bound, args.as_ptr(), args.len());
+            }
+        }
+    }
+
     crate::object::class_registry::report_dispatch_miss(
         "call-method (no method/field/proto match)",
         object,
