@@ -265,7 +265,7 @@ def normalize_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def validate_artifact(payload: Mapping[str, Any], *, require_complete: bool = True) -> None:
+def validate_artifact(payload: Mapping[str, Any]) -> None:
     """Validate schema structure, completeness, and derived distributions."""
     if "benchmarks" not in payload or not isinstance(payload["benchmarks"], Mapping):
         raise ArtifactError("artifact has no benchmarks object")
@@ -367,7 +367,7 @@ def validate_artifact(payload: Mapping[str, Any], *, require_complete: bool = Tr
                 raise ArtifactError(f"{name}: compatibility field {field} is inconsistent")
 
 
-def load_artifact(path: str | Path, *, require_complete: bool = True) -> dict[str, Any]:
+def load_artifact(path: str | Path) -> dict[str, Any]:
     """Load, normalize, and validate a benchmark artifact from disk."""
     try:
         with Path(path).open(encoding="utf-8") as handle:
@@ -375,7 +375,7 @@ def load_artifact(path: str | Path, *, require_complete: bool = True) -> dict[st
     except (OSError, json.JSONDecodeError) as exc:
         raise ArtifactError(f"could not load {path}: {exc}") from exc
     normalized = normalize_artifact(payload)
-    validate_artifact(normalized, require_complete=require_complete)
+    validate_artifact(normalized)
     return normalized
 
 
@@ -481,8 +481,8 @@ def evaluate_regressions(
             raise ArtifactError(f"{name} must be a positive finite number")
     baseline = normalize_artifact(baseline)
     current = normalize_artifact(current)
-    validate_artifact(baseline, require_complete=False)
-    validate_artifact(current, require_complete=True)
+    validate_artifact(baseline)
+    validate_artifact(current)
     rows: list[ComparisonRow] = []
     regressions: list[ComparisonRow] = []
     improvements: list[ComparisonRow] = []
@@ -776,8 +776,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
             return 0
         if args.command == "compare":
-            baseline = load_artifact(args.baseline, require_complete=False)
-            current = load_artifact(args.current, require_complete=True)
+            baseline = load_artifact(args.baseline)
+            current = load_artifact(args.current)
             report = evaluate_regressions(
                 baseline,
                 current,

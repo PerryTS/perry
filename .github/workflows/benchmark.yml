@@ -152,8 +152,8 @@ jobs:
               exit(0)
           from benchmarks.benchmark_gate import evaluate_regressions, load_artifact
 
-          cur = load_artifact(cur_path, require_complete=True)
-          base = load_artifact(base_path, require_complete=False) if os.path.exists(base_path) else {"benchmarks": {}}
+          cur = load_artifact(cur_path)
+          base = load_artifact(base_path) if os.path.exists(base_path) else {"benchmarks": {}}
           gate = evaluate_regressions(base, cur, speed_threshold_pct=20, memory_threshold_pct=30)
           gate_rows = {row.name: row for row in gate.rows}
           mode = "RELEASE GATE" if os.environ.get("IS_RELEASE") == "true" else "tracking (warn-only)"

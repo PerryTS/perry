@@ -177,7 +177,7 @@ class BenchmarkArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "baseline.json"
             path.write_text(json.dumps(legacy))
-            loaded = load_artifact(path, require_complete=False)
+            loaded = load_artifact(path)
 
         entry = loaded["benchmarks"]["fast"]
         self.assertEqual(entry["runtimes"]["perry"]["wall_ms"]["median"], 9)
