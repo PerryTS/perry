@@ -129,27 +129,6 @@ Perry compiles to native machine code via LLVM — no JIT warmup, no interpreter
 
 Run benchmarks yourself: `cd benchmarks/suite && ./run_benchmarks.sh` (requires node, cargo; optional: bun, shermes).
 
-### Regression-check methodology
-
-The release regression workflow is separate from the public tables above. It
-runs Perry and exact Node/Bun comparator versions five times per benchmark,
-stores every timing and RSS sample, and reports medians plus distribution
-statistics and Perry-to-peer ratios. A timing regression must exceed both the
-percentage threshold and a per-benchmark noise allowance derived from the
-stored repeated-sample median absolute deviation (with a 1 ms timer-resolution
-floor).
-There is no global 100 ms escape hatch, so stable short benchmarks can gate a
-release while noisy rows receive their own wider allowance. Missing samples
-make the artifact invalid rather than silently shrinking the sample set.
-When both artifacts have matching pinned peer metadata, a regression must also
-worsen Perry's peer-relative trend, which controls for runner-wide slowdowns.
-
-The same workflow tracks the Fastify `minimal`, `text`, and `parametric`
-loopback workloads under fixed `oha` duration/concurrency settings. Their
-throughput and p50/p95/p99 distributions are diagnostic trend signals, not
-release gates. See [`benchmarks/README.md`](benchmarks/README.md#regression-artifact-schema)
-for the generated artifact schema and compatibility policy.
-
 ## Binary Size
 
 Perry produces small, self-contained binaries with no external dependencies at run time:
