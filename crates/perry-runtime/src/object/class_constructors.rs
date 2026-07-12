@@ -584,7 +584,12 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     };
     let parent_cid = match crate::object::get_parent_class_id(child_class_id) {
         Some(p) if p != 0 => p,
-        _ => return undef,
+        // #6316: `class Bus extends EventEmitter` has NO registered parent —
+        // the native base is not a perry class, so nothing was ever wired into
+        // CLASS_REGISTRY. Before this, `super.emit(…)` fell off here and
+        // silently returned `undefined`. The base method the subclass override
+        // displaced is the correct target.
+        _ => return call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef),
     };
     // Static-context super call (`super.m()` inside a `static` method): the
     // receiver is the class constructor (a ClassRef), so resolve the PARENT's
@@ -660,7 +665,40 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         super::IMPLICIT_THIS.with(|c| c.set(prev_this));
         return result;
     }
-    undef
+    // #6316: the parent chain is real (an intermediate user class) but bottoms
+    // out in a NATIVE base whose surface perry stamps onto the instance —
+    // `class Logged extends Bus`, `class Bus extends EventEmitter`. Neither the
+    // vtable nor the prototype registry knows `emit`; the displaced base method
+    // does. Runs LAST so a genuine user-class parent method always wins.
+    call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef)
+}
+
+/// Invoke the native base method a subclass override displaced (#6316), with
+/// `this` bound to the receiver. Falls back to `undef` when the receiver carries
+/// no such method — an ordinary `super.m()` miss stays `undefined`.
+///
+/// # Safety
+/// `args_ptr` must point to `args_len` valid `f64`s (or be null when
+/// `args_len == 0`).
+unsafe fn call_displaced_native_base_method(
+    this_value: f64,
+    name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+    undef: f64,
+) -> f64 {
+    let Some(method_value) = crate::node_stream::displaced_native_base_method(this_value, name)
+    else {
+        return undef;
+    };
+    // The stashed closure already captures the receiver in slot 0, but bind
+    // IMPLICIT_THIS too: the shared emitter/stream stubs read their receiver
+    // through `this_value(closure)`, which falls back to IMPLICIT_THIS when the
+    // capture is undefined (the prototype-installed form).
+    let prev_this = super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits()));
+    let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
+    super::IMPLICIT_THIS.with(|c| c.set(prev_this));
+    result
 }
 
 /// Keepalive anchor (generated-code-only callee).
