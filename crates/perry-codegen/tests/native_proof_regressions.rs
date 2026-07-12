@@ -13277,5 +13277,106 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
     }
 }
 
+/// #6299: a numeric array that arrives as a call's return value must still get
+/// the guarded numeric array-index fast path.
+///
+/// `arr[i] = arr[i] + 1` only lowers to `Expr::IndexSet` when the receiver is a
+/// statically-known local array; for a call-returned array the lowerer emits the
+/// spec-compliant `Expr::PutValueSet` instead. `collect_index_used_locals` had no
+/// arm for that variant (it fell into a `_ => {}` catch-all), so the loop counter
+/// never joined `index_used_locals`, lost its i32 shadow slot, and every `arr[i]`
+/// in the loop fell back from `js_typed_feedback_numeric_array_index_{get,set}_guard`
+/// to the generic `js_array_get_index_or_string` path — a 6.8x cliff.
+///
+/// Asserting on the emitted helper (rather than wall-clock time) pins the actual
+/// codegen decision and stays meaningful under any optimization level.
+#[test]
+fn put_value_set_index_keeps_the_numeric_array_fast_path() {
+    // for (let i = 0; i < arr.length; i++) arr[i] = arr[i] + 1;
+    // with `arr: number[]` written through the generic PutValue form.
+    let arr = 1u32;
+    let i = 2u32;
+    let read_arr_i = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(arr)),
+        index: Box::new(Expr::LocalGet(i)),
+    };
+    let body = vec![
+        Stmt::Let {
+            id: arr,
+            name: "arr".to_string(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: false,
+            init: Some(Expr::Array(vec![])),
+        },
+        // The array escapes into a call — this is what `const arr = build()`
+        // lowers to (the callee fills the array through a return slot). It is
+        // load-bearing for the repro: an array that stays local is still
+        // hoistable, so `stmt/loops.rs` hands the counter an i32 slot from the
+        // length-hoist path and the fast path survives even with the collector
+        // blind spot. Once the array escapes, that path bails and the counter's
+        // only route to an i32 slot is `index_used_locals` — the set this fix
+        // repairs.
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![Expr::LocalGet(arr)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+        Stmt::For {
+            init: Some(Box::new(Stmt::Let {
+                id: i,
+                name: "i".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            })),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(i)),
+                right: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(arr)),
+                    property: "length".to_string(),
+                }),
+            }),
+            update: Some(Expr::Update {
+                id: i,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![Stmt::Expr(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(arr)),
+                key: Box::new(Expr::LocalGet(i)),
+                value: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(read_arr_i),
+                    right: Box::new(Expr::Integer(1)),
+                }),
+                receiver: Box::new(Expr::LocalGet(arr)),
+                strict: false,
+            })],
+        },
+    ];
+
+    let ir = compile_ir("put_value_set_fast_path", body);
+
+    // The loop counter must keep its i32 shadow slot: that is what lets the
+    // guarded helpers take a native i32 index.
+    assert!(
+        ir.contains("alloca i32"),
+        "the `arr[i]` loop counter lost its i32 shadow slot — `index_used_locals` \
+         no longer sees the PutValueSet key (#6299):\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_typed_feedback_numeric_array_index_get_guard"),
+        "`arr[i]` read through PutValueSet's value subtree must keep the guarded \
+         numeric fast path, not fall back to js_array_get_index_or_string (#6299):\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_typed_feedback_numeric_array_index_set_guard"),
+        "`arr[i] = ...` through PutValueSet must keep the guarded numeric store \
+         fast path (#6299):\n{ir}"
+    );
+}
+
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
