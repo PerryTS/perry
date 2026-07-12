@@ -15,6 +15,247 @@ fn full_gc() {
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
 }
 
+struct ArraySideTableTestGuard;
+
+impl ArraySideTableTestGuard {
+    fn new() -> Self {
+        crate::array::test_clear_array_named_property_roots();
+        crate::map::test_clear_map_iterator_arrays();
+        crate::set::test_clear_set_iterator_arrays();
+        Self
+    }
+}
+
+impl Drop for ArraySideTableTestGuard {
+    fn drop(&mut self) {
+        crate::array::test_clear_array_named_property_roots();
+        crate::map::test_clear_map_iterator_arrays();
+        crate::set::test_clear_set_iterator_arrays();
+    }
+}
+
+fn register_array_side_table_scanners() {
+    gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
+    gc_register_mutable_root_scanner(crate::map::scan_map_iterator_array_roots_mut);
+    gc_register_mutable_root_scanner(crate::set::scan_set_iterator_array_roots_mut);
+}
+
+unsafe fn set_array_named_property(arr: *mut crate::array::ArrayHeader, name: &str, value: f64) {
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::array::array_named_property_set(arr, key, value);
+}
+
+unsafe fn alloc_nursery_test_array() -> *mut crate::array::ArrayHeader {
+    let arr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::array::ArrayHeader>(),
+        std::mem::align_of::<crate::array::ArrayHeader>(),
+        GC_TYPE_ARRAY,
+    ) as *mut crate::array::ArrayHeader;
+    (*arr).length = 0;
+    (*arr).capacity = 0;
+    arr
+}
+
+unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHeader {
+    let obj = gc_malloc(
+        std::mem::size_of::<crate::object::ObjectHeader>(),
+        GC_TYPE_OBJECT,
+    ) as *mut crate::object::ObjectHeader;
+    (*obj).object_type = 1;
+    (*obj).class_id = 0;
+    (*obj).parent_class_id = 0;
+    (*obj).field_count = 0;
+    (*obj).keys_array = std::ptr::null_mut();
+    obj
+}
+
+fn util_types_is_map_iterator(addr: usize) -> bool {
+    crate::object::js_util_types_is_map_iterator(f64::from_bits(ptr_bits(addr))).to_bits()
+        == crate::value::TAG_TRUE
+}
+
+fn util_types_is_set_iterator(addr: usize) -> bool {
+    crate::object::js_util_types_is_set_iterator(f64::from_bits(ptr_bits(addr))).to_bits()
+        == crate::value::TAG_TRUE
+}
+
+#[test]
+fn test_array_named_dead_owner_stops_rooting_value_after_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let value = unsafe { alloc_malloc_test_object() };
+    let owner = unsafe { alloc_nursery_test_array() };
+    unsafe {
+        set_array_named_property(owner, "payload", f64::from_bits(ptr_bits(value as usize)));
+    }
+
+    full_gc();
+    assert!(
+        !crate::array::test_array_named_property_owner_exists(owner as usize),
+        "the first full collection must prune the dead owner"
+    );
+    assert!(
+        malloc_user_ptr_tracked(value as *mut u8),
+        "the value was scanned before post-trace pruning and survives that cycle"
+    );
+
+    full_gc();
+    assert!(
+        !malloc_user_ptr_tracked(value as *mut u8),
+        "without the dead owner entry, the next full collection must reclaim the value"
+    );
+}
+
+#[test]
+fn test_array_named_dead_owner_cannot_leak_property_across_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead = unsafe { alloc_nursery_test_array() };
+    unsafe {
+        set_array_named_property(dead, "inherited", f64::from_bits(crate::value::TAG_TRUE));
+    }
+    let dead_addr = dead as usize;
+
+    let _ = gc_collect_minor();
+    let replacement = unsafe { alloc_nursery_test_array() };
+    assert_eq!(
+        replacement as usize, dead_addr,
+        "test premise: the copied-minor Eden reset must reuse the exact owner address"
+    );
+    assert!(
+        unsafe { crate::array::array_named_property_get_by_name(replacement, "inherited") }
+            .is_none(),
+        "an ordinary replacement array must not inherit the dead array's expando"
+    );
+}
+
+#[test]
+fn test_array_named_live_move_rekeys_owner_and_rewrites_object_value() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let arr = unsafe { alloc_nursery_test_array() };
+    let old_owner = arr as usize;
+    let (value, _) = unsafe { alloc_nursery_test_object(0) };
+    let old_value = value as usize;
+    unsafe {
+        set_array_named_property(arr, "kept", f64::from_bits(ptr_bits(old_value)));
+    }
+    js_shadow_slot_set(0, ptr_bits(old_owner));
+
+    let _ = gc_collect_minor();
+
+    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
+    let new_value_bits = unsafe {
+        crate::array::array_named_property_get_by_name(
+            new_owner as *const crate::array::ArrayHeader,
+            "kept",
+        )
+    }
+    .expect("the moved owner must retain its expando")
+    .to_bits();
+    let new_value = (new_value_bits & POINTER_MASK) as usize;
+    assert_ne!(new_value, old_value, "the object value must be rewritten");
+    assert!(crate::arena::pointer_in_nursery(new_value));
+    assert!(crate::array::test_array_named_property_owner_exists(
+        new_owner
+    ));
+    assert!(!crate::array::test_array_named_property_owner_exists(
+        old_owner
+    ));
+}
+
+#[test]
+fn test_array_named_materialized_iterator_brands_follow_live_moves() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+
+    let map = crate::map::js_map_alloc(0);
+    let set = crate::set::js_set_alloc(0);
+    let map_iter = crate::map::js_map_entries(map) as usize;
+    let set_iter = crate::set::js_set_to_array(set) as usize;
+    assert!(util_types_is_map_iterator(map_iter));
+    assert!(util_types_is_set_iterator(set_iter));
+    js_shadow_slot_set(0, ptr_bits(map_iter));
+    js_shadow_slot_set(1, ptr_bits(set_iter));
+
+    let _ = gc_collect_minor();
+
+    let moved_map_iter = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let moved_set_iter = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    assert_ne!(moved_map_iter, map_iter);
+    assert_ne!(moved_set_iter, set_iter);
+    assert!(util_types_is_map_iterator(moved_map_iter));
+    assert!(util_types_is_set_iterator(moved_set_iter));
+    assert!(!util_types_is_map_iterator(map_iter));
+    assert!(!util_types_is_set_iterator(set_iter));
+
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+    full_gc();
+    assert!(!util_types_is_map_iterator(moved_map_iter));
+    assert!(!util_types_is_set_iterator(moved_set_iter));
+}
+
+#[test]
+fn test_array_named_dead_map_iterator_marker_does_not_brand_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead_map = crate::map::js_map_alloc(0);
+    let dead_map_iter = crate::map::js_map_entries(dead_map) as usize;
+    assert!(util_types_is_map_iterator(dead_map_iter));
+
+    let _ = gc_collect_minor();
+    let _replacement_map = crate::map::js_map_alloc(0);
+    let replacement_map_array = unsafe { alloc_nursery_test_array() };
+    assert_eq!(
+        replacement_map_array as usize, dead_map_iter,
+        "test premise: the copied-minor Eden reset must reuse the exact Map iterator address"
+    );
+    assert!(!util_types_is_map_iterator(replacement_map_array as usize));
+
+    // Finalize the replacement Map while its header is still intact; a raw
+    // arena reset would otherwise strand its external entries allocation.
+    full_gc();
+}
+
+#[test]
+fn test_array_named_dead_set_iterator_marker_does_not_brand_exact_eden_reuse() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _side_tables = ArraySideTableTestGuard::new();
+    register_array_side_table_scanners();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let dead_set = crate::set::js_set_alloc(0);
+    let dead_set_iter = crate::set::js_set_to_array(dead_set) as usize;
+    assert!(util_types_is_set_iterator(dead_set_iter));
+
+    let _ = gc_collect_minor();
+    let _replacement_set = crate::set::js_set_alloc(0);
+    let replacement_set_array = unsafe { alloc_nursery_test_array() };
+    assert_eq!(
+        replacement_set_array as usize, dead_set_iter,
+        "test premise: the copied-minor Eden reset must reuse the exact Set iterator address"
+    );
+    assert!(!util_types_is_set_iterator(replacement_set_array as usize));
+
+    // Finalize the replacement Set before the test guard tears down state.
+    full_gc();
+}
+
 #[test]
 fn test_dead_owner_descriptor_entries_pruned_on_full_gc() {
     let _guard = GcTestIsolationGuard::new();
