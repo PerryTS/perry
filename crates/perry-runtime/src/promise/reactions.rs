@@ -8,6 +8,8 @@
 
 use super::*;
 
+use super::keyed_table::PromiseKeyedTable;
+
 pub(super) struct PromiseSettleListener {
     pub(super) on_fulfilled: ClosurePtr,
     pub(super) on_rejected: ClosurePtr,
@@ -15,8 +17,10 @@ pub(super) struct PromiseSettleListener {
 }
 
 thread_local! {
-    pub(super) static PROMISE_SETTLE_LISTENERS: RefCell<Vec<(usize, PromiseSettleListener)>> =
-        const { RefCell::new(Vec::new()) };
+    /// Keyed by pending-promise address — see `keyed_table.rs` (#6084 item 2:
+    /// this used to be a raw `Vec` that every settlement scanned end to end).
+    pub(super) static PROMISE_SETTLE_LISTENERS: RefCell<PromiseKeyedTable<PromiseSettleListener>> =
+        const { RefCell::new(PromiseKeyedTable::new()) };
 }
 
 pub(crate) fn js_promise_attach_settle_listener(
@@ -37,14 +41,14 @@ pub(crate) fn js_promise_attach_settle_listener(
                 crate::gc::runtime_write_barrier_root_raw_ptr(on_fulfilled);
                 crate::gc::runtime_write_barrier_root_raw_ptr(on_rejected);
                 PROMISE_SETTLE_LISTENERS.with(|listeners| {
-                    listeners.borrow_mut().push((
+                    listeners.borrow_mut().push(
                         promise as usize,
                         PromiseSettleListener {
                             on_fulfilled,
                             on_rejected,
                             context,
                         },
-                    ));
+                    );
                 });
             }
             PromiseState::Fulfilled => {
@@ -61,20 +65,7 @@ pub(super) fn promise_take_settle_listeners(promise: *mut Promise) -> Vec<Promis
     if promise.is_null() {
         return Vec::new();
     }
-    PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        let mut listeners = listeners.borrow_mut();
-        let key = promise as usize;
-        let mut drained = Vec::new();
-        let mut i = 0;
-        while i < listeners.len() {
-            if listeners[i].0 == key {
-                drained.push(listeners.swap_remove(i).1);
-            } else {
-                i += 1;
-            }
-        }
-        drained
-    })
+    PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().take_all(promise as usize))
 }
 
 fn enqueue_settle_listener_task(
@@ -99,11 +90,16 @@ fn enqueue_settle_listener_task(
 
 pub(super) fn scan_promise_settle_listeners_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        for (key, listener) in listeners.borrow_mut().iter_mut() {
-            visitor.visit_metadata_usize_slot(key);
-            visitor.visit_raw_const_ptr_slot(&mut listener.on_fulfilled);
-            visitor.visit_raw_const_ptr_slot(&mut listener.on_rejected);
-            scan_snapshot_roots_mut(&mut listener.context, visitor);
+        let mut listeners = listeners.borrow_mut();
+        let mut rekeyed = false;
+        for entry in listeners.iter_mut() {
+            rekeyed |= visitor.visit_metadata_usize_slot(&mut entry.key);
+            visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled);
+            visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected);
+            scan_snapshot_roots_mut(&mut entry.value.context, visitor);
+        }
+        if rekeyed {
+            listeners.note_key_rewritten();
         }
     });
 }
@@ -116,12 +112,7 @@ pub(super) fn remove_settle_listeners_for_dead_promise(promise: *mut Promise) {
         return;
     }
     let key = promise as usize;
-    PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        let mut listeners = listeners.borrow_mut();
-        if !listeners.is_empty() {
-            listeners.retain(|(k, _)| *k != key);
-        }
-    });
+    PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().remove_key(key));
 }
 
 /// Copied-minor from-space cleanup for the settle-listener table: drop entries
@@ -130,11 +121,11 @@ pub(super) fn remove_settle_listeners_for_dead_promise(promise: *mut Promise) {
 pub(super) fn cleanup_copied_minor_settle_listeners_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        listeners.borrow_mut().retain_mut(|(key, _)| {
-            match super::copied_minor_promise_key_fate(*key) {
+        listeners.borrow_mut().retain_mut(|entry| {
+            match super::copied_minor_promise_key_fate(entry.key) {
                 Keep => true,
                 Rekey(new_key) => {
-                    *key = new_key;
+                    entry.key = new_key;
                     true
                 }
                 Drop => false,
@@ -169,8 +160,10 @@ pub(super) struct OverflowReaction {
 }
 
 thread_local! {
-    pub(super) static PROMISE_OVERFLOW_REACTIONS: RefCell<Vec<(usize, OverflowReaction)>> =
-        const { RefCell::new(Vec::new()) };
+    /// Keyed by pending-promise address — see `keyed_table.rs` (#6084 item 2:
+    /// this used to be a raw `Vec` that every settlement scanned end to end).
+    pub(super) static PROMISE_OVERFLOW_REACTIONS: RefCell<PromiseKeyedTable<OverflowReaction>> =
+        const { RefCell::new(PromiseKeyedTable::new()) };
 }
 
 /// Park a 2nd+ reaction on a still-pending `promise`.
@@ -186,7 +179,7 @@ pub(super) fn push_overflow_reaction(
     crate::gc::runtime_write_barrier_root_raw_ptr(on_rejected);
     crate::gc::runtime_write_barrier_root_raw_ptr(next);
     PROMISE_OVERFLOW_REACTIONS.with(|r| {
-        r.borrow_mut().push((
+        r.borrow_mut().push(
             promise as usize,
             OverflowReaction {
                 on_fulfilled,
@@ -194,7 +187,7 @@ pub(super) fn push_overflow_reaction(
                 next,
                 context,
             },
-        ));
+        );
     });
 }
 
@@ -202,30 +195,11 @@ pub(super) fn push_overflow_reaction(
 /// `promise`. Returns `Vec::new()` for the overwhelmingly common no-overflow
 /// case without touching the table's allocation.
 pub(super) fn promise_take_overflow_reactions(promise: *mut Promise) -> Vec<OverflowReaction> {
-    PROMISE_OVERFLOW_REACTIONS.with(|r| {
-        let mut r = r.borrow_mut();
-        if r.is_empty() {
-            return Vec::new();
-        }
-        let key = promise as usize;
-        let mut drained = Vec::new();
-        // Preserve FIFO order (a plain filter keeps relative order; swap_remove
-        // would not — reaction ordering is observable, see resolved-sequence).
-        r.retain(|(k, reaction)| {
-            if *k == key {
-                drained.push(OverflowReaction {
-                    on_fulfilled: reaction.on_fulfilled,
-                    on_rejected: reaction.on_rejected,
-                    next: reaction.next,
-                    context: reaction.context.clone(),
-                });
-                false
-            } else {
-                true
-            }
-        });
-        drained
-    })
+    // FIFO order is observable (`p.then(a); p.then(b)` must run a before b).
+    // `take_all` restores it from each entry's registration seq — the old
+    // order-preserving `retain` had to touch every entry in the table, which is
+    // what made settling N promises O(N²) (#6084 item 2).
+    PROMISE_OVERFLOW_REACTIONS.with(|r| r.borrow_mut().take_all(promise as usize))
 }
 
 /// Push the `Task::Inline` jobs for a settled promise's drained overflow
@@ -251,12 +225,17 @@ pub(super) fn enqueue_overflow_reactions(
 
 pub(super) fn scan_promise_overflow_reactions_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        for (key, reaction) in reactions.borrow_mut().iter_mut() {
-            visitor.visit_metadata_usize_slot(key);
-            visitor.visit_raw_const_ptr_slot(&mut reaction.on_fulfilled);
-            visitor.visit_raw_const_ptr_slot(&mut reaction.on_rejected);
-            visitor.visit_raw_mut_ptr_slot(&mut reaction.next);
-            scan_snapshot_roots_mut(&mut reaction.context, visitor);
+        let mut reactions = reactions.borrow_mut();
+        let mut rekeyed = false;
+        for entry in reactions.iter_mut() {
+            rekeyed |= visitor.visit_metadata_usize_slot(&mut entry.key);
+            visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled);
+            visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected);
+            visitor.visit_raw_mut_ptr_slot(&mut entry.value.next);
+            scan_snapshot_roots_mut(&mut entry.value.context, visitor);
+        }
+        if rekeyed {
+            reactions.note_key_rewritten();
         }
     });
 }
@@ -270,12 +249,7 @@ pub(super) fn remove_overflow_reactions_for_dead_promise(promise: *mut Promise) 
         return;
     }
     let key = promise as usize;
-    PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        let mut reactions = reactions.borrow_mut();
-        if !reactions.is_empty() {
-            reactions.retain(|(k, _)| *k != key);
-        }
-    });
+    PROMISE_OVERFLOW_REACTIONS.with(|reactions| reactions.borrow_mut().remove_key(key));
 }
 
 /// Copied-minor from-space cleanup for the overflow-reaction table — see
@@ -284,11 +258,11 @@ pub(super) fn remove_overflow_reactions_for_dead_promise(promise: *mut Promise) 
 pub(super) fn cleanup_copied_minor_overflow_reactions_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        reactions.borrow_mut().retain_mut(|(key, _)| {
-            match super::copied_minor_promise_key_fate(*key) {
+        reactions.borrow_mut().retain_mut(|entry| {
+            match super::copied_minor_promise_key_fate(entry.key) {
                 Keep => true,
                 Rekey(new_key) => {
-                    *key = new_key;
+                    entry.key = new_key;
                     true
                 }
                 Drop => false,
