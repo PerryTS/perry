@@ -7,7 +7,7 @@
 
 use super::*;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -5025,6 +5025,9 @@ pub fn run_with_parse_cache(
 
     // For dylib output, skip runtime/stdlib linking — symbols resolve from host at dlopen time
     if is_dylib {
+        // #6222: the link below runs the HOST toolchain. Reject a target it cannot
+        // honour rather than emitting a host-arch dylib from a cross-compiled object.
+        verify_dylib_target_linkable(target.as_deref())?;
         let is_dylib_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
             || (target.is_none() && cfg!(target_os = "windows"));
         let has_plugin_deactivate = ctx
@@ -5087,12 +5090,26 @@ pub fn run_with_parse_cache(
             c.arg("-shared");
             c
         } else {
-            // macOS — use flat_namespace so plugins can resolve symbols from the host
             let mut c = Command::new("cc");
-            c.arg("-dynamiclib")
-                .arg("-flat_namespace")
-                .arg("-undefined")
-                .arg("dynamic_lookup");
+            c.arg("-dynamiclib");
+            // #6222: propagate `--target`. Without this the driver defaults to the
+            // host, so `--target ios` cross-compiled the object correctly and then
+            // linked it into a *macOS* dylib. `verify_dylib_target_linkable` above
+            // has already rejected any target we cannot link on this host.
+            let apple_cross = target.as_deref().and_then(apple_dylib_cross_target);
+            if let Some((sdk, triple)) = apple_cross {
+                let sysroot = apple_sdk_sysroot(sdk)?;
+                c.arg("-target").arg(triple).arg("-isysroot").arg(&sysroot);
+            }
+            // A plugin does not link the runtime (symbols resolve from the host at
+            // `dlopen` time), so undefined symbols must be permitted either way.
+            // `-flat_namespace` is a macOS-only plugin convention and is DEPRECATED
+            // on the embedded Apple platforms — passing it there makes the linker
+            // warn on every build for no benefit.
+            if apple_cross.is_none() {
+                c.arg("-flat_namespace");
+            }
+            c.arg("-undefined").arg("dynamic_lookup");
             c
         };
 
@@ -5664,4 +5681,71 @@ pub fn run_with_parse_cache(
         link_cache_stats: Some(link_cache_status.stats()),
         build_cache_stats: Some(build_cache_stats),
     })
+}
+
+/// (#6222) Apple SDK + clang triple for a cross-compiled **shared library** link.
+///
+/// The dylib path links with the host `cc` driver and does NOT link the runtime
+/// (symbols resolve from the host at `dlopen` time), so nothing else in that path
+/// consults `--target`. Without these flags the linker happily consumes a correctly
+/// cross-compiled iOS object and emits a **host-arch** dylib — the failure the user
+/// sees is a link error or a dylib that will never load on device.
+fn apple_dylib_cross_target(target: &str) -> Option<(&'static str, &'static str)> {
+    Some(match target {
+        "ios" => ("iphoneos", "arm64-apple-ios17.0"),
+        "ios-simulator" => ("iphonesimulator", "arm64-apple-ios17.0-simulator"),
+        "tvos" => ("appletvos", "arm64-apple-tvos17.0"),
+        "tvos-simulator" => ("appletvsimulator", "arm64-apple-tvos17.0-simulator"),
+        "watchos" => ("watchos", "arm64_32-apple-watchos10.0"),
+        "watchos-simulator" => ("watchsimulator", "arm64-apple-watchos10.0-simulator"),
+        "visionos" => ("xros", "arm64-apple-xros1.0"),
+        "visionos-simulator" => ("xrsimulator", "arm64-apple-xros1.0-simulator"),
+        _ => return None,
+    })
+}
+
+/// Resolve an Apple SDK sysroot via `xcrun`.
+fn apple_sdk_sysroot(sdk: &str) -> Result<PathBuf> {
+    let out = Command::new("xcrun")
+        .args(["--sdk", sdk, "--show-sdk-path"])
+        .output()
+        .with_context(|| {
+            format!("Failed to invoke `xcrun --sdk {sdk} --show-sdk-path` (is Xcode installed?)")
+        })?;
+    if !out.status.success() {
+        bail!(
+            "`xcrun --sdk {sdk} --show-sdk-path` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        bail!("`xcrun --sdk {sdk} --show-sdk-path` returned nothing");
+    }
+    Ok(PathBuf::from(path))
+}
+
+/// (#6222) Reject a `--target` the dylib link step cannot honour on this host,
+/// instead of silently linking the cross object into a host-arch shared library.
+/// The executable path already fails early and cleanly (it has to find a
+/// per-target `libperry_runtime.a`); the dylib path links no runtime, so it had
+/// no such check and produced a host binary in silence.
+fn verify_dylib_target_linkable(target: Option<&str>) -> Result<()> {
+    let Some(t) = target else { return Ok(()) };
+    let host_ok = match t {
+        "windows" | "windows-winui" => true,
+        t if t.starts_with("linux") => cfg!(target_os = "linux"),
+        t if apple_dylib_cross_target(t).is_some() => cfg!(target_os = "macos"),
+        _ => false,
+    };
+    if !host_ok {
+        bail!(
+            "--output-type dylib cannot link for target \"{t}\" on this host.\n\
+             The object is cross-compiled correctly, but the shared-library link step \
+             runs the host toolchain, so it would emit a host-architecture dylib.\n\
+             Apple targets (ios, ios-simulator, tvos, watchos, visionos and their \
+             simulators) require a macOS host with Xcode."
+        );
+    }
+    Ok(())
 }
