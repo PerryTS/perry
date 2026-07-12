@@ -183,14 +183,18 @@ pub(super) const ED25519_PUBLIC_PREFIX: &str = "PERRY-ED25519-PUBLIC:";
 pub(super) const X25519_PRIVATE_PREFIX: &str = "PERRY-X25519-PRIVATE:";
 pub(super) const X25519_PUBLIC_PREFIX: &str = "PERRY-X25519-PUBLIC:";
 
-pub(super) fn ed25519_private_surrogate(key: &ed25519_dalek::SigningKey) -> String {
+/// `pub(crate)` (not `pub(super)`): the WebCrypto bridge builds the very same
+/// surrogate strings when `KeyObject.from()` converts an asymmetric CryptoKey
+/// back into a KeyObject (#6302), and both sides must agree byte-for-byte or
+/// the `parse_*_surrogate` readers below reject the result.
+pub(crate) fn ed25519_private_surrogate(key: &ed25519_dalek::SigningKey) -> String {
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
     let public =
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes());
     format!("{ED25519_PRIVATE_PREFIX}{secret}.{public}")
 }
 
-pub(super) fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> String {
+pub(crate) fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> String {
     let public = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
     format!("{ED25519_PUBLIC_PREFIX}{public}")
 }
@@ -217,12 +221,12 @@ pub(crate) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dale
     ed25519_dalek::VerifyingKey::from_bytes(&public).ok()
 }
 
-pub(super) fn x25519_private_surrogate(secret: &[u8; 32]) -> String {
+pub(crate) fn x25519_private_surrogate(secret: &[u8; 32]) -> String {
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
     format!("{X25519_PRIVATE_PREFIX}{encoded}")
 }
 
-pub(super) fn x25519_public_surrogate(public: &[u8; 32]) -> String {
+pub(crate) fn x25519_public_surrogate(public: &[u8; 32]) -> String {
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public);
     format!("{X25519_PUBLIC_PREFIX}{encoded}")
 }

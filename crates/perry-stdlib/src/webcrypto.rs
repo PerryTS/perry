@@ -106,6 +106,12 @@ pub unsafe extern "C" fn js_webcrypto_native_dispatch(
         "keyObjectToCryptoKey" if args_len >= 4 => {
             js_webcrypto_key_object_to_crypto_key(arg(0), arg(1), arg(2), arg(3))
         }
+        // Internal bridge for `crypto.KeyObject.from(<asymmetric CryptoKey>)`
+        // (#6302) — the runtime owns the secret-key shape but the asymmetric
+        // key encoders live here. Not a `crypto.subtle` method name.
+        "keyObjectFromCryptoKey" if args_len >= 1 => {
+            js_webcrypto_key_object_from_crypto_key(arg(0))
+        }
         "supports" if args_len >= 2 => js_webcrypto_supports(arg(0), arg(1), arg(2)),
         "encapsulateBits" => promise_to_value(js_webcrypto_encapsulate_bits(args_ptr, args_len)),
         "decapsulateBits" => promise_to_value(js_webcrypto_decapsulate_bits(args_ptr, args_len)),
