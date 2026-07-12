@@ -96,6 +96,11 @@ elif [[ $FULL_MODE -eq 1 ]]; then
 else
   BENCHMARKS="02_loop_overhead.ts 03_array_write.ts 04_array_read.ts 05_fibonacci.ts 06_math_intensive.ts 07_object_create.ts 08_string_concat.ts 09_method_calls.ts 10_nested_loops.ts 11_prime_sieve.ts 12_binary_trees.ts 13_factorial.ts 14_closure.ts 15_mandelbrot.ts 16_matrix_multiply.ts"
 fi
+EXPECTED_BENCHMARKS=""
+for bench in $BENCHMARKS; do
+  name="${bench%.ts}"
+  EXPECTED_BENCHMARKS+="${EXPECTED_BENCHMARKS:+,}$name"
+done
 
 # Check for node
 HAS_NODE=0
@@ -141,6 +146,7 @@ else
 fi
 
 RUNTIME_METADATA=$(mktemp)
+trap 'rm -f "$RUNTIME_METADATA"' EXIT
 python3 - "$RUNTIME_METADATA" "$COMPILETS" "$HAS_NODE" "$HAS_BUN" \
   "$("$COMPILETS" --version 2>/dev/null || echo local-build)" \
   "$(node --version 2>/dev/null || true)" "$(bun --version 2>/dev/null || true)" \
@@ -180,6 +186,19 @@ echo ""
 # ---------------------------------------------------------------------------
 RESULTS_FILE=$(mktemp)
 RUN_OUTPUT_DIR=$(mktemp -d)
+CURRENT_JSON=""
+
+cleanup() {
+  rm -f "$RESULTS_FILE" "$RUNTIME_METADATA"
+  rm -rf "$RUN_OUTPUT_DIR"
+  if [[ -n "$CURRENT_JSON" && -z "$JSON_OUT" ]]; then
+    rm -f "$CURRENT_JSON"
+  fi
+  for bench in $BENCHMARKS; do
+    rm -f "$SUITE_DIR/${bench%.ts}"
+  done
+}
+trap cleanup EXIT
 
 extract_time() {
   awk -F: '/^[a-z_]+:[0-9]+/ {print $2; exit}' <<<"$1"
@@ -192,15 +211,16 @@ measure_rss() {
   local binary="$2"
   shift 2
   local tmp_err=$(mktemp)
+  local command_status=0
 
   if [[ -x /usr/bin/time ]]; then
     if [[ "$(uname)" == "Darwin" ]]; then
-      /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+      /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
     else
-      /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+      /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
     fi
   else
-    "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+    "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
   fi
 
   local rss_kb=0
@@ -218,7 +238,7 @@ measure_rss() {
 
   rm -f "$tmp_err"
 
-  echo "$rss_kb"
+  echo "$rss_kb|$command_status"
 }
 
 echo -e "${BOLD}Compiling benchmarks...${NC}"
@@ -282,11 +302,15 @@ for bench in $BENCHMARKS; do
     for (( run=0; run<RUNS; run++ )); do
       p_out="$RUN_OUTPUT_DIR/$name.perry.$run.out"
       p_out_samples+=("$p_out")
-      r_rss=$(measure_rss "$p_out" "$SUITE_DIR/$name")
+      measurement=$(measure_rss "$p_out" "$SUITE_DIR/$name")
+      r_rss="${measurement%%|*}"
+      r_status="${measurement##*|}"
       r_out=$(cat "$p_out")
       r_ms=$(extract_time "$r_out")
-      [[ -n "$r_ms" ]] && p_ms_samples+=("$r_ms")
-      p_rss_samples+=("${r_rss:-0}")
+      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+        p_ms_samples+=("$r_ms")
+        p_rss_samples+=("${r_rss:-0}")
+      fi
     done
     if [[ ${#p_ms_samples[@]} -gt 0 ]]; then
       perry_ms=$(median "${p_ms_samples[@]}")
@@ -306,11 +330,15 @@ for bench in $BENCHMARKS; do
     for (( run=0; run<RUNS; run++ )); do
       n_out="$RUN_OUTPUT_DIR/$name.node.$run.out"
       n_out_samples+=("$n_out")
-      r_rss=$(measure_rss "$n_out" "${NODE_CMD[@]}" "$SUITE_DIR/$bench")
+      measurement=$(measure_rss "$n_out" "${NODE_CMD[@]}" "$SUITE_DIR/$bench")
+      r_rss="${measurement%%|*}"
+      r_status="${measurement##*|}"
       r_out=$(cat "$n_out")
       r_ms=$(extract_time "$r_out")
-      [[ -n "$r_ms" ]] && n_ms_samples+=("$r_ms")
-      n_rss_samples+=("${r_rss:-0}")
+      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+        n_ms_samples+=("$r_ms")
+        n_rss_samples+=("${r_rss:-0}")
+      fi
     done
     if [[ ${#n_ms_samples[@]} -gt 0 ]]; then
       node_ms=$(median "${n_ms_samples[@]}")
@@ -331,11 +359,15 @@ for bench in $BENCHMARKS; do
     for (( run=0; run<RUNS; run++ )); do
       b_out="$RUN_OUTPUT_DIR/$name.bun.$run.out"
       b_out_samples+=("$b_out")
-      r_rss=$(measure_rss "$b_out" "${BUN_CMD[@]}" "$SUITE_DIR/$bench")
+      measurement=$(measure_rss "$b_out" "${BUN_CMD[@]}" "$SUITE_DIR/$bench")
+      r_rss="${measurement%%|*}"
+      r_status="${measurement##*|}"
       r_out=$(cat "$b_out")
       r_ms=$(extract_time "$r_out")
-      [[ -n "$r_ms" ]] && b_ms_samples+=("$r_ms")
-      b_rss_samples+=("${r_rss:-0}")
+      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+        b_ms_samples+=("$r_ms")
+        b_rss_samples+=("${r_rss:-0}")
+      fi
     done
     if [[ ${#b_ms_samples[@]} -gt 0 ]]; then
       bun_ms=$(median "${b_ms_samples[@]}")
@@ -498,10 +530,12 @@ if [[ -n "$JSON_OUT" ]]; then
 else
   CURRENT_JSON=$(mktemp)
 fi
+rm -f "$CURRENT_JSON"
 python3 "$BENCHMARK_GATE" build \
   --records "$RESULTS_FILE" \
   --runtime-metadata "$RUNTIME_METADATA" \
   --runs "$RUNS" \
+  --expected-benchmarks "$EXPECTED_BENCHMARKS" \
   --output "$CURRENT_JSON"
 
 CORRECTNESS_FAIL_COUNT=$(python3 - "$CURRENT_JSON" <<'PY'
@@ -575,18 +609,5 @@ PY
     COMPARE_EXIT=0
   fi
 fi
-
-# Cleanup
-rm -f "$RESULTS_FILE"
-rm -f "$RUNTIME_METADATA"
-rm -rf "$RUN_OUTPUT_DIR"
-# Only remove CURRENT_JSON if it was a tempfile (not user-requested via --json-out)
-[[ -z "$JSON_OUT" ]] && rm -f "$CURRENT_JSON"
-cd "$SUITE_DIR" && rm -f 01_startup 02_loop_overhead 03_array_write 04_array_read 05_fibonacci \
-  06_math_intensive 07_object_create 08_string_concat 09_method_calls 10_nested_loops \
-  11_prime_sieve 12_binary_trees 13_factorial 14_closure 15_mandelbrot 16_matrix_multiply \
-  bench_gc_pressure bench_json_roundtrip bench_object_property bench_int_arithmetic \
-  bench_buffer_readwrite bench_array_grow bench_string_heavy bench_numeric_array_numeric \
-  bench_numeric_array_downgrade 2>/dev/null
 
 exit ${COMPARE_EXIT:-0}

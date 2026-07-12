@@ -136,12 +136,13 @@ runs Perry and exact Node/Bun comparator versions five times per benchmark,
 stores every timing and RSS sample, and reports medians plus distribution
 statistics and Perry-to-peer ratios. A timing regression must exceed both the
 percentage threshold and a per-benchmark noise allowance derived from the
-stored repeated-sample standard deviation (with a 1 ms timer-resolution floor).
+stored repeated-sample median absolute deviation (with a 1 ms timer-resolution
+floor).
 There is no global 100 ms escape hatch, so stable short benchmarks can gate a
 release while noisy rows receive their own wider allowance. Missing samples
 make the artifact invalid rather than silently shrinking the sample set.
-When the baseline has peer data, a regression must also worsen Perry's
-peer-relative trend, which controls for runner-wide slowdowns.
+When both artifacts have matching pinned peer metadata, a regression must also
+worsen Perry's peer-relative trend, which controls for runner-wide slowdowns.
 
 The same workflow tracks the Fastify `minimal`, `text`, and `parametric`
 loopback workloads under fixed `oha` duration/concurrency settings. Their

@@ -89,7 +89,7 @@ jobs:
 
           mkdir -p .bench-results
 
-          # Run full suite (15 base benchmarks + 7 regression-probe benchmarks)
+          # Run full suite (15 base benchmarks + 9 regression-probe benchmarks)
           ./benchmarks/compare.sh \
             --full \
             --runs 5 \
@@ -224,7 +224,7 @@ jobs:
               print()
               print("## Fastify HTTP tracking")
               print()
-              print("Fixed loopback load: 1 warmup, 5 × 15s samples, concurrency 10. These signals are tracked but do not gate releases.")
+              print("Fixed loopback load: 1 warmup, 5 × 15s samples, concurrency 10. No HTTP performance threshold is applied; missing or unhealthy samples still fail collection.")
               print()
               print("| Kernel | Runtime | RPS med [min–p95] | p50 ms | p95 ms | p99 ms |")
               print("|--------|---------|------------------:|-------:|-------:|-------:|")

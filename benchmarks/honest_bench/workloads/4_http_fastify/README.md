@@ -70,4 +70,5 @@ at least one kernel without regressing the others. The Node and Bun kernels run
 the same routes and pinned Fastify dependency as fixed external reference
 points. CI fixes warmup count, sample count, duration, concurrency, and the
 `oha` version, then persists raw throughput and p50/p95/p99 distributions.
-HTTP signals are tracking-only, not release gates.
+No HTTP performance threshold gates releases, but missing or unhealthy samples
+still invalidate the tracking artifact.

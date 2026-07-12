@@ -119,11 +119,14 @@ TypeScript entirely?"
 CI regression signal; it does not refresh any public performance table.
 
 - `run_config.requested_samples` is the exact number required from every
-  available runtime. An incomplete timing or RSS sample set is invalid.
+  available runtime, while `expected_benchmarks` records the complete required
+  suite. Missing rows, failed processes, or incomplete timing/RSS samples are
+  invalid.
 - `runtimes.{perry,node,bun}` records availability, the observed exact version,
-  and the measured command used (plus Perry's compile command). Bun may be
-  unavailable in a local run; that state is explicit and Node remains the
-  correctness reference. If Node is unavailable, Bun becomes the reference.
+  and the measured command used. Perry's compile command may also be included
+  by the collector. Bun may be unavailable in a local run; that state is
+  explicit and Node remains the correctness reference. If Node is unavailable,
+  Bun becomes the reference.
 - `benchmarks.<name>.runtimes.<runtime>.{wall_ms,rss_kb}` contains raw
   `samples`, `sample_count`, `median`, `p95`, `min`, `max`, `mad`, and `stdev`.
 - `benchmarks.<name>.ratios` contains Perry-to-Node and Perry-to-Bun wall-time
@@ -135,12 +138,13 @@ CI regression signal; it does not refresh any public performance table.
 The committed `baseline.json` is still the legacy scalar schema until a
 separate, intentional baseline refresh. The gate normalizes that schema when
 reading it, while requiring complete version-2 data from a new run. Timing
-noise is calibrated per benchmark as three times the larger stored population
-standard deviation, with a 1 ms quantization floor; the configured percentage
-threshold must also be exceeded. When the baseline contains Node or Bun data,
-the corresponding peer-relative trend must corroborate the slowdown, which
-controls for runner-wide drift even while the committed baseline is scalar.
-RSS retains its 4 MiB OS-accounting floor.
+noise is calibrated per benchmark as three times the larger robust sigma
+estimate (`MAD × 1.4826`), with a 1 ms quantization floor; the configured
+percentage threshold must also be exceeded. A stable one-tick shift can
+therefore gate. A peer-relative trend only corroborates or vetoes a slowdown
+when both artifacts have identical pinned peer version and command metadata;
+legacy baselines therefore do not produce a peer trend delta. RSS retains its
+4 MiB OS-accounting floor.
 
 The workflow also emits `http-fastify-raw.json`, metadata, and a summarized
 `http-fastify.json`. For each kernel/runtime, the summary stores full repeated

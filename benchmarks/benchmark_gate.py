@@ -28,6 +28,35 @@ class ArtifactError(ValueError):
     """Raised when benchmark evidence is missing or malformed."""
 
 
+def _mapping(value: Any, context: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ArtifactError(f"{context}: expected an object")
+    return value
+
+
+def _validate_runtime_metadata(runtimes: Any) -> Mapping[str, Mapping[str, Any]]:
+    runtimes = _mapping(runtimes, "runtime metadata")
+    for runtime_name in RUNTIME_NAMES:
+        if runtime_name not in runtimes:
+            raise ArtifactError(f"runtime metadata missing for {runtime_name}")
+        metadata = _mapping(runtimes[runtime_name], f"runtime metadata for {runtime_name}")
+        if not isinstance(metadata.get("available"), bool):
+            raise ArtifactError(f"runtime metadata for {runtime_name} has invalid availability")
+        command = metadata.get("command")
+        if (
+            not isinstance(command, list)
+            or not command
+            or any(not isinstance(part, str) or not part for part in command)
+        ):
+            raise ArtifactError(f"runtime metadata for {runtime_name} has no pinned command")
+        version = metadata.get("version")
+        if metadata["available"] and (not isinstance(version, str) or not version.strip()):
+            raise ArtifactError(f"runtime metadata for {runtime_name} has no version")
+    if runtimes["perry"]["available"] is not True:
+        raise ArtifactError("Perry runtime metadata must be available")
+    return runtimes  # type: ignore[return-value]
+
+
 def _number(value: Any, context: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ArtifactError(f"{context}: expected a number, got {value!r}")
@@ -38,6 +67,7 @@ def _number(value: Any, context: str) -> float:
 
 
 def distribution(values: Iterable[Any]) -> dict[str, Any]:
+    """Return raw samples and deterministic summary statistics."""
     samples = [_number(value, "sample") for value in values]
     if not samples:
         raise ArtifactError("distribution has no samples")
@@ -81,27 +111,31 @@ def build_artifact(
     runtimes: Mapping[str, Mapping[str, Any]],
     commit: str,
     generated_at: str,
+    expected_benchmarks: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    if requested_samples < 2:
+    """Build one complete schema-v2 benchmark artifact."""
+    if isinstance(requested_samples, bool) or not isinstance(requested_samples, int) or requested_samples < 2:
         raise ArtifactError("at least two repeated samples are required")
-    for runtime_name in RUNTIME_NAMES:
-        if runtime_name not in runtimes:
-            raise ArtifactError(f"runtime metadata missing for {runtime_name}")
-        metadata = runtimes[runtime_name]
-        if not isinstance(metadata.get("command"), list) or not metadata["command"]:
-            raise ArtifactError(f"runtime metadata for {runtime_name} has no pinned command")
-        if metadata.get("available") and not metadata.get("version"):
-            raise ArtifactError(f"runtime metadata for {runtime_name} has no version")
+    runtimes = _validate_runtime_metadata(runtimes)
+    if expected_benchmarks is not None:
+        if (
+            isinstance(expected_benchmarks, (str, bytes))
+            or not expected_benchmarks
+            or any(not isinstance(name, str) or not name for name in expected_benchmarks)
+            or len(set(expected_benchmarks)) != len(expected_benchmarks)
+        ):
+            raise ArtifactError("expected benchmark names are empty, duplicated, or invalid")
 
     benchmarks: dict[str, Any] = {}
     for record in records:
-        name = str(record.get("name", ""))
-        if not name or name in benchmarks:
+        record = _mapping(record, "benchmark record")
+        name = record.get("name")
+        if not isinstance(name, str) or not name or name in benchmarks:
             raise ArtifactError(f"invalid or duplicate benchmark name: {name!r}")
         runtime_results: dict[str, Any] = {}
-        raw_runtimes = record.get("runtimes", {})
+        raw_runtimes = _mapping(record.get("runtimes"), f"{name}: runtimes")
         for runtime_name in RUNTIME_NAMES:
-            available = bool(runtimes[runtime_name].get("available"))
+            available = runtimes[runtime_name]["available"]
             raw = raw_runtimes.get(runtime_name)
             if not available:
                 if raw:
@@ -109,8 +143,10 @@ def build_artifact(
                 continue
             if not isinstance(raw, Mapping):
                 raise ArtifactError(f"{name}: {runtime_name} has 0/{requested_samples} samples")
-            wall_samples = list(raw.get("wall_ms", []))
-            rss_samples = list(raw.get("rss_kb", []))
+            wall_samples = raw.get("wall_ms")
+            rss_samples = raw.get("rss_kb")
+            if not isinstance(wall_samples, list) or not isinstance(rss_samples, list):
+                raise ArtifactError(f"{name}: {runtime_name} samples must be arrays")
             if len(wall_samples) != requested_samples:
                 raise ArtifactError(
                     f"{name}: {runtime_name} has {len(wall_samples)}/{requested_samples} wall samples"
@@ -121,6 +157,8 @@ def build_artifact(
                 )
             if any(_number(value, f"{name}: {runtime_name} RSS sample") <= 0 for value in rss_samples):
                 raise ArtifactError(f"{name}: {runtime_name} has an invalid zero RSS sample")
+            if any(_number(value, f"{name}: {runtime_name} wall sample") < 0 for value in wall_samples):
+                raise ArtifactError(f"{name}: {runtime_name} has an invalid negative wall sample")
             runtime_results[runtime_name] = {
                 "wall_ms": distribution(wall_samples),
                 "rss_kb": distribution(rss_samples),
@@ -129,13 +167,16 @@ def build_artifact(
         perry = runtime_results["perry"]
         node = runtime_results.get("node")
         bun = runtime_results.get("bun")
+        correctness = _mapping(record.get("correctness"), f"{name}: correctness")
+        if correctness.get("status") not in ("pass", "fail", "unchecked"):
+            raise ArtifactError(f"{name}: correctness has an invalid status")
         entry: dict[str, Any] = {
             "runtimes": runtime_results,
             "ratios": {
                 "perry_to_node": _runtime_ratio(perry, node) if node else None,
                 "perry_to_bun": _runtime_ratio(perry, bun) if bun else None,
             },
-            "correctness": dict(record.get("correctness", {})),
+            "correctness": dict(correctness),
             # Compatibility fields retained for existing artifact consumers.
             "perry_ms": perry["wall_ms"]["median"],
             "perry_rss_kb": perry["rss_kb"]["median"],
@@ -149,14 +190,29 @@ def build_artifact(
             entry["memory_ratio"] = entry["ratios"]["perry_to_node"]["rss"]
         benchmarks[name] = entry
 
-    return {
+    if not benchmarks:
+        raise ArtifactError("artifact contains no benchmark records")
+    expected = list(expected_benchmarks) if expected_benchmarks is not None else list(benchmarks)
+    missing = sorted(set(expected) - set(benchmarks))
+    unexpected = sorted(set(benchmarks) - set(expected))
+    if missing or unexpected:
+        raise ArtifactError(
+            f"benchmark set mismatch: missing={missing or 'none'}, unexpected={unexpected or 'none'}"
+        )
+
+    artifact = {
         "schema_version": SCHEMA_VERSION,
         "commit": commit,
         "generated_at": generated_at,
-        "run_config": {"requested_samples": requested_samples},
+        "run_config": {
+            "requested_samples": requested_samples,
+            "expected_benchmarks": expected,
+        },
         "runtimes": {name: dict(runtimes[name]) for name in RUNTIME_NAMES},
         "benchmarks": benchmarks,
     }
+    validate_artifact(artifact)
+    return artifact
 
 
 def _legacy_distribution(value: Any) -> dict[str, Any] | None:
@@ -166,20 +222,31 @@ def _legacy_distribution(value: Any) -> dict[str, Any] | None:
 
 
 def normalize_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
-    if payload.get("schema_version") == SCHEMA_VERSION:
+    """Normalize a supported legacy or schema-v2 artifact for comparison."""
+    payload = _mapping(payload, "artifact")
+    schema_version = payload.get("schema_version")
+    if schema_version == SCHEMA_VERSION:
         return dict(payload)
+    if schema_version not in (None, 1):
+        raise ArtifactError(f"unsupported benchmark artifact schema: {schema_version!r}")
     if "benchmarks" not in payload:
         raise ArtifactError("artifact has no benchmarks object")
+    legacy_benchmarks = _mapping(payload["benchmarks"], "legacy benchmarks")
+    if not legacy_benchmarks:
+        raise ArtifactError("artifact contains no benchmarks")
 
     normalized = dict(payload)
     normalized["schema_version"] = 1
     normalized_benchmarks: dict[str, Any] = {}
-    for name, old in payload.get("benchmarks", {}).items():
+    for name, old in legacy_benchmarks.items():
+        old = _mapping(old, f"legacy benchmark {name}")
         runtime_results: dict[str, Any] = {}
         for runtime_name in RUNTIME_NAMES:
             wall = _legacy_distribution(old.get(f"{runtime_name}_ms"))
             if wall is None:
                 continue
+            if wall["median"] < 0:
+                raise ArtifactError(f"legacy benchmark {name} has a negative {runtime_name} timing")
             rss = _legacy_distribution(old.get(f"{runtime_name}_rss_kb", 0))
             runtime_results[runtime_name] = {"wall_ms": wall, "rss_kb": rss}
         perry = runtime_results.get("perry")
@@ -199,30 +266,109 @@ def normalize_artifact(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def validate_artifact(payload: Mapping[str, Any], *, require_complete: bool = True) -> None:
+    """Validate schema structure, completeness, and derived distributions."""
     if "benchmarks" not in payload or not isinstance(payload["benchmarks"], Mapping):
         raise ArtifactError("artifact has no benchmarks object")
-    if not require_complete or payload.get("schema_version") != SCHEMA_VERSION:
+    if not payload["benchmarks"]:
+        raise ArtifactError("artifact contains no benchmarks")
+    if payload.get("schema_version") != SCHEMA_VERSION:
         return
-    requested = payload.get("run_config", {}).get("requested_samples")
+    for field in ("commit", "generated_at"):
+        if not isinstance(payload.get(field), str) or not payload[field].strip():
+            raise ArtifactError(f"artifact has invalid {field}")
+    runtimes = _validate_runtime_metadata(payload.get("runtimes"))
+    run_config = _mapping(payload.get("run_config"), "run_config")
+    requested = run_config.get("requested_samples")
     if not isinstance(requested, int) or requested < 2:
         raise ArtifactError("artifact has invalid requested sample count")
+    expected_benchmarks = run_config.get("expected_benchmarks")
+    if (
+        not isinstance(expected_benchmarks, list)
+        or not expected_benchmarks
+        or any(not isinstance(name, str) or not name for name in expected_benchmarks)
+        or len(set(expected_benchmarks)) != len(expected_benchmarks)
+    ):
+        raise ArtifactError("artifact has invalid expected benchmark names")
+    if set(expected_benchmarks) != set(payload["benchmarks"]):
+        missing = sorted(set(expected_benchmarks) - set(payload["benchmarks"]))
+        unexpected = sorted(set(payload["benchmarks"]) - set(expected_benchmarks))
+        raise ArtifactError(
+            f"benchmark set mismatch: missing={missing or 'none'}, unexpected={unexpected or 'none'}"
+        )
     for name, entry in payload["benchmarks"].items():
-        for runtime_name, metadata in payload.get("runtimes", {}).items():
-            if not metadata.get("available"):
+        entry = _mapping(entry, f"benchmark {name}")
+        runtime_results = _mapping(entry.get("runtimes"), f"{name}: runtimes")
+        for runtime_name in RUNTIME_NAMES:
+            metadata = runtimes[runtime_name]
+            if not metadata["available"]:
+                if runtime_name in runtime_results:
+                    raise ArtifactError(f"{name}: unavailable {runtime_name} unexpectedly has samples")
                 continue
-            runtime_result = entry.get("runtimes", {}).get(runtime_name)
+            runtime_result = runtime_results.get(runtime_name)
             if not runtime_result:
                 raise ArtifactError(f"{name}: {runtime_name} has 0/{requested} samples")
+            runtime_result = _mapping(runtime_result, f"{name}: {runtime_name}")
             for metric_name in ("wall_ms", "rss_kb"):
-                metric = runtime_result.get(metric_name, {})
+                metric = _mapping(runtime_result.get(metric_name), f"{name}: {runtime_name} {metric_name}")
                 samples = metric.get("samples", [])
+                if not isinstance(samples, list):
+                    raise ArtifactError(f"{name}: {runtime_name} {metric_name} samples are invalid")
                 if metric.get("sample_count") != requested or len(samples) != requested:
                     raise ArtifactError(
                         f"{name}: {runtime_name} has {len(samples)}/{requested} {metric_name} samples"
                     )
+                recalculated = distribution(samples)
+                for field, value in recalculated.items():
+                    if metric.get(field) != value:
+                        raise ArtifactError(
+                            f"{name}: {runtime_name} {metric_name} has inconsistent {field}"
+                        )
+                if metric_name == "rss_kb" and any(
+                    _number(value, f"{name}: {runtime_name} RSS sample") <= 0 for value in samples
+                ):
+                    raise ArtifactError(f"{name}: {runtime_name} has an invalid zero RSS sample")
+                if metric_name == "wall_ms" and any(
+                    _number(value, f"{name}: {runtime_name} wall sample") < 0 for value in samples
+                ):
+                    raise ArtifactError(f"{name}: {runtime_name} has a negative wall sample")
+        correctness = _mapping(entry.get("correctness"), f"{name}: correctness")
+        correctness_status = correctness.get("status")
+        if correctness_status not in ("pass", "fail", "unchecked"):
+            raise ArtifactError(f"{name}: correctness has an invalid status")
+        if correctness_status == "unchecked" and any(
+            runtimes[peer]["available"] for peer in ("node", "bun")
+        ):
+            raise ArtifactError(f"{name}: correctness is unchecked despite an available peer")
+        reference = correctness.get("reference")
+        if correctness_status in ("pass", "fail") and reference not in ("node", "bun"):
+            raise ArtifactError(f"{name}: correctness has an invalid reference")
+        if correctness_status == "unchecked" and reference not in ("none", "node", "bun"):
+            raise ArtifactError(f"{name}: correctness has an invalid reference")
+        perry_result = runtime_results["perry"]
+        ratios = _mapping(entry.get("ratios"), f"{name}: ratios")
+        for peer in ("node", "bun"):
+            peer_result = runtime_results.get(peer)
+            expected_ratio = _runtime_ratio(perry_result, peer_result) if peer_result else None
+            if ratios.get(f"perry_to_{peer}") != expected_ratio:
+                raise ArtifactError(f"{name}: Perry-to-{peer} ratio is inconsistent")
+        compatibility_values = {
+            "perry_ms": perry_result["wall_ms"]["median"],
+            "perry_rss_kb": perry_result["rss_kb"]["median"],
+        }
+        for peer in ("node", "bun"):
+            if peer in runtime_results:
+                compatibility_values[f"{peer}_ms"] = runtime_results[peer]["wall_ms"]["median"]
+                compatibility_values[f"{peer}_rss_kb"] = runtime_results[peer]["rss_kb"]["median"]
+        if "node" in runtime_results:
+            compatibility_values["speed_ratio"] = ratios["perry_to_node"]["wall_time"]
+            compatibility_values["memory_ratio"] = ratios["perry_to_node"]["rss"]
+        for field, value in compatibility_values.items():
+            if entry.get(field) != value:
+                raise ArtifactError(f"{name}: compatibility field {field} is inconsistent")
 
 
 def load_artifact(path: str | Path, *, require_complete: bool = True) -> dict[str, Any]:
+    """Load, normalize, and validate a benchmark artifact from disk."""
     try:
         with Path(path).open(encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -259,15 +405,30 @@ def _pct_delta(current: Any, baseline: Any) -> float | None:
     return (float(current) - float(baseline)) / float(baseline) * 100.0
 
 
+def _speed_pct_delta(current: Any, baseline: Any) -> float | None:
+    if current is None or baseline is None:
+        return None
+    current_value = float(current)
+    baseline_value = float(baseline)
+    if baseline_value == 0:
+        # Internal suite timers have 1 ms resolution. Treat a zero baseline as
+        # the bottom of that first tick rather than making the row ungateable.
+        return 0.0 if current_value == 0 else current_value * 100.0
+    return (current_value - baseline_value) / baseline_value * 100.0
+
+
 def _metric(entry: Mapping[str, Any], runtime_name: str, metric_name: str) -> Mapping[str, Any] | None:
     return entry.get("runtimes", {}).get(runtime_name, {}).get(metric_name)
 
 
 def _noise_allowance_ms(base_metric: Mapping[str, Any], current_metric: Mapping[str, Any]) -> float:
     # Integer millisecond timers have a one-tick quantization floor. Above that,
-    # use three population standard deviations from this benchmark's own stored
-    # samples instead of one global absolute escape hatch.
-    dispersions = [float(base_metric.get("stdev", 0)), float(current_metric.get("stdev", 0))]
+    # use three robust sigma estimates (MAD × 1.4826) from this benchmark's own
+    # stored samples. A single outlier must not hide a stable median shift.
+    dispersions = [
+        float(base_metric.get("mad", 0)) * 1.4826,
+        float(current_metric.get("mad", 0)) * 1.4826,
+    ]
     return max(1.0, 3.0 * max(dispersions))
 
 
@@ -289,6 +450,21 @@ def _peer_corroborates(delta_values: Sequence[float | None], threshold_pct: floa
     return statistics.median(available) > threshold_pct / 2.0
 
 
+def _peer_metadata_matches(
+    baseline: Mapping[str, Any], current: Mapping[str, Any], peer: str
+) -> bool:
+    base_metadata = baseline.get("runtimes", {}).get(peer)
+    current_metadata = current.get("runtimes", {}).get(peer)
+    if not isinstance(base_metadata, Mapping) or not isinstance(current_metadata, Mapping):
+        return False
+    return (
+        base_metadata.get("available") is True
+        and current_metadata.get("available") is True
+        and base_metadata.get("version") == current_metadata.get("version")
+        and base_metadata.get("command") == current_metadata.get("command")
+    )
+
+
 def evaluate_regressions(
     baseline: Mapping[str, Any],
     current: Mapping[str, Any],
@@ -296,8 +472,16 @@ def evaluate_regressions(
     speed_threshold_pct: float,
     memory_threshold_pct: float,
 ) -> GateReport:
+    """Compare Perry medians using percentage, noise, memory, and peer signals."""
+    for name, value in (
+        ("speed threshold", speed_threshold_pct),
+        ("memory threshold", memory_threshold_pct),
+    ):
+        if _number(value, name) <= 0:
+            raise ArtifactError(f"{name} must be a positive finite number")
     baseline = normalize_artifact(baseline)
     current = normalize_artifact(current)
+    validate_artifact(baseline, require_complete=False)
     validate_artifact(current, require_complete=True)
     rows: list[ComparisonRow] = []
     regressions: list[ComparisonRow] = []
@@ -322,13 +506,21 @@ def evaluate_regressions(
         cur_memory = _metric(cur, "perry", "rss_kb")
         if not base_speed or not cur_speed or not base_memory or not cur_memory:
             raise ArtifactError(f"{name}: Perry speed or RSS distribution missing")
-        speed_pct = _pct_delta(cur_speed["median"], base_speed["median"])
+        speed_pct = _speed_pct_delta(cur_speed["median"], base_speed["median"])
         memory_pct = _pct_delta(cur_memory["median"], base_memory["median"])
         speed_noise = _noise_allowance_ms(base_speed, cur_speed)
         speed_delta_ms = float(cur_speed["median"]) - float(base_speed["median"])
         memory_delta_kb = float(cur_memory["median"]) - float(base_memory["median"])
-        node_ratio_delta = _ratio_delta(base, cur, "node")
-        bun_ratio_delta = _ratio_delta(base, cur, "bun")
+        node_ratio_delta = (
+            _ratio_delta(base, cur, "node")
+            if _peer_metadata_matches(baseline, current, "node")
+            else None
+        )
+        bun_ratio_delta = (
+            _ratio_delta(base, cur, "bun")
+            if _peer_metadata_matches(baseline, current, "bun")
+            else None
+        )
         peer_corroborates = _peer_corroborates(
             (node_ratio_delta, bun_ratio_delta), speed_threshold_pct
         )
@@ -336,13 +528,13 @@ def evaluate_regressions(
         speed_regression = (
             speed_pct is not None
             and speed_pct > speed_threshold_pct
-            and speed_delta_ms > speed_noise
+            and speed_delta_ms >= speed_noise
             and peer_corroborates is not False
         )
         speed_improvement = (
             speed_pct is not None
             and speed_pct < -speed_threshold_pct
-            and -speed_delta_ms > speed_noise
+            and -speed_delta_ms >= speed_noise
         )
         # Memory retains a small OS accounting floor; finding #7 concerns timed
         # regions, not RSS page accounting.
@@ -386,8 +578,28 @@ def summarize_http(
     expected_workloads: Sequence[str] = HTTP_WORKLOADS,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Validate and summarize fixed-load Fastify HTTP samples."""
+    if isinstance(expected_samples, bool) or not isinstance(expected_samples, int) or expected_samples < 1:
+        raise ArtifactError("HTTP expected sample count must be a positive integer")
+    if (
+        "perry" not in expected_runtimes
+        or len(set(expected_runtimes)) != len(expected_runtimes)
+        or any(runtime not in RUNTIME_NAMES for runtime in expected_runtimes)
+    ):
+        raise ArtifactError("HTTP expected runtimes must include Perry exactly once")
+    if (
+        not expected_workloads
+        or len(set(expected_workloads)) != len(expected_workloads)
+        or any(not isinstance(workload, str) or not workload for workload in expected_workloads)
+    ):
+        raise ArtifactError("HTTP expected workloads are empty or duplicated")
+    payload = _mapping(payload, "HTTP artifact")
+    raw_rows = payload.get("rows")
+    if not isinstance(raw_rows, list):
+        raise ArtifactError("HTTP artifact rows must be an array")
     grouped: dict[str, dict[str, list[Mapping[str, Any]]]] = {}
-    for row in payload.get("rows", []):
+    for index, row in enumerate(raw_rows, 1):
+        row = _mapping(row, f"HTTP row {index}")
         workload = str(row.get("workload", ""))
         language = str(row.get("language", ""))
         if not workload.startswith("http_fastify_") or language not in expected_runtimes:
@@ -418,11 +630,17 @@ def summarize_http(
                 raise ArtifactError(f"{workload}: {runtime_name} has {len(failed)} failed HTTP samples")
             required_metrics = ("rps", "p50_ms", "p95_ms", "p99_ms", "success_rate")
             for row in rows:
+                values: dict[str, float] = {}
                 for metric in required_metrics:
                     if metric not in row:
                         raise ArtifactError(f"{workload}: {runtime_name} sample is missing {metric}")
-                    _number(row[metric], f"{workload}: {runtime_name} {metric}")
-                if row["rps"] <= 0 or row["success_rate"] < 0.99:
+                    values[metric] = _number(row[metric], f"{workload}: {runtime_name} {metric}")
+                if (
+                    values["rps"] <= 0
+                    or not 0.99 <= values["success_rate"] <= 1.0
+                    or min(values["p50_ms"], values["p95_ms"], values["p99_ms"]) < 0
+                    or not values["p50_ms"] <= values["p95_ms"] <= values["p99_ms"]
+                ):
                     raise ArtifactError(f"{workload}: {runtime_name} has an unhealthy HTTP sample")
             summaries[runtime_name] = {
                 metric: distribution(row[metric] for row in rows)
@@ -437,6 +655,22 @@ def summarize_http(
                 if peer != "perry"
             },
         }
+    if metadata is not None:
+        metadata = _mapping(metadata, "HTTP metadata")
+        toolchains = _mapping(metadata.get("toolchains"), "HTTP metadata toolchains")
+        commands = _mapping(metadata.get("commands"), "HTTP metadata commands")
+        for toolchain in ("perry", "node", "bun", "oha"):
+            version = toolchains.get(toolchain)
+            if not isinstance(version, str) or not version.strip() or version.startswith("error:"):
+                raise ArtifactError(f"HTTP metadata has no usable {toolchain} version")
+        for command_name in ("perry_http", "perry_http_compile", "node_http", "bun_http", "oha"):
+            command = commands.get(command_name)
+            if (
+                not isinstance(command, list)
+                or not command
+                or any(not isinstance(part, str) or not part for part in command)
+            ):
+                raise ArtifactError(f"HTTP metadata has no pinned {command_name} command")
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -453,7 +687,10 @@ def _format_pct(value: float | None) -> str:
 def _print_report(report: GateReport, baseline: Mapping[str, Any], current: Mapping[str, Any]) -> None:
     print(f"Baseline commit: {baseline.get('commit', '?')} | Current commit: {current.get('commit', '?')}")
     print()
-    print(f"{'Benchmark':<28} {'Correct':>9} {'Speed':>9} {'Noise':>9} {'RAM':>9} {'P/Node':>9} {'P/Bun':>9} {'Status':>12}")
+    print(
+        f"{'Benchmark':<28} {'Correct':>9} {'Speed':>9} {'Noise':>9} "
+        f"{'RAM':>9} {'P/Node':>9} {'P/Bun':>9} {'Status':>12}"
+    )
     print("-" * 102)
     for row in report.rows:
         print(
@@ -504,6 +741,7 @@ def _git_commit() -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run artifact build, comparison, or HTTP summary commands."""
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     build = subparsers.add_parser("build")
@@ -511,6 +749,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     build.add_argument("--runtime-metadata", type=Path, required=True)
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--runs", type=int, required=True)
+    build.add_argument("--expected-benchmarks", required=True)
     compare = subparsers.add_parser("compare")
     compare.add_argument("baseline", type=Path)
     compare.add_argument("current", type=Path)
@@ -520,7 +759,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     http.add_argument("--input", type=Path, required=True)
     http.add_argument("--output", type=Path, required=True)
     http.add_argument("--samples", type=int, required=True)
-    http.add_argument("--metadata", type=Path)
+    http.add_argument("--metadata", type=Path, required=True)
     args = parser.parse_args(argv)
 
     try:
@@ -532,6 +771,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtimes=runtimes,
                 commit=_git_commit(),
                 generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                expected_benchmarks=args.expected_benchmarks.split(","),
             )
             args.output.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
             return 0

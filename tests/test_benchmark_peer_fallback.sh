@@ -32,7 +32,9 @@ while [[ $# -gt 0 ]]; do
   fi
 done
 source_file="$(cd "$(dirname "$source_file")" && pwd)/$(basename "$source_file")"
-printf '#!/usr/bin/env bash\nexec %q %q\n' "$PERRY_FAKE_NODE" "$source_file" >"$output_file"
+source_name="$(basename "$source_file")"
+printf '#!/usr/bin/env bash\n%q %q\nstatus=$?\nif [[ "${PERRY_FAKE_FAIL_SOURCE:-}" == %q ]]; then exit 7; fi\nexit "$status"\n' \
+  "$PERRY_FAKE_NODE" "$source_file" "$source_name" >"$output_file"
 chmod +x "$output_file"
 SH
 chmod +x "$FAKE_PERRY"
@@ -65,5 +67,35 @@ for entry in artifact["benchmarks"].values():
     assert entry["runtimes"]["perry"]["wall_ms"]["sample_count"] == 2
     assert entry["runtimes"]["node"]["wall_ms"]["sample_count"] == 2
 PY
+
+# A process that emits valid timing/correctness output and then exits nonzero
+# must still make the artifact incomplete and fail with the invalid-data code.
+echo 'stale artifact' >"$TMP/failed.json"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+PERRY_BIN="$FAKE_PERRY" \
+PERRY_FAKE_NODE="$NODE_REAL" \
+PERRY_FAKE_FAIL_SOURCE="02_loop_overhead.ts" \
+  "$ROOT/benchmarks/compare.sh" \
+    --quick \
+    --runs 2 \
+    --warn-only \
+    --json-out "$TMP/failed.json" \
+    >"$TMP/failed-output.txt" 2>"$TMP/failed-error.txt"
+failed_status=$?
+set -e
+if [[ "$failed_status" -ne 2 ]]; then
+  cat "$TMP/failed-error.txt" >&2
+  echo "expected failed runtime samples to exit 2, got $failed_status" >&2
+  exit 1
+fi
+if [[ -e "$TMP/failed.json" ]]; then
+  echo "compare.sh left a stale JSON artifact after failed collection" >&2
+  exit 1
+fi
+if [[ -e "$ROOT/benchmarks/suite/02_loop_overhead" ]]; then
+  echo "compare.sh did not clean compiled benchmark artifacts after failure" >&2
+  exit 1
+fi
 
 echo "benchmark Bun-absent fallback: ok"
