@@ -1,5 +1,19 @@
 name: Node Core Subset Radar
 
+# Advisory nightly Node-compat radar (#800). It publishes a parity number and
+# an artifact; it does NOT gate merges or releases, and it deliberately does
+# NOT run on pull_request — it is a heavy, cargo-relinking sweep.
+#
+# #6305: this used to be one serial job that swept all 23 APIs. It never once
+# completed — 38/38 scheduled runs died with exit 143, and the runner's own
+# system log gave the reason: "The runner has received a shutdown signal", i.e.
+# the hosted VM was reclaimed under the job rather than stopped by
+# `timeout-minutes`. When that happens no further step runs — not even an
+# `if: always()` one — so the report was never uploaded and #4975 lost its
+# parity number entirely. The sweep is now split across shards, each shard is
+# bounded by a wall-clock budget it enforces itself, and the report is written
+# incrementally so a partial sweep still publishes a (clearly-flagged) number.
+
 on:
   workflow_dispatch:
     inputs:
@@ -12,8 +26,6 @@ on:
         required: false
         default: "25"
   schedule:
-    # Advisory nightly compatibility radar. It uploads a report but does not
-    # gate merges or releases.
     - cron: "17 3 * * *"
 
 permissions:
@@ -23,13 +35,35 @@ concurrency:
   group: node-core-subset-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # Number of shards. MUST equal the length of `matrix.shard` below — the merge
+  # job uses it to know which per-shard reports to expect, so that a shard whose
+  # runner died outright is detected as missing rather than silently dropped.
+  NODE_CORE_SHARDS: "6"
+  # Bail out of the sweep with a partial-but-flagged report at this many seconds
+  # rather than running until something else kills us. Sized to sit well inside
+  # the job's `timeout-minutes` even after the release build and a cold ext-crate
+  # prewarm (the budget covers the prewarm too).
+  NODE_CORE_TIME_BUDGET: "2400"
+
 jobs:
-  node-core-subset:
+  radar:
+    name: radar (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 75
+    strategy:
+      # One shard blowing its budget must not cancel the others: their numbers
+      # are still worth publishing.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       NODE_CORE_APIS: ${{ github.event_name == 'workflow_dispatch' && inputs.apis || '' }}
       NODE_CORE_MAX_PER_API: ${{ github.event_name == 'workflow_dispatch' && inputs.max_per_api || '25' }}
+      # Without this, Python block-buffers stdout into the Actions pipe and a
+      # killed step shows *zero* output — which is why #6305 was undiagnosable
+      # from the job log for six weeks.
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v7
 
@@ -63,14 +97,66 @@ jobs:
           set -euo pipefail
           args=(
             --root vendor/nodejs
-            --report test-compat/node-core/report.json
+            --report "test-compat/node-core/report-shard-${{ matrix.shard }}.json"
             --max-per-api "$NODE_CORE_MAX_PER_API"
+            --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
+            --time-budget "$NODE_CORE_TIME_BUDGET"
           )
           if [[ -n "$NODE_CORE_APIS" ]]; then
             read -r -a requested_apis <<< "$NODE_CORE_APIS"
             args+=(--api "${requested_apis[@]}")
           fi
           scripts/node_core_subset.py "${args[@]}"
+
+      - name: Runner headroom
+        if: always()
+        run: |
+          # The nightly's terminal symptom was the VM being reclaimed mid-sweep.
+          # If that recurs, this is the evidence we did not have (#6305).
+          df -h / | tail -1
+          free -h | head -2
+
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-core-subset-report-shard-${{ matrix.shard }}
+          path: test-compat/node-core/report-shard-${{ matrix.shard }}.json
+          if-no-files-found: warn
+
+  report:
+    name: merge + publish
+    needs: radar
+    # Publish whatever the shards managed even if some of them failed: a
+    # clearly-flagged lower bound beats the nothing-at-all that #6305 produced.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download shard reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: node-core-subset-report-shard-*
+          merge-multiple: true
+          path: shard-reports
+
+      - name: Merge shard reports
+        run: |
+          set -euo pipefail
+          # Ask for every shard report BY NAME rather than globbing whatever
+          # turned up: a shard whose runner was reclaimed uploads nothing, and
+          # that has to read as a missing shard, not as a smaller sweep. The
+          # merge exits non-zero if any shard is missing or incomplete — but it
+          # writes the aggregate report first, so the number still lands.
+          reports=()
+          for i in $(seq 1 "$NODE_CORE_SHARDS"); do
+            reports+=("shard-reports/report-shard-${i}.json")
+          done
+          scripts/node_core_subset.py \
+            --merge "${reports[@]}" \
+            --report test-compat/node-core/report.json
 
       - name: Write radar summary
         if: always()
@@ -80,15 +166,24 @@ jobs:
           from pathlib import Path
 
           report_path = Path("test-compat/node-core/report.json")
+          print("## Node Core Subset Radar")
+          print("")
           if not report_path.exists():
-              print("## Node Core Subset Radar")
-              print("")
               print("No report was generated.")
               raise SystemExit(0)
 
           report = json.loads(report_path.read_text())
-          print("## Node Core Subset Radar")
-          print("")
+          if not report.get("complete", False):
+              print("> [!WARNING]")
+              print("> **The sweep did not complete** — the parity below is a "
+                    "LOWER BOUND over the tests that actually ran.")
+              for key, label in (("missing_shard_reports", "Missing shard reports"),
+                                 ("unreached_apis", "Never reached"),
+                                 ("partial_apis", "Cut off mid-API")):
+                  if report.get(key):
+                      print(f"> - {label}: `{', '.join(report[key])}`")
+              print("")
+
           print(f"Node corpus: `{report.get('node_pinned', '')}`")
           print(f"Node runtime: `{report.get('node_runtime', '')}`")
           print(f"Parity: `{report.get('parity_pct', 0)}%` over `{report.get('judged', 0)}` judged tests")
