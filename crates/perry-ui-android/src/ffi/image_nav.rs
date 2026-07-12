@@ -98,8 +98,9 @@ pub extern "C" fn perry_ui_widget_set_control_size(handle: i64, size: i64) {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_corner_radius(handle: i64, radius: f64) {
-    widgets::set_corner_radius(handle, radius);
+pub extern "C" fn perry_ui_widget_set_corner_radius(handle: f64, radius: f64) {
+    let h = widgets::decode_js_handle_f64(handle);
+    widgets::set_corner_radius(h, radius);
 }
 
 /// Set drop shadow via Material `setElevation` + (API 28+)
@@ -107,7 +108,7 @@ pub extern "C" fn perry_ui_widget_set_corner_radius(handle: i64, radius: f64) {
 /// `widgets::set_shadow` for the full mapping rationale (issue #185 Phase B).
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_shadow(
-    handle: i64,
+    handle: f64,
     r: f64,
     g: f64,
     b: f64,
@@ -116,23 +117,25 @@ pub extern "C" fn perry_ui_widget_set_shadow(
     offset_x: f64,
     offset_y: f64,
 ) {
-    widgets::set_shadow(handle, r, g, b, a, blur, offset_x, offset_y);
+    let h = widgets::decode_js_handle_f64(handle);
+    widgets::set_shadow(h, r, g, b, a, blur, offset_x, offset_y);
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_background_color(
-    handle: i64,
+    handle: f64,
     r: f64,
     g: f64,
     b: f64,
     a: f64,
 ) {
-    widgets::set_background_color(handle, r, g, b, a);
+    let h = widgets::decode_js_handle_f64(handle);
+    widgets::set_background_color(h, r, g, b, a);
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_background_gradient(
-    handle: i64,
+    handle: f64,
     r1: f64,
     g1: f64,
     b1: f64,
@@ -143,40 +146,45 @@ pub extern "C" fn perry_ui_widget_set_background_gradient(
     a2: f64,
     direction: f64,
 ) {
-    widgets::set_background_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
+    let h = widgets::decode_js_handle_f64(handle);
+    widgets::set_background_gradient(h, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_widget_set_border_color(handle: f64, r: f64, g: f64, b: f64, a: f64) {
     catch_panic_void("perry_ui_widget_set_border_color", || {
-        widgets::set_border_color(handle, r, g, b, a)
+        let h = widgets::decode_js_handle_f64(handle);
+        widgets::set_border_color(h, r, g, b, a)
     });
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_border_width(handle: i64, width: f64) {
+pub extern "C" fn perry_ui_widget_set_border_width(handle: f64, width: f64) {
     catch_panic_void("perry_ui_widget_set_border_width", || {
-        widgets::set_border_width(handle, width)
+        let h = widgets::decode_js_handle_f64(handle);
+        widgets::set_border_width(h, width)
     });
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_edge_insets(
-    handle: i64,
+    handle: f64,
     top: f64,
     left: f64,
     bottom: f64,
     right: f64,
 ) {
     catch_panic_void("perry_ui_widget_set_edge_insets", || {
-        widgets::set_edge_insets(handle, top, left, bottom, right)
+        let h = widgets::decode_js_handle_f64(handle);
+        widgets::set_edge_insets(h, top, left, bottom, right)
     });
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_opacity(handle: i64, alpha: f64) {
+pub extern "C" fn perry_ui_widget_set_opacity(handle: f64, alpha: f64) {
     catch_panic_void("perry_ui_widget_set_opacity", || {
-        widgets::set_opacity(handle, alpha)
+        let h = widgets::decode_js_handle_f64(handle);
+        widgets::set_opacity(h, alpha)
     });
 }
 
