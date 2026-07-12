@@ -828,8 +828,20 @@ pub(super) fn compile_module_entry(
                 // Initial microtask flush (4 rounds) before entering the
                 // event loop — handles fire-and-forget .then() chains that
                 // don't need the full event loop.
+                //
+                // #6077: `js_promise_run_microtasks_event_loop` is
+                // `js_promise_run_microtasks` plus the unhandled-rejection
+                // checkpoint (Node's `processPromiseRejections`), which runs
+                // between the microtask drain and the timer queues. Only the
+                // codegen event loop may use it: this is the one pump whose
+                // caller has a fully unwound JS stack, so "no handler yet" here
+                // really means "no handler this turn" — the runtime's busy-wait
+                // pumps (`for await` over a stream, fs.cp) drain microtasks with
+                // a suspended JS frame on the stack and must NOT report.
                 for _ in 0..4 {
-                    let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                    let _ = ctx
+                        .block()
+                        .call(I32, "js_promise_run_microtasks_event_loop", &[]);
                     let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                     let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                     let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
@@ -880,7 +892,9 @@ pub(super) fn compile_module_entry(
 
                 // loop_body: tick everything, sleep, loop
                 ctx.current_block = body_idx;
-                let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                let _ = ctx
+                    .block()
+                    .call(I32, "js_promise_run_microtasks_event_loop", &[]);
                 let _ = ctx.block().call(I32, "js_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
@@ -907,7 +921,9 @@ pub(super) fn compile_module_entry(
                 let zero_code = "0x0".to_string();
                 ctx.block()
                     .call_void("js_process_emit_before_exit", &[(DOUBLE, &zero_code)]);
-                let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                let _ = ctx
+                    .block()
+                    .call(I32, "js_promise_run_microtasks_event_loop", &[]);
                 let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
