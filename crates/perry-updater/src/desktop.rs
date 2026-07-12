@@ -229,25 +229,41 @@ pub extern "C" fn perry_updater_perform_rollback(target_path_val: i64) -> i64 {
         Some(s) => s,
         None => return 0,
     };
+
+    let mut rename = rename_path;
+    if perform_rollback_with(&target, &mut rename) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Rollback implementation factored for deterministic failure-path tests.
+/// The native ABI above supplies `rename_path`; tests can inject a failed
+/// second rename and verify that the broken executable is restored.
+fn perform_rollback_with<F>(target: &str, rename: &mut F) -> bool
+where
+    F: FnMut(&str, &str) -> std::io::Result<()>,
+{
     let prev = format!("{}.prev", target);
 
     if !std::path::Path::new(&prev).exists() {
-        return 0;
+        return false;
     }
 
     // Move current (likely-broken) target out of the way.
     let broken = format!("{}.broken", target);
     let _ = remove_path(&broken);
-    let _ = rename_path(&target, &broken);
+    let _ = rename(target, &broken);
 
-    if rename_path(&prev, &target).is_err() {
+    if rename(&prev, target).is_err() {
         // Try to put broken back so the system isn't left without an exe.
-        let _ = rename_path(&broken, &target);
-        return 0;
+        let _ = rename(&broken, target);
+        return false;
     }
 
     let _ = remove_path(&broken);
-    1
+    true
 }
 
 fn rename_path(from: &str, to: &str) -> std::io::Result<()> {
@@ -356,6 +372,42 @@ mod tests {
 
         let s = target.to_string_lossy().to_string();
         assert_eq!(perry_updater_perform_rollback(make_str(&s)), 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_rename_failure_restores_broken_target() {
+        let dir = std::env::temp_dir().join(format!(
+            "perry-updater-rb-rename-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app.bin");
+        let prev = format!("{}.prev", target.display());
+        std::fs::write(&target, b"broken-v2").unwrap();
+        std::fs::write(&prev, b"backup-v1").unwrap();
+
+        let target_s = target.to_string_lossy().to_string();
+        let prev_for_failure = prev.clone();
+        let mut rename = move |from: &str, to: &str| {
+            if from == prev_for_failure {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected rollback rename failure",
+                ));
+            }
+            std::fs::rename(from, to)
+        };
+
+        assert!(!perform_rollback_with(&target_s, &mut rename));
+        assert_eq!(std::fs::read(&target).unwrap(), b"broken-v2");
+        assert_eq!(std::fs::read(&prev).unwrap(), b"backup-v1");
+        assert!(!std::path::Path::new(&format!("{}.broken", target.display())).exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }

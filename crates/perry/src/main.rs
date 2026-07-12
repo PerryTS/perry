@@ -161,6 +161,7 @@ enum Commands {
     /// `perry updater keygen` — generate Ed25519 keypair.
     /// `perry updater sign`   — sign a binary for a v2 manifest entry.
     /// `perry updater verify` — sanity-check a v2 signature locally.
+    /// `perry updater sign-cli-manifest` — sign an authenticated CLI update manifest.
     #[cfg(feature = "updater-cli")]
     Updater(commands::updater::UpdaterArgs),
 
@@ -317,6 +318,14 @@ fn install_panic_hook() {
 
 fn main_inner() -> Result<()> {
     env_logger::init();
+    #[cfg(windows)]
+    {
+        let raw_args: Vec<String> = std::env::args().collect();
+        if let Some(result) = update_checker::maybe_run_windows_update_helper(&raw_args) {
+            return result;
+        }
+    }
+    update_checker::recover_interrupted_self_update()?;
 
     // Handle legacy invocation (perry file.ts -o out)
     let args: Vec<String> = std::env::args().collect();

@@ -168,7 +168,20 @@ pub extern "C" fn js_iterator_result_validate(result: f64) -> f64 {
 /// array-memcpy / index-loop arms) so they don't reach this helper.
 #[no_mangle]
 pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
-    if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
+    // `class X extends Array` — the instance is object-backed (a plain
+    // `ObjectHeader` with indexed fields + `length`), but `array_values_iter`
+    // reads a dense `ArrayHeader`. `js_array_is_array` now reports true for such
+    // an instance, so the array branch below would misread it. Iterate a dense
+    // snapshot of its elements instead — UNLESS the subclass declared its own
+    // `[Symbol.iterator]`, in which case fall through (past the `is_array` branch,
+    // which is guarded below) to the generic symbol lookup that resolves the
+    // user's iterator.
+    if crate::array::is_array_subclass_instance(val_f64) {
+        if !crate::array::array_subclass_has_iterator_override(val_f64) {
+            let snapshot = crate::array::array_subclass_dense_snapshot(val_f64);
+            return crate::array::array_values_iter(snapshot);
+        }
+    } else if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
         if !crate::array::array_proto_iterator_modified() {
             return crate::array::array_values_iter(val_f64);
         }

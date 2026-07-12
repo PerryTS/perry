@@ -1197,6 +1197,12 @@ pub(super) fn gc_last_pause_us() -> u64 {
     GC_STATS.with(|stats| stats.borrow().last_pause_us)
 }
 
+/// Total collections so far on this thread. `js_gc_module_idle_hint` compares
+/// this before/after a trigger check to report whether a collection ran.
+pub(super) fn gc_total_collection_count() -> u64 {
+    GC_STATS.with(|stats| stats.borrow().collection_count)
+}
+
 impl GcCollectOutcome {
     #[inline]
     pub(super) fn emit_after_current(self) -> u64 {

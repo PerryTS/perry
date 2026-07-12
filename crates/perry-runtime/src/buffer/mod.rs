@@ -14,6 +14,7 @@ mod coding;
 mod copy_bytes;
 mod copy_write;
 mod dataview;
+mod detach;
 mod encode;
 mod from;
 mod header;
@@ -42,6 +43,13 @@ pub use header::{
 pub(crate) use header::{
     collect_dead_registered_buffers_post_trace, finalize_collected_dead_buffer,
 };
+
+// ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
+// `detach_array_buffer` dereferences the raw address it is given, so it stays
+// crate-internal; only the side-effect-free `is_detached_buffer` probe is
+// part of the public surface.
+pub use detach::is_detached_buffer;
+pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{

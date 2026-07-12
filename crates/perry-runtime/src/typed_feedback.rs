@@ -1071,6 +1071,18 @@ fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     }
 }
 
+/// INVARIANT (load-bearing): every array-like receiver reaching this must carry
+/// a real GcHeader. The address checks below are coarse (band floor, canonical
+/// form, heap range) — none of them proves a header is actually there, and the
+/// `addr - GC_HEADER_SIZE` back-read is taken on faith. Reintroducing an
+/// off-GC-heap allocation tier for small typed arrays or buffers (the pre-#6190
+/// raw-`alloc` tier under the 16 KB threshold) therefore does not fault: it
+/// silently reads whatever heap bytes precede the block, and when they happen to
+/// look like `GC_TYPE_ARRAY` the caller admits a typed array to the inline
+/// plain-`ArrayHeader` raw-slot path, which reinterprets its elements as f64
+/// denormals and sums them as zero (#6136; #6190 made every typed array/buffer a
+/// GC-heap object). Keep that invariant or replace this with an exact registry
+/// lookup — do not weaken it by adding address heuristics here.
 fn gc_header_for_user_addr(addr: usize) -> Option<*const crate::gc::GcHeader> {
     if addr < crate::gc::GC_HEADER_SIZE + 0x1000
         || (addr as u64) >> 48 != 0

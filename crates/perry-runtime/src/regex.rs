@@ -694,6 +694,35 @@ pub extern "C" fn js_regexp_new(
         (*ptr).regex_ptr = regex_ptr;
         (*ptr).pattern_ptr = pattern;
         (*ptr).flags_ptr = canonical_flags_ptr;
+        // `pattern_ptr` / `flags_ptr` are GC-managed StringHeaders — the GC scans
+        // this 2-slot payload range via the magic-tagged RegExp layout, and
+        // `canonical_flags_ptr` (js_string_from_str above) is a freshly-allocated
+        // YOUNG string. They are stored into this malloc'd (old-generation) header
+        // by raw writes; without a write barrier the old→young edge is never
+        // remembered, so a copying minor GC sweeps the string while the retained
+        // RegExp still points at it. The evacuation verifier reports this as an
+        // uncovered object→string edge, and it crashes for real when the freed
+        // slot is later scanned/read (a heavy regex workload — e.g. ANSI/emoji
+        // parsing in a terminal UI — hits it within seconds). Remember both edges,
+        // mirroring every other native-header pointer store (closure captures,
+        // object prototype slots, array headers). `runtime_write_barrier_gc_slot`
+        // detects the malloc parent and only remembers genuinely-young children,
+        // so an already-old/interned `pattern` is a harmless no-op.
+        let regexp_parent_addr = ptr as usize;
+        if !pattern.is_null() {
+            crate::gc::runtime_write_barrier_gc_slot(
+                regexp_parent_addr,
+                std::ptr::addr_of!((*ptr).pattern_ptr) as usize,
+                js_nanbox_string(pattern as i64).to_bits(),
+            );
+        }
+        if !canonical_flags_ptr.is_null() {
+            crate::gc::runtime_write_barrier_gc_slot(
+                regexp_parent_addr,
+                std::ptr::addr_of!((*ptr).flags_ptr) as usize,
+                js_nanbox_string(canonical_flags_ptr as i64).to_bits(),
+            );
+        }
         (*ptr).case_insensitive = case_insensitive;
         (*ptr).global = global;
         (*ptr).multiline = multiline;

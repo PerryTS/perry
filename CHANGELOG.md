@@ -1,3 +1,165 @@
+## v0.5.1258 — fix(thread): compile-time containment for perry/thread worker closures (#6185 Tier 1, PR #6276)
+
+The closure passed to `spawn` / `parallelMap` / `parallelFilter` is now
+rejected at compile time when it hits one of the three cross-heap
+unsoundness triggers catalogued in the 2026-07-09 GC audit (#6185):
+
+1. **Async work** — an async worker closure, a nested async closure, or a
+   stray `await`. The codegen await loop is emitted into every function
+   containing `await`, unconditional on which OS thread runs it, so a worker
+   doing async work pumps the process-global `PENDING_THREAD_RESULTS` /
+   timer queues: it can steal another thread's completion, deserialize it
+   into the worker's arena, and resolve a main-heap promise with a pointer
+   into an arena that is unmapped at worker exit (use-after-free). Detection
+   is `is_async || func_id ∈ hir.async_step_closures` — the
+   async-to-generator transform CLEARS `is_async` when it CPS-rewrites an
+   await-containing closure into a state machine, so the flag alone can't
+   identify one at codegen time; the registry is now threaded through
+   `CrossModuleCtx` into `FnCtx`.
+2. **Nested thread primitives** inside a worker body — same queue-pumping
+   problem, triggered from the worker side.
+3. **Reads of heap-typed module-scope bindings** (object/array literals,
+   `const f = () => ...` helpers, Map/Set, class instances). Module globals
+   are process-wide `@perry_global_*` slots read in place —
+   `compute_auto_captures` deliberately excludes them from capture slots —
+   so a worker aliases the main thread's heap with no synchronization and no
+   rewrite when a moving cycle relocates the object. Primitive globals
+   (number/string/boolean/bigint) stay allowed; `SharedArrayBuffer` globals
+   are exempt (process-global, never-freed `shared_sab` backing — cross-agent
+   sharing is its documented purpose, and the shipped Atomics cross-thread
+   suite reads a top-level SAB from workers).
+
+The walk (`lower_call/closure_analysis.rs::find_thread_hazard_in_body`, wired
+into the existing perry/thread check site in `lower_call/native/mod.rs`)
+recurses into nested closures — anything defined in the worker body executes
+on the worker thread — and delegates expression descent to
+`perry_hir::walker::walk_expr_children`, so a new `Expr` variant can't
+silently skip it. Best-effort by design: an AST walk cannot see through a
+named callee defined outside the worker body; the runtime serializer guards
+(#6188 / #6212) remain the backstop. Owner-tagged runtime dispatch — with the
+Android `nativePumpTick` UI-thread pump special-cased — stays open as the
+Wave-4 follow-up on #6185.
+
+Also: `compile_static_method` now seeds its `FnCtx.local_types` from
+`module_global_types` (mirroring `compile_method` / `compile_function`). It
+previously built the map from params alone, so inside a static method the new
+module-global classifier saw no type information and allowed everything;
+type-aware dispatch in static-method bodies gains the same information.
+
+Behavior change: previously-compiling worker closures doing any of the three
+now fail to compile, with diagnostics naming the sanctioned rewrite (bind the
+global to a function-scope local so it is captured and deep-copied, or declare
+module-level helpers with `function name(...)`). One in-repo casualty:
+`test-parity/node-suite/fs-promises/thread/filehandle-thread-detached-returned.ts`
+read a module-scope `FileHandle` from the worker; rewritten to capture the
+handle through a function-scope binding (byte-identical stdout against the
+checked-in expectation, matching its `-captured` sibling).
+
+New integration suite `crates/perry/tests/issue_6185_thread_worker_closure_guards.rs`
+— 7 negative-compile cases (async worker, awaiting worker, nested async
+closure, nested spawn, module-object read, module-arrow-helper read,
+static-method module-object read) and 5 sanctioned patterns (primitive
+globals, primitive global in a static method, local-copy capture, `function`
+helper, `await spawn(...)` in the enclosing scope). Docs: the threading
+overview gains "Workers Are Synchronous" and "Module-Scope Objects Stay Home".
+
+## v0.5.1257 — feat(runtime): ArrayBuffer.prototype.transfer (ES2024) + perry/gc explicit GC control (#6273)
+
+`transfer(newLength?)` / `transferToFixedLength(newLength?)` / `detached` with
+real memory release: detach zeroes the source header and every registered
+view's length (views report length 0 like Node; `ArrayBuffer.prototype.slice`
+copies — the only view-table entries marked as ArrayBuffers — are skipped and
+survive), records the buffer in a detached side-registry (pruned in
+`finalize_collected_dead_buffer` against the #6080 ABA class), and hands the
+page-aligned interior of the payload back to the OS (`MADV_FREE_REUSABLE` →
+`MADV_FREE` on macOS, `MADV_DONTNEED` on Linux). Buffer bytes live inline in
+the GC old arena, so this is what makes "detach = release" true immediately: a
+256 MB buffer drops the process footprint 291 → 32 MB the moment `transfer(0)`
+runs, while the detached object is still reachable. The GcHeader `size` stays
+untouched — the arena sweep walks the full allocation; only pages entirely
+inside the payload are decommitted. Note macOS accounting: `phys_footprint`
+(Activity Monitor, `vmmap`) drops instantly; `task_info` `resident_size` (what
+`process.memoryUsage().rss` reads) lags until reuse/pressure.
+
+Spec ToIndex ordering honored across the detach surface (CodeRabbit review):
+`ToIndex(newLength/byteOffset/length)` runs BEFORE the IsDetachedBuffer check —
+user `valueOf` code can detach the buffer mid-call — in `transfer`, the
+DataView constructor (including the spec's second re-check after `byteLength`
+coercion), and typed-array view construction. `new Uint8Array(buffer,
+byteOffset, length?)` previously codegen'd a raw `fptosi` cast (object offsets
+never ran `valueOf`; `undefined` length was a -1 sentinel) — it now passes raw
+NaN-boxed args like every other typed-array view kind. structuredClone:
+transfer shares the same detach path (`detached` reports true), cloning an
+already-detached buffer throws `DataCloneError`, transferring one is rejected
+in `collect_transfer_list`, and transfer-list detachment is deferred until the
+whole clone succeeds so a failed clone leaves sources attached.
+
+New `perry/gc` built-in module (runtime-only, `perry/thread` pattern; does not
+resolve under Node/Bun): `collect()` full collection (same as global `gc()`),
+`minor()` synchronous nursery collection returning freed bytes (manual-gc
+guards: unsafe-zone skip + forced conservative scan per #4977), and
+`idleHint()` — runs `gc_check_trigger()` at a caller-declared idle point
+(frame boundary) and reports whether a collection ran; O(1) when nothing is
+due, no new GC invariants. Wired end-to-end: NATIVE_MODULES +
+RUNTIME_ONLY_MODULES + manifest signatures (API docs regenerated), codegen
+native-table rows (buffer proto methods need NO codegen wiring — dispatch is
+by name), `types/perry/gc/index.d.ts` written by `perry init`/`perry types`,
+docs page `docs/src/internals/explicit-memory.md`.
+
+Validation: `test-files/test_gap_arraybuffer_transfer.ts` byte-for-byte vs
+node v26 (move/grow/shrink, error cases, valueOf-detach ordering,
+structuredClone semantics); `test-files/test_perry_gc_module.ts` perry-only
+functional test; full gap suite zero regressions (all 19 mismatches reproduce
+identically on unmodified pre-PR main — 16 triaged, 3 verified pre-existing
+via in-place A/B revert: disposablestack_2875, events_import_4995,
+http_overloads_3226plus).
+
+## v0.5.1256 — fix(hir): user class shadowing a global name loses to the intrinsic in `new` expressions (#6233, PR #6270)
+
+A module-scope `class Symbol extends Base {}` legally shadows the global
+`Symbol`, but the built-in constructor arms in `lower_new`
+(perry-hir `lower/expr_new.rs`) fired by name alone, so `new Symbol()` bound
+to the intrinsic and threw "Symbol is not a constructor" at module init —
+effect's `SchemaAST.ts` declares AST node classes named `Symbol` and `BigInt`,
+so importing the effect barrel crashed under `perry.compilePackages`.
+Depending on the name this crashed (Symbol/BigInt/Proxy/WeakRef/
+FinalizationRegistry/AggregateError) or silently constructed the wrong object
+(Map/Set/Date/Number/String/Boolean/Error/TypeError/Uint8Array/Int32Array:
+native instance, field initializers never ran, `instanceof` the user class
+false). 16 of the issue's 22 blast-radius shapes misbehaved.
+
+Same family as #5912/#5913 (`new URL()`) and #6003 (`class Headers`). Fixes:
+
+- `lower/expr_new.rs`: a `shadowed_by_user_binding` snapshot (class / local /
+  function / imported binding / forward-declared sibling class) taken once at
+  the ident-arm top now gates every built-in constructor arm; the existing
+  Object/Function/URL/URLSearchParams/URLPattern/TextEncoder/TextDecoder
+  guards are unified onto it.
+- Type inference (`lower_types.rs` + `destructuring/var_decl/type_infer.rs`):
+  `new Map()` was typed as the builtin `Generic { base: "Map" }` by name,
+  routing the binding's method calls down the collection intrinsic fast paths
+  (SIGSEGV on a user-class instance). A user class now wins; non-class
+  shadowing bindings (a local, `function Map() {}`, an import) get `Any`,
+  scoped to a conservative `builtin_constructor_inference_name` set so
+  module-export names that legitimately arrive through locals (`Buffer`, the
+  stream/event classes) keep their fast paths. The user-class check is also
+  hoisted above the explicit-type-args early return so a generic user
+  `class Map<T>` never produces the collection-recognizer `Generic` shape.
+- `lower/lower_expr/arm_bin.rs`: the `x instanceof WeakRef |
+  FinalizationRegistry` compile-time fold backs off when the name is shadowed.
+- `lower/pre_scan.rs`: the weak-locals pre-scan no longer tags
+  `const w = new WeakRef(x)` as a native weak instance when a user declaration
+  shadows the constructor name, so `w.deref()` dispatches to the user method.
+- `lower_types.rs` split into `lower_types.rs` + `lower_types/extract.rs`
+  (TS-annotation extraction + decorator lowering) to stay under the
+  2000-line lint cap; pure move with named re-exports.
+
+Regression tests `test_issue_6233_shadowed_global_class_new.ts` (issue repro +
+22-name blast-radius matrix + reserved method names + instanceof) and
+`test_issue_6233_shadowed_global_fn_new.ts` (function/const constructors named
+after builtins) match node byte-for-byte. Targeted parity sweep (~160
+collection/error/weak/url/typed-array tests): no regressions.
+
 ## v0.5.1255 — chore(deps): bump crossbeam-epoch 0.9.18 → 0.9.20 (RUSTSEC-2026-0204)
 
 RUSTSEC-2026-0204 (published 2026-07-06) flags crossbeam-epoch < 0.9.20 for an

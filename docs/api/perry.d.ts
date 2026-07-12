@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1952 entries across 114 modules
+// Coverage: 1955 entries across 115 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2495,6 +2495,15 @@ declare module "perry/container-compose" {
   export function stop(...args: any[]): any;
   /** stdlib */
   export function up(...args: any[]): any;
+}
+
+declare module "perry/gc" {
+  /** stdlib */
+  export function collect(): void;
+  /** stdlib */
+  export function idleHint(): boolean;
+  /** stdlib */
+  export function minor(): number;
 }
 
 declare module "perry/i18n" {

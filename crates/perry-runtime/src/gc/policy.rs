@@ -302,9 +302,17 @@ pub(crate) fn gc_moving_safepoint_enabled() -> bool {
 pub(crate) fn gc_incremental_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        matches!(
+        // DEFAULT ON (#6180 flip): ordinary allocation pressure is collected
+        // by the budgeted incremental stepper — debt-paced assists, sound
+        // across mutator windows (mark barrier + allocate-black + final
+        // remark + drain-before-synchronous), census-free, RSS-parity on
+        // realistic workloads with ~5x lower worst pause. Bounded pauses by
+        // default; the synchronous collector remains for manual gc(),
+        // emergency reclaim, and as the PERRY_GC_INCREMENTAL=0 escape hatch
+        // (bisection / max-throughput batch workloads).
+        !matches!(
             std::env::var("PERRY_GC_INCREMENTAL").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }
@@ -755,25 +763,31 @@ pub(super) fn copied_minor_promotion_handoff_pressure_due(
 }
 
 pub(super) fn copied_minor_promotable_active_survivor_bytes() -> usize {
+    // Pure measurement pass over the active survivor semispace only. Use the
+    // block-filtered walk so blocks outside the active range are skipped in
+    // O(n_blocks) instead of iterating every object in Eden/longlived/old-gen
+    // just to discard it (#6181) — both walkers visit the regions in the same
+    // order with the same global block-index bases, so the filter is exactly
+    // equivalent to the previous in-callback range check.
     let active_range = crate::arena::active_survivor_block_index_range();
     let mut promotable = 0usize;
-    crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
-        if !active_range.contains(&block_idx) {
-            return;
-        }
-        let header = header_ptr as *mut GcHeader;
-        unsafe {
-            let flags = (*header).gc_flags;
-            if flags & GC_FLAG_FORWARDED != 0 {
-                return;
+    crate::arena::arena_walk_objects_filtered(
+        |block_idx| active_range.contains(&block_idx),
+        |header_ptr, _block_idx| {
+            let header = header_ptr as *mut GcHeader;
+            unsafe {
+                let flags = (*header).gc_flags;
+                if flags & GC_FLAG_FORWARDED != 0 {
+                    return;
+                }
+                let prior_age = copied_survival_age((*header)._reserved, flags);
+                let next_age = prior_age.saturating_add(1);
+                if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
+                    promotable = promotable.saturating_add((*header).size as usize);
+                }
             }
-            let prior_age = copied_survival_age((*header)._reserved, flags);
-            let next_age = prior_age.saturating_add(1);
-            if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
-                promotable = promotable.saturating_add((*header).size as usize);
-            }
-        }
-    });
+        },
+    );
     promotable
 }
 
@@ -1875,6 +1889,40 @@ fn manual_gc_collect_now() {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
     crate::weakref::queue_pending_finalization_callbacks_after_gc();
+}
+
+/// `perry/gc` `collect()` — explicit full collection, same semantics as the
+/// global `gc()`. Returns `undefined` so the JS surface has a stable shape.
+#[no_mangle]
+pub extern "C" fn js_gc_module_collect() -> f64 {
+    js_gc_collect();
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `perry/gc` `minor()` — synchronous nursery-only collection; returns the
+/// freed byte count (0 when skipped: unsafe zone or deferred). Like `gc()`,
+/// the callsite may hold live locals only on the native stack, so force the
+/// conservative scan (#4977).
+#[no_mangle]
+pub extern "C" fn js_gc_module_minor() -> f64 {
+    if manual_gc_blocked_by_unsafe_zone() {
+        return 0.0;
+    }
+    let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+    super::gc_collect_minor() as f64
+}
+
+/// `perry/gc` `idleHint()` — frame-boundary pacing hint for latency-sensitive
+/// programs (games, interactive UIs). If a threshold-driven collection is
+/// already due, run it NOW — at a point the caller declared idle — instead of
+/// letting it land mid-frame at an arbitrary allocation site. O(1) when
+/// nothing is due. Returns whether a collection ran.
+#[no_mangle]
+pub extern "C" fn js_gc_module_idle_hint() -> f64 {
+    let before = gc_total_collection_count();
+    gc_check_trigger();
+    let ran = gc_total_collection_count() != before;
+    f64::from_bits(crate::value::JSValue::bool(ran).bits())
 }
 
 pub(super) fn gc_blocked_by_unsafe_zone() -> bool {

@@ -1388,6 +1388,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         &[p_any("p0")],
         TypeSpec::Promise,
     ),
+    // `perry/gc` — explicit GC control. `collect()` runs a full collection
+    // (same as the global `gc()`), `minor()` runs a nursery-only collection
+    // and returns the freed byte count, `idleHint()` runs a threshold-due
+    // collection at a caller-declared idle point (frame boundary) and
+    // returns whether one ran.
+    method_sig("perry/gc", "collect", false, None, &[], TypeSpec::Void),
+    method_sig("perry/gc", "minor", false, None, &[], TypeSpec::Number),
+    method_sig("perry/gc", "idleHint", false, None, &[], TypeSpec::Bool),
     method_sig(
         "lodash",
         "chunk",

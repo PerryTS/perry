@@ -735,6 +735,19 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         }
         None => {}
     }
+    // `class X extends Array` instance — object-backed; spread (`[...sub]`,
+    // `fn(...sub)`) over a dense snapshot of its indexed elements. The generic
+    // `[Symbol.iterator]` lookup below would resolve the inherited array
+    // iterator, which misreads the plain object as a dense `ArrayHeader`.
+    // Matches the Map/Set-subclass branch above. Skipped when the subclass
+    // declared its own `[Symbol.iterator]`, so the override drives the spread
+    // via the generic symbol lookup below.
+    if crate::array::is_array_subclass_instance(value)
+        && !crate::array::array_subclass_has_iterator_override(value)
+    {
+        let snap = crate::array::array_subclass_dense_snapshot(value);
+        return crate::value::js_nanbox_get_pointer(snap) as *mut ArrayHeader;
+    }
     if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
         return crate::typedarray::typed_array_to_array(
             raw_ptr as *const crate::typedarray::TypedArrayHeader,

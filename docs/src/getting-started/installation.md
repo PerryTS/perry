@@ -174,3 +174,29 @@ Run `perry doctor` to verify the toolchain. See the [Windows platform guide](../
 
 - [Write your first program](hello-world.md)
 - [Build a native app](first-app.md)
+
+### Authenticated self-update and release migration
+
+`perry update` only installs a release when the matching
+`<archive>.update.json` is present and validates against a public-key keyring
+compiled into the CLI. The manifest is Ed25519-signed over a domain-separated
+payload that binds the key id, version, platform, artifact name, HTTPS URL,
+SHA-256 digest, and size. Old releases that only publish `*.sha256` sidecars
+are therefore intentionally **not** eligible for automatic installation;
+download them manually from the release page.
+
+Release maintainers must configure these GitHub settings before enabling a
+release: repository variable `PERRY_CLI_UPDATE_PUBLIC_KEYS` (a JSON array of
+`{"key_id":"...","public_key":"<base64-32-byte-Ed25519-key>"}`),
+repository variable `PERRY_CLI_UPDATE_KEY_ID`, and protected secret
+`PERRY_CLI_UPDATE_SIGNING_KEY` (the matching base64 32-byte seed). The workflow
+fails rather than publishing an unsigned manifest when the secret/key id is
+missing. Keep the old public key in the compiled keyring during rotation, sign
+new manifests with the new `key_id`, and remove the old key only after the
+minimum supported CLI has shipped with the replacement.
+
+The updater stages under the install directory with owner-only permissions,
+verifies before extraction, rejects links/path traversal, and restores the old
+binary and libraries after an interrupted transaction. It never recommends
+running the updater with elevated privileges; use the package manager or a
+manual install when the installation directory is not writable.

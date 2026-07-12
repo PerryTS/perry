@@ -128,67 +128,179 @@ pub extern "C" fn js_string_split_n(
 
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-    if delim.is_empty() {
-        // Empty delimiter: split into individual characters (single pass)
-        let mut parts: Vec<*mut StringHeader> = str_data
-            .chars()
-            .map(|c| {
-                let mut buf = [0u8; 4];
-                let char_str = c.encode_utf8(&mut buf);
-                js_string_from_bytes(char_str.as_ptr(), char_str.len() as u32)
-            })
-            .collect();
-        if limit > 0 && (parts.len() as i64) > (limit as i64) {
-            parts.truncate(limit as usize);
-        }
 
-        let arr = crate::array::js_array_alloc(parts.len() as u32);
+    // Per-part metadata inputs, derived ONCE from the source payload.
+    //
+    // NOT `is_ascii_string(s)`: that compares `byte_len == utf16_len` over the
+    // WHOLE source, which malformed bytes can satisfy while the individual
+    // parts do not. For `[0x80, b'|', 0xF0]` the source is 3 == 3 (so the old
+    // check said "ASCII"), but the parts need utf16_len 0 and 2 — the fast path
+    // stamped 1 and 1 onto them, corrupting `.length` and every downstream
+    // index operation. Scan the bytes instead: a genuinely all-ASCII source has
+    // all-ASCII parts, which IS sound per-part.
+    //
+    // Both of these are plain `bool`s, so they stay valid even if a later
+    // allocation moves the source string.
+    let (src_all_ascii, src_has_lone_surrogates) = unsafe {
+        let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+        (
+            bytes.iter().all(|&b| b < 0x80),
+            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+        )
+    };
+
+    if delim.is_empty() {
+        // Empty delimiter: split into individual characters (single pass).
+        //
+        // #6085: `str_data.chars()` decodes through std's UTF-8-validity
+        // assumption (`next_code_point` reads continuation bytes with
+        // `unwrap_unchecked`). Perry payloads are EXACT-SIZED and not
+        // guaranteed valid UTF-8 — a `Buffer`/FFI blob sliced at a byte
+        // delimiter can end in a truncated multi-byte lead — so that walk read
+        // up to 3 bytes past the end of the allocation. Step the raw bytes with
+        // the bounded WTF-8 decoder instead and emit each sequence verbatim;
+        // well-formed input yields byte-identical parts.
+        // Pass 1: count the sequences. No allocation happens here, so the
+        // source payload cannot move under us.
+        let mut n = 0usize;
         unsafe {
-            (*arr).length = parts.len() as u32;
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-            for (i, p) in parts.iter().enumerate() {
-                let nanboxed = STRING_TAG | (*p as u64 & POINTER_MASK);
-                // GC_STORE_AUDIT(BARRIERED): split char slot is immediately recorded via note_array_slot.
-                std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
-                crate::array::note_array_slot(arr, i, nanboxed);
+            let src = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
+            let mut i = 0usize;
+            while i < src.len() {
+                let (advance, _, _) = crate::string::wtf8_step(src, i);
+                i = (i + advance).min(src.len());
+                n += 1;
+                if limit > 0 && n as i64 >= limit as i64 {
+                    break;
+                }
             }
         }
-        return arr;
+
+        // Pass 2: allocate the result array, then fill it slot by slot.
+        //
+        // GC safety: `js_string_from_bytes` allocates, and a collection can
+        // both RECLAIM and (under C4b evacuation) MOVE the source string and
+        // the result array. A raw `*mut StringHeader` parked in a plain `Vec`
+        // is neither a root nor rewritten, so accumulating the parts there and
+        // writing them into the array afterwards is unsound. Root the source
+        // and the array in a `RuntimeHandleScope`, re-read both after every
+        // allocation, and store each part into the (rooted) array immediately —
+        // from then on the array keeps it alive.
+        let arr = crate::array::js_array_alloc(n as u32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s_handle = scope.root_string_ptr(s);
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+
+        let mut i = 0usize;
+        for idx in 0..n {
+            // Copy the sequence into a stack buffer BEFORE allocating:
+            // `js_string_from_bytes` allocates first and copies second, so
+            // handing it a pointer into the GC heap is the #5062 dangling-source
+            // class. A WTF-8 sequence is at most 4 bytes.
+            let mut buf = [0u8; 4];
+            let seq_len;
+            unsafe {
+                let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
+                let src = slice::from_raw_parts(string_data(s_now), (*s_now).byte_len as usize);
+                if i >= src.len() {
+                    break;
+                }
+                let (advance, _, _) = crate::string::wtf8_step(src, i);
+                let end = (i + advance).min(src.len());
+                seq_len = end - i;
+                buf[..seq_len].copy_from_slice(&src[i..end]);
+                i = end;
+            }
+            // `js_string_from_bytes` derives utf16_len from the bytes (correct
+            // even for a malformed sequence) but hardcodes flags = 0. A lone
+            // surrogate carved out of a WTF-8 source must keep its flag, or
+            // `isWellFormed()` on the part wrongly reports true.
+            let seq = &buf[..seq_len];
+            let sh = if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
+                js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
+            } else {
+                js_string_from_bytes(seq.as_ptr(), seq_len as u32)
+            };
+            unsafe {
+                let arr_now = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                let elements_ptr =
+                    (arr_now as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                let nanboxed = STRING_TAG | (sh as u64 & POINTER_MASK);
+                // GC_STORE_AUDIT(BARRIERED): split char slot is immediately recorded via note_array_slot.
+                std::ptr::write(elements_ptr.add(idx), f64::from_bits(nanboxed));
+                crate::array::note_array_slot(arr_now, idx, nanboxed);
+                // Publish the slot only once it holds a real value: `js_array_alloc`
+                // does NOT zero its storage, so a GC that scanned `length = n` up
+                // front would read uninitialized slots as JSValues.
+                (*arr_now).length = (idx + 1) as u32;
+            }
+        }
+        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     }
 
-    // Non-empty delimiter: arena-allocate parts (bump-pointer, no tracking overhead)
-    let mut part_slices: Vec<&str> = str_data.split(delim).collect();
-    if limit > 0 && (part_slices.len() as i64) > (limit as i64) {
-        part_slices.truncate(limit as usize);
+    // Non-empty delimiter: record the parts as BYTE RANGES into the source
+    // payload, not as `&str` slices. `string_storage_alloc` below allocates, and
+    // a collection can move the source string — borrowed slices (and the raw
+    // pointers inside them) would dangle, and `ptr::copy_nonoverlapping` from a
+    // stale address is the #5062 class. Offsets stay valid across a move; the
+    // source address is re-read from a rooted handle on every iteration.
+    let src_base = str_data.as_ptr() as usize;
+    let mut part_ranges: Vec<(usize, usize)> = str_data
+        .split(delim)
+        .map(|part| (part.as_ptr() as usize - src_base, part.len()))
+        .collect();
+    if limit > 0 && (part_ranges.len() as i64) > (limit as i64) {
+        part_ranges.truncate(limit as usize);
     }
-    let n = part_slices.len();
-
-    let src_is_ascii = is_ascii_string(s);
+    let n = part_ranges.len();
 
     let arr = crate::array::js_array_alloc(n as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+
     unsafe {
-        (*arr).length = n as u32;
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        for (i, part) in part_slices.iter().enumerate() {
-            let byte_len = part.len() as u32;
+        for (i, &(offset, byte_len_usize)) in part_ranges.iter().enumerate() {
+            let byte_len = byte_len_usize as u32;
+            // Allocate the destination FIRST (it may move the source), then
+            // re-read the source address before touching its bytes.
             let (sh, data_ptr) = string_storage_alloc(byte_len);
-            let utf16_len = if src_is_ascii {
-                byte_len
+            let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
+            let part_ptr = string_data(s_now).add(offset);
+            // Derive metadata from THIS PART's own bytes. The only shortcut
+            // taken is the all-ASCII one, which was verified by scanning the
+            // source payload (so it holds for every part).
+            let (utf16_len, flags) = if src_all_ascii {
+                (byte_len, 0)
             } else {
-                compute_utf16_len(part.as_ptr(), byte_len)
+                let part_bytes = slice::from_raw_parts(part_ptr, byte_len as usize);
+                let flags = if src_has_lone_surrogates
+                    && crate::string::bytes_have_lone_surrogate(part_bytes)
+                {
+                    STRING_FLAG_HAS_LONE_SURROGATES
+                } else {
+                    0
+                };
+                (compute_utf16_len(part_ptr, byte_len), flags)
             };
-            init_string_header(sh, utf16_len, byte_len, byte_len, 0, 0);
+            init_string_header(sh, utf16_len, byte_len, byte_len, 0, flags);
             if byte_len > 0 {
-                ptr::copy_nonoverlapping(part.as_ptr(), data_ptr, byte_len as usize);
+                ptr::copy_nonoverlapping(part_ptr, data_ptr, byte_len as usize);
             }
+            let arr_now = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            let elements_ptr =
+                (arr_now as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             let nanboxed = STRING_TAG | (sh as u64 & POINTER_MASK);
             // GC_STORE_AUDIT(BARRIERED): split part slot is immediately recorded via note_array_slot.
             std::ptr::write(elements_ptr.add(i), f64::from_bits(nanboxed));
-            crate::array::note_array_slot(arr, i, nanboxed);
+            crate::array::note_array_slot(arr_now, i, nanboxed);
+            // Publish incrementally — `js_array_alloc` leaves the storage
+            // uninitialized, so `length` must never cover an unwritten slot.
+            (*arr_now).length = (i + 1) as u32;
         }
     }
 
-    arr
+    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`

@@ -170,13 +170,8 @@ impl DirtyHeaderSlotScan {
 
         if self.cursor >= self.work.len() {
             unsafe {
-                if self.changed
-                    && gc_type_rewrite_hook_kind((*self.header).obj_type)
-                        == GcRewriteHookKind::SetIndex
-                {
-                    crate::set::rebuild_set_index_for_gc(
-                        self.user_ptr as *mut crate::set::SetHeader,
-                    );
+                if self.changed {
+                    run_gc_rewrite_hook((*self.header).obj_type, self.user_ptr as usize);
                 }
             }
             true

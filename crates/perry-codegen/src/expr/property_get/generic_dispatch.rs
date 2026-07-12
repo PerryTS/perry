@@ -316,6 +316,25 @@ pub(crate) fn lower_generic_property_get(
     let object_type_ok = ctx.block().icmp_eq(I32, &object_type, "1");
     let is_object = ctx.block().and(I1, &is_object, &object_type_ok);
 
+    // #6080: a receiver that has ever had a property/accessor descriptor
+    // installed (`Object.defineProperty`) needs descriptor-aware dispatch —
+    // an accessor must fire on reads, a non-writable slot must reject stores.
+    // The PIC hit path is a raw slot load: if the site was primed on a plain
+    // data property and `defineProperty` later converts that key to a getter
+    // (or a different descriptor), `keys_array` is unchanged, so the stale
+    // hit path would return the raw slot and bypass the getter entirely.
+    // OBJ_FLAG_HAS_DESCRIPTORS lives in the GcHeader `_reserved` i16 at
+    // offset -6; force a miss (→ `js_object_get_field_ic_miss`, which honors
+    // descriptors) whenever it is set. Mirrors the guard in
+    // `class_field_inline_guard.rs`. Cost: 1 sub + load i16 + and + cmp,
+    // folded into the existing `hit` cond_br.
+    let reserved_addr = ctx.block().sub(I64, &safe_obj_handle, "6");
+    let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
+    let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
+    let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048"); // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
+    let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
+    let is_object = ctx.block().and(I1, &is_object, &no_desc);
+
     // Load obj->keys_array at offset 16 of ObjectHeader.
     let keys_addr = ctx.block().add(I64, &safe_obj_handle, "16");
     let keys_ptr_p = ctx.block().inttoptr(I64, &keys_addr);

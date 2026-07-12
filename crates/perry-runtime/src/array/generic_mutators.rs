@@ -90,3 +90,39 @@ fn pushlike_primitive_result(recv: f64, count: usize) -> f64 {
     let o = to_object(recv);
     (al_length(o) + count as i64) as f64
 }
+
+/// `Array.prototype.reduce`/`reduceRight` on an empty array-like with no
+/// initial value throws `TypeError`. Split out of `generic.rs` (called by
+/// `js_arraylike_reduce`/`js_arraylike_reduceRight`) to keep that file under
+/// the 2000-line gate.
+pub(super) fn throw_reduce_empty() -> ! {
+    let msg = b"Reduce of empty array with no initial value";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+/// #5989: `Set`/`Map` fallback for the generic array-like `forEach` engine.
+///
+/// Codegen routes `<expr>.forEach(cb, thisArg)` to `js_arraylike_forEach` when
+/// it cannot statically prove the receiver is a collection — the case for a
+/// member-access receiver such as React's
+/// `renderState.bootstrapScripts.forEach(flushResource, destination)` in
+/// `writePreamble`. A Set/Map is NOT array-like (no `.length`, no
+/// integer-indexed elements), so the array-like loop reads length 0 and
+/// iterates nothing, silently dropping every entry (the Next.js dropped Float
+/// preload-`<link>` bug). This runs the collection's real `forEach` and returns
+/// `true` when `recv` is a *registered* Set/Map; a genuine array-like receiver
+/// returns `false` and falls through to the array-like loop unchanged.
+pub(super) fn arraylike_collection_foreach(recv: f64, cb: f64, this_arg: f64) -> bool {
+    let bits = recv.to_bits();
+    if let Some(set) = crate::set::set_ptr_from_receiver_bits(bits) {
+        crate::set::js_set_foreach(set, cb, this_arg);
+        return true;
+    }
+    if let Some(map) = crate::map::map_ptr_from_receiver_bits(bits) {
+        crate::map::js_map_foreach(map, cb, this_arg);
+        return true;
+    }
+    false
+}

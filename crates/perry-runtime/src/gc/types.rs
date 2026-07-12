@@ -141,6 +141,12 @@ pub(crate) enum GcMoveHookKind {
 pub(crate) enum GcRewriteHookKind {
     None,
     SetIndex,
+    /// Rebuild the Map pointer-key lookup index (`map::MAP_PTR_INDEX`) after
+    /// a GC pass rewrote this Map's entry slots: object/bigint keys are
+    /// indexed by their pointer bits (identity) or pointee content (bigints),
+    /// both of which go stale when the referenced allocation is evacuated.
+    /// Mirrors `SetIndex` (#6084).
+    MapIndex,
 }
 
 #[allow(dead_code)]
@@ -336,7 +342,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcLargeObjectPolicy::NotApplicable,
         false,
         GcMoveHookKind::MapSideTables,
-        GcRewriteHookKind::None,
+        GcRewriteHookKind::MapIndex,
         GcFinalizeHookKind::MapSideAllocation,
     )),
     Some(gc_type_info_entry(
@@ -499,18 +505,25 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcRewriteDescriptorKind::Leaf,
         GcLayoutSlotKind::None,
-        // Non-movable: like Date, a Temporal value is referenced by a NaN-boxed
-        // pointer kept in a plain f64/DOUBLE local that codegen does NOT
-        // shadow-root. The conservative stack scan keeps it alive; a stable
-        // address means that un-rooted pointer never goes stale across a GC.
-        false,
+        // Movable (#6186, completing the Date change from #6214 — the
+        // non-movable rationale above it was disproven there): `movable`
+        // only gates OLD-PAGE DEFRAG, which runs solely inside moving
+        // collections at stack-unwound safepoints; the nursery copied-minor
+        // already relocates Temporal cells. The embedded `temporal_rs` value
+        // survives memcpy (its owned allocations live on the Rust heap and
+        // move by value); from-space bulk resets skip per-object finalizers,
+        // so a moved cell is never double-dropped — `TemporalCleanup` fires
+        // once, wherever the cell finally dies.
+        true,
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::NotApplicable,
         // pointer_free: the embedded `temporal_rs` value is plain integers +
         // `'static` calendar data, never a JSValue. Any Rust-heap it owns is
         // released by the TemporalCleanup finalize hook, not GC tracing.
         true,
-        GcMoveHookKind::None,
+        // Expando rekey on relocation, mirroring Date: no-op when the cell
+        // has no expando entry.
+        GcMoveHookKind::ExoticExpandoOwner,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::TemporalCleanup,
     )),
@@ -575,6 +588,22 @@ pub(crate) fn gc_type_is_pointer_free(obj_type: u8) -> bool {
 #[inline]
 pub(crate) fn gc_type_rewrite_hook_kind(obj_type: u8) -> GcRewriteHookKind {
     gc_type_info(obj_type).map_or(GcRewriteHookKind::None, |info| info.rewrite_hook_kind)
+}
+
+/// Run the post-rewrite hook for `obj_type` after a GC pass changed one or
+/// more of the object's reference slots. Shared by every rewrite call site
+/// (remembered-set dirty-slot scan, copying field scan, verify/force-evacuate
+/// rewrites) so a new hook kind only needs wiring here.
+pub(crate) fn run_gc_rewrite_hook(obj_type: u8, user_ptr: usize) {
+    match gc_type_rewrite_hook_kind(obj_type) {
+        GcRewriteHookKind::None => {}
+        GcRewriteHookKind::SetIndex => {
+            crate::set::rebuild_set_index_for_gc(user_ptr as *mut crate::set::SetHeader);
+        }
+        GcRewriteHookKind::MapIndex => {
+            crate::map::rebuild_map_ptr_index_for_gc(user_ptr as *mut crate::map::MapHeader);
+        }
+    }
 }
 
 pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user: usize) {

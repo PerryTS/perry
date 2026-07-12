@@ -8,6 +8,28 @@ enum LocalWrite {
     NonPointer,
 }
 
+thread_local! {
+    /// #6219 perf: cache each closure body's collected local-writes, keyed by
+    /// the body slice's identity `(ptr, len)`, so a closure subtree is walked
+    /// ONCE total instead of once per enclosing frame. Writes are keyed by
+    /// GLOBAL local id, so the same cached set is correct for every ancestor
+    /// frame AND the closure's own frame — the collection is compositional.
+    ///
+    /// Without this, emitting a shadow frame per closure/method (#6219) made
+    /// each frame's `collect_pointer_typed_locals` re-descend the full nested
+    /// closure subtree, so a body nested `D` deep was walked `O(D)` times —
+    /// `O(nesting²)` overall, which never finished on deeply-nested bundles
+    /// (the Next.js standalone server, thousands of closures 5–10 deep).
+    ///
+    /// Safe because within a single `perry compile` the HIR is alive for the
+    /// whole (parallel) codegen — no body is freed, so no `(ptr, len)` is ever
+    /// reused for a different body; and each closure body is reachable from
+    /// exactly one enclosing tree, so its writes don't depend on the caller.
+    static CLOSURE_WRITES_MEMO: std::cell::RefCell<
+        HashMap<(usize, usize), std::rc::Rc<HashMap<u32, Vec<LocalWrite>>>>,
+    > = std::cell::RefCell::new(HashMap::new());
+}
+
 const MAX_POINTER_ANALYSIS_TYPE_DEPTH: usize = 4;
 
 fn pointer_analysis_type(ty: &Type) -> Type {
@@ -421,6 +443,68 @@ pub fn collect_pointer_typed_locals(
         }
     }
 
+    /// Shallow: ids DECLARED directly in `stmts` (`let` bindings), recursing
+    /// through control-flow blocks but NOT into nested closures. A nested
+    /// closure's locals belong to its own scope, and its own memo entry already
+    /// excludes them, so we stop at the closure boundary.
+    ///
+    /// Used only to decide which of a closure's collected writes are "free"
+    /// (i.e. target a captured outer local) and therefore worth propagating to
+    /// ancestor frames. Approximation is safe in BOTH directions: HIR local ids
+    /// are globally unique, so under-counting here at worst propagates a write
+    /// to an id no ancestor declares (pruned harmlessly), and over-counting at
+    /// worst makes an ancestor slightly more conservative (an extra safe root).
+    fn collect_direct_let_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { id, .. } => {
+                    out.insert(*id);
+                }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    collect_direct_let_ids(then_branch, out);
+                    if let Some(else_branch) = else_branch {
+                        collect_direct_let_ids(else_branch, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    collect_direct_let_ids(body, out);
+                }
+                Stmt::For { init, body, .. } => {
+                    if let Some(init) = init {
+                        collect_direct_let_ids(std::slice::from_ref(init.as_ref()), out);
+                    }
+                    collect_direct_let_ids(body, out);
+                }
+                Stmt::Labeled { body, .. } => {
+                    collect_direct_let_ids(std::slice::from_ref(body.as_ref()), out);
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    collect_direct_let_ids(body, out);
+                    if let Some(catch) = catch {
+                        collect_direct_let_ids(&catch.body, out);
+                    }
+                    if let Some(finally) = finally {
+                        collect_direct_let_ids(finally, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for case in cases {
+                        collect_direct_let_ids(&case.body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn collect_expr_writes(expr: &Expr, writes: &mut HashMap<u32, Vec<LocalWrite>>) {
         match expr {
             Expr::LocalSet(id, rhs) => {
@@ -439,7 +523,40 @@ pub fn collect_pointer_typed_locals(
                         collect_expr_writes(default, writes);
                     }
                 }
-                collect_expr_writes_in_closure_stmts(body, writes);
+                // #6219 perf: collect this closure body's writes at most once
+                // (memoized by body identity) and merge them in, rather than
+                // re-descending the subtree for every enclosing frame. The
+                // recursive `collect_expr_writes_in_closure_stmts` below itself
+                // routes deeper closures through this same arm, so the whole
+                // subtree is computed once and every ancestor reuses the cache.
+                //
+                // The cached set holds only the closure's FREE writes — targets
+                // NOT declared anywhere in this subtree (its params + direct
+                // `let`s; deeper closures' locals are already excluded by their
+                // own cached entries). Those are precisely the writes an ancestor
+                // frame can care about (a captured outer local written from
+                // inside the closure). A write to one of the closure's OWN locals
+                // is resolved by that closure's own analysis, so propagating it up
+                // was pure O(nesting²)-clone waste — the second half of the #6219
+                // codegen blowup, after the redundant re-walk fixed by the memo.
+                let key = (body.as_ptr() as usize, body.len());
+                let cached = CLOSURE_WRITES_MEMO.with(|m| m.borrow().get(&key).cloned());
+                let sub = match cached {
+                    Some(rc) => rc,
+                    None => {
+                        let mut sub_writes: HashMap<u32, Vec<LocalWrite>> = HashMap::new();
+                        collect_expr_writes_in_closure_stmts(body, &mut sub_writes);
+                        let mut own_ids: HashSet<u32> = params.iter().map(|p| p.id).collect();
+                        collect_direct_let_ids(body, &mut own_ids);
+                        sub_writes.retain(|id, _| !own_ids.contains(id));
+                        let rc = std::rc::Rc::new(sub_writes);
+                        CLOSURE_WRITES_MEMO.with(|m| m.borrow_mut().insert(key, rc.clone()));
+                        rc
+                    }
+                };
+                for (id, ws) in sub.iter() {
+                    writes.entry(*id).or_default().extend(ws.iter().cloned());
+                }
             }
             _ => {
                 perry_hir::walker::walk_expr_children(expr, &mut |child| {
@@ -557,6 +674,18 @@ pub fn collect_pointer_typed_locals(
     }
     collect_facts(stmts, &mut local_types, &mut writes);
     super::integer_locals::collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
+    // #6219 perf: the type-inference fixpoint below infers each frame local's
+    // type from its writes. Writes to ids NOT declared in THIS frame (a nested
+    // closure's own locals, pulled in while walking the subtree for captured-
+    // local writes) are resolved by that closure's OWN analysis, so processing
+    // them here is pure redundant work — O(nesting) per closure frame, the
+    // second half of the #6219 codegen blowup (the first being the walk itself,
+    // fixed by CLOSURE_WRITES_MEMO). Prune to this frame's locals (params +
+    // `let`s, all present in `local_types`). This is at worst OVER-inclusive —
+    // a frame local whose write references a pruned id sees that id as unknown
+    // and conservatively keeps its slot — so it never DROPS a shadow slot: no
+    // under-rooting / use-after-free risk, only (rarely) one extra safe root.
+    writes.retain(|id, _| local_types.contains_key(id));
 
     let mut local_value_types: HashMap<u32, Type> = local_types
         .iter()
@@ -579,8 +708,31 @@ pub fn collect_pointer_typed_locals(
         })
         .collect();
 
-    let mut changed = true;
-    while changed {
+    // #6219 perf: BOUND the refinement fixpoint.
+    //
+    // This loop exists only to PROVE additional locals non-pointer (it ONLY
+    // ever GROWS `non_pointer_locals`, below), which lets `walk`/param slots
+    // DROP them from the shadow frame. Every slot decision gates on
+    // `is_ptr_typed(declared_ty) && !non_pointer_locals.contains(id)`, so
+    // curtailing this loop is strictly conservative: a local that would have
+    // been proven non-pointer instead keeps a safe extra root. It never removes
+    // a needed slot — no under-rooting / use-after-free is possible.
+    //
+    // Unbounded (`while changed`) the loop is O(locals × iterations): a long
+    // def-use chain (`a = b; b = c; …`) needs one pass per link. Next.js/webpack
+    // emit whole chunks as a single closure with thousands of locals — pre-#6219
+    // closure bodies were never shadow-analyzed, so this cost is new, and
+    // uncapped (with SipHash-keyed lookups) it never converges: 25 min+ on the
+    // standalone server, still short of LLVM emission. A fixed iteration cap
+    // bounds it while keeping full precision for normal frames (which converge
+    // in a handful of passes); a hard size gate skips refinement entirely on the
+    // pathologically huge frames where even a few passes are wasted work.
+    const MAX_FIXPOINT_ITERS: usize = 16;
+    const MAX_FIXPOINT_LOCALS: usize = 8192;
+    let mut iters = 0usize;
+    let mut changed = writes.len() <= MAX_FIXPOINT_LOCALS;
+    while changed && iters < MAX_FIXPOINT_ITERS {
+        iters += 1;
         changed = false;
         for (id, local_writes) in &writes {
             let mut inferred_ty: Option<Type> = None;

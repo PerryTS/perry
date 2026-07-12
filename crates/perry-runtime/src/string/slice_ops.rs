@@ -212,60 +212,167 @@ pub(crate) fn is_js_whitespace(c: char) -> bool {
     )
 }
 
-/// Trim whitespace from both ends of a string
-#[no_mangle]
-pub extern "C" fn js_string_trim(s: *const StringHeader) -> *mut StringHeader {
+/// Is the WTF-8 sequence starting at `i` a JS whitespace code point?
+/// Returns `(is_whitespace, advance)`.
+///
+/// The sequence must be COMPLETE — fully contained in `bytes` — to count as
+/// whitespace. `wtf8_step` zero-fills continuation bytes that don't exist, so a
+/// truncated tail like `E2 80` would otherwise decode as U+2000 (EN QUAD, which
+/// IS JS whitespace) and `trim`/`trimEnd` would silently eat those bytes. A
+/// truncated tail is therefore treated as non-whitespace and preserved verbatim
+/// — consistent with `case_convert`, which also only maps complete sequences.
+#[inline]
+fn js_whitespace_seq_at(bytes: &[u8], i: usize) -> (bool, usize) {
+    let (advance, units, cp) = crate::string::wtf8_step(bytes, i);
+    let complete = i + advance <= bytes.len();
+    let is_ws = complete && units > 0 && char::from_u32(cp).map(is_js_whitespace).unwrap_or(false);
+    (is_ws, advance)
+}
+
+/// Byte range `[start, end)` of `bytes` after trimming JS whitespace from the
+/// requested ends. Bounds-driven (#6085): decodes with `wtf8_step` instead of
+/// `str::trim_matches`, whose `chars()` walk reads continuation bytes past an
+/// exact-sized payload that ends in a truncated multi-byte lead.
+///
+/// Trimming behavior on valid input is unchanged; a truncated/invalid tail is
+/// never treated as whitespace, so it survives the trim byte-for-byte.
+fn js_whitespace_trim_range(bytes: &[u8], trim_start: bool, trim_end: bool) -> (usize, usize) {
+    let mut start = 0usize;
+    if trim_start {
+        while start < bytes.len() {
+            let (is_ws, advance) = js_whitespace_seq_at(bytes, start);
+            if !is_ws {
+                break;
+            }
+            start = (start + advance).min(bytes.len());
+        }
+    }
+
+    let mut end = bytes.len();
+    if trim_end {
+        // Forward-walk from `start`, remembering the end of the last
+        // non-whitespace sequence. A reverse WTF-8 walk would have to guess
+        // sequence boundaries; this stays O(n) and never reads out of range.
+        let mut i = start;
+        let mut last_non_ws_end = start;
+        while i < bytes.len() {
+            let (is_ws, advance) = js_whitespace_seq_at(bytes, i);
+            let next = (i + advance).min(bytes.len());
+            if !is_ws {
+                last_non_ws_end = next;
+            }
+            i = next;
+        }
+        end = last_non_ws_end;
+    }
+
+    (start, end.max(start))
+}
+
+/// Shared trim entry point over the raw payload bytes.
+fn trim_impl(s: *const StringHeader, trim_start: bool, trim_end: bool) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let (start, end) = js_whitespace_trim_range(bytes, trim_start, trim_end);
+    let out = &bytes[start..end];
+    // Preserve the WTF-8 flag: trimming only removes well-formed whitespace, so
+    // any lone surrogate in the source survives into the result.
+    let flags = unsafe { (*s).flags };
+    if flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+        return js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32);
+    }
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
 
-    let str_data = string_as_str(s);
-    let trimmed = str_data.trim_matches(is_js_whitespace);
-    js_string_from_str(trimmed)
+/// Trim whitespace from both ends of a string
+#[no_mangle]
+pub extern "C" fn js_string_trim(s: *const StringHeader) -> *mut StringHeader {
+    trim_impl(s, true, true)
 }
 
 /// Trim whitespace from start of a string (trimStart/trimLeft)
 #[no_mangle]
 pub extern "C" fn js_string_trim_start(s: *const StringHeader) -> *mut StringHeader {
-    if !is_valid_string_ptr(s) {
-        return js_string_from_bytes(ptr::null(), 0);
-    }
-    let str_data = string_as_str(s);
-    js_string_from_str(str_data.trim_start_matches(is_js_whitespace))
+    trim_impl(s, true, false)
 }
 
 /// Trim whitespace from end of a string (trimEnd/trimRight)
 #[no_mangle]
 pub extern "C" fn js_string_trim_end(s: *const StringHeader) -> *mut StringHeader {
+    trim_impl(s, false, true)
+}
+
+/// Unicode case conversion over the raw payload (#6085).
+///
+/// `str::to_lowercase`/`to_uppercase` iterate `chars()`, which reads
+/// continuation bytes past an exact-sized payload ending in a truncated
+/// multi-byte lead. Decode with the bounded `wtf8_step` instead: sequences that
+/// form a real Unicode scalar get the full `char` case mapping (identical
+/// output for well-formed input, including multi-char expansions like `ß`→`SS`),
+/// while a lone surrogate or a truncated/invalid sequence is copied through
+/// VERBATIM — which also preserves the WTF-8 round-trip (#4793) that the old
+/// `from_utf8_unchecked` path only got by accident.
+fn case_convert(s: *const StringHeader, upper: bool) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
-    let str_data = string_as_str(s);
-    js_string_from_str(str_data.trim_end_matches(is_js_whitespace))
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut has_lone_surrogate = false;
+    let mut buf = [0u8; 4];
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (advance, units, cp) = crate::string::wtf8_step(bytes, i);
+        let end = (i + advance).min(bytes.len());
+        // A sequence is only case-mapped when it decodes to a real scalar value
+        // AND the encoder round-trips it (a truncated tail must not be
+        // "repaired" into a different character).
+        let mapped = if units > 0 && advance == end - i {
+            char::from_u32(cp)
+        } else {
+            None
+        };
+        match mapped {
+            Some(ch) => {
+                if upper {
+                    for c in ch.to_uppercase() {
+                        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    }
+                } else {
+                    for c in ch.to_lowercase() {
+                        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    }
+                }
+            }
+            None => {
+                // Lone surrogate / truncated / stray continuation byte: copy the
+                // raw bytes so the payload round-trips unchanged.
+                if (0xD800..=0xDFFF).contains(&cp) {
+                    has_lone_surrogate = true;
+                }
+                out.extend_from_slice(&bytes[i..end]);
+            }
+        }
+        i = end;
+    }
+    if has_lone_surrogate || unsafe { (*s).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+        return js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32);
+    }
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
 }
 
 /// Convert string to lowercase
 #[no_mangle]
 pub extern "C" fn js_string_to_lower_case(s: *const StringHeader) -> *mut StringHeader {
-    if !is_valid_string_ptr(s) {
-        return js_string_from_bytes(ptr::null(), 0);
-    }
-
-    let str_data = string_as_str(s);
-    let lower = str_data.to_lowercase();
-    js_string_from_str(&lower)
+    case_convert(s, false)
 }
 
 /// Convert string to uppercase
 #[no_mangle]
 pub extern "C" fn js_string_to_upper_case(s: *const StringHeader) -> *mut StringHeader {
-    if !is_valid_string_ptr(s) {
-        return js_string_from_bytes(ptr::null(), 0);
-    }
-
-    let str_data = string_as_str(s);
-    let upper = str_data.to_uppercase();
-    js_string_from_str(&upper)
+    case_convert(s, true)
 }
 
 /// Find index of substring (-1 if not found)

@@ -168,6 +168,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     env:
+      # Public, rotation-capable CLI update keyring baked into every release.
+      # It is intentionally a repository variable (not fetched at runtime).
+      PERRY_CLI_UPDATE_PUBLIC_KEYS: ${{ vars.PERRY_CLI_UPDATE_PUBLIC_KEYS }}
       # Pin the macOS deployment target so bottle object files carry a
       # stable LC_VERSION_MIN / LC_BUILD_VERSION tag regardless of which
       # GitHub runner OS built them. Otherwise users linking against the
@@ -630,6 +633,53 @@ jobs:
           "$hash  ${{ matrix.artifact }}.zip" | Out-File -Encoding ascii "${{ matrix.artifact }}.zip.sha256"
           Get-Content "${{ matrix.artifact }}.zip.sha256"
 
+      # The archive SHA sidecar helps package managers but is not an update
+      # authority. Sign a domain-separated, version/platform/URL/digest/size
+      # bound manifest with the protected Ed25519 release key instead.
+      - name: Sign authenticated CLI update manifest (Unix)
+        if: runner.os != 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
+        env:
+          PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
+          PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PERRY_CLI_UPDATE_SIGNING_KEY:?configure the protected 32-byte base64 Ed25519 signing secret}"
+          : "${PERRY_CLI_UPDATE_KEY_ID:?configure the matching trusted public-key id}"
+          : "${PERRY_CLI_UPDATE_PUBLIC_KEYS:?configure the compiled public-key keyring}"
+          jq -e --arg id "$PERRY_CLI_UPDATE_KEY_ID" '.[] | select(.key_id == $id and (.public_key | length > 0))' <<< "$PERRY_CLI_UPDATE_PUBLIC_KEYS" >/dev/null
+          TAG="$RELEASE_TAG"
+          if [ -z "$TAG" ]; then TAG=$(gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName'); fi
+          ARCHIVE="${{ matrix.artifact }}.tar.gz"
+          URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ARCHIVE}"
+          "target/${{ matrix.target }}/dist/perry" updater sign-cli-manifest \
+            --artifact "$ARCHIVE" --platform "$ARCHIVE" --url "$URL" \
+            --release-version "${TAG#v}" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
+            --secret-key-b64 "$PERRY_CLI_UPDATE_SIGNING_KEY" > "$ARCHIVE.update.json"
+
+      - name: Sign authenticated CLI update manifest (Windows)
+        if: runner.os == 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
+        env:
+          PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
+          PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PERRY_CLI_UPDATE_SIGNING_KEY) { throw 'configure PERRY_CLI_UPDATE_SIGNING_KEY' }
+          if (-not $env:PERRY_CLI_UPDATE_KEY_ID) { throw 'configure PERRY_CLI_UPDATE_KEY_ID' }
+          if (-not $env:PERRY_CLI_UPDATE_PUBLIC_KEYS) { throw 'configure PERRY_CLI_UPDATE_PUBLIC_KEYS' }
+          if (-not (($env:PERRY_CLI_UPDATE_PUBLIC_KEYS | ConvertFrom-Json) | Where-Object { $_.key_id -eq $env:PERRY_CLI_UPDATE_KEY_ID -and $_.public_key })) { throw 'configured key id is not in PERRY_CLI_UPDATE_PUBLIC_KEYS' }
+          $tag = $env:RELEASE_TAG
+          if (-not $tag) { $tag = (gh release list -R "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName') }
+          $archive = "${{ matrix.artifact }}.zip"
+          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$archive"
+          & "target/${{ matrix.target }}/dist/perry.exe" updater sign-cli-manifest `
+            --artifact $archive --platform $archive --url $url `
+            --release-version $tag.TrimStart('v') --key-id $env:PERRY_CLI_UPDATE_KEY_ID `
+            --secret-key-b64 $env:PERRY_CLI_UPDATE_SIGNING_KEY | Out-File -Encoding utf8 "$archive.update.json"
+
       - name: Upload release asset (Unix)
         if: runner.os != 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
         env:
@@ -649,6 +699,7 @@ jobs:
           fi
           gh release upload "$TAG" "${{ matrix.artifact }}.tar.gz" --clobber
           gh release upload "$TAG" "${{ matrix.artifact }}.tar.gz.sha256" --clobber
+          gh release upload "$TAG" "${{ matrix.artifact }}.tar.gz.update.json" --clobber
 
       - name: Upload release asset (Windows)
         if: runner.os == 'Windows' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
@@ -663,6 +714,7 @@ jobs:
           }
           gh release upload "$tag" "${{ matrix.artifact }}.zip" --clobber
           gh release upload "$tag" "${{ matrix.artifact }}.zip.sha256" --clobber
+          gh release upload "$tag" "${{ matrix.artifact }}.zip.update.json" --clobber
 
       - name: Upload build artifact (Unix, for deb + npm-publish jobs)
         if: runner.os != 'Windows'

@@ -93,6 +93,9 @@ fr = "EUR"
 
 [publish]
 server = "https://hub.perryts.com"
+exclude = ["screenshots", "docs"]
+# Deliberately send this input; see the archive safety policy below.
+include = [".env.publish"]
 
 [audit]
 fail_on = "B"
@@ -382,6 +385,25 @@ Publishing configuration.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server` | string | `https://hub.perryts.com` | Custom Perry Hub build server URL. Useful for self-hosted or enterprise deployments |
+| `exclude` | string[] | — | Project-root paths to omit from the upload. A bare name matches only a root entry; a path containing `/` matches that root-relative subtree. |
+| `include` | string[] | — | Project-root paths deliberately restored after automatic file filtering. It cannot override `exclude` or make Perry follow a symlink. |
+
+#### Upload archive safety
+
+`perry publish` and remote `perry run` package only regular files contained in
+their declared roots. Symlinks are never followed or included, whether they
+point inside the project, outside it, form a chain/cycle, or appear inside a
+`file:` dependency. A declared `file:` dependency is its own canonical root,
+so legitimate sibling packages remain supported, but links *inside* that
+dependency cannot escape it.
+
+The archive excludes `.env`, `.env.*`, `.npmrc`, certificate/key containers
+(`.pem`, `.key`, `.p12`, `.pfx`, `.crt`, `.cer`, `.der`, `.jks`, `.keystore`),
+and `service-account*.json` / `service_account*.json` by default. If a remote
+build genuinely needs one of these files, list its exact project-root path in
+`publish.include`; treat that as an intentional credential disclosure. An
+explicit `publish.exclude` always wins. The packed archive also contains a
+machine-readable `.perry/publish-manifest.json` inventory of included files.
 
 ---
 

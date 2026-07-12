@@ -270,6 +270,8 @@ pub(super) struct PublishConfig {
     pub(super) server: Option<String>,
     /// Extra directories to exclude from the upload tarball (e.g. ["screenshots", "docs"])
     pub(super) exclude: Option<Vec<String>>,
+    /// Project-root paths to deliberately upload despite automatic safety filters.
+    pub(super) include: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

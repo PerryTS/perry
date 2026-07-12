@@ -702,30 +702,29 @@ pub extern "C" fn js_array_flatMap(
                 continue;
             };
             let mapped = js_closure_call3(callback, element, i as f64, rooted.receiver());
-            // Check if the mapped value is an array (pointer-tagged)
-            let bits = mapped.to_bits();
-            let top16 = bits >> 48;
-            if top16 == 0x7FFD {
-                // NaN-boxed pointer — likely an array
-                let sub_arr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
-                if !sub_arr.is_null() {
-                    sub_rooted.set_nanbox_f64(mapped);
-                    let sub_len = (*sub_arr).length;
-                    for j in 0..sub_len as usize {
-                        let sub_arr = (sub_rooted.get_nanbox_u64() & crate::value::POINTER_MASK)
-                            as *const ArrayHeader;
-                        let sub_elements = (sub_arr as *const u8)
-                            .add(std::mem::size_of::<ArrayHeader>())
-                            as *const f64;
-                        let Some(sub_element) = present_array_element(sub_elements, j) else {
-                            continue;
-                        };
-                        push_rooted(sub_element);
-                    }
+            // Root first: detecting a lazy array may materialize it, and a
+            // push in the inner loop can move the callback result's target.
+            sub_rooted.set_nanbox_f64(mapped);
+            let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
+            if !sub_arr.is_null() {
+                let sub_len = (*sub_arr).length;
+                for j in 0..sub_len as usize {
+                    // Resolve from the rooted value after each allocation so a
+                    // moved array (or a proxy's moved array target) is never
+                    // read through a stale ArrayHeader pointer.
+                    let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
+                    debug_assert!(!sub_arr.is_null());
+                    let sub_elements = (sub_arr as *const u8)
+                        .add(std::mem::size_of::<ArrayHeader>())
+                        as *const f64;
+                    let Some(sub_element) = present_array_element(sub_elements, j) else {
+                        continue;
+                    };
+                    push_rooted(sub_element);
                 }
             } else {
                 // Not an array — push as single element
-                push_rooted(mapped);
+                push_rooted(sub_rooted.get_nanbox_f64());
             }
         }
 

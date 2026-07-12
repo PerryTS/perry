@@ -73,6 +73,20 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             super::super::has_own_helpers::throw_to_object_nullish_type_error();
         }
 
+        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
+        // Headers/Blob, …) is not an address and must never be dereferenced. It
+        // carries no own properties, so report false. Proxies also live in the
+        // handle band but are served by the trap branch below (which runs before
+        // any deref), so leave their sub-band alone.
+        if obj_js.is_pointer() {
+            let addr = obj_js.as_pointer::<u8>() as usize;
+            if crate::value::addr_class::is_handle_band(addr)
+                && !crate::value::addr_class::is_proxy_id_band(addr)
+            {
+                return f64::from_bits(TAG_FALSE);
+            }
+        }
+
         // ToPropertyKey(V): fold an object argument (e.g. one whose `toString`
         // returns a Symbol) into its canonical key before the symbol/string
         // split. A no-op for keys that are already primitives.

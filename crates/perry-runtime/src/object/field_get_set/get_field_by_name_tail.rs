@@ -261,13 +261,21 @@ pub(crate) fn get_field_by_name_object_tail(
                 // on ArrayBuffer (not DataView/SharedArrayBuffer/typed arrays),
                 // which return `undefined` for them in Node — so scope to a
                 // plain registered ArrayBuffer.
-                if (key_bytes == b"resizable" || key_bytes == b"maxByteLength")
+                if (key_bytes == b"resizable"
+                    || key_bytes == b"maxByteLength"
+                    || key_bytes == b"detached")
                     && crate::buffer::is_array_buffer(obj as usize)
                     && !crate::buffer::is_data_view(obj as usize)
                     && !crate::buffer::is_shared_array_buffer(obj as usize)
                 {
                     if key_bytes == b"resizable" {
                         return JSValue::bool(false);
+                    }
+                    // `detached` (ES2024) — true after a successful
+                    // `transfer`/`transferToFixedLength`/structuredClone
+                    // transfer.
+                    if key_bytes == b"detached" {
+                        return JSValue::bool(crate::buffer::is_detached_buffer(obj as usize));
                     }
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);

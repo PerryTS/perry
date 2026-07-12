@@ -466,11 +466,32 @@ pub unsafe fn dispatch_buffer_method(
         "inspect" => {
             crate::builtins::js_util_inspect(buf_f64, f64::from_bits(crate::value::TAG_UNDEFINED))
         }
+        // ES2024 `ArrayBuffer.prototype.transfer` / `transferToFixedLength`.
+        // Scoped to plain ArrayBuffers: SharedArrayBuffer and Uint8Array/Buffer
+        // receivers don't have these methods in Node, so they keep falling
+        // through to the catch-all like any other unknown method.
+        "transfer" | "transferToFixedLength"
+            if crate::buffer::is_array_buffer(addr)
+                && !crate::buffer::is_shared_array_buffer(addr)
+                && !crate::buffer::is_data_view(addr) =>
+        {
+            crate::buffer::array_buffer_transfer(addr, args)
+        }
         "slice" | "subarray" => {
             let len = (*buf_ptr).length as i32;
             let (start, end) = if crate::buffer::is_array_buffer(addr)
                 || crate::buffer::is_shared_array_buffer(addr)
             {
+                // A detached ArrayBuffer refuses slice with a TypeError
+                // (ES2024 DetachArrayBuffer; `transfer` is the only detach
+                // source in Perry).
+                if crate::buffer::is_detached_buffer(addr)
+                    && !crate::buffer::is_shared_array_buffer(addr)
+                {
+                    crate::collection_iter::throw_type_error(
+                        "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
+                    );
+                }
                 // ArrayBuffer / SharedArrayBuffer.prototype.slice: ToIntegerOrInfinity
                 // on `start` (always) and `end` (defaults to len when undefined),
                 // running an object arg's `valueOf` in left-to-right order. Plain
