@@ -203,21 +203,6 @@ pub struct CompileOptions {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: Vec<String>,
-    /// Issue #321: subset of `namespace_imports` populated by the
-    /// "named import resolves to a `export * as Foo from "./Foo"`" branch
-    /// in `compile.rs`. When the user wrote `import { Effect } from
-    /// "effect"` and effect's index.ts has `export * as Effect from
-    /// "./Effect.js"`, Effect lands in `namespace_imports` (so member
-    /// dispatch works) AND in this set (so the StaticMethodCall codegen
-    /// arm knows it's safe to route var-shape members through
-    /// `js_closure_callN`). Plain `import * as Effect from "./Effect"`
-    /// (used heavily by effect's INTERNAL modules) populates only
-    /// `namespace_imports`, NOT this set — the pre-existing direct-call
-    /// path preserves their long-standing silently-wrong-but-doesn't-throw
-    /// behavior on var-shape static calls (the right fix there is a
-    /// broader audit; doing it together with the named-import fix
-    /// surfaces init-order issues hiding behind the silent-wrong shape).
-    pub namespace_reexport_named_imports: std::collections::HashSet<String>,
     /// Imported class definitions from other native modules, keyed by
     /// the local alias (or original name when no alias). Each entry
     /// carries the class HIR, the module prefix of its origin, and an
@@ -569,8 +554,6 @@ impl ImportedCtor {
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
     pub namespace_imports: std::collections::HashSet<String>,
-    /// Issue #321: see `CompileOptions::namespace_reexport_named_imports`.
-    pub namespace_reexport_named_imports: std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. See doc on
     /// `CompileOptions::namespace_member_prefixes`.
     pub namespace_member_prefixes: std::collections::HashMap<(String, String), String>,

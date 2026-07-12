@@ -433,20 +433,6 @@ fn compute_object_cache_key_with_env(
         );
     }
 
-    // Issue #321: namespace reexport named imports — separate subset that
-    // gates the codegen's StaticMethodCall var-shape routing. Cache must
-    // discriminate between two modules whose `namespace_imports` are
-    // identical but whose `namespace_reexport_named_imports` differ, else
-    // the wrong code-path winds up in the object file.
-    {
-        let mut v: Vec<&String> = opts.namespace_reexport_named_imports.iter().collect();
-        v.sort();
-        h.field(
-            "ns_reexport_named_imports",
-            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(","),
-        );
-    }
-
     // Import function prefixes (HashMap — MUST sort).
     {
         let mut v: Vec<(&String, &String)> = opts.import_function_prefixes.iter().collect();
@@ -1064,7 +1050,6 @@ mod object_cache_tests {
             verify_native_regions: false,
             disable_buffer_fast_path: false,
             namespace_imports: Vec::new(),
-            namespace_reexport_named_imports: std::collections::HashSet::new(),
             imported_classes: Vec::new(),
             imported_enums: Vec::new(),
             imported_async_funcs: std::collections::HashSet::new(),

@@ -448,14 +448,6 @@ pub(crate) struct FnCtx<'a> {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: &'a std::collections::HashSet<String>,
-    /// Issue #321: subset of `namespace_imports` populated only by the
-    /// "named import resolves to a `export * as Foo from "./Foo"`" branch
-    /// in `compile.rs`. The StaticMethodCall arm uses this to decide
-    /// whether to route var-shape members through `js_closure_callN`
-    /// (safe for the user-import shape) vs. preserving the pre-fix
-    /// direct-call (silently-wrong-but-doesn't-throw) path used by
-    /// `import * as` namespaces in effect's internal modules.
-    pub namespace_reexport_named_imports: &'a std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Consulted
     /// by namespace member access lowering to disambiguate when the same

@@ -804,7 +804,6 @@ pub(super) fn compile_closure(
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
-        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,

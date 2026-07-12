@@ -2121,14 +2121,6 @@ pub fn run_with_parse_cache(
                 std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
-            // Issue #321: subset of `namespace_imports` populated only by the
-            // named-import-of-namespace-reexport branch below (`import { Effect
-            // } from "effect"` where effect's index.ts has `export * as Effect
-            // from "./Effect.js"`). The codegen's StaticMethodCall arm consults
-            // this to decide whether it can route var-shape members through
-            // `js_closure_callN`; see the field doc in codegen.rs.
-            let mut namespace_reexport_named_imports: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -2600,13 +2592,6 @@ pub fn run_with_parse_cache(
                                     break;
                                 };
                                 namespace_imports.push(local_name.clone());
-                                // Issue #321: tag this local as a "named-import-
-                                // of-namespace-reexport" so codegen's
-                                // StaticMethodCall arm knows to route var-shape
-                                // members through `js_closure_callN`. See the
-                                // expr.rs StaticMethodCall comment for why this
-                                // is scoped narrowly.
-                                namespace_reexport_named_imports.insert(local_name.clone());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
@@ -2686,7 +2671,9 @@ pub fn run_with_parse_cache(
                                     // else the export name itself.
                                     namespace_member_origin_names.insert(
                                         (local_name.clone(), export_name.clone()),
-                                        resolved_origin_name.unwrap_or_else(|| export_name.clone()),
+                                        resolved_origin_name
+                                            .clone()
+                                            .unwrap_or_else(|| export_name.clone()),
                                     );
 
                                     let key = (origin_path.clone(), export_name.clone());
@@ -2720,7 +2707,15 @@ pub fn run_with_parse_cache(
                                     // `Cannot read properties of undefined`
                                     // on `program._tag`. Mirrors the
                                     // `Namespace { local }` branch above.
-                                    if exported_var_names.contains(&key) {
+                                    let origin_key_under_origin_name = resolved_origin_name
+                                        .as_ref()
+                                        .map(|name| (origin_path.clone(), name.clone()));
+                                    if exported_var_names.contains(&key)
+                                        || origin_key_under_origin_name
+                                            .as_ref()
+                                            .map(|key| exported_var_names.contains(key))
+                                            .unwrap_or(false)
+                                    {
                                         imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
@@ -4034,7 +4029,6 @@ pub fn run_with_parse_cache(
                 verify_native_regions,
                 disable_buffer_fast_path,
                 namespace_imports,
-                namespace_reexport_named_imports,
                 imported_classes,
                 imported_enums,
                 imported_async_funcs: imported_async_set,
