@@ -409,6 +409,9 @@ pub fn handle_activate() {
         if let Some(callback) = *c.borrow() {
             // Unbox NaN-boxed closure (same as callback.rs / iOS/macOS).
             let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
             unsafe {
                 js_closure_call1(ptr, 0.0);
             }
@@ -420,7 +423,11 @@ pub fn handle_activate() {
 pub fn handle_terminate() {
     ON_TERMINATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
+            // Unbox NaN-boxed closure — see invoke0 / callback.rs for details.
             let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
             unsafe {
                 js_closure_call1(ptr, 0.0);
             }

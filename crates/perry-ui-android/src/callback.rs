@@ -136,6 +136,7 @@ pub fn invoke1(key: i64, arg: f64) {
         guard.as_ref().and_then(|m| m.get(&key).copied())
     };
     if let Some(closure_f64) = closure_f64 {
+        // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
             js_closure_call1(closure_ptr, arg);
@@ -150,6 +151,7 @@ pub fn invoke2(key: i64, arg1: f64, arg2: f64) {
         guard.as_ref().and_then(|m| m.get(&key).copied())
     };
     if let Some(closure_f64) = closure_f64 {
+        // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
             js_closure_call2(closure_ptr, arg1, arg2);
@@ -165,6 +167,7 @@ pub fn invoke4(key: i64, arg0: f64, arg1: f64, arg2: f64, arg3: f64) {
         guard.as_ref().and_then(|m| m.get(&key).copied())
     };
     if let Some(closure_f64) = closure_f64 {
+        // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
             js_closure_call4(closure_ptr, arg0, arg1, arg2, arg3);
@@ -182,6 +185,7 @@ pub fn invoke_with_string_array(key: i64, paths: &[String]) {
         guard.as_ref().and_then(|m| m.get(&key).copied())
     };
     if let Some(closure_f64) = closure_f64 {
+        // Unbox NaN-boxed closure — see invoke0 for details.
         let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
         unsafe {
             let mut arr = js_array_alloc(paths.len() as u32);
