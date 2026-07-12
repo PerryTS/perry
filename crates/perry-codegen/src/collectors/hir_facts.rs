@@ -1641,6 +1641,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &constants,
+            &crate::collectors::ModuleDispatchFacts::default(),
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
@@ -1730,6 +1731,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &crate::collectors::ModuleDispatchFacts::default(),
         );
 
         assert!(graph.integer_locals().contains(&1));

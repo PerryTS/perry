@@ -399,3 +399,278 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{ClassField, Function};
+    use perry_types::Type;
+
+    const RECEIVER: u32 = 1;
+
+    /// `class C { value = 14; getValue(): number { return this.value; } }` —
+    /// the exact shape `simple_scalar_method_summary` accepts.
+    fn summarizable_class(name: &str) -> Class {
+        Class {
+            id: 1,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: vec![ClassField {
+                name: "value".to_string(),
+                key_expr: None,
+                ty: Type::Number,
+                init: Some(Expr::Number(14.0)),
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            }],
+            constructor: None,
+            methods: vec![Function {
+                id: 2,
+                name: "getValue".to_string(),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: Type::Number,
+                body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "value".to_string(),
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            }],
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            is_nested: false,
+            aliases: Vec::new(),
+        }
+    }
+
+    fn new_receiver_stmt(class_name: &str) -> Stmt {
+        Stmt::Let {
+            id: RECEIVER,
+            name: "obj".to_string(),
+            ty: Type::Named(class_name.to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: class_name.to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        }
+    }
+
+    fn call_method_stmt(method: &str) -> Stmt {
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(RECEIVER)),
+                property: method.to_string(),
+            }),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))
+    }
+
+    /// `(obj as any).<key> = () => 99` — lowers to `PutValueSet` since #4126.
+    fn own_write_stmt(key: &str) -> Stmt {
+        Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(RECEIVER)),
+            key: Box::new(Expr::String(key.to_string())),
+            value: Box::new(Expr::Number(99.0)),
+            receiver: Box::new(Expr::LocalGet(RECEIVER)),
+            strict: false,
+        })
+    }
+
+    fn escaped_receivers(
+        stmts: &[Stmt],
+        class: &Class,
+        facts: &ModuleDispatchFacts,
+    ) -> HashSet<u32> {
+        let classes = HashMap::from([(class.name.clone(), class)]);
+        let candidates = HashMap::from([(RECEIVER, class.name.clone())]);
+        let mut escaped = HashSet::new();
+        mark_unstable_scalar_method_receivers(stmts, &candidates, &classes, facts, &mut escaped);
+        escaped
+    }
+
+    fn stable_facts() -> ModuleDispatchFacts {
+        ModuleDispatchFacts {
+            prototype_touched_classes: HashSet::new(),
+            opaque_prototype_mutation: false,
+        }
+    }
+
+    #[test]
+    fn summarized_receiver_stays_scalar_replaced_when_lookup_is_stable() {
+        let class = summarizable_class("C");
+        let stmts = vec![new_receiver_stmt("C"), call_method_stmt("getValue")];
+        assert!(escaped_receivers(&stmts, &class, &stable_facts()).is_empty());
+    }
+
+    /// #5872: `const obj = new C(); (obj as any).getValue = () => 99;
+    /// return obj.getValue();` must NOT fold to the field value.
+    #[test]
+    fn own_property_write_shadowing_the_method_escapes_the_receiver() {
+        let class = summarizable_class("C");
+        let stmts = vec![
+            new_receiver_stmt("C"),
+            own_write_stmt("getValue"),
+            call_method_stmt("getValue"),
+        ];
+        assert!(escaped_receivers(&stmts, &class, &stable_facts()).contains(&RECEIVER));
+    }
+
+    /// A write to a *different* own property is a plain field store and must
+    /// keep the receiver scalar-replaced.
+    #[test]
+    fn own_property_write_to_another_name_keeps_scalar_replacement() {
+        let class = summarizable_class("C");
+        let stmts = vec![
+            new_receiver_stmt("C"),
+            own_write_stmt("value"),
+            call_method_stmt("getValue"),
+        ];
+        assert!(escaped_receivers(&stmts, &class, &stable_facts()).is_empty());
+    }
+
+    /// The shadowing write can be nested anywhere in the body (#5872's
+    /// `loopMutationReceiverMethod`).
+    #[test]
+    fn own_property_write_inside_a_loop_escapes_the_receiver() {
+        let class = summarizable_class("C");
+        let stmts = vec![
+            new_receiver_stmt("C"),
+            Stmt::While {
+                condition: Expr::Bool(true),
+                body: vec![own_write_stmt("getValue")],
+            },
+            call_method_stmt("getValue"),
+        ];
+        assert!(escaped_receivers(&stmts, &class, &stable_facts()).contains(&RECEIVER));
+    }
+
+    /// `C.prototype.getValue = fn` in an unrelated function — invisible to a
+    /// per-function walk, which is why the fact set is module-scoped.
+    #[test]
+    fn prototype_mutation_anywhere_in_the_module_escapes_the_receiver() {
+        let class = summarizable_class("C");
+        let mut module = Module::new("m.ts");
+        module.functions.push(Function {
+            id: 9,
+            name: "mutate".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Void,
+            body: vec![Stmt::Expr(Expr::RegisterPrototypeMethod {
+                class_name: "C".to_string(),
+                method_name: "getValue".to_string(),
+                value: Box::new(Expr::Number(114.0)),
+            })],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        module.classes.push(class.clone());
+
+        let facts = collect_module_dispatch_facts(&module);
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(!facts.prototype_is_stable(&classes, "C"));
+
+        let stmts = vec![new_receiver_stmt("C"), call_method_stmt("getValue")];
+        assert!(escaped_receivers(&stmts, &class, &facts).contains(&RECEIVER));
+    }
+
+    /// Merely NAMING a prototype is enough — `Object.defineProperty(C.prototype,
+    /// …)` and `let p = C.prototype; p.m = fn` both go through a `PropertyGet`.
+    #[test]
+    fn naming_a_class_prototype_marks_it_unstable() {
+        let class = summarizable_class("C");
+        let mut module = Module::new("m.ts");
+        module.init.push(Stmt::Expr(Expr::ObjectDefineProperty(
+            Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::ClassRef("C".to_string())),
+                property: "prototype".to_string(),
+            }),
+            Box::new(Expr::String("getValue".to_string())),
+            Box::new(Expr::Undefined),
+        )));
+        module.classes.push(class.clone());
+
+        let facts = collect_module_dispatch_facts(&module);
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(!facts.prototype_is_stable(&classes, "C"));
+    }
+
+    /// A prototype named through something other than a class ref can't be
+    /// attributed, so nothing in the module may be summarized.
+    #[test]
+    fn unattributable_prototype_access_marks_the_module_opaque() {
+        let class = summarizable_class("C");
+        let mut module = Module::new("m.ts");
+        module.init.push(Stmt::Let {
+            id: 7,
+            name: "p".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(6)),
+                property: "prototype".to_string(),
+            }),
+        });
+        module.classes.push(class.clone());
+
+        let facts = collect_module_dispatch_facts(&module);
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(!facts.prototype_is_stable(&classes, "C"));
+    }
+
+    /// An untouched class in a module that mutates a *different* prototype
+    /// keeps its fast path.
+    #[test]
+    fn unrelated_prototype_mutation_leaves_other_classes_stable() {
+        let class = summarizable_class("C");
+        let mut module = Module::new("m.ts");
+        module.init.push(Stmt::Expr(Expr::RegisterPrototypeMethod {
+            class_name: "Other".to_string(),
+            method_name: "getValue".to_string(),
+            value: Box::new(Expr::Number(1.0)),
+        }));
+        module.classes.push(class.clone());
+
+        let facts = collect_module_dispatch_facts(&module);
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(facts.prototype_is_stable(&classes, "C"));
+    }
+
+    #[test]
+    fn default_facts_are_conservative() {
+        let class = summarizable_class("C");
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(!ModuleDispatchFacts::default().prototype_is_stable(&classes, "C"));
+    }
+}
