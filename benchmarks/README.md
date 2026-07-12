@@ -113,6 +113,42 @@ competitive?" Native reference points exist to answer the
 follow-up question: "and how does that compare to giving up
 TypeScript entirely?"
 
+## Regression artifact schema
+
+`compare.sh --json-out <path>` writes schema version 2. This schema is for the
+CI regression signal; it does not refresh any public performance table.
+
+- `run_config.requested_samples` is the exact number required from every
+  available runtime. An incomplete timing or RSS sample set is invalid.
+- `runtimes.{perry,node,bun}` records availability, the observed exact version,
+  and the measured command used (plus Perry's compile command). Bun may be
+  unavailable in a local run; that state is explicit and Node remains the
+  correctness reference. If Node is unavailable, Bun becomes the reference.
+- `benchmarks.<name>.runtimes.<runtime>.{wall_ms,rss_kb}` contains raw
+  `samples`, `sample_count`, `median`, `p95`, `min`, `max`, `mad`, and `stdev`.
+- `benchmarks.<name>.ratios` contains Perry-to-Node and Perry-to-Bun wall-time
+  and RSS ratios. Existing scalar fields such as `perry_ms`, `node_ms`,
+  `speed_ratio`, and `memory_ratio` remain for artifact consumers.
+- `correctness` retains the semantic output evidence and is evaluated before
+  performance results.
+
+The committed `baseline.json` is still the legacy scalar schema until a
+separate, intentional baseline refresh. The gate normalizes that schema when
+reading it, while requiring complete version-2 data from a new run. Timing
+noise is calibrated per benchmark as three times the larger stored population
+standard deviation, with a 1 ms quantization floor; the configured percentage
+threshold must also be exceeded. When the baseline contains Node or Bun data,
+the corresponding peer-relative trend must corroborate the slowdown, which
+controls for runner-wide drift even while the committed baseline is scalar.
+RSS retains its 4 MiB OS-accounting floor.
+
+The workflow also emits `http-fastify-raw.json`, metadata, and a summarized
+`http-fastify.json`. For each kernel/runtime, the summary stores full repeated
+distributions for requests/second, success rate, and p50/p95/p99 latency.
+These fixed-load HTTP results do not use a performance threshold because
+hosted-runner network scheduling is not stable enough for a release gate;
+missing or unhealthy samples still invalidate the tracking artifact.
+
 ---
 
 ## TL;DR

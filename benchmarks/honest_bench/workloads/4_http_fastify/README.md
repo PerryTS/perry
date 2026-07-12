@@ -11,9 +11,10 @@ measured run. Captures req/s, p50/p95/p99 latency, peak RSS.
 | `text` | `GET /` | `'pong'` text/plain | Primitive response fast path — no JSON.stringify, no per-response allocation |
 | `parametric` | `GET /users/:id` | `{id: <param>}` JSON | Router pattern match + per-request params object |
 
-Each kernel ships in two languages: `perry/` (compiles to native binary
-via `perry compile`) and `node/` (run via `node --import tsx`,
-upstream `fastify@^5.2.0` from npm).
+Each kernel ships as a Perry source and a shared runtime-peer source. Perry
+compiles to a native binary; Node runs the peer source through
+`node --import tsx`, and Bun runs that same source through `bun run`. The npm
+fixture pins `fastify@5.8.5`, `tsx@4.22.3`, and `typescript@5.9.3` exactly.
 
 ## Running
 
@@ -51,12 +52,12 @@ HTTP-specific keys:
 `wall_ms` is synthesised as `1_000_000 / rps` so the existing
 `scripts/summary.py` "lower is better" sort still ranks correctly.
 
-## Why no Bun reference output
+## Why no reference output
 
-Output-correctness checks (`harness/check_output.py`) are skipped for
-workload 4. There's no canonical response payload to sha256 — every
-response is `200 OK` with a small known body, and the metric of
-interest is rate, not content. `output_match` is reported as `null`.
+Output-correctness checks (`harness/check_output.py`) are skipped for workload
+4. There is no canonical output file to hash; instead, every measured row must
+serve requests with at least a 99% success rate. Failed or incomplete rows are
+rejected by the CI summary builder. `output_match` remains `null`.
 
 ## Acceptance bar (relative to the Fastify perf work)
 
@@ -65,6 +66,8 @@ It pins a fixed client load (`oha -c 10`) against each kernel so a PR's
 mean `rps` can be compared against the prior PR's run on the same
 hardware. The intent: as the Perry Fastify serving path lands its perf
 fixes, each subsequent PR's mean `rps` must beat the prior PR's run on
-at least one kernel without regressing the others. The Node kernels run
-the same routes on upstream `fastify` as a fixed external reference
-point.
+at least one kernel without regressing the others. The Node and Bun kernels run
+the same routes and pinned Fastify dependency as fixed external reference
+points. CI fixes warmup count, sample count, duration, concurrency, and the
+`oha` version, then persists raw throughput and p50/p95/p99 distributions.
+HTTP signals are tracking-only, not release gates.
