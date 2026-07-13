@@ -16,6 +16,11 @@ const READABLE_ITERATOR_PENDING_KEY: &[u8] = b"__perryReadableIteratorPending";
 const READABLE_ITERATOR_ENDED_KEY: &[u8] = b"__perryReadableIteratorEnded";
 const READABLE_ITERATOR_ERROR_KEY: &[u8] = b"__perryReadableIteratorError";
 const READABLE_ITERATOR_ATTACHED_KEY: &[u8] = b"__perryReadableIteratorAttached";
+/// Marks a readable that is NOT a node:stream Readable — an `fs` read stream or a
+/// child's `stdout`/`stderr`. Those keep their own listener registry and stay
+/// paused until `resume()` is called on the object itself, so the iterator has to
+/// start their flow through the public method rather than node:stream's internal one.
+const FOREIGN_READABLE_KEY: &[u8] = b"__perryForeignReadable";
 const READABLE_ITERATOR_DATA_CB_KEY: &[u8] = b"__perryReadableIteratorDataCb";
 const READABLE_ITERATOR_END_CB_KEY: &[u8] = b"__perryReadableIteratorEndCb";
 const READABLE_ITERATOR_ERROR_CB_KEY: &[u8] = b"__perryReadableIteratorErrorCb";
@@ -387,6 +392,21 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
     // Start flow: delivers any already-buffered chunks via `data` (on the
     // resume/drain microtask) and schedules `end` if the source is finite.
     resume_readable_stream(stream);
+
+    // A foreign readable has no node:stream state for the call above to act on;
+    // it starts reading only when its own `resume()` runs.
+    if has_truthy_hidden(stream, hidden_key(FOREIGN_READABLE_KEY)) {
+        let name = b"resume";
+        unsafe {
+            crate::object::js_native_call_method(
+                stream,
+                name.as_ptr() as *const i8,
+                name.len(),
+                std::ptr::null(),
+                0,
+            );
+        }
+    }
 }
 
 fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &[u8]) {
@@ -556,7 +576,22 @@ fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
     iterator
 }
 
-pub(super) fn install_readable_async_iterator_symbol(stream: f64) {
+/// Install node:stream's async iterator on a readable that is *not* a node:stream
+/// Readable (an `fs` read stream, a child's `stdout`/`stderr`). The iterator is
+/// event-driven — it attaches persistent `data`/`end`/`error` listeners and settles
+/// one promise per pull — so it drives any emitter-backed readable, provided the
+/// source forwards its events into node:stream's registry (see
+/// `node_stream::emit_to_stream_listeners`) and can be resumed via `resume()`.
+pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_key(FOREIGN_READABLE_KEY),
+        f64::from_bits(TAG_TRUE),
+    );
+    install_readable_async_iterator_symbol(stream);
+}
+
+pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
     install_async_iterator_symbol(stream, ns_async_iterator);
 }
 

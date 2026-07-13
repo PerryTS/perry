@@ -200,6 +200,31 @@ fn split_by_empty_delimiter_does_not_read_past_payload() {
     assert_eq!(unsafe { (*arr).length }, 3);
 }
 
+#[test]
+fn scalar_split_helpers_do_not_read_past_payload() {
+    let g = GuardedString::new(&TRUNCATED_TAIL);
+    let empty = js_string_from_bytes(b"".as_ptr(), 0);
+
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(g.ptr(), empty, 0),
+        1.0
+    );
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(g.ptr(), empty, 2),
+        1.0
+    );
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(g.ptr(), empty, 3),
+        0.0
+    );
+
+    let value = super::split::js_string_split_part_value(g.ptr(), empty, 2);
+    let part = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
+    let bytes = unsafe { std::slice::from_raw_parts(string_data(part), (*part).byte_len as usize) };
+    assert_eq!(bytes, &[0xC3]);
+    assert_eq!(unsafe { (*part).utf16_len }, 1);
+}
+
 /// Read back a split part's `(bytes, utf16_len, flags)`.
 fn split_part_meta(arr: *mut crate::array::ArrayHeader, i: u32) -> (Vec<u8>, u32, u32) {
     unsafe {

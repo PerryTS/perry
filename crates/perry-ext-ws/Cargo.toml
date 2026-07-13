@@ -27,4 +27,19 @@ lazy_static = "1.5"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
-perry-runtime = { workspace = true, features = ["external-ws-symbols"] }
+# #6303: perry-runtime MUST be built here with the same feature set the shipped
+# `libperry_runtime.a` / `libperry_stdlib.a` carry (i.e. its `default`). This crate
+# is a `staticlib`, so it BUNDLES the perry-runtime rlib objects into
+# `libperry_ext_*.a` — and perry links the ext archives BEFORE stdlib/runtime
+# (`prefer_well_known_before_stdlib`), so those bundled objects WIN the link for
+# every symbol they define. The workspace dep is `default-features = false`, so
+# without `"default"` here a per-crate `cargo build -p perry-ext-<x>` (exactly what
+# release-packages.yml does in its per-crate loop) bundles a runtime with
+# `regex-engine`/`temporal`/... compiled OUT. The dispatchers those features gate
+# are exported UNCONDITIONALLY (`js_string_replace_search_dyn`,
+# `js_native_call_method`, ...) with the feature-gated logic `#[cfg]`-ed out of the
+# BODY — so the degraded copy silently ToString-coerces a RegExp argument and
+# searches for it literally instead of matching it (str.replace(re, fn) never fires
+# its callback). Keep `"default"` in lock-step with perry-runtime's default feature
+# list; `manifest_ext_runtime_features.rs` guards it.
+perry-runtime = { workspace = true, features = ["default", "external-ws-symbols"] }

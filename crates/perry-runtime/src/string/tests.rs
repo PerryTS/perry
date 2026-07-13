@@ -198,6 +198,13 @@ fn test_string_split() {
     let arr = js_string_split(s, delim);
 
     assert_eq!(js_array_length(arr), 3);
+    // `split` produces a pointer-only result array. Its layout is recorded
+    // once for the initialized prefix rather than through one side-table
+    // update per string element.
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+        Some(3)
+    );
 
     // Get the string pointers from the array and verify their contents
     // Note: split() stores NaN-boxed string pointers with STRING_TAG
@@ -216,6 +223,128 @@ fn test_string_split() {
         assert_eq!((*ptr1).flags, 0);
         assert_eq!((*ptr2).flags, 0);
     }
+
+    // A later non-pointer write must conservatively drop the specialized
+    // pointer-only layout instead of retaining stale pointer assumptions.
+    crate::array::js_array_set_f64(arr, 1, 42.0);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 3),
+        None
+    );
+}
+
+#[test]
+fn test_string_split_part_value() {
+    let s = js_string_from_bytes(b"a,b,c".as_ptr(), 5);
+    let delim = js_string_from_bytes(b",".as_ptr(), 1);
+    let value = super::split::js_string_split_part_value(s, delim, 1);
+    let ptr = (value.to_bits() & crate::value::POINTER_MASK) as *const StringHeader;
+    assert_eq!(string_as_str(ptr), "b");
+    assert_eq!(
+        super::split::js_string_split_part_value(s, delim, 3).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+}
+
+#[test]
+fn test_string_split_part_utf16_length() {
+    let ascii = js_string_from_bytes(b"a,bc,d".as_ptr(), 6);
+    let comma = js_string_from_bytes(b",".as_ptr(), 1);
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(ascii, comma, 1),
+        2.0
+    );
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(ascii, comma, 3),
+        0.0
+    );
+    let trailing = js_string_from_bytes(b"a,".as_ptr(), 2);
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(trailing, comma, 1),
+        0.0
+    );
+
+    let unicode = js_string_from_str("a,😀,d");
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(unicode, comma, 1),
+        2.0
+    );
+
+    let multi = js_string_from_bytes(b"a--bc".as_ptr(), 5);
+    let double_dash = js_string_from_bytes(b"--".as_ptr(), 2);
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(multi, double_dash, 1),
+        2.0
+    );
+}
+
+#[test]
+fn test_scalar_split_parts_derive_malformed_metadata_from_part_bytes() {
+    let source_bytes = [0x80u8, b'|', 0xF0];
+    let source = js_string_from_bytes(source_bytes.as_ptr(), source_bytes.len() as u32);
+    let delimiter = js_string_from_bytes(b"|".as_ptr(), 1);
+
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(source, delimiter, 0),
+        0.0
+    );
+    assert_eq!(
+        super::split::js_string_split_part_utf16_length(source, delimiter, 1),
+        2.0
+    );
+
+    let value = super::split::js_string_split_part_value(source, delimiter, 1);
+    let part = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
+    let bytes = unsafe { slice::from_raw_parts(string_data(part), (*part).byte_len as usize) };
+    assert_eq!(bytes, &[0xF0]);
+    assert_eq!(unsafe { (*part).utf16_len }, 2);
+}
+
+#[test]
+fn test_scalar_split_part_value_preserves_lone_surrogate_flag() {
+    let source_bytes = [0xEDu8, 0xA0, 0x80, b'|', b'A'];
+    let source = js_string_from_wtf8_bytes(source_bytes.as_ptr(), source_bytes.len() as u32);
+    let delimiter = js_string_from_bytes(b"|".as_ptr(), 1);
+
+    let value = super::split::js_string_split_part_value(source, delimiter, 0);
+    let part = crate::value::js_nanbox_get_pointer(value) as *const StringHeader;
+    assert_eq!(
+        unsafe { (*part).flags & STRING_FLAG_HAS_LONE_SURROGATES },
+        STRING_FLAG_HAS_LONE_SURROGATES
+    );
+}
+
+#[test]
+fn test_uppercase_split_length_and_index_of_without_intermediate_string() {
+    let dash = js_string_from_bytes(b"-".as_ptr(), 1);
+    let ascii = js_string_from_bytes(b"item-9".as_ptr(), 6);
+    let nine = js_string_from_bytes(b"9".as_ptr(), 1);
+    assert_eq!(
+        super::split::js_string_to_upper_case_split_part_utf16_length(ascii, dash, 1),
+        1.0
+    );
+    assert_eq!(
+        super::slice_ops::js_string_to_upper_case_index_of(ascii, nine),
+        5
+    );
+
+    let unicode = js_string_from_str("straße-😀");
+    let ss = js_string_from_bytes(b"SS".as_ptr(), 2);
+    assert_eq!(
+        super::split::js_string_to_upper_case_split_part_utf16_length(unicode, dash, 1),
+        2.0
+    );
+    assert_eq!(
+        super::slice_ops::js_string_to_upper_case_index_of(unicode, ss),
+        4
+    );
+
+    let malformed_bytes = [b'a', b'-', 0xF0];
+    let malformed = js_string_from_bytes(malformed_bytes.as_ptr(), malformed_bytes.len() as u32);
+    assert_eq!(
+        super::split::js_string_to_upper_case_split_part_utf16_length(malformed, dash, 1),
+        2.0
+    );
 }
 
 #[test]

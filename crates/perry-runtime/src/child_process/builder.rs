@@ -148,6 +148,20 @@ pub(crate) fn cp_build_readable() -> f64 {
     let val = cp_box_ptr(obj as *const u8);
     cp_set_field(val, b"readable", TAG_TRUE_F64);
     cp_set_field(val, b"destroyed", TAG_FALSE_F64);
+    // A child's `stdout`/`stderr` must be async-iterable, like Node's: both
+    // `for await (const chunk of child.stdout)` and the `isAsyncIterable` probe
+    // every stream-consuming library runs —
+    // `typeof stream[Symbol.asyncIterator] === "function"` — depend on it.
+    // Without the symbol, `get-stream` (used by execa) rejects the stream with
+    // "The first argument must be a Readable, a ReadableStream, or an async
+    // iterable", which silently aborted the background downloads of a large
+    // esbuild-bundled CLI app.
+    //
+    // Reuse node:stream's iterator: it is event-driven (it attaches persistent
+    // `data`/`end`/`error` listeners and settles a promise per pull), so it
+    // drives this emitter-backed object as-is — `cp_emit` forwards to node:stream's
+    // listener registry so those listeners fire.
+    crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(val);
     val
 }
 

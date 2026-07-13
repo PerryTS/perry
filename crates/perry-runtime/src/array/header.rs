@@ -271,6 +271,24 @@ pub(crate) fn scan_array_named_property_roots_mut(visitor: &mut crate::gc::Runti
     });
 }
 
+/// Remove named-property entries whose array owners are provably dead under
+/// the centralized collection-specific liveness policy.
+pub(crate) fn prune_dead_array_named_property_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    ARRAY_NAMED_PROPS.with(|m| {
+        m.borrow_mut().retain(|owner, _| !is_dead_owner(*owner));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_array_named_property_owner_exists(owner: usize) -> bool {
+    ARRAY_NAMED_PROPS.with(|m| m.borrow().contains_key(&owner))
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_array_named_property_roots() {
+    ARRAY_NAMED_PROPS.with(|m| m.borrow_mut().clear());
+}
+
 unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
     if key.is_null() {
         return None;

@@ -612,6 +612,23 @@ fn test_typed_shape_descriptor_transfers_on_object_move() {
 }
 
 #[test]
+fn test_all_pointer_layout_transfers_on_array_move() {
+    clear_marks();
+    clear_mark_seeds();
+
+    let src = crate::array::js_array_alloc_pointer_elements(2);
+    let dst = crate::array::js_array_alloc(2);
+    unsafe {
+        layout_transfer(src as *mut u8, dst as *mut u8);
+    }
+
+    assert_eq!(test_layout_pointer_slot_count(dst as usize, 2), Some(2));
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
+#[test]
 fn test_unboxed_object_layout_scans_zero_raw_numeric_fields() {
     clear_marks();
     clear_mark_seeds();

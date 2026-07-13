@@ -26,6 +26,7 @@ use anyhow::{anyhow, Result};
 use swc_ecma_ast as ast;
 
 use crate::ir::{BinaryOp, Expr, UpdateOp};
+use crate::lower::expr_assign::throw_type_error_const_assignment;
 use crate::lower_patterns::unescape_template;
 
 use super::{lower_expr, LoweringContext};
@@ -130,13 +131,19 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         ast::UpdateOp::MinusMinus => BinaryOp::Sub,
     };
 
-    // Unwrap compile-time-only wrappers: `obj.x!++` (TS non-null assertion) and
-    // `(obj.x)++` (parenthesized) are transparent to update-expression lowering.
+    // Unwrap compile-time-only wrappers: `obj.x!++` (TS non-null assertion),
+    // `(obj.x)++` (parenthesized) and the TS casts (`(x as any)++`,
+    // `(<any>x)++`, `(x satisfies number)++`) are all transparent to
+    // update-expression lowering (#6300 — the cast forms previously fell
+    // through to the "only identifiers and member expressions" error).
     let mut arg = update.arg.as_ref();
     loop {
         match arg {
             ast::Expr::TsNonNull(inner) => arg = inner.expr.as_ref(),
             ast::Expr::Paren(inner) => arg = inner.expr.as_ref(),
+            ast::Expr::TsAs(inner) => arg = inner.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(inner) => arg = inner.expr.as_ref(),
+            ast::Expr::TsSatisfies(inner) => arg = inner.expr.as_ref(),
             _ => break,
         }
     }
@@ -174,6 +181,36 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                     byte_offset: 0,
                 });
             };
+            if ctx.is_local_immutable(id) {
+                // #6300: `const c = 1; c++` (and `(c as any)--`, `(c!)++`, …) is
+                // a PutValue on an immutable binding →
+                // `TypeError: Assignment to constant variable.` Emitting
+                // `Expr::Update` here silently mutated the `const` instead.
+                //
+                // The throw is NOT unconditional-first: per ES `++`/`--`
+                // (13.4.2.1 / 13.4.3.1) the operand is run through
+                // `ToNumeric(GetValue(lhs))` *before* `PutValue` rejects the
+                // immutable binding, and that coercion is itself observable —
+                // `const s = Symbol(); s++` throws "Cannot convert a Symbol
+                // value to a number", not the const TypeError (a BigInt, by
+                // contrast, passes ToNumeric cleanly and does get the const
+                // TypeError). Sequence the same `js_to_numeric` the normal
+                // update path uses in front of the throw so both orders match
+                // V8.
+                return Ok(Expr::Sequence(vec![
+                    Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_to_numeric".to_string(),
+                            param_types: vec![perry_types::Type::Any],
+                            return_type: perry_types::Type::Any,
+                        }),
+                        args: vec![Expr::LocalGet(id)],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    },
+                    throw_type_error_const_assignment(&name),
+                ]));
+            }
             let op = match update.op {
                 ast::UpdateOp::PlusPlus => UpdateOp::Increment,
                 ast::UpdateOp::MinusMinus => UpdateOp::Decrement,

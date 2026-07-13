@@ -872,6 +872,16 @@ pub(crate) struct FnCtx<'a> {
     /// `PropertyGet LocalGet(id), "length"` folds to the constant N.
     pub scalar_replaced_arrays: std::collections::HashMap<u32, Vec<String>>,
 
+    /// Scalar-replaced string-split parts whose only observed property is
+    /// `.length`. These slots hold the already-boxed numeric length, allowing
+    /// PropertyGet to bypass construction of a temporary StringHeader.
+    pub scalar_replaced_split_part_lengths:
+        std::collections::HashMap<u32, std::collections::HashMap<u32, String>>,
+
+    /// A non-escaping uppercase result represented by a slot holding its
+    /// original receiver. Only fused string operations may consume it.
+    pub scalar_replaced_uppercase_sources: std::collections::HashMap<u32, String>,
+
     /// Non-escaping array literals identified by escape analysis. Maps
     /// local_id → length. Used by the Stmt::Let lowering to intercept
     /// `let arr = [a, b, c]` and emit per-index allocas instead of a
@@ -879,6 +889,9 @@ pub(crate) struct FnCtx<'a> {
     pub non_escaping_arrays: std::collections::HashMap<u32, u32>,
     pub non_escaping_array_used_indices:
         std::collections::HashMap<u32, std::collections::HashSet<u32>>,
+    pub non_escaping_array_length_only_indices:
+        std::collections::HashMap<u32, std::collections::HashSet<u32>>,
+    pub fusible_uppercase_locals: std::collections::HashSet<u32>,
 
     /// Non-escaping object literals identified by escape analysis. Maps
     /// local_id → field names (declaration order, deduplicated). Used by

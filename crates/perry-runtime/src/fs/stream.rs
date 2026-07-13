@@ -582,6 +582,26 @@ fn callbacks_for_event(id: usize, event: &str) -> Vec<f64> {
     })
 }
 
+/// Forward `event` to node:stream's listener registry for this stream's object.
+///
+/// A read stream carries node:stream's async iterator (installed in
+/// `js_fs_create_read_stream`), and that iterator's `data`/`end`/`error`
+/// listeners register in node:stream's registry — not the per-id one above. Without
+/// this, `for await (const chunk of fs.createReadStream(p))` would hang forever.
+fn bridge_to_stream_listeners(id: usize, event: &str, args: &[f64]) {
+    let object_value = STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .map(|state| state.object_value)
+            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+    });
+    if object_value.to_bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    crate::node_stream::emit_to_stream_listeners(object_value, event.as_bytes(), args);
+}
+
 fn emit_event0(id: usize, event: &str) {
     use crate::closure::js_closure_call0;
     let callbacks = callbacks_for_event(id, event);
@@ -591,6 +611,7 @@ fn emit_event0(id: usize, event: &str) {
             js_closure_call0(cb_ptr);
         }
     }
+    bridge_to_stream_listeners(id, event, &[]);
 }
 
 fn emit_event1(id: usize, event: &str, arg: f64) {
@@ -602,6 +623,7 @@ fn emit_event1(id: usize, event: &str, arg: f64) {
             js_closure_call1(cb_ptr, arg);
         }
     }
+    bridge_to_stream_listeners(id, event, &[arg]);
 }
 
 fn call_js_method0(receiver: f64, name: &[u8]) -> f64 {
@@ -1649,6 +1671,12 @@ fn create_read_stream_with_state(state: StreamState) -> f64 {
             update_common_props(state);
         }
     });
+    // Like Node's, a read stream must be async-iterable: `for await (const chunk of
+    // fs.createReadStream(p))`, and the `typeof stream[Symbol.asyncIterator] ===
+    // "function"` probe that stream-consuming libraries run before accepting a
+    // stream at all. `emit_event0`/`emit_event1` forward to node:stream's listener
+    // registry so the iterator this installs actually receives the chunks.
+    crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(value);
     value
 }
 

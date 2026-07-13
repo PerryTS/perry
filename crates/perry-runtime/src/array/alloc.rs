@@ -54,6 +54,35 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     ptr
 }
 
+/// Allocate a fresh array whose initialized prefix is known to contain only
+/// heap pointers. Runtime producers such as `String.prototype.split` use this
+/// instead of starting as a raw-f64 array and immediately invalidating that
+/// representation on their first string store.
+///
+/// The caller must grow `length` only after writing each pointer slot. That
+/// keeps the all-pointer layout precise if allocation triggers a collection
+/// while the result is being materialized.
+pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        // Arena slots can be reused after a raw-f64 array. The all-pointer
+        // layout owns the same header, so clear numeric representation flags
+        // before publishing it as pointer-only.
+        clear_array_numeric_layout(ptr);
+        crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
+    }
+
+    ptr
+}
+
 /// Create a new empty array (convenience alias for `js_array_alloc(0)`).
 /// Used by perry-ui audio code.
 #[no_mangle]

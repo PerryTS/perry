@@ -30,6 +30,38 @@ pub fn is_registered_map_iterator(addr: usize) -> bool {
     MAP_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
 }
 
+/// Rekey legacy materialized-iterator brands after array evacuation without
+/// treating the metadata key as a root.
+pub(crate) fn scan_map_iterator_array_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    MAP_ITERATOR_ARRAYS.with(|r| {
+        let mut arrays = r.borrow_mut();
+        let mut moved = Vec::new();
+        for old_addr in arrays.iter().copied() {
+            let mut new_addr = old_addr;
+            if visitor.visit_metadata_usize_slot(&mut new_addr) {
+                moved.push((old_addr, new_addr));
+            }
+        }
+        for (old_addr, new_addr) in moved {
+            arrays.remove(&old_addr);
+            arrays.insert(new_addr);
+        }
+    });
+}
+
+/// Remove legacy Map iterator brands whose array owners are provably dead
+/// under the centralized collection-specific liveness policy.
+pub(crate) fn prune_dead_map_iterator_array_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    MAP_ITERATOR_ARRAYS.with(|r| {
+        r.borrow_mut().retain(|owner| !is_dead_owner(*owner));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_map_iterator_arrays() {
+    MAP_ITERATOR_ARRAYS.with(|r| r.borrow_mut().clear());
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -694,13 +726,13 @@ fn string_view_from_bits(
         return Some((scratch.as_ptr(), len as u32));
     }
     let ptr = extract_string_ptr_from_value(bits);
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    unsafe {
-        let len = (*ptr).byte_len;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        Some((data, len))
+    match unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) } {
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_STRING => unsafe {
+            let len = (*ptr).byte_len;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            Some((data, len))
+        },
+        _ => None,
     }
 }
 
@@ -729,14 +761,10 @@ fn is_string_like(bits: u64) -> bool {
         return !extract_string_ptr_from_value(bits).is_null();
     }
     let ptr = extract_string_ptr_from_value(bits);
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return false;
-    }
-    unsafe {
-        let gc_hdr =
-            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_hdr).obj_type == crate::gc::GC_TYPE_STRING
-    }
+    matches!(
+        unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) },
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_STRING
+    )
 }
 
 /// Check if two JSValues are equal (for map key comparison)

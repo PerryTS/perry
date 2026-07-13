@@ -24,6 +24,7 @@ mod refs;
 mod scalar_methods;
 mod shadow_slots;
 mod this_as_value;
+mod uppercase_strings;
 
 // Public re-exports for the visible API (`pub fn emit_i64_function` etc.).
 pub use clamp_detect::{
