@@ -995,8 +995,10 @@ triggers on a published GitHub Release or manual `workflow_dispatch`. Matrix
 runners build:
 
 - `macos-14` / `macos-15` — arm64 + x86_64 Darwin binaries
-- `ubuntu-22.04` / `ubuntu-24.04-arm` — glibc x86_64 + aarch64
-- `ubuntu-22.04` / `ubuntu-24.04-arm` — musl x86_64 + aarch64
+- `ubuntu-24.04` / `ubuntu-24.04-arm` — glibc x86_64 + aarch64 (glibc 2.39 floor:
+  the npm launcher and `install.sh` route older-glibc hosts to the musl build — if
+  you move these runners, update `GLIBC_BUILD_FLOOR` in `npm/perry/bin/detect.cjs`)
+- `ubuntu-24.04` / `ubuntu-24.04-arm` — musl x86_64 + aarch64 (fully static)
 - `windows-latest` — x86_64 MSVC
 
 Artifacts are published to:

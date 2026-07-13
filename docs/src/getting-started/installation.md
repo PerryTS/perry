@@ -63,6 +63,21 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
 
+#### Linux glibc requirement
+
+The Linux **glibc** binaries are built on Ubuntu 24.04, so they require **glibc ≥ 2.39**. Older distributions — Ubuntu 22.04 (glibc 2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) — cannot load them; the dynamic loader fails with `GLIBC_2.39 not found` before Perry starts.
+
+On those hosts Perry uses the **fully-static musl build** instead, which has no libc dependency and runs on any Linux:
+
+- **`install.sh`** detects the glibc version and downloads `perry-linux-<arch>-musl.tar.gz` automatically.
+- **npm** — the launcher routes to `@perryts/perry-linux-x64-musl` (or `-arm64-musl`) and prints a one-time notice. npm does not install that package on a glibc machine by itself (its `libc` selector says `musl`), so install it once:
+
+  ```bash
+  npm install --force @perryts/perry-linux-x64-musl
+  ```
+
+The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. Tracking issue: [#6298](https://github.com/PerryTS/perry/issues/6298).
+
 ### Homebrew (macOS)
 
 ```bash
