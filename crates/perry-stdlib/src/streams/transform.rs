@@ -236,18 +236,195 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
         js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
         return promise;
     }
-    if transform_cb != 0 && readable_id != 0 {
-        js_closure_call2(
-            transform_cb as *const ClosureHeader,
-            chunk,
-            readable_id as f64,
-        );
-    } else {
-        // Identity transform — pass-through.
-        js_readable_stream_controller_enqueue(readable_id as f64, chunk);
-    }
-    js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+    // Spec/Node tick parity: the transformer's `transform()` runs as a promise
+    // JOB (TransformStreamDefaultSinkWriteAlgorithm chains PerformTransform),
+    // never synchronously inside `writer.write()`. Running it inline made the
+    // transform side of a piped tee one tick per chunk — faster than Node's
+    // cadence (teepipe2.js) — which let a tee sibling's reader outrun the
+    // pipeline (Next.js cold-start head reorder). Queue the invocation; the
+    // write promise resolves in the job, after the transform enqueues.
+    let job_fn = transform_write_job as *const u8;
+    perry_runtime::closure::js_register_closure_arity(job_fn, 0);
+    let job = perry_runtime::closure::js_closure_alloc(job_fn, 4);
+    perry_runtime::closure::js_closure_set_capture_ptr(job, 0, transform_cb);
+    perry_runtime::closure::js_closure_set_capture_ptr(job, 1, readable_id as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(job, 2, chunk.to_bits() as i64);
+    perry_runtime::closure::js_closure_set_capture_ptr(job, 3, promise as i64);
+    perry_runtime::builtins::js_queue_microtask(job as i64);
     promise
+}
+
+/// First hop: the sink write algorithm job. Node's write path costs two jobs
+/// before the transformer runs (sink write algorithm → PerformTransform);
+/// teepipe2.js shows the transform output landing one tick later than a
+/// single-job deferral produces. Re-queue once, then run the transform.
+extern "C" fn transform_write_job(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let job_fn = transform_write_job2 as *const u8;
+        perry_runtime::closure::js_register_closure_arity(job_fn, 0);
+        let job = perry_runtime::closure::js_closure_alloc(job_fn, 4);
+        for i in 0..4 {
+            perry_runtime::closure::js_closure_set_capture_ptr(
+                job,
+                i,
+                perry_runtime::closure::js_closure_get_capture_ptr(closure, i),
+            );
+        }
+        perry_runtime::builtins::js_queue_microtask(job as i64);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn transform_write_job2(closure: *const ClosureHeader) -> f64 {
+    unsafe {
+        let transform_cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0);
+        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+        let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as u64;
+        let promise =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+        let chunk = f64::from_bits(chunk_bits);
+        if transform_cb != 0 && readable_id != 0 {
+            let ret = js_closure_call2(
+                transform_cb as *const ClosureHeader,
+                chunk,
+                readable_id as f64,
+            );
+            // Spec PerformTransform: `Promise.resolve(transformer.transform(
+            // chunk, controller))` — an async transform's returned promise
+            // gates the write's settlement. Next's buffered transform returns
+            // a setImmediate-deferred flush promise; ignoring it let Perry's
+            // pipe run a macrotask ahead of Node per write.
+            if perry_runtime::promise::js_value_is_promise(ret) != 0 {
+                let inner = perry_runtime::value::js_nanbox_get_pointer(ret) as *mut Promise;
+                if !inner.is_null() {
+                    let f = transform_write_settle_fulfilled as *const u8;
+                    let r = transform_write_settle_rejected as *const u8;
+                    perry_runtime::closure::js_register_closure_arity(f, 1);
+                    perry_runtime::closure::js_register_closure_arity(r, 1);
+                    let fc = perry_runtime::closure::js_closure_alloc(f, 2);
+                    perry_runtime::closure::js_closure_set_capture_ptr(fc, 0, readable_id as i64);
+                    perry_runtime::closure::js_closure_set_capture_ptr(fc, 1, promise as i64);
+                    let rc = perry_runtime::closure::js_closure_alloc(r, 2);
+                    perry_runtime::closure::js_closure_set_capture_ptr(rc, 0, readable_id as i64);
+                    perry_runtime::closure::js_closure_set_capture_ptr(rc, 1, promise as i64);
+                    let _ = perry_runtime::promise::js_promise_then(inner, fc, rc);
+                    return f64::from_bits(TAG_UNDEFINED);
+                }
+            }
+        } else if readable_id != 0 {
+            // Identity transform — pass-through.
+            js_readable_stream_controller_enqueue(readable_id as f64, chunk);
+        }
+        // Spec backpressure (TransformStreamDefaultSinkWriteAlgorithm): the
+        // readable side's default highWaterMark is 0, so any chunk sitting
+        // undrained in its queue keeps backpressure ON and the write promise
+        // PENDING until the consumer catches up (a read pops the queue empty
+        // or parks on it). Resolving unconditionally let a `pipeTo` upstream
+        // keep pulling at full speed — in a teed pipeline the fast pipe
+        // pre-filled the sibling branch's queue and reordered promise chains
+        // racing the stream (Next.js cold-start head reorder: node's pipe is
+        // stalled here, so the flight branch's read #3 stays pending while
+        // the module-require chain finishes).
+        settle_transform_write(readable_id, promise);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Settle a transform write with spec semantics: reject when the readable
+/// side has errored (the TransformStream is errored — writes must not report
+/// success), park on backpressure while undrained chunks remain, else resolve.
+unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
+    enum Settle {
+        Errored(u64),
+        Park,
+        Resolve,
+    }
+    let settle = {
+        let g = super::READABLE_STREAMS.lock().unwrap();
+        match g.get(&readable_id) {
+            Some(s) if s.state == ReadableState::Errored => Settle::Errored(s.error_value),
+            Some(s) if !s.chunks.is_empty() => Settle::Park,
+            _ => Settle::Resolve,
+        }
+    };
+    match settle {
+        Settle::Errored(reason) => js_promise_reject(promise, f64::from_bits(reason)),
+        Settle::Park => {
+            TRANSFORM_WRITE_RELEASES
+                .lock()
+                .unwrap()
+                .entry(readable_id)
+                .or_default()
+                .push(promise as usize);
+        }
+        Settle::Resolve => js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED)),
+    }
+}
+
+lazy_static::lazy_static! {
+    /// Transform readable id -> write promises parked on backpressure, released
+    /// when the consumer drains the readable (see `transform_release_writes`).
+    pub(super) static ref TRANSFORM_WRITE_RELEASES: Mutex<HashMap<usize, Vec<usize>>> =
+        Mutex::new(HashMap::new());
+}
+
+/// The async transformer's returned promise fulfilled — settle the write with
+/// the same backpressure gate as the synchronous path.
+extern "C" fn transform_write_settle_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+    unsafe {
+        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let promise =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+        settle_transform_write(readable_id, promise);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// The async transformer's returned promise rejected — error the readable side
+/// and reject the write (spec: transformResultPromise rejection errors the
+/// TransformStream).
+extern "C" fn transform_write_settle_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+    unsafe {
+        let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+        let promise =
+            perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+        if readable_id != 0 {
+            js_readable_stream_controller_error(readable_id as f64, reason);
+        }
+        js_promise_reject(promise, reason);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Consumer progress on a transform's readable side: release parked write
+/// promises once its queue has drained (spec: the source pull algorithm sets
+/// backpressure = false). Called from the reader-read paths in `streams.rs`.
+pub(super) unsafe fn transform_release_writes(readable_id: usize) {
+    let (drained, errored) = {
+        let g = super::READABLE_STREAMS.lock().unwrap();
+        match g.get(&readable_id) {
+            Some(s) => (
+                s.chunks.is_empty(),
+                (s.state == ReadableState::Errored).then_some(s.error_value),
+            ),
+            None => (true, None),
+        }
+    };
+    if !drained && errored.is_none() {
+        return;
+    }
+    let parked = TRANSFORM_WRITE_RELEASES
+        .lock()
+        .unwrap()
+        .remove(&readable_id);
+    if let Some(promises) = parked {
+        for p in promises {
+            match errored {
+                Some(reason) => js_promise_reject(p as *mut Promise, f64::from_bits(reason)),
+                None => js_promise_resolve(p as *mut Promise, f64::from_bits(TAG_UNDEFINED)),
+            }
+        }
+    }
 }
 
 pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {

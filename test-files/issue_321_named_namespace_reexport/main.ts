@@ -15,9 +15,8 @@
 // `runSync(program)` then read `program._tag` off a closure pointer and
 // the runtime threw `Cannot read properties of undefined (reading '_tag')`.
 //
-// POST-FIX: the consumer's namespace local is tagged into a new
-// `namespace_reexport_named_imports` set so the StaticMethodCall arm
-// fetches the closure via the zero-arg getter and dispatches through
+// POST-FIX: the StaticMethodCall arm classifies the member as variable-shaped,
+// fetches its closure via the zero-arg getter, and dispatches through
 // `js_closure_callN` with the user's args. `Effect.succeed(42)` now
 // returns the EffectInst, `_tag === "Commit"`, and `runSync` returns 42.
 //

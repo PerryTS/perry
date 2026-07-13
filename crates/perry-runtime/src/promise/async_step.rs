@@ -380,6 +380,27 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
 /// function) or step_closure doesn't match (nested async-fn call,
 /// where the outer activation's `next` must NOT be settled here).
 /// Fall back to `js_promise_resolved(value)`.
+/// Codegen entry for the return value of an await-less async fn (the
+/// transform leaves those un-converted; `Stmt::Return` wraps the value
+/// directly). Differs from `js_promise_resolved` in one spec-visible way: an
+/// async fn always returns a FRESH promise, and `return <promise>` ADOPTS the
+/// inner via the two-tick job (V8 hop parity; hops.js
+/// `asyncfn-return-resolved-promise` = t0 t1 t2 X in Node) — the #2823
+/// `Promise.resolve(p) === p` identity does not apply to async returns.
+#[no_mangle]
+pub extern "C" fn js_async_fn_result(value: f64) -> *mut Promise {
+    let value = adapt_foreign_promise_value(value);
+    if js_value_is_promise(value) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+        if !inner.is_null() {
+            let fresh = js_promise_new();
+            super::assimilate::enqueue_native_adoption_job(fresh, inner);
+            return fresh;
+        }
+    }
+    js_promise_resolved(value)
+}
+
 #[no_mangle]
 pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *mut Promise {
     // PR #1004 followup (sibling to js_async_step_chain): adapt a
@@ -409,6 +430,19 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
         trap.trap_next
     } else {
         bump(&MT_STEP_DONE_REUSE_MISS);
+        // An async fn always returns a FRESH promise — `js_promise_resolved`'s
+        // #2823 identity short-circuit (Promise.resolve(p) === p) must not
+        // apply to `return <promise>` from an async fn, which instead adopts
+        // the inner promise via the two-tick job (V8 hop parity; hops.js
+        // `asyncfn-return-resolved-promise` = t0 t1 t2 X in Node).
+        if js_value_is_promise(value) != 0 {
+            let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+            if !inner.is_null() {
+                let fresh = js_promise_new();
+                super::assimilate::enqueue_native_adoption_job(fresh, inner);
+                return fresh;
+            }
+        }
         js_promise_resolved(value)
     }
 }
@@ -426,11 +460,13 @@ fn resolve_trap_next_with_adoption(target: *mut Promise, value: f64) {
         js_promise_resolve(target, value);
         return;
     }
-    // Native Promise: chain `target` to follow its eventual state.
+    // Native Promise: adopt via the native job — `return <promise>` from an
+    // async fn is observable two ticks later in V8 (hop parity; see
+    // `enqueue_native_adoption_job`).
     if js_value_is_promise(value) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() && inner != target {
-            js_promise_resolve_with_promise(target, inner);
+            super::assimilate::enqueue_native_adoption_job(target, inner);
             return;
         }
     }
@@ -440,7 +476,7 @@ fn resolve_trap_next_with_adoption(target: *mut Promise, value: f64) {
     if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
         if !inner.is_null() && inner != target {
-            js_promise_resolve_with_promise(target, inner);
+            super::assimilate::enqueue_native_adoption_job(target, inner);
             return;
         }
     }

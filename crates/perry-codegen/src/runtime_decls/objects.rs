@@ -291,6 +291,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_require_object_coercible", DOUBLE, &[DOUBLE]);
     // Next.js wall 53: runtime `require(absolutePath.json)` disk fallback.
     module.declare_function("js_require_json_disk", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_require_resolve_node_modules", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_globalthis_seed_async_local_storage", VOID, &[]);
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);

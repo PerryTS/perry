@@ -128,6 +128,79 @@ pub fn class_chain_extends_builtin_error(
     false
 }
 
+/// Issue #6343: walk the class's `extends` chain and report whether it reaches
+/// a base whose *construction* codegen cannot see.
+///
+/// Scalar replacement models an instance as exactly the set of DECLARED fields
+/// on its chain — one alloca per field name — and inlines the constructor
+/// bodies that fill them. That is only faithful when the whole chain is
+/// visible. A base that isn't contributes instance state the promoted set does
+/// not model, and every way that happens is silent:
+///
+///   * a **native** base — `class X extends EventEmitter`, `extends Readable`,
+///     … — installs its method surface as OWN PROPERTIES on the instance at
+///     subclass-init time (`js_object_set_field_by_name(obj, "emit", <native
+///     closure>)`) rather than on a prototype. `emit` has no declared slot, so
+///     the promoted set has no slot for it and `x.emit` reads back
+///     `undefined` (#6343: `class X extends EventEmitter { a = 1 }` printed
+///     `typeof x.emit === "undefined"` while `x.a` was correct).
+///   * a **dynamic** base — `extends <expr>`, including a lexically shadowed
+///     heritage name — runs an arbitrary constructor that can install
+///     anything.
+///   * a parent NAME that resolves to no visible class: a builtin (`Error`,
+///     `Map`, `Set`, `Event`, …) or a base whose declaration never reached
+///     this module. Its construction happens in the runtime, not in code
+///     codegen can inline.
+///
+/// The only sound answer for all three is to keep the instance on the heap,
+/// where the real init runs and property lookup goes through the object.
+///
+/// This is deliberately a chain property, not a name test: it must hop user
+/// classes (`class Leaf extends Mid`, `class Mid extends EventEmitter`) and it
+/// must NOT fire for a chain that bottoms out in an ordinary user class — that
+/// instance is fully modeled and keeping it scalar-replaced is a real win
+/// (guarded by `scripts/run_issue_945_scalar_method_ir_guard.sh`).
+///
+/// Generalizes [`class_chain_extends_builtin_error`] (#573), which stays as-is
+/// because it is name-keyed and therefore also fires for a *locally shadowed*
+/// `Error` — this walk resolves such a shadow to the user class and would let
+/// it through.
+pub fn class_chain_has_unmodeled_base(
+    class: &perry_hir::Class,
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+) -> bool {
+    let mut current = class;
+    let mut seen: HashSet<String> = HashSet::new();
+    loop {
+        // A cycle (or a chain deep enough to look like one) means the walk
+        // can't prove anything. Fail closed: keep the instance on the heap.
+        if !seen.insert(current.name.clone()) || seen.len() > 64 {
+            return true;
+        }
+        // `native_extends` is the (module, class) tag for a base whose
+        // subclass-init shim stamps a surface onto `this` at construction —
+        // events, node:stream, the Web Streams bases, async_hooks, ws.
+        if current.native_extends.is_some() {
+            return true;
+        }
+        // `class X extends <expr>` — the parent is a runtime value; its
+        // constructor is opaque to this analysis.
+        if current.extends_expr.is_some() || current.heritage_lexically_shadowed {
+            return true;
+        }
+        let Some(parent_name) = current.extends_name.as_deref() else {
+            // Chain bottoms out in a root user class: fully modeled.
+            return false;
+        };
+        match classes.get(parent_name) {
+            Some(parent) => current = parent,
+            // A parent name with no visible class behind it — a builtin, or an
+            // import whose stub never landed. Unmodeled either way.
+            None => return true,
+        }
+    }
+}
+
 pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<String>) -> bool {
     use perry_hir::Stmt;
     for s in stmts {
@@ -497,5 +570,93 @@ mod tests {
         classes.insert(parent.name.clone(), &parent);
 
         assert!(!class_chain_extends_builtin_error(&child, &classes));
+    }
+
+    // ── #6343: unmodeled-base chain walk ──
+
+    /// A root user class with no heritage is fully modeled — scalar
+    /// replacement must stay available (this is the #945 fast path).
+    #[test]
+    fn unmodeled_base_allows_plain_class() {
+        let plain = class("Plain", None);
+        let mut classes = HashMap::new();
+        classes.insert(plain.name.clone(), &plain);
+
+        assert!(!class_chain_has_unmodeled_base(&plain, &classes));
+    }
+
+    /// A chain of ordinary user classes is fully modeled too.
+    #[test]
+    fn unmodeled_base_allows_user_class_chain() {
+        let base = class("Base", None);
+        let mid = class("Mid", Some("Base"));
+        let leaf = class("Leaf", Some("Mid"));
+        let mut classes = HashMap::new();
+        classes.insert(base.name.clone(), &base);
+        classes.insert(mid.name.clone(), &mid);
+        classes.insert(leaf.name.clone(), &leaf);
+
+        assert!(!class_chain_has_unmodeled_base(&leaf, &classes));
+    }
+
+    /// `class X extends EventEmitter` — the native base installs its surface as
+    /// own properties on the instance, so the instance must stay on the heap.
+    #[test]
+    fn unmodeled_base_rejects_direct_native_parent() {
+        let mut child = class("X", Some("EventEmitter"));
+        child.native_extends = Some(("events".to_string(), "EventEmitter".to_string()));
+        let mut classes = HashMap::new();
+        classes.insert(child.name.clone(), &child);
+
+        assert!(class_chain_has_unmodeled_base(&child, &classes));
+    }
+
+    /// The native base is found by walking the CHAIN, not by matching the
+    /// leaf's own `extends` name: `class Leaf extends Mid`, `class Mid extends
+    /// EventEmitter`.
+    #[test]
+    fn unmodeled_base_rejects_indirect_native_parent() {
+        let mut mid = class("Mid", Some("EventEmitter"));
+        mid.native_extends = Some(("events".to_string(), "EventEmitter".to_string()));
+        let leaf = class("Leaf", Some("Mid"));
+        let mut classes = HashMap::new();
+        classes.insert(mid.name.clone(), &mid);
+        classes.insert(leaf.name.clone(), &leaf);
+
+        assert!(class_chain_has_unmodeled_base(&leaf, &classes));
+    }
+
+    /// A parent name with no class behind it (a builtin such as `Error` /
+    /// `Map`, or an import whose stub never landed) is unmodeled.
+    #[test]
+    fn unmodeled_base_rejects_unresolvable_parent_name() {
+        let child = class("MyError", Some("Error"));
+        let mut classes = HashMap::new();
+        classes.insert(child.name.clone(), &child);
+
+        assert!(class_chain_has_unmodeled_base(&child, &classes));
+    }
+
+    /// `class X extends <expr>` — an arbitrary runtime parent value.
+    #[test]
+    fn unmodeled_base_rejects_dynamic_parent_expr() {
+        let mut child = class("X", None);
+        child.extends_expr = Some(Box::new(Expr::LocalGet(0)));
+        let mut classes = HashMap::new();
+        classes.insert(child.name.clone(), &child);
+
+        assert!(class_chain_has_unmodeled_base(&child, &classes));
+    }
+
+    /// A cyclic chain proves nothing, so it must fail closed (escape).
+    #[test]
+    fn unmodeled_base_fails_closed_on_cyclic_parent_chain() {
+        let child = class("A", Some("B"));
+        let parent = class("B", Some("A"));
+        let mut classes = HashMap::new();
+        classes.insert(child.name.clone(), &child);
+        classes.insert(parent.name.clone(), &parent);
+
+        assert!(class_chain_has_unmodeled_base(&child, &classes));
     }
 }

@@ -1,9 +1,10 @@
 use super::*;
 
 use crate::crypto::util::{
-    parse_ed25519_private_surrogate, parse_ed25519_public_surrogate, parse_p256_signing_key_pem,
-    parse_p256_verifying_key_pem, parse_rsa_private_key_pem, parse_rsa_public_key_pem,
-    parse_x25519_private_surrogate, parse_x25519_public_surrogate,
+    ed25519_private_surrogate, ed25519_public_surrogate, parse_ed25519_private_surrogate,
+    parse_ed25519_public_surrogate, parse_p256_signing_key_pem, parse_p256_verifying_key_pem,
+    parse_rsa_private_key_pem, parse_rsa_public_key_pem, parse_x25519_private_surrogate,
+    parse_x25519_public_surrogate, x25519_private_surrogate, x25519_public_surrogate,
 };
 
 unsafe fn throw_type_error(message: &str) -> ! {
@@ -158,4 +159,121 @@ pub(super) unsafe fn js_webcrypto_key_object_to_crypto_key(
         CryptoKeyMaterial::new(key_algo, hash, kind, extractable, usages),
     );
     f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+}
+
+/// Read a registered CryptoKey's raw material straight out of its BufferHeader.
+///
+/// SAFETY: callers must have resolved `addr` through `lookup_crypto_key` first,
+/// which only succeeds for an address the WebCrypto key factories registered —
+/// i.e. a live `BufferHeader` holding the key material.
+///
+/// `bytes_from_jsvalue` cannot be used here: it gates on `is_registered_buffer`,
+/// which is exactly the thread-local check #6302 is about — a CryptoKey whose
+/// metadata resolves through the process-global registry still has readable
+/// bytes at `addr`.
+unsafe fn crypto_key_bytes(addr: usize) -> Vec<u8> {
+    let buf = addr as *const BufferHeader;
+    let len = (*buf).length as usize;
+    if len == 0 {
+        return Vec::new();
+    }
+    std::slice::from_raw_parts(buffer_payload(buf), len).to_vec()
+}
+
+/// Re-encode an asymmetric CryptoKey's WebCrypto key material (SPKI/PKCS#8 DER
+/// for RSA, a SEC1 point / raw scalar for EC, raw 32-byte keys for Ed/X25519)
+/// into the PEM / internal-surrogate string form Perry's KeyObject surrogates
+/// use, plus the `asymmetric_key_meta` type id (1 rsa, 2 ec, 3 ed25519,
+/// 4 x25519). Returns `None` for key types Perry has no KeyObject surrogate for
+/// (Ed448 / X448 / ML-KEM) — the caller turns that into a throw, never a silent
+/// `undefined`.
+fn asymmetric_key_surrogate(mat: CryptoKeyMaterial, bytes: &[u8]) -> Option<(String, u8)> {
+    let ed_key: Option<[u8; 32]> = bytes.try_into().ok();
+    match (mat.algo, mat.kind) {
+        (KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss | KeyAlgo::RsaOaep, KeyKind::Public) => {
+            let key = RsaPublicKey::from_public_key_der(bytes).ok()?;
+            Some((key.to_public_key_pem(Default::default()).ok()?, 1))
+        }
+        (KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss | KeyAlgo::RsaOaep, KeyKind::Private) => {
+            let key = RsaPrivateKey::from_pkcs8_der(bytes).ok()?;
+            Some((key.to_pkcs8_pem(Default::default()).ok()?.to_string(), 1))
+        }
+        (KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256, KeyKind::Public) => {
+            let key = P256PublicKey::from_sec1_bytes(bytes).ok()?;
+            Some((key.to_public_key_pem(Default::default()).ok()?, 2))
+        }
+        (KeyAlgo::EcdsaP256 | KeyAlgo::EcdhP256, KeyKind::Private) => {
+            let key = P256SecretKey::from_slice(bytes).ok()?;
+            Some((key.to_pkcs8_pem(Default::default()).ok()?.to_string(), 2))
+        }
+        (KeyAlgo::EcdsaP384 | KeyAlgo::EcdhP384, KeyKind::Public) => {
+            let key = P384PublicKey::from_sec1_bytes(bytes).ok()?;
+            Some((key.to_public_key_pem(Default::default()).ok()?, 2))
+        }
+        (KeyAlgo::EcdsaP384 | KeyAlgo::EcdhP384, KeyKind::Private) => {
+            let key = P384SecretKey::from_slice(bytes).ok()?;
+            Some((key.to_pkcs8_pem(Default::default()).ok()?.to_string(), 2))
+        }
+        (KeyAlgo::EcdsaP521 | KeyAlgo::EcdhP521, KeyKind::Public) => {
+            let key = P521PublicKey::from_sec1_bytes(bytes).ok()?;
+            Some((key.to_public_key_pem(Default::default()).ok()?, 2))
+        }
+        (KeyAlgo::EcdsaP521 | KeyAlgo::EcdhP521, KeyKind::Private) => {
+            let key = P521SecretKey::from_slice(bytes).ok()?;
+            Some((key.to_pkcs8_pem(Default::default()).ok()?.to_string(), 2))
+        }
+        (KeyAlgo::Ed25519, KeyKind::Public) => {
+            let key = ed25519_dalek::VerifyingKey::from_bytes(&ed_key?).ok()?;
+            Some((ed25519_public_surrogate(&key), 3))
+        }
+        (KeyAlgo::Ed25519, KeyKind::Private) => {
+            let key = ed25519_dalek::SigningKey::from_bytes(&ed_key?);
+            Some((ed25519_private_surrogate(&key), 3))
+        }
+        (KeyAlgo::X25519, KeyKind::Public) => Some((x25519_public_surrogate(&ed_key?), 4)),
+        (KeyAlgo::X25519, KeyKind::Private) => Some((x25519_private_surrogate(&ed_key?), 4)),
+        _ => None,
+    }
+}
+
+/// `crypto.KeyObject.from(cryptoKey)` for **asymmetric** CryptoKeys (#6302).
+///
+/// The runtime handles the secret-key shape itself (a Buffer flagged as a
+/// secret key); public/private keys need the encoders above, so
+/// `native_module_crypto_key_object::key_object_from` routes them here through
+/// the WebCrypto dispatch hook. The result is a PEM/surrogate string flagged
+/// with `mark_as_asymmetric_key`, i.e. exactly what `createPublicKey()` /
+/// `createPrivateKey()` / `generateKeyPairSync()` hand back — so `type`,
+/// `asymmetricKeyType`, `export()`, `equals()`, `toCryptoKey()`, and the
+/// sign/verify paths all work on it.
+pub(super) unsafe fn js_webcrypto_key_object_from_crypto_key(key_bits: f64) -> f64 {
+    let addr = strip_ptr(key_bits.to_bits());
+    let mat = lookup_crypto_key(addr)
+        .unwrap_or_else(|| throw_type_error("KeyObject.from() argument is not a CryptoKey"));
+    let kind_id = match mat.kind {
+        KeyKind::Public => 1u8,
+        KeyKind::Private => 2u8,
+        // Secret keys never reach the bridge — the runtime converts them.
+        KeyKind::Secret => {
+            throw_type_error("KeyObject.from() received a secret key on the asymmetric path")
+        }
+    };
+    let bytes = crypto_key_bytes(addr);
+    let (surrogate, asym_type) = asymmetric_key_surrogate(mat, &bytes).unwrap_or_else(|| {
+        let message = format!(
+            "KeyObject.from() does not support {:?} {} keys",
+            mat.algo,
+            if kind_id == 1 { "public" } else { "private" }
+        );
+        perry_runtime::fs::validate::throw_error_with_code(
+            &message,
+            "ERR_CRYPTO_UNSUPPORTED_OPERATION",
+        )
+    });
+    let ptr = perry_runtime::js_string_from_bytes(surrogate.as_ptr(), surrogate.len() as u32);
+    if ptr.is_null() {
+        throw_dom_exception("OperationError", "The operation failed");
+    }
+    perry_runtime::buffer::mark_as_asymmetric_key(ptr as usize, kind_id, asym_type);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
 }

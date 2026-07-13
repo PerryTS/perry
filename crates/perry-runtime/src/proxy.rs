@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
 
 mod apply_construct;
+pub use apply_construct::{call_proxy_value_with_this, js_proxy_apply, js_proxy_construct};
 pub(crate) use apply_construct::{is_callable_function, is_constructor_function};
-pub use apply_construct::{js_proxy_apply, js_proxy_construct};
 mod has_delete;
 pub(crate) use has_delete::reflect_ordinary_delete_property_key;
 pub use has_delete::{js_proxy_delete, js_proxy_has};

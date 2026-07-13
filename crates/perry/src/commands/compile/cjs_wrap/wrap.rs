@@ -729,6 +729,15 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // written for the in-IIFE position; at module scope (flat) it is purely
     // cosmetic. Embedding `{cjs_preamble}` reproduces the historical IIFE text
     // byte-for-byte.
+    // Debug-quoted absolute dir of this module, the starting point for the
+    // require.resolve node_modules subpath fallback.
+    let module_dir_literal = format!(
+        "{:?}",
+        source_path
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -832,6 +841,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
 {require_resolve_cases}
         if (__perry_cjs_require_is_builtin(specifier)) return specifier;
+        var __perry_nm_resolved = __perry_require_resolve_node_modules({module_dir_literal}, specifier);
+        if (__perry_nm_resolved !== undefined) return __perry_nm_resolved;
         throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
     }};
     require.resolve.paths = function paths(specifier) {{

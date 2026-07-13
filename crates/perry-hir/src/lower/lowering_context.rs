@@ -52,6 +52,24 @@ pub(crate) struct PrivateScope {
     pub(crate) members: HashMap<String, PrivMember>,
 }
 
+/// A `function Mixin(B) { return class [Name] extends B { … } }` recorded by
+/// `pre_scan_mixin_functions`, so a `const M = Mixin(Base)` call site can
+/// synthesize a real class extending the concrete base.
+#[derive(Debug, Clone)]
+pub(crate) struct MixinFn {
+    /// The mixin function's single parameter — the name the returned class
+    /// `extends`.
+    pub(crate) param_name: String,
+    /// The returned class EXPRESSION's own name, if it has one (`return class
+    /// Named extends B {}`). `None` for the anonymous form, whose `.name` is
+    /// the empty string per spec — a directly-returned class expression gets
+    /// no NamedEvaluation from the call site's binding.
+    pub(crate) class_expr_name: Option<String>,
+    /// The returned class's AST, copied verbatim; the call site rewrites its
+    /// `extends` clause to the concrete base.
+    pub(crate) class_ast: Box<swc_ecma_ast::Class>,
+}
+
 pub struct LoweringContext {
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
@@ -623,10 +641,12 @@ pub struct LoweringContext {
     /// name, so the New expression points at a real HIR class.
     pub(crate) class_expr_aliases: HashMap<String, String>,
     /// Mixin functions: `function withName<T>(B: Constructor<T>) { return class extends B { ... } }`.
-    /// Maps mixin name → (param_name, captured class AST). Stub field
-    /// added to satisfy in-tree references; full mixin support is a
-    /// separate workstream.
-    pub(crate) mixin_funcs: HashMap<String, (String, Box<swc_ecma_ast::Class>)>,
+    /// Maps mixin name → (param_name, class-expression's own name, captured
+    /// class AST). The class-expression name is `None` for the common
+    /// anonymous `return class extends B {…}` form and drives the synthesized
+    /// class's user-visible `.name` (issue #5952). Stub field added to satisfy
+    /// in-tree references; full mixin support is a separate workstream.
+    pub(crate) mixin_funcs: HashMap<String, MixinFn>,
     /// Set to the class name when lowering inside a class constructor body.
     /// Used to resolve `new.target` to a placeholder object whose `.name`
     /// returns the class name. None outside any constructor.

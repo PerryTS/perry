@@ -53,6 +53,15 @@ fn scan_timeout_timers_step(
     let mut q = TIMER_QUEUE.lock().unwrap();
     while state.index < q.len() {
         let timer = &mut q[state.index];
+        // #6185: the budgeted/incremental scan obeys the same ownership rule as
+        // the stop-the-world one — never mark (and, on an evacuating cycle, never
+        // rewrite) a slot in another agent's arena. Skip the entry wholesale,
+        // advancing the scan state exactly as if it had been fully scanned.
+        if !crate::agent::owns(timer.owner) {
+            state.index += 1;
+            state.finish_timer();
+            continue;
+        }
         while state.slot < 2 {
             if !consume_timer_root_work(remaining) {
                 return false;
@@ -78,6 +87,15 @@ fn scan_callback_timers_step(
     let mut q = CALLBACK_TIMERS.lock().unwrap();
     while state.index < q.len() {
         let timer = &mut q[state.index];
+        // #6185: the budgeted/incremental scan obeys the same ownership rule as
+        // the stop-the-world one — never mark (and, on an evacuating cycle, never
+        // rewrite) a slot in another agent's arena. Skip the entry wholesale,
+        // advancing the scan state exactly as if it had been fully scanned.
+        if !crate::agent::owns(timer.owner) {
+            state.index += 1;
+            state.finish_timer();
+            continue;
+        }
         if state.slot == 0 {
             if !consume_timer_root_work(remaining) {
                 return false;
@@ -137,6 +155,15 @@ fn scan_interval_timers_step(
     let mut q = INTERVAL_TIMERS.lock().unwrap();
     while state.index < q.len() {
         let timer = &mut q[state.index];
+        // #6185: the budgeted/incremental scan obeys the same ownership rule as
+        // the stop-the-world one — never mark (and, on an evacuating cycle, never
+        // rewrite) a slot in another agent's arena. Skip the entry wholesale,
+        // advancing the scan state exactly as if it had been fully scanned.
+        if !crate::agent::owns(timer.owner) {
+            state.index += 1;
+            state.finish_timer();
+            continue;
+        }
         if state.slot == 0 {
             if !consume_timer_root_work(remaining) {
                 return false;

@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * Minimal Activity that hosts a Perry-compiled native UI.
@@ -34,13 +36,41 @@ class PerryActivity : Activity() {
         // Switch from splash theme to normal theme before inflating layout
         setTheme(android.R.style.Theme_Material_Light_NoActionBar)
 
-        // Go edge-to-edge (content under status/nav bars, matching iOS behavior)
-        window.setFlags(
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        )
+        // Keep content below the status / nav bars. Two layout regimes are in
+        // play and the host padding has to follow whichever one is live:
+        //   * API < 35 — the decor view fits system windows (explicitly on
+        //     30-34, by default below that), so the content view is already
+        //     inset and any padding we add here is just blank space.
+        //   * API >= 35 — we target SDK 35, so Android 15 forces edge-to-edge
+        //     and setDecorFitsSystemWindows() is a no-op. Nothing insets the
+        //     content; without padding the UI draws under the system bars.
+        // So pad from the insets we are actually handed rather than branching
+        // on SDK_INT: the decor consumes them in the first regime (leaving us
+        // to pad by zero) and passes them through in the second. This also
+        // covers the nav bar, display cutouts and landscape, which a top-only
+        // status_bar_height pad does not. getSafeAreaInsets() is no help here
+        // — it still returns zeros on Android.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            @Suppress("DEPRECATION")
+            window.setDecorFitsSystemWindows(true)
+        }
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        window.statusBarColor = android.graphics.Color.WHITE
+        window.navigationBarColor = android.graphics.Color.WHITE
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
 
         rootLayout = FrameLayout(this)
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, windowInsets ->
+            val bars = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
         setContentView(rootLayout)
 
         // Store device locale in SharedPreferences so preferencesGet("AppleLanguages") works

@@ -14,9 +14,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SUITE_DIR="$SCRIPT_DIR/suite"
-COMPILETS="$ROOT/target/release/perry"
+COMPILETS="${PERRY_BIN:-$ROOT/target/release/perry}"
 BASELINE="$SCRIPT_DIR/baseline.json"
 VERIFY_OUTPUT="$SCRIPT_DIR/verify_benchmark_output.py"
+BENCHMARK_GATE="$SCRIPT_DIR/benchmark_gate.py"
 
 # Thresholds
 SPEED_THRESHOLD=15    # >15% slower = regression
@@ -33,7 +34,7 @@ NC='\033[0m'
 UPDATE_BASELINE=0
 QUICK_MODE=0
 FULL_MODE=0
-RUNS=1
+RUNS=5
 JSON_OUT=""
 WARN_ONLY=0
 COMPARE_EXIT=0
@@ -76,6 +77,16 @@ if [[ ! -f "$VERIFY_OUTPUT" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$BENCHMARK_GATE" ]]; then
+  echo -e "${RED}Benchmark artifact builder not found at $BENCHMARK_GATE${NC}"
+  exit 1
+fi
+
+if ! [[ "$RUNS" =~ ^[0-9]+$ ]] || [[ "$RUNS" -lt 2 ]]; then
+  echo "--runs must be an integer of at least 2 so dispersion can be calibrated" >&2
+  exit 2
+fi
+
 # Select benchmarks
 if [[ $QUICK_MODE -eq 1 ]]; then
   BENCHMARKS="02_loop_overhead.ts 05_fibonacci.ts 06_math_intensive.ts 10_nested_loops.ts 13_factorial.ts"
@@ -85,6 +96,11 @@ elif [[ $FULL_MODE -eq 1 ]]; then
 else
   BENCHMARKS="02_loop_overhead.ts 03_array_write.ts 04_array_read.ts 05_fibonacci.ts 06_math_intensive.ts 07_object_create.ts 08_string_concat.ts 09_method_calls.ts 10_nested_loops.ts 11_prime_sieve.ts 12_binary_trees.ts 13_factorial.ts 14_closure.ts 15_mandelbrot.ts 16_matrix_multiply.ts"
 fi
+EXPECTED_BENCHMARKS=""
+for bench in $BENCHMARKS; do
+  name="${bench%.ts}"
+  EXPECTED_BENCHMARKS+="${EXPECTED_BENCHMARKS:+,}$name"
+done
 
 # Check for node
 HAS_NODE=0
@@ -119,6 +135,49 @@ else
   echo "Node.js is unavailable for .ts benchmark inputs; Node columns and correctness checks will be skipped." >&2
 fi
 
+# Bun runs TypeScript directly. It is optional for local runs, but CI installs
+# an exact version and the artifact always records whether it was available.
+HAS_BUN=0
+BUN_CMD=(bun run)
+if command -v bun &>/dev/null; then
+  HAS_BUN=1
+else
+  echo "Bun is unavailable; Bun distributions and ratios will be marked unavailable." >&2
+fi
+
+RUNTIME_METADATA=$(mktemp)
+trap 'rm -f "$RUNTIME_METADATA"' EXIT
+python3 - "$RUNTIME_METADATA" "$COMPILETS" "$HAS_NODE" "$HAS_BUN" \
+  "$("$COMPILETS" --version 2>/dev/null || echo local-build)" \
+  "$(node --version 2>/dev/null || true)" "$(bun --version 2>/dev/null || true)" \
+  "${NODE_CMD[*]}" <<'PY'
+import json
+import sys
+
+path, perry, has_node, has_bun, perry_version, node_version, bun_version, node_command = sys.argv[1:]
+metadata = {
+    "perry": {
+        "available": True,
+        "version": perry_version.strip() or "local-build",
+        "command": ["<compiled-binary>"],
+        "compile_command": [perry, "<source.ts>", "-o", "<compiled-binary>"],
+    },
+    "node": {
+        "available": has_node == "1",
+        "version": node_version.strip() or None,
+        "command": node_command.split() + ["<source.ts>"],
+    },
+    "bun": {
+        "available": has_bun == "1",
+        "version": bun_version.strip() or None,
+        "command": ["bun", "run", "<source.ts>"],
+    },
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(metadata, handle, indent=2)
+    handle.write("\n")
+PY
+
 echo -e "${BOLD}${CYAN}Perry Performance Comparison (speed + RAM)${NC}"
 echo ""
 
@@ -127,6 +186,19 @@ echo ""
 # ---------------------------------------------------------------------------
 RESULTS_FILE=$(mktemp)
 RUN_OUTPUT_DIR=$(mktemp -d)
+CURRENT_JSON=""
+
+cleanup() {
+  rm -f "$RESULTS_FILE" "$RUNTIME_METADATA"
+  rm -rf "$RUN_OUTPUT_DIR"
+  if [[ -n "$CURRENT_JSON" && -z "$JSON_OUT" ]]; then
+    rm -f "$CURRENT_JSON"
+  fi
+  for bench in $BENCHMARKS; do
+    rm -f "$SUITE_DIR/${bench%.ts}"
+  done
+}
+trap cleanup EXIT
 
 extract_time() {
   awk -F: '/^[a-z_]+:[0-9]+/ {print $2; exit}' <<<"$1"
@@ -139,15 +211,16 @@ measure_rss() {
   local binary="$2"
   shift 2
   local tmp_err=$(mktemp)
+  local command_status=0
 
   if [[ -x /usr/bin/time ]]; then
     if [[ "$(uname)" == "Darwin" ]]; then
-      /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+      /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
     else
-      /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+      /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
     fi
   else
-    "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+    "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
   fi
 
   local rss_kb=0
@@ -165,7 +238,7 @@ measure_rss() {
 
   rm -f "$tmp_err"
 
-  echo "$rss_kb"
+  echo "$rss_kb|$command_status"
 }
 
 echo -e "${BOLD}Compiling benchmarks...${NC}"
@@ -179,17 +252,18 @@ done
 echo ""
 
 echo -e "${BOLD}Running benchmarks...${NC}"
-if [[ $HAS_NODE -eq 1 ]]; then
-  printf "${BOLD}%-20s %10s %10s %10s %10s %10s %10s %10s${NC}\n" \
-    "Benchmark" "Perry ms" "Node ms" "Ratio" "Perry KB" "Node KB" "Mem Ratio" "Correct"
-else
-  printf "${BOLD}%-20s %10s %10s %10s %10s${NC}\n" "Benchmark" "Perry ms" "Perry KB" "Mem KB" "Correct"
-fi
+printf "${BOLD}%-20s %10s %10s %10s %10s %10s %10s %10s${NC}\n" \
+  "Benchmark" "Perry ms" "Node ms" "Bun ms" "P/Node" "P/Bun" "Perry KB" "Correct"
 echo "────────────────────────────────────────────────────────────────────────────────────────────"
 
 median() {
   # Median of space-separated integers (simple, small N)
   python3 -c "import sys; xs=sorted(int(x) for x in sys.argv[1:]); print(xs[len(xs)//2] if xs else 0)" "$@"
+}
+
+join_samples() {
+  local IFS=,
+  printf '%s' "$*"
 }
 
 write_unchecked_correctness() {
@@ -222,17 +296,21 @@ for bench in $BENCHMARKS; do
   perry_ms="ERR"
   perry_rss=0
   p_out_samples=()
+  p_ms_samples=()
+  p_rss_samples=()
   if [[ -f "$SUITE_DIR/$name" ]]; then
-    p_ms_samples=()
-    p_rss_samples=()
     for (( run=0; run<RUNS; run++ )); do
       p_out="$RUN_OUTPUT_DIR/$name.perry.$run.out"
       p_out_samples+=("$p_out")
-      r_rss=$(measure_rss "$p_out" "$SUITE_DIR/$name")
+      measurement=$(measure_rss "$p_out" "$SUITE_DIR/$name")
+      r_rss="${measurement%%|*}"
+      r_status="${measurement##*|}"
       r_out=$(cat "$p_out")
       r_ms=$(extract_time "$r_out")
-      [[ -n "$r_ms" ]] && p_ms_samples+=("$r_ms")
-      [[ "$r_rss" -gt 0 ]] 2>/dev/null && p_rss_samples+=("$r_rss")
+      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+        p_ms_samples+=("$r_ms")
+        p_rss_samples+=("${r_rss:-0}")
+      fi
     done
     if [[ ${#p_ms_samples[@]} -gt 0 ]]; then
       perry_ms=$(median "${p_ms_samples[@]}")
@@ -246,17 +324,21 @@ for bench in $BENCHMARKS; do
   node_ms="-"
   node_rss=0
   n_out_samples=()
+  n_ms_samples=()
+  n_rss_samples=()
   if [[ $HAS_NODE -eq 1 ]]; then
-    n_ms_samples=()
-    n_rss_samples=()
     for (( run=0; run<RUNS; run++ )); do
       n_out="$RUN_OUTPUT_DIR/$name.node.$run.out"
       n_out_samples+=("$n_out")
-      r_rss=$(measure_rss "$n_out" "${NODE_CMD[@]}" "$SUITE_DIR/$bench")
+      measurement=$(measure_rss "$n_out" "${NODE_CMD[@]}" "$SUITE_DIR/$bench")
+      r_rss="${measurement%%|*}"
+      r_status="${measurement##*|}"
       r_out=$(cat "$n_out")
       r_ms=$(extract_time "$r_out")
-      [[ -n "$r_ms" ]] && n_ms_samples+=("$r_ms")
-      [[ "$r_rss" -gt 0 ]] 2>/dev/null && n_rss_samples+=("$r_rss")
+      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+        n_ms_samples+=("$r_ms")
+        n_rss_samples+=("${r_rss:-0}")
+      fi
     done
     if [[ ${#n_ms_samples[@]} -gt 0 ]]; then
       node_ms=$(median "${n_ms_samples[@]}")
@@ -266,12 +348,47 @@ for bench in $BENCHMARKS; do
     fi
   fi
 
+  # Run Bun RUNS times, take median. Missing Bun is an explicit supported
+  # fallback for local development; CI pins and installs it.
+  bun_ms="-"
+  bun_rss=0
+  b_out_samples=()
+  b_ms_samples=()
+  b_rss_samples=()
+  if [[ $HAS_BUN -eq 1 ]]; then
+    for (( run=0; run<RUNS; run++ )); do
+      b_out="$RUN_OUTPUT_DIR/$name.bun.$run.out"
+      b_out_samples+=("$b_out")
+      measurement=$(measure_rss "$b_out" "${BUN_CMD[@]}" "$SUITE_DIR/$bench")
+      r_rss="${measurement%%|*}"
+      r_status="${measurement##*|}"
+      r_out=$(cat "$b_out")
+      r_ms=$(extract_time "$r_out")
+      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+        b_ms_samples+=("$r_ms")
+        b_rss_samples+=("${r_rss:-0}")
+      fi
+    done
+    if [[ ${#b_ms_samples[@]} -gt 0 ]]; then
+      bun_ms=$(median "${b_ms_samples[@]}")
+    fi
+    if [[ ${#b_rss_samples[@]} -gt 0 ]]; then
+      bun_rss=$(median "${b_rss_samples[@]}")
+    fi
+  fi
+
   # Calculate ratios
   speed_ratio="-"
+  bun_speed_ratio="-"
   mem_ratio="-"
   if [[ "$perry_ms" != "ERR" && "$node_ms" != "-" ]]; then
     if [[ "$node_ms" -gt 0 ]] 2>/dev/null; then
       speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$node_ms\"):.2f}')" 2>/dev/null || echo "-")
+    fi
+  fi
+  if [[ "$perry_ms" != "ERR" && "$bun_ms" != "-" ]]; then
+    if [[ "$bun_ms" -gt 0 ]] 2>/dev/null; then
+      bun_speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$bun_ms\"):.2f}')" 2>/dev/null || echo "-")
     fi
   fi
   if [[ "$perry_rss" -gt 0 && "$node_rss" -gt 0 ]] 2>/dev/null; then
@@ -279,22 +396,28 @@ for bench in $BENCHMARKS; do
   fi
 
   correctness_json="$RUN_OUTPUT_DIR/$name.correctness.json"
+  reference="node"
+  reference_outputs=("${n_out_samples[@]}")
   if [[ $HAS_NODE -ne 1 ]]; then
-    write_unchecked_correctness "$correctness_json" "none" "node unavailable"
-  elif [[ ${#n_out_samples[@]} -eq 0 ]]; then
-    write_unchecked_correctness "$correctness_json" "none" "node produced no stdout sample"
+    reference="bun"
+    reference_outputs=("${b_out_samples[@]}")
+  fi
+  if [[ $HAS_NODE -ne 1 && $HAS_BUN -ne 1 ]]; then
+    write_unchecked_correctness "$correctness_json" "none" "Node and Bun unavailable"
+  elif [[ ${#reference_outputs[@]} -eq 0 ]]; then
+    write_unchecked_correctness "$correctness_json" "none" "$reference produced no stdout sample"
   else
     if [[ ${#p_out_samples[@]} -eq 0 ]]; then
       missing_out="$RUN_OUTPUT_DIR/$name.perry.missing.out"
       : > "$missing_out"
       p_out_samples=("$missing_out")
     fi
-    python3 - "$VERIFY_OUTPUT" "${n_out_samples[0]}" "$correctness_json" "${p_out_samples[@]}" <<'PY'
+    python3 - "$VERIFY_OUTPUT" "${reference_outputs[0]}" "$correctness_json" "$reference" "${p_out_samples[@]}" <<'PY'
 import importlib.util
 import json
 import sys
 
-verifier_path, expected_path, output_path, *actual_paths = sys.argv[1:]
+verifier_path, expected_path, output_path, reference, *actual_paths = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("benchmark_output_verifier", verifier_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -305,7 +428,7 @@ for index, actual_path in enumerate(actual_paths, start=1):
     report = module.compare_stdout_files(
         expected_path=expected_path,
         actual_path=actual_path,
-        reference="node",
+        reference=reference,
     )
     report["sample"] = index
     reports.append(report)
@@ -313,7 +436,7 @@ for index, actual_path in enumerate(actual_paths, start=1):
 if not reports:
     merged = {
         "status": "unchecked",
-        "reference": "node",
+        "reference": reference,
         "actual_lines": [],
         "expected_lines": [],
         "reason": "perry produced no stdout sample",
@@ -325,7 +448,7 @@ else:
         first = failures[0]
         merged = {
             "status": "fail",
-            "reference": "node",
+            "reference": reference,
             "actual_lines": first["actual_lines"],
             "expected_lines": first["expected_lines"],
             "reason": (
@@ -337,16 +460,16 @@ else:
         first = passes[0]
         merged = {
             "status": "pass",
-            "reference": "node",
+            "reference": reference,
             "actual_lines": first["actual_lines"],
             "expected_lines": first["expected_lines"],
-            "reason": f"all {len(reports)} Perry sample(s) matched Node semantic output",
+            "reason": f"all {len(reports)} Perry sample(s) matched {reference} semantic output",
         }
     else:
         first = reports[0]
         merged = {
             "status": "unchecked",
-            "reference": "node",
+            "reference": reference,
             "actual_lines": first["actual_lines"],
             "expected_lines": first["expected_lines"],
             "reason": first["reason"],
@@ -361,15 +484,39 @@ PY
   fi
   correctness_status=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$correctness_json")
 
-  if [[ $HAS_NODE -eq 1 ]]; then
-    printf "%-20s %10s %10s %10s %10s %10s %10s %10s\n" \
-      "$display" "${perry_ms}ms" "${node_ms}ms" "$speed_ratio" "${perry_rss}KB" "${node_rss}KB" "$mem_ratio" "$correctness_status"
-  else
-    printf "%-20s %10s %10s %10s %10s\n" "$display" "${perry_ms}ms" "${perry_rss}KB" "$mem_ratio" "$correctness_status"
-  fi
+  printf "%-20s %10s %10s %10s %10s %10s %10s %10s\n" \
+    "$display" "${perry_ms}ms" "${node_ms}ms" "${bun_ms}ms" "$speed_ratio" "$bun_speed_ratio" "${perry_rss}KB" "$correctness_status"
 
-  # Save result for JSON
-  echo "${name}|${perry_ms}|${perry_rss}|${node_ms}|${node_rss}|${correctness_json}" >> "$RESULTS_FILE"
+  # Save raw samples as JSONL. The artifact builder rejects any available
+  # runtime that did not produce exactly RUNS timing and RSS samples.
+  p_ms_csv=""; p_rss_csv=""; n_ms_csv=""; n_rss_csv=""; b_ms_csv=""; b_rss_csv=""
+  [[ ${#p_ms_samples[@]} -gt 0 ]] && p_ms_csv=$(join_samples "${p_ms_samples[@]}")
+  [[ ${#p_rss_samples[@]} -gt 0 ]] && p_rss_csv=$(join_samples "${p_rss_samples[@]}")
+  [[ ${#n_ms_samples[@]} -gt 0 ]] && n_ms_csv=$(join_samples "${n_ms_samples[@]}")
+  [[ ${#n_rss_samples[@]} -gt 0 ]] && n_rss_csv=$(join_samples "${n_rss_samples[@]}")
+  [[ ${#b_ms_samples[@]} -gt 0 ]] && b_ms_csv=$(join_samples "${b_ms_samples[@]}")
+  [[ ${#b_rss_samples[@]} -gt 0 ]] && b_rss_csv=$(join_samples "${b_rss_samples[@]}")
+  python3 - "$RESULTS_FILE" "$name" "$correctness_json" \
+    "$p_ms_csv" "$p_rss_csv" "$n_ms_csv" "$n_rss_csv" "$b_ms_csv" "$b_rss_csv" <<'PY'
+import json
+import sys
+
+path, name, correctness_path, *sample_groups = sys.argv[1:]
+def samples(raw):
+    return [int(value) for value in raw.split(",") if value != ""]
+
+runtime_names = ("perry", "node", "bun")
+runtimes = {}
+for index, runtime_name in enumerate(runtime_names):
+    wall_ms = samples(sample_groups[index * 2])
+    rss_kb = samples(sample_groups[index * 2 + 1])
+    if wall_ms or rss_kb:
+        runtimes[runtime_name] = {"wall_ms": wall_ms, "rss_kb": rss_kb}
+with open(correctness_path, encoding="utf-8") as handle:
+    correctness = json.load(handle)
+with open(path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"name": name, "runtimes": runtimes, "correctness": correctness}) + "\n")
+PY
 done
 set -e
 
@@ -383,53 +530,13 @@ if [[ -n "$JSON_OUT" ]]; then
 else
   CURRENT_JSON=$(mktemp)
 fi
-python3 - "$RESULTS_FILE" "$CURRENT_JSON" <<'PYEOF'
-import json, sys
-results_file, output_file = sys.argv[1], sys.argv[2]
-from datetime import datetime, timezone
-import subprocess
-
-commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                       capture_output=True, text=True).stdout.strip()
-
-benchmarks = {}
-with open(results_file) as f:
-    for line in f:
-        parts = line.strip().split('|')
-        if len(parts) < 6: continue
-        name, perry_ms, perry_rss, node_ms, node_rss, correctness_path = parts[:6]
-        entry = {
-            "perry_ms": int(perry_ms) if perry_ms not in ("ERR", "") else None,
-            "perry_rss_kb": int(perry_rss) if perry_rss else 0,
-        }
-        try:
-            with open(correctness_path) as correctness_file:
-                entry["correctness"] = json.load(correctness_file)
-        except Exception as exc:
-            entry["correctness"] = {
-                "status": "unchecked",
-                "reference": "none",
-                "actual_lines": [],
-                "expected_lines": [],
-                "reason": f"could not read correctness report: {exc}",
-            }
-        if node_ms not in ("-", ""):
-            entry["node_ms"] = int(node_ms)
-            entry["node_rss_kb"] = int(node_rss)
-            if entry["perry_ms"] and entry["node_ms"]:
-                entry["speed_ratio"] = round(entry["perry_ms"] / entry["node_ms"], 3)
-            if entry["perry_rss_kb"] and entry["node_rss_kb"]:
-                entry["memory_ratio"] = round(entry["perry_rss_kb"] / entry["node_rss_kb"], 3)
-        benchmarks[name] = entry
-
-result = {
-    "commit": commit,
-    "generated_at": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-    "benchmarks": benchmarks
-}
-with open(output_file, 'w') as f:
-    json.dump(result, f, indent=2)
-PYEOF
+rm -f "$CURRENT_JSON"
+python3 "$BENCHMARK_GATE" build \
+  --records "$RESULTS_FILE" \
+  --runtime-metadata "$RUNTIME_METADATA" \
+  --runs "$RUNS" \
+  --expected-benchmarks "$EXPECTED_BENCHMARKS" \
+  --output "$CURRENT_JSON"
 
 CORRECTNESS_FAIL_COUNT=$(python3 - "$CURRENT_JSON" <<'PY'
 import json
@@ -452,110 +559,13 @@ if [[ -f "$BASELINE" && $UPDATE_BASELINE -eq 0 ]]; then
   echo ""
 
   set +e
-  python3 - "$BASELINE" "$CURRENT_JSON" "$SPEED_THRESHOLD" "$MEMORY_THRESHOLD" <<'PYEOF'
-import json, sys
-
-baseline_file, current_file = sys.argv[1], sys.argv[2]
-speed_thresh = int(sys.argv[3])
-mem_thresh = int(sys.argv[4])
-
-baseline = json.load(open(baseline_file))
-current = json.load(open(current_file))
-
-regressions = []
-improvements = []
-correctness_failures = []
-
-print(f"Baseline commit: {baseline.get('commit', '?')} | Current commit: {current.get('commit', '?')}")
-print(f"Speed threshold: {speed_thresh}% | Memory threshold: {mem_thresh}%")
-print()
-print(f"{'Benchmark':<20s} {'Correct':>10s} {'Speed Delta':>12s} {'RAM Delta':>10s} {'Status':>12s}")
-print("-" * 72)
-
-# Noise floors: percentage swings on tiny measurements are unreliable.
-# A 7ms jitter on a 9ms benchmark is 78% but means nothing. Require both
-# the absolute delta AND percentage to exceed the threshold.
-#
-# 20ms was too tight for macos-14 runner-to-runner variance: at v0.5.1151
-# bench_string_heavy measured 60/81/104ms across three same-commit runs
-# (the 21-44ms swings hard-failed the release gate twice on pure noise,
-# while every CPU-bound row over ~300ms tracked within ~10%). Any release
-# regression worth hard-failing on (the v0.5.1129 hang was a ~4000x case)
-# clears 100ms by orders of magnitude.
-MIN_SPEED_DELTA_MS = 100  # need at least 100ms absolute change to flag
-MIN_RAM_DELTA_KB = 4096   # need at least 4MB absolute change to flag
-
-for name, cur in current["benchmarks"].items():
-    correctness = cur.get("correctness", {})
-    correctness_status = correctness.get("status", "unchecked")
-    if correctness_status == "fail":
-        reason = correctness.get("reason", "semantic output mismatch")
-        expected = correctness.get("expected_lines", [])
-        actual = correctness.get("actual_lines", [])
-        correctness_failures.append(
-            f"{name}: {reason}; expected={expected!r}; actual={actual!r}"
-        )
-        print(f"{name.replace('_', ' '):<20s} {correctness_status:>10s} {'-':>12s} {'-':>10s} {'INVALID':>12s}")
-        continue
-
-    base = baseline.get("benchmarks", {}).get(name)
-    if not base:
-        print(f"{name:<20s} {correctness_status:>10s} {'NEW':>12s} {'NEW':>10s} {'new':>12s}")
-        continue
-
-    # Speed comparison
-    speed_status = "ok"
-    speed_delta = "-"
-    if cur.get("perry_ms") is not None and base.get("perry_ms") is not None and base["perry_ms"] > 0:
-        abs_delta = cur["perry_ms"] - base["perry_ms"]
-        pct = abs_delta / base["perry_ms"] * 100
-        speed_delta = f"{pct:+.1f}%"
-        # Flag only if BOTH percentage AND absolute delta exceed threshold
-        if pct > speed_thresh and abs(abs_delta) >= MIN_SPEED_DELTA_MS:
-            speed_status = "REGRESSION"
-            regressions.append(f"{name}: speed +{pct:.1f}% ({base['perry_ms']}ms -> {cur['perry_ms']}ms)")
-        elif pct < -speed_thresh and abs(abs_delta) >= MIN_SPEED_DELTA_MS:
-            speed_status = "improved"
-            improvements.append(f"{name}: speed {pct:.1f}% ({base['perry_ms']}ms -> {cur['perry_ms']}ms)")
-
-    # Memory comparison
-    mem_status = "ok"
-    mem_delta = "-"
-    if cur.get("perry_rss_kb") and base.get("perry_rss_kb") and base["perry_rss_kb"] > 0:
-        abs_delta = cur["perry_rss_kb"] - base["perry_rss_kb"]
-        pct = abs_delta / base["perry_rss_kb"] * 100
-        mem_delta = f"{pct:+.1f}%"
-        if pct > mem_thresh and abs(abs_delta) >= MIN_RAM_DELTA_KB:
-            mem_status = "REGRESSION"
-            regressions.append(f"{name}: RAM +{pct:.1f}% ({base['perry_rss_kb']}KB -> {cur['perry_rss_kb']}KB)")
-        elif pct < -mem_thresh and abs(abs_delta) >= MIN_RAM_DELTA_KB:
-            mem_status = "improved"
-            improvements.append(f"{name}: RAM {pct:.1f}% ({base['perry_rss_kb']}KB -> {cur['perry_rss_kb']}KB)")
-
-    status = "REGRESSION" if "REGRESSION" in (speed_status, mem_status) else \
-             "improved" if "improved" in (speed_status, mem_status) else "ok"
-    print(f"{name.replace('_', ' '):<20s} {correctness_status:>10s} {speed_delta:>12s} {mem_delta:>10s} {status:>12s}")
-
-print()
-if correctness_failures:
-    print(f"{len(correctness_failures)} CORRECTNESS FAILURE(S):")
-    for failure in correctness_failures:
-        print(f"  - {failure}")
-    sys.exit(1)
-elif regressions:
-    print(f"{len(regressions)} REGRESSION(S):")
-    for r in regressions:
-        print(f"  - {r}")
-    sys.exit(1)
-elif improvements:
-    print(f"{len(improvements)} improvement(s), no regressions")
-else:
-    print("No significant changes")
-PYEOF
+  python3 "$BENCHMARK_GATE" compare "$BASELINE" "$CURRENT_JSON" \
+    --speed-threshold "$SPEED_THRESHOLD" \
+    --memory-threshold "$MEMORY_THRESHOLD"
   COMPARE_EXIT=$?
   set -e
 
-  if [[ $COMPARE_EXIT -ne 0 && $WARN_ONLY -eq 1 ]]; then
+  if [[ $COMPARE_EXIT -eq 1 && $WARN_ONLY -eq 1 ]]; then
     echo ""
     echo "--warn-only: benchmark gate failed but not failing build"
     COMPARE_EXIT=0
@@ -599,17 +609,5 @@ PY
     COMPARE_EXIT=0
   fi
 fi
-
-# Cleanup
-rm -f "$RESULTS_FILE"
-rm -rf "$RUN_OUTPUT_DIR"
-# Only remove CURRENT_JSON if it was a tempfile (not user-requested via --json-out)
-[[ -z "$JSON_OUT" ]] && rm -f "$CURRENT_JSON"
-cd "$SUITE_DIR" && rm -f 01_startup 02_loop_overhead 03_array_write 04_array_read 05_fibonacci \
-  06_math_intensive 07_object_create 08_string_concat 09_method_calls 10_nested_loops \
-  11_prime_sieve 12_binary_trees 13_factorial 14_closure 15_mandelbrot 16_matrix_multiply \
-  bench_gc_pressure bench_json_roundtrip bench_object_property bench_int_arithmetic \
-  bench_buffer_readwrite bench_array_grow bench_string_heavy bench_numeric_array_numeric \
-  bench_numeric_array_downgrade 2>/dev/null
 
 exit ${COMPARE_EXIT:-0}

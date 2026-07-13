@@ -520,3 +520,107 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
         "fancy-fallback header must keep rejecting after cache eviction"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UTF-16 code-unit indices (#5897)
+//
+// Every JS-observable string index is counted in UTF-16 code units — the same
+// unit `str.length` (`StringHeader::utf16_len`) reports. The regex module used
+// to count `chars()` (Unicode scalars) instead, which is only equivalent for
+// BMP text: a non-BMP scalar is one `char` but TWO code units.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn byte_index_to_utf16_index_counts_surrogate_pairs_as_two() {
+    // U+1D306 TETRAGRAM FOR CENTRE ("𝌆") is 4 UTF-8 bytes / 1 char / 2 UTF-16 units.
+    let s = "𝌆a";
+    assert_eq!(byte_index_to_utf16_index(s, 0), 0);
+    // Past the astral scalar: 2 code units, NOT 1 (the old `chars().count()`).
+    assert_eq!(byte_index_to_utf16_index(s, 4), 2);
+    // Past the trailing ASCII 'a'.
+    assert_eq!(byte_index_to_utf16_index(s, 5), 3);
+    // Matches what `str.length` reports for the same string.
+    assert_eq!(
+        byte_index_to_utf16_index(s, s.len()),
+        s.encode_utf16().count()
+    );
+
+    // Pure-BMP text is unchanged (code points == code units).
+    let bmp = "héllo";
+    assert_eq!(
+        byte_index_to_utf16_index(bmp, bmp.len()),
+        bmp.encode_utf16().count()
+    );
+
+    // Out-of-range byte index clamps to the end rather than panicking.
+    assert_eq!(byte_index_to_utf16_index(s, 999), 3);
+}
+
+#[test]
+fn utf16_index_to_byte_inverts_byte_index_to_utf16_index() {
+    let s = "a𝌆b𝌆";
+    // Walk every code-unit boundary and confirm the round trip.
+    for (byte, ch) in s.char_indices() {
+        let u16_idx = byte_index_to_utf16_index(s, byte);
+        assert_eq!(
+            utf16_index_to_byte(s, u16_idx),
+            byte,
+            "round trip at {byte}"
+        );
+        let _ = ch;
+    }
+    assert_eq!(utf16_index_to_byte(s, 0), 0);
+    // Index 1 addresses the LOW surrogate of the first "𝌆" — no UTF-8 boundary
+    // of its own, so it resolves just past that scalar.
+    assert_eq!(utf16_index_to_byte(s, 2), 1 + 4);
+    // At/beyond the end clamps to the buffer length.
+    assert_eq!(utf16_index_to_byte(s, 99), s.len());
+}
+
+#[test]
+fn exec_last_index_advances_by_utf16_code_units() {
+    // test262 built-ins/RegExp/prototype/exec/u-lastindex-value:
+    //   var r = /./ug; r.exec('𝌆'); assert.sameValue(r.lastIndex, 2);
+    // A single astral match must leave `lastIndex` at 2 (the string's `.length`),
+    // not 1 (its scalar count).
+    let re = js_regexp_new(make_string("."), make_string("ug"));
+    let arr = js_regexp_exec(re, make_string("𝌆"));
+    assert!(!arr.is_null(), "/./ug must match the astral scalar");
+    assert_eq!(
+        regex_last_index_offset(re),
+        2,
+        "lastIndex must be in UTF-16 code units"
+    );
+
+    // A second exec finds nothing more and resets lastIndex — proving the
+    // UTF-16 lastIndex maps back to a valid byte offset (the end of input).
+    let arr2 = js_regexp_exec(re, make_string("𝌆"));
+    assert!(
+        arr2.is_null(),
+        "second exec must not re-match past the input"
+    );
+    assert_eq!(regex_last_index_offset(re), 0, "no-match resets lastIndex");
+}
+
+#[test]
+fn global_exec_walks_astral_string_by_code_units() {
+    // Two astral scalars: `.` with `u` matches each whole scalar, so lastIndex
+    // must land on 2 then 4 — the same indices `str.length` / `charAt` use.
+    let re = js_regexp_new(make_string("."), make_string("ug"));
+    let subject = "𝌆𝌆";
+    assert!(!js_regexp_exec(re, make_string(subject)).is_null());
+    assert_eq!(regex_last_index_offset(re), 2);
+    assert!(!js_regexp_exec(re, make_string(subject)).is_null());
+    assert_eq!(regex_last_index_offset(re), 4);
+    // Exhausted → null, lastIndex reset.
+    assert!(js_regexp_exec(re, make_string(subject)).is_null());
+    assert_eq!(regex_last_index_offset(re), 0);
+}
+
+#[test]
+fn search_returns_utf16_index() {
+    // `"𝌆x".search(/x/)` is 2 (the astral scalar occupies indices 0 and 1),
+    // matching `"𝌆x".indexOf("x")`.
+    let re = js_regexp_new(make_string("x"), make_string(""));
+    assert_eq!(js_string_search_regex(make_string("𝌆x"), re), 2);
+}

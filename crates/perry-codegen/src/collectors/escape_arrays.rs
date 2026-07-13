@@ -2,6 +2,20 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 
+/// Distinguishes a literal-separator string split from an array literal. It
+/// must not overlap the valid literal-array length range: a 16-element array
+/// is a normal scalar-replacement candidate, not a split sentinel.
+const SPLIT_CANDIDATE_MARKER: u32 = u32::MAX;
+
+#[inline]
+fn scalar_candidate_allows_index(candidate_len: u32, index: u32) -> bool {
+    if candidate_len == SPLIT_CANDIDATE_MARKER {
+        index < MAX_SCALAR_ARRAY_LEN as u32
+    } else {
+        index < candidate_len
+    }
+}
+
 pub fn collect_non_escaping_arrays(
     stmts: &[perry_hir::Stmt],
     boxed_vars: &HashSet<u32>,
@@ -31,6 +45,167 @@ pub fn collect_non_escaping_array_used_indices(
     }
     collect_used_array_indices_in_stmts(stmts, non_escaping_arrays, &mut used);
     used
+}
+
+/// Constant array indices whose every use is a direct `.length` read. This
+/// lets scalar-replaced string splits compute the part's UTF-16 length without
+/// first materializing that part as a temporary JS string.
+pub fn collect_non_escaping_array_length_only_indices(
+    stmts: &[perry_hir::Stmt],
+    non_escaping_arrays: &HashMap<u32, u32>,
+) -> HashMap<u32, HashSet<u32>> {
+    let mut uses: HashMap<u32, HashMap<u32, (usize, usize)>> = HashMap::new();
+    collect_length_only_indices_in_stmts(stmts, non_escaping_arrays, &mut uses);
+    uses.into_iter()
+        .filter_map(|(id, indices)| {
+            let length_only = indices
+                .into_iter()
+                .filter_map(|(index, (total, length))| (total == length).then_some(index))
+                .collect::<HashSet<_>>();
+            (!length_only.is_empty()).then_some((id, length_only))
+        })
+        .collect()
+}
+
+fn collect_length_only_indices_in_stmts(
+    stmts: &[perry_hir::Stmt],
+    non_escaping_arrays: &HashMap<u32, u32>,
+    uses: &mut HashMap<u32, HashMap<u32, (usize, usize)>>,
+) {
+    use perry_hir::Stmt;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(expr) = init {
+                    collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => {
+                collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
+            }
+            Stmt::Return(expr) => {
+                if let Some(expr) = expr {
+                    collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_length_only_indices_in_expr(condition, non_escaping_arrays, uses);
+                collect_length_only_indices_in_stmts(then_branch, non_escaping_arrays, uses);
+                if let Some(else_branch) = else_branch {
+                    collect_length_only_indices_in_stmts(else_branch, non_escaping_arrays, uses);
+                }
+            }
+            Stmt::While { condition, body } => {
+                collect_length_only_indices_in_expr(condition, non_escaping_arrays, uses);
+                collect_length_only_indices_in_stmts(body, non_escaping_arrays, uses);
+            }
+            Stmt::DoWhile { body, condition } => {
+                collect_length_only_indices_in_stmts(body, non_escaping_arrays, uses);
+                collect_length_only_indices_in_expr(condition, non_escaping_arrays, uses);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    collect_length_only_indices_in_stmts(
+                        std::slice::from_ref(init.as_ref()),
+                        non_escaping_arrays,
+                        uses,
+                    );
+                }
+                if let Some(condition) = condition {
+                    collect_length_only_indices_in_expr(condition, non_escaping_arrays, uses);
+                }
+                if let Some(update) = update {
+                    collect_length_only_indices_in_expr(update, non_escaping_arrays, uses);
+                }
+                collect_length_only_indices_in_stmts(body, non_escaping_arrays, uses);
+            }
+            Stmt::Labeled { body, .. } => collect_length_only_indices_in_stmts(
+                std::slice::from_ref(body.as_ref()),
+                non_escaping_arrays,
+                uses,
+            ),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_length_only_indices_in_stmts(body, non_escaping_arrays, uses);
+                if let Some(catch) = catch {
+                    collect_length_only_indices_in_stmts(&catch.body, non_escaping_arrays, uses);
+                }
+                if let Some(finally) = finally {
+                    collect_length_only_indices_in_stmts(finally, non_escaping_arrays, uses);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_length_only_indices_in_expr(discriminant, non_escaping_arrays, uses);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        collect_length_only_indices_in_expr(test, non_escaping_arrays, uses);
+                    }
+                    collect_length_only_indices_in_stmts(&case.body, non_escaping_arrays, uses);
+                }
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_) => {}
+        }
+    }
+}
+
+fn collect_length_only_indices_in_expr(
+    expr: &perry_hir::Expr,
+    non_escaping_arrays: &HashMap<u32, u32>,
+    uses: &mut HashMap<u32, HashMap<u32, (usize, usize)>>,
+) {
+    use perry_hir::Expr;
+    if let Expr::IndexGet { object, index } = expr {
+        if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
+            if non_escaping_arrays
+                .get(id)
+                .is_some_and(|&len| scalar_candidate_allows_index(len, index))
+            {
+                let entry = uses.entry(*id).or_default().entry(index).or_default();
+                entry.0 += 1;
+            }
+        }
+    }
+    if let Expr::PropertyGet { object, property } = expr {
+        if property == "length" {
+            if let Expr::IndexGet { object, index } = object.as_ref() {
+                if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
+                    if non_escaping_arrays
+                        .get(id)
+                        .is_some_and(|&len| scalar_candidate_allows_index(len, index))
+                    {
+                        let entry = uses.entry(*id).or_default().entry(index).or_default();
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+    }
+    if let Expr::Closure { body, .. } = expr {
+        collect_length_only_indices_in_stmts(body, non_escaping_arrays, uses);
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        collect_length_only_indices_in_expr(child, non_escaping_arrays, uses);
+    });
 }
 
 fn collect_used_array_indices_in_stmts(
@@ -146,7 +321,7 @@ fn collect_used_array_indices_in_expr(
         if let Expr::LocalGet(id) = object.as_ref() {
             if let Some(&len) = non_escaping_arrays.get(id) {
                 if let Some(k) = const_index(index) {
-                    if k < len {
+                    if scalar_candidate_allows_index(len, k) {
                         used.entry(*id).or_default().insert(k);
                     }
                 }
@@ -179,6 +354,26 @@ pub fn find_array_candidates(
                 if (1..=MAX_SCALAR_ARRAY_LEN).contains(&n) {
                     candidates.insert(*id, n as u32);
                 }
+            }
+            // A non-escaping `text.split("literal")` can use the same scalar
+            // replacement machinery as an array literal. Its distinct marker
+            // still admits only small constant indices; the lowering materializes
+            // precisely those slots instead of allocating the result array.
+            Stmt::Let {
+                id,
+                init: Some(Expr::Call { callee, args, .. }),
+                ..
+            } if !boxed_vars.contains(id)
+                && !module_globals.contains_key(id)
+                && matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, property }
+                        if matches!(object.as_ref(), Expr::LocalGet(_))
+                            && property == "split"
+                )
+                && matches!(args.as_slice(), [Expr::String(s)] if !s.is_empty()) =>
+            {
+                candidates.insert(*id, SPLIT_CANDIDATE_MARKER);
             }
             Stmt::If {
                 then_branch,
@@ -360,7 +555,7 @@ pub fn check_array_escapes_in_expr(
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(&len) = candidates.get(id) {
                     match const_index(index) {
-                        Some(k) if k < len => {
+                        Some(k) if scalar_candidate_allows_index(len, k) => {
                             // Safe use — walk index for other candidates (none
                             // in a literal), skip object walk.
                             check_array_escapes_in_expr(index, candidates, escaped);
@@ -380,8 +575,16 @@ pub fn check_array_escapes_in_expr(
         // Safe: `arr.length` read folds to the constant N.
         Expr::PropertyGet { object, property } => {
             if let Expr::LocalGet(id) = object.as_ref() {
-                if candidates.contains_key(id) && property == "length" {
-                    return;
+                if let Some(&len) = candidates.get(id) {
+                    if property == "length" {
+                        // A scalar-replaced literal split has no statically
+                        // known runtime length, unlike a literal array.
+                        if len == SPLIT_CANDIDATE_MARKER {
+                            escaped.insert(*id);
+                        } else {
+                            return;
+                        }
+                    }
                 }
             }
             check_array_escapes_in_expr(object, candidates, escaped);
@@ -590,3 +793,25 @@ pub fn check_array_escapes_in_expr(
 /// Upper bound on field count — matches `MAX_SCALAR_ARRAY_LEN`. Beyond this the
 /// per-field alloca cost overtakes the arena-bump heap path we'd otherwise use.
 pub(crate) const MAX_SCALAR_OBJECT_FIELDS: usize = 16;
+
+#[cfg(test)]
+mod tests {
+    use super::{scalar_candidate_allows_index, SPLIT_CANDIDATE_MARKER};
+    use crate::collectors::MAX_SCALAR_ARRAY_LEN;
+
+    #[test]
+    fn split_marker_does_not_collide_with_maximum_literal_array_length() {
+        let literal_len = MAX_SCALAR_ARRAY_LEN as u32;
+        assert!(scalar_candidate_allows_index(literal_len, literal_len - 1));
+        assert!(!scalar_candidate_allows_index(literal_len, literal_len));
+
+        assert!(scalar_candidate_allows_index(
+            SPLIT_CANDIDATE_MARKER,
+            literal_len - 1
+        ));
+        assert!(!scalar_candidate_allows_index(
+            SPLIT_CANDIDATE_MARKER,
+            literal_len
+        ));
+    }
+}

@@ -100,6 +100,16 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
 
 /// `chunk.byteLength` for desiredSize accounting on byte streams; 1.0 for
 /// values whose byte length can't be derived (matches the count fallback).
+/// Clone a byte chunk as a fresh Uint8Array (spec `CloneAsUint8Array`, used by
+/// the byte-stream tee so branches never share a mutable buffer). Non-byte
+/// values pass through unchanged.
+pub(super) unsafe fn clone_byte_chunk(chunk_bits: u64) -> u64 {
+    match read_bytes_from_chunk(chunk_bits) {
+        Some(bytes) => alloc_uint8array_from_bytes(&bytes),
+        None => chunk_bits,
+    }
+}
+
 pub(super) unsafe fn chunk_byte_length(chunk_bits: u64) -> f64 {
     match read_bytes_from_chunk(chunk_bits) {
         Some(bytes) => bytes.len() as f64,
@@ -302,6 +312,10 @@ pub unsafe extern "C" fn js_reader_read_with_view(reader_handle: f64, view: f64)
     }
 
     let filled = fill_view_from_queue(stream_id, &info);
+    // A BYOB drain (or an about-to-park read on an empty queue) is consumer
+    // progress on this readable — release transform writes parked on
+    // backpressure, mirroring the default-reader path in `js_reader_read`.
+    super::transform::transform_release_writes(stream_id);
     if filled > 0 {
         let bytes = std::slice::from_raw_parts(info.data, filled);
         let value = alloc_view_of_kind(info.kind, info.elem_size, bytes);

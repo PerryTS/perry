@@ -333,8 +333,33 @@ pub(crate) fn lower_member_tail(
                     );
                     let outer_is_inherited_function_proto_method =
                         matches!(outer_static_member, Some("bind" | "call" | "apply"));
+                    // #5897: `RegExp` has NO intrinsic static-member fast path in
+                    // Perry — nothing downstream keys on the collapsed
+                    // `GlobalGet(0).<prop>` shape for it (no reified statics are
+                    // installed for `RegExp`, and its `.prototype` / `.length` /
+                    // `.name` reads are folded by the dedicated arms above and
+                    // below, off the AST receiver rather than `object_expr`).
+                    // Collapsing can therefore only LOSE the receiver: an
+                    // unrecognized static read resolved against `globalThis`
+                    // instead of the constructor, so after
+                    // `Function.prototype.indicator = 1` the spec-mandated
+                    // `RegExp.indicator` (inherited from `Function.prototype`,
+                    // which is `RegExp`'s [[Prototype]]) came back `undefined`
+                    // rather than `1` (test262 built-ins/RegExp/S15.10.5_A2_T2).
+                    // Keeping the receiver lets the runtime walk the constructor's
+                    // prototype chain, which already resolves inherited props.
+                    //
+                    // The same receiver-drop affects the OTHER built-in
+                    // constructors (`Array.indicator`, `Object.indicator`, …), but
+                    // there the collapsed shape IS load-bearing — the intrinsic
+                    // call/constant-fold paths for `Array.isArray`, `Object.keys`,
+                    // `Math.PI`, … depend on it — so lifting it for those needs a
+                    // complete per-builtin intrinsic-member table and is tracked
+                    // separately.
+                    let receiver_is_regexp_ctor = property == "RegExp";
                     if !outer_is_prototype_or_proto
                         && !receiver_is_namespace_value
+                        && !receiver_is_regexp_ctor
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
                         && !outer_is_reified_builtin_static_value

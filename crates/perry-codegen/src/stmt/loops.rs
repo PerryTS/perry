@@ -100,14 +100,19 @@ struct LengthHoistRejection {
 /// only on a guard-passing block so NaN, infinities, fractional values, and
 /// out-of-i32-range values keep JS comparison semantics.
 struct DynamicI32Bound {
-    counter_id: u32,
     op: perry_hir::CompareOp,
-    /// `i1` slot: true when `n` was a finite integral i32 at loop entry.
+    /// `i1` slot: true when the guard proved, at loop entry, that the whole
+    /// `icmp` loop stays inside i32 — see [`emit_guarded_i32_bound`].
     flag_slot: String,
     /// `i32` slot holding `fptosi(n)` (valid only when `flag_slot` is true).
     bound_i32_slot: String,
-    /// Whether we allocated the counter's i32 slot (so we remove it at exit).
-    counter_i32_was_fresh: bool,
+    /// `i32` slot the fast cond block compares against `bound_i32_slot`.
+    counter_i32_slot: String,
+    /// True when `counter_i32_slot` is loop-private: allocated here and
+    /// deliberately NOT published in `ctx.i32_counter_slots`, so the loop body
+    /// and the slow cond keep reading the counter's f64 slot (#6072). The
+    /// update block bumps it by hand in that case.
+    counter_is_private: bool,
 }
 
 #[derive(Clone)]
@@ -2057,20 +2062,76 @@ fn is_packed_f64_loop_index(
     )
 }
 
+/// Emit the one-time loop-entry guard behind the dynamic-bound `icmp` fast
+/// loop, and pick the i32 counter it compares.
+///
+/// The counter comes from one of two places:
+///
+/// * It already owns a **shared** i32 shadow (`ctx.i32_counter_slots`, put
+///   there at its `Let` site because it is index-used / strictly-i32-bounded).
+///   Every read of the local in this loop already comes from that shadow, so
+///   reusing it for the `icmp` introduces no new representation and no new
+///   hazard — the array-index fast path keeps working exactly as before.
+/// * It has no shadow. #6072: the old code installed one **into the shared
+///   map** right here, with nothing proving that the counter stays inside i32.
+///   A runtime bound above `INT32_MAX` — `for (let i = 2147483640; i < lim;
+///   i++)` with `lim = 2147483653` — wrapped the shadow to `INT32_MIN`, and
+///   because every `LocalGet` prefers the shadow over the f64 slot (issue #48),
+///   the counter went negative and the loop spun forever. Even the *slow*
+///   (guard-failed) cond read the wrapped shadow, so the runtime guard could
+///   not save it. Now we allocate a **loop-private** i32 counter that never
+///   enters the map: only the fast cond block reads it, the update block bumps
+///   it, and the body / slow cond keep reading the f64 slot, which `Update`
+///   maintains with exact JS semantics.
+///
+/// The guard proves, once, that the fast loop cannot leave i32 range:
+///
+/// * `n` is a number, integral, and `>= INT32_MIN`;
+/// * `n <= INT32_MAX` for `i < n` — the counter is only bumped after a taken
+///   `i < n`, so it tops out at `n`;
+/// * `n <= INT32_MAX - 1` for `i <= n` — there the counter tops out at `n + 1`;
+/// * (private counter only) the counter's entry value is itself an integral
+///   number in i32 range, so the initial `fptosi` is well-defined and the
+///   counter starts no higher than `INT32_MAX`.
+///
+/// Anything else (NaN, infinities, fractional or out-of-i32-range bounds,
+/// non-numbers, a counter seeded past 2^31) leaves the flag false and runs the
+/// generic per-iteration comparison with full JS semantics.
 fn emit_guarded_i32_bound(
     ctx: &mut FnCtx<'_>,
     counter_id: u32,
     bound_id: u32,
     op: perry_hir::CompareOp,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
     label_prefix: &str,
 ) -> Option<DynamicI32Bound> {
     let bound_slot = ctx.locals.get(&bound_id).cloned()?;
-    let counter_i32_was_fresh = ensure_loop_counter_i32_slot(ctx, counter_id)?;
+    let counter_slot = ctx.locals.get(&counter_id).cloned()?;
+    let shared_counter_i32 = ctx.i32_counter_slots.get(&counter_id).cloned();
+    let counter_is_private = shared_counter_i32.is_none();
+    if counter_is_private && !dynamic_bound_private_counter_is_safe(ctx, counter_id, update, body) {
+        return None;
+    }
+    let counter_i32_slot = match shared_counter_i32 {
+        Some(slot) => slot,
+        None => ctx.func.alloca_entry(I32),
+    };
+
+    // `i <= n` bumps the counter one past the bound on the last iteration, so
+    // the largest bound it can carry without overflowing is `INT32_MAX - 1`.
+    let max_bound = match op {
+        perry_hir::CompareOp::Le => "2147483646.0",
+        _ => "2147483647.0",
+    };
 
     let flag_slot = ctx.func.alloca_entry(I1);
     let bound_i32_slot = ctx.func.alloca_entry(I32);
     ctx.block().store(I1, "false", &flag_slot);
     ctx.block().store(I32, "0", &bound_i32_slot);
+    if counter_is_private {
+        ctx.block().store(I32, "0", &counter_i32_slot);
+    }
 
     let n_dbl = ctx.block().load(DOUBLE, &bound_slot);
     let is_number = emit_js_value_is_number(ctx, &n_dbl);
@@ -2085,7 +2146,7 @@ fn emit_guarded_i32_bound(
 
     ctx.current_block = number_idx;
     let ge_min = ctx.block().fcmp("oge", &n_dbl, "-2147483648.0");
-    let le_max = ctx.block().fcmp("ole", &n_dbl, "2147483647.0");
+    let le_max = ctx.block().fcmp("ole", &n_dbl, max_bound);
     let in_i32_range = ctx.block().and(I1, &ge_min, &le_max);
     ctx.block()
         .cond_br(&in_i32_range, &convert_label, &merge_label);
@@ -2094,31 +2155,91 @@ fn emit_guarded_i32_bound(
     let bound_i32 = ctx.block().fptosi(DOUBLE, &n_dbl, I32);
     let roundtrip = ctx.block().sitofp(I32, &bound_i32, DOUBLE);
     let is_integral = ctx.block().fcmp("oeq", &roundtrip, &n_dbl);
-    ctx.block().store(I1, &is_integral, &flag_slot);
     ctx.block().store(I32, &bound_i32, &bound_i32_slot);
+    if !counter_is_private {
+        // The shared shadow was already seeded (and range-checked) at the
+        // counter's `Let` site; only the bound needs proving here.
+        ctx.block().store(I1, &is_integral, &flag_slot);
+        ctx.block().br(&merge_label);
+        ctx.current_block = merge_idx;
+        return Some(DynamicI32Bound {
+            op,
+            flag_slot,
+            bound_i32_slot,
+            counter_i32_slot,
+            counter_is_private,
+        });
+    }
+
+    // Private counter: seed it from the f64 slot, but only on a block the
+    // range check dominates — `fptosi` of an out-of-range double is poison.
+    // A non-number counter (every NaN-boxed tag is a NaN double) fails the
+    // ordered compares below and takes the generic path.
+    let counter_idx = ctx.new_block(&format!("{label_prefix}.counter_i32.range"));
+    let counter_conv_idx = ctx.new_block(&format!("{label_prefix}.counter_i32.convert"));
+    let counter_label = ctx.block_label(counter_idx);
+    let counter_conv_label = ctx.block_label(counter_conv_idx);
+    ctx.block()
+        .cond_br(&is_integral, &counter_label, &merge_label);
+
+    ctx.current_block = counter_idx;
+    let c_dbl = ctx.block().load(DOUBLE, &counter_slot);
+    let c_ge_min = ctx.block().fcmp("oge", &c_dbl, "-2147483648.0");
+    let c_le_max = ctx.block().fcmp("ole", &c_dbl, "2147483647.0");
+    let c_in_range = ctx.block().and(I1, &c_ge_min, &c_le_max);
+    ctx.block()
+        .cond_br(&c_in_range, &counter_conv_label, &merge_label);
+
+    ctx.current_block = counter_conv_idx;
+    let c_i32 = ctx.block().fptosi(DOUBLE, &c_dbl, I32);
+    let c_roundtrip = ctx.block().sitofp(I32, &c_i32, DOUBLE);
+    let c_is_integral = ctx.block().fcmp("oeq", &c_roundtrip, &c_dbl);
+    ctx.block().store(I32, &c_i32, &counter_i32_slot);
+    ctx.block().store(I1, &c_is_integral, &flag_slot);
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
     Some(DynamicI32Bound {
-        counter_id,
         op,
         flag_slot,
         bound_i32_slot,
-        counter_i32_was_fresh,
+        counter_i32_slot,
+        counter_is_private,
     })
 }
 
-fn ensure_loop_counter_i32_slot(ctx: &mut FnCtx<'_>, counter_id: u32) -> Option<bool> {
-    if ctx.i32_counter_slots.contains_key(&counter_id) {
-        return Some(false);
+/// Static preconditions for handing a dynamic-bound loop a *loop-private* i32
+/// counter (#6072).
+///
+/// The private shadow is maintained by this loop alone — the update block bumps
+/// it by hand, because the counter is not in `ctx.i32_counter_slots` and so the
+/// generic `Update` / `LocalSet` lowerings never see it. That is only correct
+/// when the loop's own `i++` is the *only* thing that ever advances the
+/// counter, and when the counter lives in a plain f64 alloca (a boxed/captured
+/// or module-global counter is read through a box/root helper, which a stack
+/// shadow could not track).
+fn dynamic_bound_private_counter_is_safe(
+    ctx: &crate::expr::FnCtx<'_>,
+    counter_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> bool {
+    use perry_hir::{Expr, UpdateOp};
+    if !ctx.locals.contains_key(&counter_id)
+        || ctx.boxed_vars.contains(&counter_id)
+        || ctx.module_globals.contains_key(&counter_id)
+    {
+        return false;
     }
-    let counter_slot = ctx.locals.get(&counter_id).cloned()?;
-    let i32_slot = ctx.func.alloca_entry(I32);
-    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
-    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
-    ctx.block().store(I32, &cur_i32, &i32_slot);
-    ctx.i32_counter_slots.insert(counter_id, i32_slot);
-    Some(true)
+    let advanced_by_increment = matches!(
+        update,
+        Some(Expr::Update {
+            id,
+            op: UpdateOp::Increment,
+            ..
+        }) if *id == counter_id
+    );
+    advanced_by_increment && !stmts_mutate_local(body, counter_id)
 }
 
 fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
@@ -2428,16 +2549,17 @@ fn lower_for_after_init_with_i32_bound(
     // finite-integral-i32 guard and `fptosi(n)` once here, in the pre-loop
     // block, so the cond block can pick an `icmp slt/sle i32` fast loop when
     // safe and fall back to the generic comparison otherwise.
-    let dynamic_i32_bound: Option<DynamicI32Bound> =
-        if hoist_classification.is_none() && local_bound_classification.is_none() {
-            condition
-                .and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
-                .and_then(|(counter_id, bound_id, op)| {
-                    emit_guarded_i32_bound(ctx, counter_id, bound_id, op, label_prefix)
-                })
-        } else {
-            None
-        };
+    let dynamic_i32_bound: Option<DynamicI32Bound> = if hoist_classification.is_none()
+        && local_bound_classification.is_none()
+    {
+        condition
+            .and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
+            .and_then(|(counter_id, bound_id, op)| {
+                emit_guarded_i32_bound(ctx, counter_id, bound_id, op, update, body, label_prefix)
+            })
+    } else {
+        None
+    };
     let local_bound_index_bounds_are_safe =
         local_bound_classification.is_some_and(|(counter_id, _, op)| {
             matches!(op, perry_hir::CompareOp::Lt)
@@ -2561,43 +2683,46 @@ fn lower_for_after_init_with_i32_bound(
         }
     } else if let Some(ref dyn_bound) = dynamic_i32_bound {
         // Issue #168 follow-up: `i < n` / `i <= n` with a runtime-guarded
-        // local bound. Branch on the one-time finite-integral-i32 flag
-        // hoisted above: the fast loop uses `icmp`, and the slow loop keeps
-        // full JS comparison semantics. The branch is loop-invariant, so
-        // LLVM's LoopUnswitch peels it into two loops at -O2+; even
-        // unswitched, the hot path executes pure integer compares with no
-        // per-iteration `sitofp` / call.
-        if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&dyn_bound.counter_id).cloned() {
-            let fast_idx = ctx.new_block(&format!("{label_prefix}.cond.fast"));
-            let slow_idx = ctx.new_block(&format!("{label_prefix}.cond.slow"));
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(slow_idx);
-            let flag = ctx.block().load(I1, &dyn_bound.flag_slot);
-            ctx.block().cond_br(&flag, &fast_label, &slow_label);
+        // local bound. Branch on the one-time guard flag hoisted above: the
+        // fast loop uses `icmp`, and the slow loop keeps full JS comparison
+        // semantics. The branch is loop-invariant, so LLVM's LoopUnswitch peels
+        // it into two loops at -O2+; even unswitched, the hot path executes
+        // pure integer compares with no per-iteration `sitofp` / call.
+        //
+        // #6072: when the counter's i32 slot is loop-private, the slow cond
+        // below re-lowers the condition with the counter absent from
+        // `ctx.i32_counter_slots`, so it reads the f64 slot — the one the
+        // `Update` lowering keeps at exact JS semantics. That is what makes a
+        // guard failure (e.g. a bound past `INT32_MAX`) merely slow instead of
+        // an infinite loop over a wrapped counter.
+        let ctr_i32_slot = dyn_bound.counter_i32_slot.clone();
+        let fast_idx = ctx.new_block(&format!("{label_prefix}.cond.fast"));
+        let slow_idx = ctx.new_block(&format!("{label_prefix}.cond.slow"));
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(slow_idx);
+        let flag = ctx.block().load(I1, &dyn_bound.flag_slot);
+        ctx.block().cond_br(&flag, &fast_label, &slow_label);
 
-            // Fast path: integer induction variable + `icmp`.
-            ctx.current_block = fast_idx;
-            let ctr = ctx.block().load(I32, &ctr_i32_slot);
-            let bound = ctx.block().load(I32, &dyn_bound.bound_i32_slot);
-            let cmp = match dyn_bound.op {
-                perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
-                _ => ctx.block().icmp_slt(I32, &ctr, &bound),
-            };
-            ctx.block().cond_br(&cmp, &body_label, &exit_label);
+        // Fast path: integer induction variable + `icmp`.
+        ctx.current_block = fast_idx;
+        let ctr = ctx.block().load(I32, &ctr_i32_slot);
+        let bound = ctx.block().load(I32, &dyn_bound.bound_i32_slot);
+        let cmp = match dyn_bound.op {
+            perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
+            _ => ctx.block().icmp_slt(I32, &ctr, &bound),
+        };
+        ctx.block().cond_br(&cmp, &body_label, &exit_label);
 
-            // Slow path: generic per-iteration comparison (full coercion).
-            ctx.current_block = slow_idx;
-            if let Some(cond_expr) = condition {
-                let cv = lower_expr(ctx, cond_expr)?;
-                let i1 = lower_truthy(ctx, &cv, cond_expr);
-                ctx.block().cond_br(&i1, &body_label, &exit_label);
-            } else {
-                ctx.block().br(&body_label);
-            }
-            true
+        // Slow path: generic per-iteration comparison (full coercion).
+        ctx.current_block = slow_idx;
+        if let Some(cond_expr) = condition {
+            let cv = lower_expr(ctx, cond_expr)?;
+            let i1 = lower_truthy(ctx, &cv, cond_expr);
+            ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
-            false
+            ctx.block().br(&body_label);
         }
+        true
     } else {
         false
     };
@@ -2663,6 +2788,22 @@ fn lower_for_after_init_with_i32_bound(
     if let Some(update_expr) = update {
         let _ = lower_expr(ctx, update_expr)?;
     }
+    // #6072: a loop-private i32 counter is invisible to the `Update` lowering
+    // (it is not in `ctx.i32_counter_slots`), so advance it here. The classifier
+    // proved the update is exactly `counter++` and that nothing else writes the
+    // counter, so this stays in lockstep with the f64 slot. The `add` wraps
+    // (LLVM `add` without `nsw`) if the guard failed, but nothing reads this
+    // slot then — only the fast cond block does, and it is unreachable with a
+    // false flag.
+    if let Some(ref dyn_bound) = dynamic_i32_bound {
+        if dyn_bound.counter_is_private && !ctx.block().is_terminated() {
+            let slot = dyn_bound.counter_i32_slot.clone();
+            let blk = ctx.block();
+            let cur = blk.load(I32, &slot);
+            let next = blk.add(I32, &cur, "1");
+            blk.store(I32, &next, &slot);
+        }
+    }
     if !ctx.block().is_terminated() {
         ctx.block().br(&cond_label);
     }
@@ -2688,12 +2829,10 @@ fn lower_for_after_init_with_i32_bound(
         }
     }
     let _ = i32_local_bound_slot;
-    // Same cleanup for the runtime-guarded `any`-bound path.
-    if let Some(dyn_bound) = dynamic_i32_bound {
-        if dyn_bound.counter_i32_was_fresh {
-            ctx.i32_counter_slots.remove(&dyn_bound.counter_id);
-        }
-    }
+    // The runtime-guarded `any`-bound path needs no cleanup: it either reuses
+    // the counter's existing (Let-site) i32 slot or keeps its own private one
+    // out of `ctx.i32_counter_slots` entirely (#6072).
+    let _ = dynamic_i32_bound;
     ctx.bounded_index_pairs
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
     ctx.bounded_buffer_index_pairs

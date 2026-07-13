@@ -55,6 +55,17 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "TextDecoderStream",
     "CompressionStream",
     "DecompressionStream",
+    // The three core Web Streams constructors. Perry implements them (codegen
+    // lowers `new ReadableStream(…)` and `x instanceof ReadableStream`, and the
+    // class has an id), but the NAMES were never registered here or in codegen's
+    // globalThis-builtin list — so a bare `ReadableStream` identifier resolved to
+    // nothing: `typeof ReadableStream === "undefined"` and `"ReadableStream" in
+    // globalThis` was false, whereas Node exposes all three as functions.
+    // Libraries feature-detect precisely that (`typeof ReadableStream !==
+    // "undefined" ? … : …`) when deciding how to consume a `fetch()` body.
+    "ReadableStream",
+    "WritableStream",
+    "TransformStream",
     "Navigator",
     "URL",
     "URLSearchParams",

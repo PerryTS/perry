@@ -144,11 +144,40 @@ fn flatten_into<'a, F>(
     for export in &module.exports {
         match export {
             Export::Named { local, exported } => {
+                // #6304: `export { run }` does NOT imply `run` is defined here.
+                // When `run` is an *import* binding of this module —
+                //     import { run } from "./chunk-XXXX.js";
+                //     export { run };
+                // — the value lives in `./chunk-XXXX.js`, not here. That two-
+                // statement file is exactly the shape esbuild/bun emit for a
+                // shared chunk under `--splitting`, so it is the common case,
+                // not an edge case.
+                //
+                // Pre-fix this pushed `source_module = <this module>`, and the
+                // driver's namespace-entry classifier then searched THIS
+                // module's HIR for a function/class/global named `run`, found
+                // nothing (it is an import, not a definition), and fell back to
+                // a `ForeignVar` getter call on `perry_fn_<thismod>__run` —
+                // which the #461 stub loop claims with an undefined-returning
+                // stub. Net effect: the whole namespace of a re-export-only
+                // chunk came out `undefined`, silently.
+                //
+                // Resolving the binding to its defining module instead lets the
+                // classifier see the real function/class/global and emit the
+                // proper closure/global reference.
+                let origin =
+                    resolve_binding_origin(module_name, local, lookup).unwrap_or_else(|| {
+                        BindingOrigin {
+                            source_module: module_name.to_string(),
+                            source_local: local.clone(),
+                            namespace_of: None,
+                        }
+                    });
                 out.push(FlatExport {
                     name: exported.clone(),
-                    source_module: module_name.to_string(),
-                    source_local: local.clone(),
-                    nested_namespace_of: None,
+                    source_module: origin.source_module,
+                    source_local: origin.source_local,
+                    nested_namespace_of: origin.namespace_of,
                 });
             }
             Export::ReExport {
@@ -156,17 +185,27 @@ fn flatten_into<'a, F>(
                 imported,
                 exported,
             } => {
-                // The value lives in `source`; if `source` re-exports it
-                // again, we want to follow that chain so codegen reaches
-                // the ULTIMATE owner. But for the MVP we surface one hop
-                // — the cross-module access pattern works regardless of
-                // how many hops away the value's defining module is, as
-                // long as we name the directly-importing source.
+                // The value lives in `source` — but `source` may itself
+                // re-export it (a barrel chain, or a bundler emitting one
+                // chunk that re-exports another). Follow the chain to the
+                // ULTIMATE owner so the classifier sees a real definition
+                // rather than another forwarding stub. When nothing can be
+                // followed, `resolve_binding_origin` returns `None` and we
+                // fall back to naming the directly-importing source — the
+                // long-standing one-hop behaviour.
+                let origin =
+                    resolve_binding_origin(source, imported, lookup).unwrap_or_else(|| {
+                        BindingOrigin {
+                            source_module: source.clone(),
+                            source_local: imported.clone(),
+                            namespace_of: None,
+                        }
+                    });
                 out.push(FlatExport {
                     name: exported.clone(),
-                    source_module: source.clone(),
-                    source_local: imported.clone(),
-                    nested_namespace_of: None,
+                    source_module: origin.source_module,
+                    source_local: origin.source_local,
+                    nested_namespace_of: origin.namespace_of,
                 });
             }
             Export::ExportAll { source } => {
@@ -186,6 +225,177 @@ fn flatten_into<'a, F>(
             }
         }
     }
+}
+
+/// #6304: where an exported name's value actually lives, after following
+/// import bindings and re-export hops through the module graph.
+struct BindingOrigin {
+    /// Module that owns the binding.
+    source_module: String,
+    /// The name the binding has *in* `source_module`.
+    source_local: String,
+    /// `Some(m)` when the binding is the module namespace of `m` rather than
+    /// a plain value (`import * as X` / `export * as X`).
+    namespace_of: Option<String>,
+}
+
+/// True when `module` actually *defines* `name` (as opposed to merely
+/// importing or re-exporting it). A definition stops origin resolution.
+fn defines_local_binding(module: &Module, name: &str) -> bool {
+    module.functions.iter().any(|f| f.name == name)
+        || module.classes.iter().any(|c| c.name == name)
+        || module.globals.iter().any(|g| g.name == name)
+        || module.enums.iter().any(|e| e.name == name)
+}
+
+/// The import binding (if any) that `name` refers to in `module`.
+///
+/// Native / builtin imports (`import { readFile } from "fs"`) are deliberately
+/// excluded: their source is not a compiled module in the graph, so redirecting
+/// an export to them would name a module that has no HIR and no
+/// `perry_fn_*` symbols. Those keep the pre-existing local-lookup behaviour.
+fn find_import_binding(module: &Module, name: &str) -> Option<(String, ImportBindingKind)> {
+    for import in &module.imports {
+        if import.type_only || import.is_native {
+            continue;
+        }
+        for spec in &import.specifiers {
+            match spec {
+                crate::ir::ImportSpecifier::Named { imported, local } if local == name => {
+                    return Some((
+                        import.source.clone(),
+                        ImportBindingKind::Value(imported.clone()),
+                    ));
+                }
+                crate::ir::ImportSpecifier::Default { local } if local == name => {
+                    return Some((
+                        import.source.clone(),
+                        ImportBindingKind::Value("default".to_string()),
+                    ));
+                }
+                crate::ir::ImportSpecifier::Namespace { local } if local == name => {
+                    return Some((import.source.clone(), ImportBindingKind::Namespace));
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+enum ImportBindingKind {
+    /// A plain value binding; the payload is the name in the source module.
+    Value(String),
+    /// The whole module namespace of the import's source.
+    Namespace,
+}
+
+/// #6304: resolve `(module_name, local)` to the module that actually defines
+/// the binding, following import bindings and `ReExport` / `NamespaceReExport`
+/// hops.
+///
+/// Returns `None` when nothing could be followed — either `module_name` already
+/// defines the binding, or the chain leaves the compiled-module graph (a native
+/// import, or a source we have no HIR for). Callers then keep their pre-existing
+/// default, so this is strictly a refinement: it can only move an entry CLOSER
+/// to a real definition, never invent one.
+///
+/// Cycle-safe: a `(module, name)` pair already visited terminates the walk, so a
+/// self-referential barrel (`export * as Token from "./selfns"` inside
+/// `selfns.ts`) cannot loop forever.
+fn resolve_binding_origin<'a, F>(
+    start_module: &str,
+    start_local: &str,
+    lookup: &F,
+) -> Option<BindingOrigin>
+where
+    F: Fn(&str) -> Option<&'a Module>,
+{
+    let mut module_name = start_module.to_string();
+    let mut local = start_local.to_string();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    // Only report an origin once we've actually moved somewhere new; otherwise
+    // the caller's existing default already names the right module.
+    let mut moved = false;
+
+    loop {
+        if !seen.insert((module_name.clone(), local.clone())) {
+            break;
+        }
+        let Some(module) = lookup(&module_name) else {
+            break;
+        };
+        // A real definition here — this is the owner.
+        if defines_local_binding(module, &local) {
+            break;
+        }
+
+        // `import { x } from "src"; export { x }` — hop to `src`.
+        if let Some((source, kind)) = find_import_binding(module, &local) {
+            if lookup(&source).is_none() {
+                break;
+            }
+            match kind {
+                ImportBindingKind::Value(imported) => {
+                    module_name = source;
+                    local = imported;
+                    moved = true;
+                    continue;
+                }
+                ImportBindingKind::Namespace => {
+                    return Some(BindingOrigin {
+                        source_module: source.clone(),
+                        source_local: String::new(),
+                        namespace_of: Some(source),
+                    });
+                }
+            }
+        }
+
+        // `export { x } from "src"` / `export * as X from "src"` — hop through
+        // the re-export. Lets a chain of barrels (or bundler chunks that
+        // re-export one another) reach the ultimate owner.
+        let mut hopped = false;
+        for export in &module.exports {
+            match export {
+                Export::ReExport {
+                    source,
+                    imported,
+                    exported,
+                } if *exported == local => {
+                    if lookup(source).is_none() {
+                        break;
+                    }
+                    module_name = source.clone();
+                    local = imported.clone();
+                    moved = true;
+                    hopped = true;
+                    break;
+                }
+                Export::NamespaceReExport { source, name } if *name == local => {
+                    if lookup(source).is_none() {
+                        break;
+                    }
+                    return Some(BindingOrigin {
+                        source_module: source.clone(),
+                        source_local: String::new(),
+                        namespace_of: Some(source.clone()),
+                    });
+                }
+                _ => {}
+            }
+        }
+        if hopped {
+            continue;
+        }
+        break;
+    }
+
+    moved.then(|| BindingOrigin {
+        source_module: module_name,
+        source_local: local,
+        namespace_of: None,
+    })
 }
 
 /// Issue #100 / #1725 / #1674: collect every `Stmt::Let { init: Some(_), .. }`

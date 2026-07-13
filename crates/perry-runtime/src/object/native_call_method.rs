@@ -226,6 +226,23 @@ pub unsafe extern "C" fn js_native_call_method_apply_by_id(
     )
 }
 
+/// The numeric property key of an `obj[key](...)` call, as the raw `f64` index
+/// `js_object_get_index_polymorphic` consumes, or `None` when `key` is not a
+/// number. Both representations a numeric key can arrive in are accepted: a
+/// plain IEEE double (what a boxed `Any` capture reads back as — the #6328
+/// async-loop shape) and a NaN-boxed INT32 (the i32 loop-counter lowering).
+#[inline]
+fn numeric_index_key(key: JSValue) -> Option<f64> {
+    if key.is_int32() {
+        return Some(key.as_int32() as f64);
+    }
+    // `is_number` accepts every non-Perry-tagged bit pattern, NaN included; a
+    // NaN key is not an index and would only make the polymorphic read return
+    // `undefined`, so screen it out here rather than paying for the probe.
+    let raw = f64::from_bits(key.bits());
+    (key.is_number() && !raw.is_nan()).then_some(raw)
+}
+
 /// Dispatch `obj[key](args)` where `key` is a *runtime value* whose static type
 /// is not provably a string (`cur._op`, `arr[i]`, a `let`-rebound key, etc.).
 ///
@@ -335,6 +352,39 @@ pub unsafe extern "C" fn js_native_call_method_value(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // #6328: NUMERIC key — `fns[i](x)`, `resolvers[i](i)`. `js_to_property_key`
+    // canonicalizes the index to the string `"i"`, and the string branch below
+    // hands that to `js_native_call_method`, which dispatches by *method name*:
+    // own-field scan + prototype/class-id chain. An Array's ELEMENT storage is
+    // none of those, so the lookup misses, the tower returns `undefined`, and
+    // the call SILENTLY EVAPORATES — no throw, no diagnostic, exit code 0.
+    //
+    // Codegen only routes an `arr[i](...)` call here when it cannot prove `i`
+    // numeric (`try_lower_index_get_call` bails to the array element-call
+    // lowering when `is_numeric_expr` holds). Inside an async function it never
+    // can: the async-to-generator transform turns every body local into a
+    // boxed mutable capture typed `Any`, so `i` reads back as an untyped value
+    // and the call lands here. That is why `await Promise.all(ps)` evaporated —
+    // the `for (…) resolvers[i](i)` loop resolved nothing (#6328).
+    //
+    // Per spec `obj[k](...)` is Get(obj, k) then Call — the property READ wins.
+    // Resolve the element/own value first and invoke it when the key names
+    // something; only fall through to the name tower when it names nothing, so
+    // a numerically-named vtable method (`class C { 3() {} }`) keeps working.
+    if !is_symbol_key {
+        if let Some(index) = numeric_index_key(key_jsval) {
+            let field =
+                crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
+            let fv = JSValue::from_bits(field.to_bits());
+            if !fv.is_undefined() && !fv.is_null() {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
+                let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
             }
         }
     }
@@ -812,7 +862,18 @@ pub unsafe extern "C" fn js_native_call_method(
     // before the generic field-scan misses and throws "is not a function".
     if matches!(
         method_name,
-        "append" | "set" | "get" | "has" | "delete" | "toString"
+        "append"
+            | "set"
+            | "get"
+            | "has"
+            | "delete"
+            | "toString"
+            | "entries"
+            | "keys"
+            | "values"
+            | "getAll"
+            | "sort"
+            | "forEach"
     ) {
         let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
         if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
@@ -1716,6 +1777,33 @@ pub unsafe extern "C" fn js_native_call_method(
                     IMPLICIT_THIS.with(|c| c.set(prev_this));
                     return result;
                 }
+            }
+        }
+    }
+
+    // #6301: `class Bus extends EventTarget {}` — a fused
+    // `bus.dispatchEvent(ev)` / `this.addEventListener(...)` call. The static
+    // lowering in `lower_call/event_target.rs` only fires for a receiver whose
+    // class name is literally `EventTarget`, so a subclass call landed here and
+    // threw "<m> is not a function" (cac v7's `class CAC extends EventTarget`
+    // → #5931). Runs LAST, after every own-field / vtable / prototype-chain
+    // lookup above, so a subclass that OVERRIDES one of these names keeps its
+    // own method; only a genuine miss on a real event target reaches this.
+    if jsval.is_pointer()
+        && crate::event_target::is_event_target_method_name(method_name.as_bytes())
+    {
+        // Re-read the receiver from its root handle instead of reusing the
+        // `object` snapshot taken at entry: the dispatch arms above allocate, so
+        // a moving collection may have relocated it (the same reason the args go
+        // through `refreshed_args()`).
+        let receiver = object_handle.get_nanbox_f64();
+        let recv = (receiver.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        if !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) {
+            if let Some(bound) =
+                crate::event_target::event_target_method_bind(recv, method_name.as_bytes())
+            {
+                let args = refreshed_args();
+                return crate::closure::js_native_call_value(bound, args.as_ptr(), args.len());
             }
         }
     }

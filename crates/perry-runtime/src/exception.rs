@@ -267,7 +267,7 @@ pub(crate) unsafe fn string_header_to_string(ptr: *const crate::string::StringHe
 /// regular objects probe for `.message`/`.stack`, everything else goes
 /// through the generic `js_jsvalue_to_string` (which handles strings,
 /// numbers, booleans, arrays, user `[Symbol.toPrimitive]`, etc.).
-fn print_uncaught(value: f64) {
+pub(crate) fn print_uncaught(value: f64) {
     let bits = value.to_bits();
     let top16 = bits >> 48;
 

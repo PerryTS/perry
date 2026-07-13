@@ -585,23 +585,15 @@ pub(super) unsafe fn writable_stream_write(
         install_writable_backpressure_ready(stream_id, writer_id);
     }
     if let Some((cb, chunk, write_promise)) = start_write {
-        let start_fn = writable_write_start_microtask as *const u8;
-        perry_runtime::closure::js_register_closure_arity(start_fn, 0);
-        let start = perry_runtime::closure::js_closure_alloc(start_fn, 5);
-        perry_runtime::closure::js_closure_set_capture_ptr(
-            start,
-            0,
-            (stream_id as f64).to_bits() as i64,
-        );
-        perry_runtime::closure::js_closure_set_capture_ptr(
-            start,
-            1,
-            (writer_id as f64).to_bits() as i64,
-        );
-        perry_runtime::closure::js_closure_set_capture_ptr(start, 2, cb);
-        perry_runtime::closure::js_closure_set_capture_ptr(start, 3, chunk.to_bits() as i64);
-        perry_runtime::closure::js_closure_set_capture_ptr(start, 4, write_promise as i64);
-        perry_runtime::builtins::js_queue_microtask(start as i64);
+        // Spec/Node tick parity: with no write in flight, `writer.write(chunk)`
+        // invokes the sink's `write()` SYNCHRONOUSLY in the same job
+        // (WritableStreamDefaultControllerProcessWrite) — deferring it through
+        // a microtask cost one tick per write, which let a tee sibling's
+        // reader outrun a pipeTo pump (teepipe.js; Next.js cold-start head
+        // reorder). All registry locks are released above; `run_writable_write`
+        // re-enters the FFI safely (it is the same body the queued microtask
+        // ran).
+        run_writable_write(stream_id, writer_id, cb, chunk, write_promise);
     }
     promise
 }

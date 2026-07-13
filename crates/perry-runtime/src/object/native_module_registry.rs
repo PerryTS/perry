@@ -148,6 +148,33 @@ pub extern "C" fn js_nm_install_assert() {
         Ordering::Relaxed,
     );
 }
+/// Seed `globalThis.AsyncLocalStorage` with the `async_hooks` constructor
+/// BEFORE any module init runs. Next.js's `node-environment-baseline.js` does
+/// exactly this assignment, but only when its own init runs — and several
+/// Next modules (including the bundled app-page runtime) snapshot
+/// `globalThis.AsyncLocalStorage` at *their* module scope. Perry's eager init
+/// order can run those snapshots first, leaving them with `undefined` and a
+/// FakeAsyncLocalStorage that throws `Invariant: AsyncLocalStorage accessed in
+/// runtime where it is not available` (Next E504) on the first request.
+/// Emitted by codegen at the top of the entry `main`, so the value exists
+/// before ANY module-scope code observes it. (Divergence note: Node itself
+/// does not expose AsyncLocalStorage on globalThis; programs feature-detecting
+/// its absence will see it present under Perry.)
+#[no_mangle]
+pub extern "C" fn js_globalthis_seed_async_local_storage() {
+    let global = crate::object::js_get_global_this();
+    let ctor = crate::object::native_module::bound_native_callable_export_value(
+        "async_hooks",
+        "AsyncLocalStorage",
+    );
+    let key = crate::string::js_string_from_bytes(b"AsyncLocalStorage".as_ptr(), 17);
+    crate::object::js_object_set_field_by_name(
+        crate::value::js_nanbox_get_pointer(global) as *mut crate::object::ObjectHeader,
+        key,
+        ctor,
+    );
+}
+
 #[no_mangle]
 pub extern "C" fn js_nm_install_async_hooks() {
     NM_DISPATCH_REGISTRY[NmBucket::AsyncHooks as usize].store(

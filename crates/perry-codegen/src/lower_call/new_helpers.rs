@@ -9,7 +9,169 @@
 use perry_hir::{Class, Expr};
 
 use crate::expr::FnCtx;
-use crate::types::DOUBLE;
+use crate::types::{DOUBLE, I32};
+
+/// The native base classes perry models by STAMPING state onto the INSTANCE at
+/// construction time instead of giving it a real builtin prototype: the instance
+/// is a plain `ObjectHeader`, and `super()` installs the base's surface on it —
+/// an own-property method bag for `EventEmitter`, a hidden backing
+/// `MapHeader`/`SetHeader` for `Map`/`Set`, the standard event fields for
+/// `Event`/`CustomEvent`.
+///
+/// Because the install rides on `super()`, it used to be keyed on the class
+/// naming the base LITERALLY in its own `extends` clause. That misses the base
+/// in two directions:
+///
+///   * a class with no own constructor writes no `super()` at all, so the init
+///     never ran — `class M extends Map {}` produced an instance with no
+///     collection storage and therefore no `set`/`get`/`size` (#6325); and
+///   * an INDIRECT subclass names an intermediate USER class, not the base, so
+///     the init never ran either — `class D extends B {}` with `class B extends
+///     EventEmitter {}` produced an object with no emitter surface (#6326).
+///
+/// Both are the same hole, and both close by triggering on "the class CHAIN
+/// reaches the base" — see [`native_instance_base_in_chain`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NativeInstanceBase {
+    EventEmitter,
+    Map,
+    Set,
+    Event,
+    CustomEvent,
+}
+
+/// The native base a parent NAME denotes, if any.
+///
+/// Deliberately narrow. The other builtin bases perry supports have their own
+/// construction machinery that the chain walk must not preempt: `Error` &
+/// friends are handled by the Error-init arms, the `node:stream` classes by
+/// `node_stream_parent_kind` (which already walks the chain), `Request`/
+/// `Response` by the fetch-handle shims, `Promise` by the backing-cell shim,
+/// and `Array` by `js_array_subclass_init` (whose `super(n)` argument is a
+/// length, not an iterable — a no-arg implicit ctor has nothing to forward).
+pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
+    match name {
+        "EventEmitter" => Some(NativeInstanceBase::EventEmitter),
+        "Map" => Some(NativeInstanceBase::Map),
+        "Set" => Some(NativeInstanceBase::Set),
+        "Event" => Some(NativeInstanceBase::Event),
+        "CustomEvent" => Some(NativeInstanceBase::CustomEvent),
+        _ => None,
+    }
+}
+
+/// The native base `class` ultimately derives from, found by walking
+/// `extends_name` through user classes that carry no constructor of their own.
+///
+/// The walk STOPS (yielding `None`) at any ancestor that HAS a constructor —
+/// local or imported. Such an ancestor's `super()` performs the base init
+/// itself, and running it a second time here would re-stamp the surface over
+/// already-live state: a fresh listener bag over an emitter the ancestor's ctor
+/// already registered listeners on, a fresh empty backing over a seeded Map.
+/// This is the same ctor-less walk `node_stream_parent_kind` performs for the
+/// classic `node:stream` bases — generalized, not invented.
+///
+/// A user class in this module SHADOWS the builtin name: with `class Map {}` in
+/// the source, `ctx.classes` resolves `Map` first, so the walk descends into the
+/// user class and never reports a native base.
+pub(crate) fn native_instance_base_in_chain(
+    ctx: &FnCtx<'_>,
+    class: &Class,
+) -> Option<NativeInstanceBase> {
+    let mut cur = class.extends_name.as_deref();
+    for _ in 0..32 {
+        let name = cur?;
+        if ctx.imported_class_ctors.contains_key(name) {
+            return None;
+        }
+        match ctx.classes.get(name).copied() {
+            // A user class in this module: keep walking only while it delegates
+            // construction upward (no ctor of its own).
+            Some(parent) => {
+                if parent.constructor.is_some() {
+                    return None;
+                }
+                cur = parent.extends_name.as_deref();
+            }
+            // Not a class in this module — the chain has reached a builtin.
+            None => return native_instance_base(name),
+        }
+    }
+    None
+}
+
+/// Install a native base's surface on `this_box`.
+///
+/// `lowered_args` are the already-lowered constructor arguments. The JS spec's
+/// implicit derived constructor is `constructor(...args) { super(...args) }`, so
+/// forwarding them is exactly what a written-out `super(...)` would have done —
+/// which is how `new Seeded([["k", 9]])` on a `class Seeded extends Map {}`
+/// seeds its backing, and how `new (class extends Event {})("tick")` gets its
+/// `type`.
+pub(crate) fn emit_native_instance_base_init(
+    ctx: &mut FnCtx<'_>,
+    base: NativeInstanceBase,
+    this_box: &str,
+    lowered_args: &[String],
+) {
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    match base {
+        NativeInstanceBase::EventEmitter => {
+            // The bare emitter seeds no state from its options bag, so the args
+            // (already lowered for their side effects) are not forwarded.
+            crate::expr::lower_event_emitter_subclass_init(ctx, this_box);
+        }
+        NativeInstanceBase::Map | NativeInstanceBase::Set => {
+            let kind: i32 = if base == NativeInstanceBase::Map {
+                0
+            } else {
+                1
+            };
+            // `new Map(iterable)` / `new Set(iterable)` — extra args are ignored
+            // by the builtin, and `undefined` seeds an empty collection.
+            let iterable = lowered_args.first().cloned().unwrap_or(undef);
+            ctx.block().call(
+                DOUBLE,
+                "js_map_set_subclass_init",
+                &[
+                    (DOUBLE, this_box),
+                    (I32, &kind.to_string()),
+                    (DOUBLE, &iterable),
+                ],
+            );
+        }
+        NativeInstanceBase::Event | NativeInstanceBase::CustomEvent => {
+            let arg0 = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            let arg1 = lowered_args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            // `argc` drives the runtime's missing-`type` throw, matching Node's
+            // `new Event()` TypeError.
+            let argc = lowered_args.len().min(2).to_string();
+            let is_custom = if base == NativeInstanceBase::CustomEvent {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string();
+            ctx.block().call(
+                DOUBLE,
+                "js_event_subclass_init",
+                &[
+                    (DOUBLE, this_box),
+                    (DOUBLE, &arg0),
+                    (DOUBLE, &arg1),
+                    (I32, &argc),
+                    (I32, &is_custom),
+                ],
+            );
+        }
+    }
+}
 
 /// Emit `js_promise_subclass_init(this, executor)` for a no-own-ctor
 /// `class X extends Promise {}` on the runtime `new X(executor)` path. Runs the

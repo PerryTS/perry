@@ -30,6 +30,7 @@ ROOT="$(pwd)"
 PERRY_ROOT="$(cd ../.. && pwd)"
 RESULTS_DIR="$ROOT/results"
 mkdir -p "$RESULTS_DIR"
+ONLY="${HONEST_BENCH_ONLY:-1,3}"
 
 STRICT_OUTPUT=0
 for arg in "$@"; do
@@ -68,11 +69,24 @@ meta = {
         "cargo": run(["cargo", "--version"]),
         "zig":   run(["zig", "version"]),
         "python": run(["python3", "--version"]),
+        "node": run(["node", "--version"]),
+        "bun": run(["bun", "--version"]),
+        "oha": run([os.environ.get("HONEST_BENCH_OHA", "/tmp/oha"), "--version"]),
         "perry": run([os.path.join("$PERRY_ROOT", "target/release/perry"), "--version"]) or "(local build)",
     },
     "harness": {
         "warmup":   int(os.environ.get("HONEST_BENCH_WARMUP", 5)),
         "measured": int(os.environ.get("HONEST_BENCH_MEASURED", 20)),
+        "http_duration": os.environ.get("HONEST_BENCH_HTTP_DURATION", "15s"),
+        "http_warmup_duration": os.environ.get("HONEST_BENCH_HTTP_WARMUP_DUR", "5s"),
+        "http_concurrency": int(os.environ.get("HONEST_BENCH_HTTP_CONC", 10)),
+    },
+    "commands": {
+        "perry_http": ["<compiled-kernel>"],
+        "perry_http_compile": [os.path.join("$PERRY_ROOT", "target/release/perry"), "<kernel.ts>", "-o", "<compiled-kernel>"],
+        "node_http": ["node", "--import", "tsx", "<kernel.ts>"],
+        "bun_http": ["bun", "run", "<kernel.ts>"],
+        "oha": [os.environ.get("HONEST_BENCH_OHA", "/tmp/oha"), "-z", os.environ.get("HONEST_BENCH_HTTP_DURATION", "15s"), "-c", os.environ.get("HONEST_BENCH_HTTP_CONC", "10"), "-r", "0", "--no-tui", "--output-format", "json", "<url>"],
     },
 }
 print(json.dumps(meta, indent=2))
@@ -80,21 +94,25 @@ PY
 
 # ------------------------------ 2. build --------------------------------------
 if [[ -z "${HONEST_BENCH_SKIP_BUILD:-}" ]]; then
-  echo "--- building Rust image_conv"
-  (cd "$ROOT/workloads/3_image_convolution/rust" && cargo build --release >/dev/null)
-  echo "--- building Zig image_conv"
-  (cd "$ROOT/workloads/3_image_convolution/zig" && ./build.sh >/dev/null)
-  echo "--- building Perry image_conv"
-  (cd "$PERRY_ROOT" && target/release/perry "$ROOT/workloads/3_image_convolution/perry/image_conv.ts" \
-        -o "$ROOT/workloads/3_image_convolution/perry/image_conv" 2>&1 | tail -2)
+  if [[ ",${HONEST_BENCH_ONLY:-1,3}," == *,3,* ]]; then
+    echo "--- building Rust image_conv"
+    (cd "$ROOT/workloads/3_image_convolution/rust" && cargo build --release >/dev/null)
+    echo "--- building Zig image_conv"
+    (cd "$ROOT/workloads/3_image_convolution/zig" && ./build.sh >/dev/null)
+    echo "--- building Perry image_conv"
+    (cd "$PERRY_ROOT" && target/release/perry "$ROOT/workloads/3_image_convolution/perry/image_conv.ts" \
+          -o "$ROOT/workloads/3_image_convolution/perry/image_conv" 2>&1 | tail -2)
+  fi
 
-  echo "--- building Rust json_pipeline"
-  (cd "$ROOT/workloads/1_json_pipeline/rust" && cargo build --release >/dev/null)
-  echo "--- building Zig json_pipeline"
-  (cd "$ROOT/workloads/1_json_pipeline/zig" && ./build.sh >/dev/null)
-  echo "--- building Perry json_pipeline"
-  (cd "$PERRY_ROOT" && target/release/perry "$ROOT/workloads/1_json_pipeline/perry/json_pipeline.ts" \
-        -o "$ROOT/workloads/1_json_pipeline/perry/json_pipeline" 2>&1 | tail -2)
+  if [[ ",${HONEST_BENCH_ONLY:-1,3}," == *,1,* ]]; then
+    echo "--- building Rust json_pipeline"
+    (cd "$ROOT/workloads/1_json_pipeline/rust" && cargo build --release >/dev/null)
+    echo "--- building Zig json_pipeline"
+    (cd "$ROOT/workloads/1_json_pipeline/zig" && ./build.sh >/dev/null)
+    echo "--- building Perry json_pipeline"
+    (cd "$PERRY_ROOT" && target/release/perry "$ROOT/workloads/1_json_pipeline/perry/json_pipeline.ts" \
+          -o "$ROOT/workloads/1_json_pipeline/perry/json_pipeline" 2>&1 | tail -2)
+  fi
 
   # Workload 4 (http_fastify) is opt-in — only build it when selected, since it
   # compiles three Perry kernels and needs a one-time npm install of fastify.
@@ -105,19 +123,17 @@ if [[ -z "${HONEST_BENCH_SKIP_BUILD:-}" ]]; then
       (cd "$PERRY_ROOT" && target/release/perry "$HTTP_KERNEL_DIR/perry/$kernel.ts" \
             -o "$HTTP_KERNEL_DIR/perry/$kernel" 2>&1 | tail -2)
     done
-    if [[ ! -d "$HTTP_KERNEL_DIR/node/node_modules" ]]; then
-      echo "--- npm install fastify (http_fastify/node, one-time)"
-      (cd "$HTTP_KERNEL_DIR/node" && npm install --no-audit --no-fund --silent)
-    fi
+    echo "--- npm ci fastify (http_fastify/node)"
+    (cd "$HTTP_KERNEL_DIR/node" && npm ci --ignore-scripts --no-audit --no-fund --silent)
   fi
 fi
 
 # ------------------------------ 3. fixtures -----------------------------------
-if [[ ! -f "$ROOT/assets/input.json" ]]; then
+if [[ ",$ONLY," == *,1,* && ! -f "$ROOT/assets/input.json" ]]; then
   echo "--- generating JSON fixture (one-time)"
   python3 scripts/gen_json.py
 fi
-if [[ ! -f "$ROOT/assets/input_small.json" ]]; then
+if [[ ",$ONLY," == *,1,* && ! -f "$ROOT/assets/input_small.json" ]]; then
   # 100-record cut of the full fixture — all three languages run this
   python3 -c "
 import json
@@ -134,7 +150,6 @@ fi
 # run. Updated only when output semantics intentionally change (set
 # HONEST_BENCH_REFRESH_EXPECTED=1 to refresh).
 EXPECTED="$RESULTS_DIR/expected.json"
-ONLY="${HONEST_BENCH_ONLY:-1,3}"
 NODE_FLAGS="--experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON"
 NODE_IMG="$ROOT/workloads/3_image_convolution/node/image_conv.ts"
 NODE_JSON="$ROOT/workloads/1_json_pipeline/node/json_pipeline.ts"
@@ -249,6 +264,8 @@ if [[ ",$ONLY," == *,4,* ]]; then
     # kernel dir before exec.
     run_http "http_fastify_$kernel" node  "$route" \
       bash -c "cd '$NODE_KERNEL_DIR' && exec node --import tsx ./$kernel.ts"
+    run_http "http_fastify_$kernel" bun "$route" \
+      bash -c "cd '$NODE_KERNEL_DIR' && exec bun run ./$kernel.ts"
   done
 fi
 

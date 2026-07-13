@@ -199,5 +199,11 @@
     "added": "2026-07-04",
     "category": "module-inventory",
     "reason": "node:readline surface (#3698+) \u2014 compile_fail in the 2026-07-03 baseline (tls/zlib/readline compile cluster, possibly runner env); standing per #5917."
+  },
+  "test_gap_disposablestack_2875": {
+    "issue": "6364",
+    "added": "2026-07-13",
+    "category": "bug-open",
+    "reason": "DisposableStack/Symbol.dispose surface incomplete: `.disposed` returns undefined where Node returns false/true, and the dispose path leaves the adopt/defer callback count at 0. NEWLY VISIBLE, not a regression: DisposableStack is Node 24+, so under CI's old Node 22 pin *node itself* exited non-zero, the harness classified the test `node_fail`, and it was dropped from the gate entirely. Raising the oracle to 26 (.node-version) makes the pre-existing gap observable for the first time. Perry's implementation lives in crates/perry-runtime/src/disposable.rs. Flips to PASS when #6364 lands."
   }
 }

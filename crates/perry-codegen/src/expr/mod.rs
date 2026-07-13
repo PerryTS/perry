@@ -448,14 +448,6 @@ pub(crate) struct FnCtx<'a> {
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
     pub namespace_imports: &'a std::collections::HashSet<String>,
-    /// Issue #321: subset of `namespace_imports` populated only by the
-    /// "named import resolves to a `export * as Foo from "./Foo"`" branch
-    /// in `compile.rs`. The StaticMethodCall arm uses this to decide
-    /// whether to route var-shape members through `js_closure_callN`
-    /// (safe for the user-import shape) vs. preserving the pre-fix
-    /// direct-call (silently-wrong-but-doesn't-throw) path used by
-    /// `import * as` namespaces in effect's internal modules.
-    pub namespace_reexport_named_imports: &'a std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Consulted
     /// by namespace member access lowering to disambiguate when the same
@@ -872,6 +864,16 @@ pub(crate) struct FnCtx<'a> {
     /// `PropertyGet LocalGet(id), "length"` folds to the constant N.
     pub scalar_replaced_arrays: std::collections::HashMap<u32, Vec<String>>,
 
+    /// Scalar-replaced string-split parts whose only observed property is
+    /// `.length`. These slots hold the already-boxed numeric length, allowing
+    /// PropertyGet to bypass construction of a temporary StringHeader.
+    pub scalar_replaced_split_part_lengths:
+        std::collections::HashMap<u32, std::collections::HashMap<u32, String>>,
+
+    /// A non-escaping uppercase result represented by a slot holding its
+    /// original receiver. Only fused string operations may consume it.
+    pub scalar_replaced_uppercase_sources: std::collections::HashMap<u32, String>,
+
     /// Non-escaping array literals identified by escape analysis. Maps
     /// local_id → length. Used by the Stmt::Let lowering to intercept
     /// `let arr = [a, b, c]` and emit per-index allocas instead of a
@@ -879,6 +881,9 @@ pub(crate) struct FnCtx<'a> {
     pub non_escaping_arrays: std::collections::HashMap<u32, u32>,
     pub non_escaping_array_used_indices:
         std::collections::HashMap<u32, std::collections::HashSet<u32>>,
+    pub non_escaping_array_length_only_indices:
+        std::collections::HashMap<u32, std::collections::HashSet<u32>>,
+    pub fusible_uppercase_locals: std::collections::HashSet<u32>,
 
     /// Non-escaping object literals identified by escape analysis. Maps
     /// local_id → field names (declaration order, deduplicated). Used by

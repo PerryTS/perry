@@ -17,6 +17,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
 
+/// #5916: how many `export { X } from "src"` hops to follow when resolving an
+/// imported name back to the module that actually declares it. Barrel chains in
+/// the wild are a handful of levels deep at most; the cap is a belt-and-braces
+/// stop so a pathological (or cyclic) re-export graph can never spin forever.
+const MAX_REEXPORT_HOPS: usize = 16;
+
 /// Builds the complete codegen view of a foreign HIR class.
 ///
 /// Callers choose only the import binding (when the route introduces one) and
@@ -1737,6 +1743,30 @@ pub fn run_with_parse_cache(
                 perry_hir::Export::Named { .. } => {}
             }
         }
+        // #6304: `flatten_exports` also has to resolve `export { run }` where
+        // `run` is an IMPORT binding (`import { run } from "./chunk.js"` — the
+        // shape esbuild/bun emit for a shared chunk under `--splitting`). That
+        // walk reads `Import::source`, which likewise holds the raw specifier,
+        // so normalize it to `Module::name` on the same terms as the export
+        // sources above. Unresolvable / native sources are left verbatim; the
+        // resolver's `lookup` then misses and it falls back to the local
+        // behaviour instead of naming a module that has no HIR.
+        for import in rewritten.imports.iter_mut() {
+            if import.is_native {
+                continue;
+            }
+            if let Some((resolved_path, _)) = resolve_import(
+                &import.source,
+                path,
+                &ctx.project_root,
+                &ctx.compile_packages,
+                &ctx.compile_package_dirs,
+            ) {
+                if let Some(name) = path_to_module_name.get(&resolved_path) {
+                    import.source = name.clone();
+                }
+            }
+        }
         module_name_to_module.insert(hir_module.name.clone(), rewritten);
     }
     // Set of native-module paths that are dynamic-import targets. We
@@ -2034,6 +2064,16 @@ pub fn run_with_parse_cache(
                     .iter()
                     .filter(|(p, _)| {
                         self::collect_modules::is_nextjs_runtime_module(p)
+                            // A `perry.compilePackages` module may be reachable
+                            // ONLY through a runtime-computed require (Next's
+                            // require-hook aliases `styled-jsx` to its resolved
+                            // package directory); without a path-init anchor the
+                            // linker dead-strips it and the runtime require dies
+                            // with MODULE_NOT_FOUND even though it was compiled.
+                            || ctx
+                                .compile_package_dirs
+                                .values()
+                                .any(|dir| p.starts_with(dir))
                     })
                     .map(|(p, m)| {
                         (p.to_string_lossy().into_owned(), sanitize_name(&m.name))
@@ -2193,14 +2233,6 @@ pub fn run_with_parse_cache(
                 std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
-            // Issue #321: subset of `namespace_imports` populated only by the
-            // named-import-of-namespace-reexport branch below (`import { Effect
-            // } from "effect"` where effect's index.ts has `export * as Effect
-            // from "./Effect.js"`). The codegen's StaticMethodCall arm consults
-            // this to decide whether it can route var-shape members through
-            // `js_closure_callN`; see the field doc in codegen.rs.
-            let mut namespace_reexport_named_imports: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -2579,6 +2611,75 @@ pub fn run_with_parse_cache(
                         }
                     }
 
+                    // Issue #5916: the `NamespaceReExport` we are about to scan
+                    // for may not sit in the module we import from — it can be
+                    // one or more `export { X } from "src"` hops upstream. A
+                    // barrel that does
+                    //     export { Token } from "./selfns"   // ReExport
+                    // where `selfns.ts` declares
+                    //     export * as Token from "./selfns"  // NamespaceReExport
+                    // exposes `Token` as a NAMESPACE, but the scan below only
+                    // looked at the barrel's own exports, saw a plain `ReExport`,
+                    // and fell through to the ordinary value path. `Token.estimate(…)`
+                    // then lowered to a `StaticMethodCall` referencing
+                    // `__perry_wrap_perry_fn_<barrel>__Token` — a closure wrapper
+                    // no module emits, so the link failed outright. (A ReExport of
+                    // an ordinary function/const across the same hop links fine;
+                    // it is specifically a NAMESPACE-valued binding that needs the
+                    // namespace routing.)
+                    //
+                    // Walk the re-export chain first so the scan runs against the
+                    // module that actually DECLARES the namespace, under the name
+                    // it declares it with. When no hop applies (the overwhelmingly
+                    // common case) this leaves the scan target exactly where it was,
+                    // so behaviour is unchanged.
+                    let mut ns_scan_hir = source_module;
+                    let mut ns_scan_path = resolved_path_str.clone();
+                    let mut ns_scan_name = exported_name.clone();
+                    for _ in 0..MAX_REEXPORT_HOPS {
+                        let Some(hir) = ns_scan_hir else { break };
+                        // Already the declaring module — nothing to follow.
+                        if hir.exports.iter().any(|e| {
+                            matches!(
+                                e,
+                                perry_hir::Export::NamespaceReExport { name, .. }
+                                    if *name == ns_scan_name
+                            )
+                        }) {
+                            break;
+                        }
+                        // Follow `export { <ns_scan_name> } from "<src>"`.
+                        let Some((hop_src, hop_imported)) =
+                            hir.exports.iter().find_map(|e| match e {
+                                perry_hir::Export::ReExport {
+                                    source,
+                                    imported,
+                                    exported,
+                                } if *exported == ns_scan_name => {
+                                    Some((source.clone(), imported.clone()))
+                                }
+                                _ => None,
+                            })
+                        else {
+                            break;
+                        };
+                        let Some((hop_path, _)) = resolve_import(
+                            &hop_src,
+                            std::path::Path::new(&ns_scan_path),
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) else {
+                            break;
+                        };
+                        let Some(hop_hir) = ctx.native_modules.get(&hop_path) else {
+                            break;
+                        };
+                        ns_scan_path = hop_path.to_string_lossy().to_string();
+                        ns_scan_hir = Some(hop_hir);
+                        ns_scan_name = hop_imported;
+                    }
+
                     // Issue #310: when the source module re-exports the
                     // imported name as a namespace (`export * as Foo from
                     // "./Foo"`), the local binding behaves identically to
@@ -2589,17 +2690,17 @@ pub fn run_with_parse_cache(
                     // name, then route the local through `namespace_imports`
                     // + register the namespace target's full export surface.
                     let mut handled_as_namespace_reexport = false;
-                    if let Some(src_hir) = source_module {
+                    if let Some(src_hir) = ns_scan_hir {
                         for export in &src_hir.exports {
                             if let perry_hir::Export::NamespaceReExport {
                                 source: ns_src,
                                 name,
                             } = export
                             {
-                                if name != &exported_name {
+                                if name != &ns_scan_name {
                                     continue;
                                 }
-                                let importer = std::path::Path::new(&resolved_path_str);
+                                let importer = std::path::Path::new(&ns_scan_path);
                                 let Some((ns_target, _)) = resolve_import(
                                     ns_src,
                                     importer,
@@ -2615,13 +2716,6 @@ pub fn run_with_parse_cache(
                                     break;
                                 };
                                 namespace_imports.push(local_name.clone());
-                                // Issue #321: tag this local as a "named-import-
-                                // of-namespace-reexport" so codegen's
-                                // StaticMethodCall arm knows to route var-shape
-                                // members through `js_closure_callN`. See the
-                                // expr.rs StaticMethodCall comment for why this
-                                // is scoped narrowly.
-                                namespace_reexport_named_imports.insert(local_name.clone());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
@@ -2701,7 +2795,9 @@ pub fn run_with_parse_cache(
                                     // else the export name itself.
                                     namespace_member_origin_names.insert(
                                         (local_name.clone(), export_name.clone()),
-                                        resolved_origin_name.unwrap_or_else(|| export_name.clone()),
+                                        resolved_origin_name
+                                            .clone()
+                                            .unwrap_or_else(|| export_name.clone()),
                                     );
 
                                     let key = (origin_path.clone(), export_name.clone());
@@ -2735,7 +2831,15 @@ pub fn run_with_parse_cache(
                                     // `Cannot read properties of undefined`
                                     // on `program._tag`. Mirrors the
                                     // `Namespace { local }` branch above.
-                                    if exported_var_names.contains(&key) {
+                                    let origin_key_under_origin_name = resolved_origin_name
+                                        .as_ref()
+                                        .map(|name| (origin_path.clone(), name.clone()));
+                                    if exported_var_names.contains(&key)
+                                        || origin_key_under_origin_name
+                                            .as_ref()
+                                            .map(|key| exported_var_names.contains(key))
+                                            .unwrap_or(false)
+                                    {
                                         imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
@@ -3718,7 +3822,6 @@ pub fn run_with_parse_cache(
                 verify_native_regions,
                 disable_buffer_fast_path,
                 namespace_imports,
-                namespace_reexport_named_imports,
                 imported_classes,
                 imported_enums,
                 imported_async_funcs: imported_async_set,

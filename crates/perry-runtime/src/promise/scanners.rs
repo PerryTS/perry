@@ -563,14 +563,22 @@ fn scan_promise_all_states_step(
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (key, promise_state) = &mut states[state.index];
-                match state.slot {
-                    0 => visitor.visit_metadata_usize_slot(key),
-                    1 => visitor.visit_raw_mut_ptr_slot(&mut promise_state.result_promise),
-                    2 => visitor.visit_raw_mut_ptr_slot(&mut promise_state.results_arr),
-                    3 => visitor.visit_raw_mut_ptr_slot(&mut promise_state.state_arr),
+                let slot = state.slot;
+                let Some(entry) = states.entry_at_mut(state.index) else {
+                    break;
+                };
+                let rekeyed = match slot {
+                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
+                    1 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.result_promise),
+                    2 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.results_arr),
+                    3 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.state_arr),
                     _ => false,
                 };
+                // Evacuation rewrote the key in place: the position is still
+                // valid, the key → position index is not.
+                if slot == 0 && rekeyed {
+                    states.note_key_rewritten();
+                }
                 state.slot += 1;
             }
             state.index += 1;
@@ -592,17 +600,26 @@ fn scan_promise_settle_listeners_step(
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (key, listener) = &mut listeners[state.index];
-                match state.slot {
-                    0 => visitor.visit_metadata_usize_slot(key),
-                    1 => visitor.visit_raw_const_ptr_slot(&mut listener.on_fulfilled),
-                    2 => visitor.visit_raw_const_ptr_slot(&mut listener.on_rejected),
+                let slot = state.slot;
+                let Some(entry) = listeners.entry_at_mut(state.index) else {
+                    break;
+                };
+                let rekeyed = match slot {
+                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
+                    1 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled),
+                    2 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected),
                     _ => false,
                 };
+                if slot == 0 && rekeyed {
+                    listeners.note_key_rewritten();
+                }
                 state.slot += 1;
             }
+            let Some(entry) = listeners.entry_at_mut(state.index) else {
+                break;
+            };
             if !crate::async_context::scan_snapshot_roots_mut_step(
-                &mut listeners[state.index].1.context,
+                &mut entry.value.context,
                 visitor,
                 &mut state.context_entry,
                 &mut state.context_store,
@@ -635,18 +652,27 @@ fn scan_promise_overflow_reactions_step(
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (key, reaction) = &mut reactions[state.index];
-                match state.slot {
-                    0 => visitor.visit_metadata_usize_slot(key),
-                    1 => visitor.visit_raw_const_ptr_slot(&mut reaction.on_fulfilled),
-                    2 => visitor.visit_raw_const_ptr_slot(&mut reaction.on_rejected),
-                    3 => visitor.visit_raw_mut_ptr_slot(&mut reaction.next),
+                let slot = state.slot;
+                let Some(entry) = reactions.entry_at_mut(state.index) else {
+                    break;
+                };
+                let rekeyed = match slot {
+                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
+                    1 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled),
+                    2 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected),
+                    3 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.next),
                     _ => false,
                 };
+                if slot == 0 && rekeyed {
+                    reactions.note_key_rewritten();
+                }
                 state.slot += 1;
             }
+            let Some(entry) = reactions.entry_at_mut(state.index) else {
+                break;
+            };
             if !crate::async_context::scan_snapshot_roots_mut_step(
-                &mut reactions[state.index].1.context,
+                &mut entry.value.context,
                 visitor,
                 &mut state.context_entry,
                 &mut state.context_store,
@@ -932,17 +958,17 @@ pub(crate) fn test_clear_promise_scanner_roots() {
 pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
     let key = promise as usize;
     super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| {
-        listeners.borrow_mut().push((
+        listeners.borrow_mut().push(
             key,
             super::reactions::PromiseSettleListener {
                 on_fulfilled: std::ptr::null(),
                 on_rejected: std::ptr::null(),
                 context: capture_context(),
             },
-        ));
+        );
     });
     super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
-        reactions.borrow_mut().push((
+        reactions.borrow_mut().push(
             key,
             super::reactions::OverflowReaction {
                 on_fulfilled: std::ptr::null(),
@@ -950,10 +976,10 @@ pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
                 next: std::ptr::null_mut(),
                 context: capture_context(),
             },
-        ));
+        );
     });
     super::combinators::PROMISE_ALL_STATES.with(|states| {
-        states.borrow_mut().push((
+        states.borrow_mut().push(
             key,
             super::combinators::PromiseAllState {
                 result_promise: std::ptr::null_mut(),
@@ -961,7 +987,7 @@ pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
                 state_arr: std::ptr::null_mut(),
                 index: 0,
             },
-        ));
+        );
     });
 }
 
@@ -969,12 +995,11 @@ pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
 /// (settle listeners, overflow reactions, Promise.all states).
 #[cfg(test)]
 pub(crate) fn test_promise_side_table_counts_for(key: usize) -> (usize, usize, usize) {
-    let listeners = super::reactions::PROMISE_SETTLE_LISTENERS
-        .with(|l| l.borrow().iter().filter(|(k, _)| *k == key).count());
-    let reactions = super::reactions::PROMISE_OVERFLOW_REACTIONS
-        .with(|r| r.borrow().iter().filter(|(k, _)| *k == key).count());
-    let states = super::combinators::PROMISE_ALL_STATES
-        .with(|s| s.borrow().iter().filter(|(k, _)| *k == key).count());
+    let listeners =
+        super::reactions::PROMISE_SETTLE_LISTENERS.with(|l| l.borrow_mut().count_for_key(key));
+    let reactions =
+        super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|r| r.borrow_mut().count_for_key(key));
+    let states = super::combinators::PROMISE_ALL_STATES.with(|s| s.borrow_mut().count_for_key(key));
     (listeners, reactions, states)
 }
 

@@ -212,7 +212,13 @@ unsafe fn pipe_step(
         return;
     }
     loop {
-        match pipe_next_read(readable_id) {
+        let step = pipe_next_read(readable_id);
+        // Pipe progress on this readable is consumer progress: release
+        // transform writes parked on backpressure (chained
+        // pipeThrough(...).pipeTo(...) drains a transform's readable through
+        // here, never through js_reader_read).
+        super::transform::transform_release_writes(readable_id);
+        match step {
             PipeReadStep::Chunk(chunk) => {
                 pipe_write_then_continue(
                     readable_id,
@@ -296,6 +302,54 @@ unsafe fn reject_pipe(
     js_promise_reject(promise, f64::from_bits(reason));
 }
 
+/// Queue the next pipe cycle directly as a microtask (one tick), mirroring the
+/// pipeTo entry's initial scheduling.
+unsafe fn schedule_pipe_step(
+    readable_id: usize,
+    writable_id: usize,
+    promise: *mut Promise,
+    locks: PipeLockIds,
+    prevent_close: bool,
+) {
+    let closure =
+        perry_runtime::closure::js_closure_alloc(readable_stream_pipe_to_microtask as *const u8, 6);
+    perry_runtime::closure::js_register_closure_arity(
+        readable_stream_pipe_to_microtask as *const u8,
+        0,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        0,
+        (readable_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        1,
+        (writable_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        2,
+        box_promise(promise).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        3,
+        (locks.reader_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        4,
+        (locks.writer_id as f64).to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        closure,
+        5,
+        (if prevent_close { 1.0 } else { 0.0f64 }).to_bits() as i64,
+    );
+    perry_runtime::builtins::js_queue_microtask(closure as i64);
+}
+
 unsafe fn pipe_write_then_continue(
     readable_id: usize,
     writable_id: usize,
@@ -305,6 +359,17 @@ unsafe fn pipe_write_then_continue(
     chunk: u64,
 ) {
     let write_promise = writable_stream_write(writable_id, locks.writer_id, f64::from_bits(chunk));
+    // Spec ReadableStreamPipeTo awaits only BACKPRESSURE (writer.ready), not
+    // each write's completion. A sink that accepted the chunk synchronously
+    // (write promise already fulfilled) must not cost an extra reaction tick —
+    // Node's pipe pump runs read→write in lockstep with a racing consumer
+    // (teepipe.js: 1 write/tick; awaiting each write made Perry ~3 ticks/write
+    // and let a tee sibling's reader outrun the pipe — Next.js cold-start
+    // head reorder). Chain on the write promise only while it is pending.
+    if perry_runtime::promise::js_promise_state(write_promise) == 1 {
+        schedule_pipe_step(readable_id, writable_id, promise, locks, prevent_close);
+        return;
+    }
     let fulfilled = pipe_closure(
         readable_stream_pipe_to_write_fulfilled as *const u8,
         readable_id,

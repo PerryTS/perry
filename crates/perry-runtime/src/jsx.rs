@@ -23,7 +23,7 @@
 //! `lower_call.rs` passes both args as `double` (NaN-boxed), so both adapters
 //! are `(f64, f64) -> f64`.
 
-use crate::closure::{js_closure_call1, ClosureHeader, CLOSURE_MAGIC};
+use crate::closure::{js_closure_call1, ClosureHeader};
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, TAG_UNDEFINED};
 
@@ -48,6 +48,20 @@ pub extern "C" fn js_jsxs(type_arg: f64, props: f64) -> f64 {
 
 fn dispatch(type_arg: f64, props: f64) -> f64 {
     let jsval = JSValue::from_bits(type_arg.to_bits());
+
+    // #6320: `<P />` where `P` is a `Proxy(<component fn>)`. A proxy value is a
+    // small registry id NaN-boxed under POINTER_TAG, not a `ClosureHeader*`;
+    // `is_valid_closure` used to probe `*(id + 12)` for CLOSURE_MAGIC behind an
+    // 0x1000 floor and SIGSEGV'd on the unmapped low address. React calls the
+    // component through the proxy's [[Call]] (apply trap, else forwarded to the
+    // target), so do the same — components take no `this`, which is exactly what
+    // the value-call path binds.
+    if crate::proxy::js_proxy_is_proxy(type_arg) == 1 {
+        if crate::proxy::proxy_wraps_callable(type_arg) {
+            return unsafe { crate::closure::js_native_call_value(type_arg, &props, 1) };
+        }
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
 
     // Function component: call it with props. Its return value is already a
     // JSX node (or any value the component produced).
@@ -302,17 +316,15 @@ fn render_props_attrs(props: f64) -> String {
 
 /// Validate that `ptr` points at a real `ClosureHeader` (CLOSURE_MAGIC at
 /// offset 12) before invoking it as a function component.
+///
+/// #6320: this used to hand-roll the probe behind an `0x1000` floor, which is
+/// an order of magnitude below `HANDLE_BAND_MAX` — every registry handle (proxy
+/// id, fetch/zlib stream, stdlib id) sailed through and the `*(addr + 12)` read
+/// faulted. `closure::is_closure_ptr` is the single owner of this check: it
+/// rejects the handle band, the non-heap addresses, and misaligned pointers
+/// before touching memory.
 fn is_valid_closure(ptr: *const ClosureHeader) -> bool {
-    let addr = ptr as u64;
-    if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
-        return false;
-    }
-    let tag = unsafe {
-        std::ptr::read_volatile(
-            (ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
-        )
-    };
-    tag == CLOSURE_MAGIC
+    crate::closure::is_closure_ptr(ptr as usize)
 }
 
 #[cfg(test)]
@@ -383,5 +395,60 @@ mod tests {
     fn void_element_stays_self_closing() {
         let node = js_jsx(str_val("br"), f64::from_bits(TAG_UNDEFINED));
         assert_eq!(node_html(node), "<br/>");
+    }
+
+    /// A function component: `(props) => <span>{props.children}</span>`.
+    extern "C" fn span_component(_closure: *const ClosureHeader, props: f64) -> f64 {
+        js_jsx(str_val("span"), props)
+    }
+
+    /// Allocate `span_component` as a real capture-free closure value.
+    fn span_component_value() -> f64 {
+        let c = crate::closure::js_closure_alloc(span_component as *const u8, 0);
+        f64::from_bits(JSValue::pointer(c as *const u8).bits())
+    }
+
+    /// Control: a plain closure component still renders.
+    #[test]
+    fn closure_function_component_renders() {
+        let props = obj_with(&[("children", str_val("hi"))]);
+        let node = js_jsx(span_component_value(), props);
+        assert_eq!(node_html(node), "<span>hi</span>");
+    }
+
+    /// #6320: `<P />` where `P = new Proxy(Component, {})`. The proxy value is a
+    /// small registry id, not a `ClosureHeader*`; the old `is_valid_closure`
+    /// probe read `*(id + 12)` behind an `0x1000` floor and SIGSEGV'd. It must
+    /// dispatch through the proxy's [[Call]] (here: no trap → forward to the
+    /// target) and render the component.
+    #[test]
+    fn proxy_wrapped_function_component_dispatches_through_call() {
+        let proxy = crate::proxy::js_proxy_new(span_component_value(), obj_with(&[]));
+        let props = obj_with(&[("children", str_val("hi"))]);
+        let node = js_jsx(proxy, props);
+        assert_eq!(node_html(node), "<span>hi</span>");
+    }
+
+    /// A proxy over a NON-callable target is not a component — it must return
+    /// undefined rather than fault or render garbage.
+    #[test]
+    fn proxy_over_non_callable_target_is_not_a_component() {
+        let proxy = crate::proxy::js_proxy_new(obj_with(&[]), obj_with(&[]));
+        let node = js_jsx(proxy, obj_with(&[]));
+        assert_eq!(node.to_bits(), TAG_UNDEFINED);
+    }
+
+    /// The validator itself must reject every small-handle id (proxy ids, fetch
+    /// / zlib streams, stdlib registry handles) WITHOUT dereferencing them.
+    #[test]
+    fn is_valid_closure_rejects_the_handle_band() {
+        for handle in [
+            0x1usize, 0x1000, 0x10000, 0x40000, 0xE0000, 0xF000D, 0xF_FFF8,
+        ] {
+            assert!(
+                !is_valid_closure(handle as *const ClosureHeader),
+                "handle {handle:#x} must not be probed as a ClosureHeader"
+            );
+        }
     }
 }

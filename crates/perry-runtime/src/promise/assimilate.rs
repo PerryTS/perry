@@ -169,10 +169,12 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
                 js_promise_resolve(promise, value);
                 return;
             }
-            // No own `then` → intrinsic `then`; native promise→promise wiring.
+            // No own `then` → intrinsic `then`. Adopt via the native job so
+            // the outer settles exactly two ticks later (V8 hop parity; see
+            // `enqueue_native_adoption_job`).
             OwnThen::None => {
                 let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
-                js_promise_resolve_with_promise(promise, inner);
+                enqueue_native_adoption_job(promise, inner);
                 return;
             }
         }
@@ -183,6 +185,82 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
         Ok(None) => js_promise_resolve(promise, value),
         Err(reason) => js_promise_reject(promise, reason),
     }
+}
+
+/// ECMA-262 hop parity for resolving a promise WITH a native promise (no own
+/// `then`): V8 still runs `PromiseResolveThenableJob` (+1 tick) and the
+/// intrinsic `then` it invokes registers a reaction (+1 tick), so adoption of
+/// an already-settled inner is observable exactly two ticks after resolve —
+/// `new Promise(res => res(Promise.resolve(1))).then(X)` fires `X` on tick 3
+/// in Node, and `async fn` returning a promise behaves identically. The old
+/// synchronous `js_promise_resolve_with_promise` wiring settled the outer
+/// ZERO ticks later, which reordered any promise chain racing the adoption
+/// (Next.js cold-start head reorder: the flight client's module-dep chain
+/// lost exactly one such race against the RSC stream read loop).
+pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promise) {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+
+    let callback = js_closure_alloc(native_promise_adoption_job as *const u8, 2);
+    js_closure_set_capture_ptr(callback, 0, outer as i64);
+    js_closure_set_capture_ptr(callback, 1, inner as i64);
+
+    let context = capture_context();
+    let ids = crate::async_hooks::init_resource(
+        "PromiseResolveThenableJob",
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        false,
+    );
+    TASK_QUEUE.with(|q| {
+        q.borrow_mut().push_back(Task::Microtask {
+            callback,
+            context,
+            async_id: ids.async_id,
+            trigger_async_id: ids.trigger_async_id,
+        });
+    });
+    crate::event_pump::js_notify_main_thread();
+}
+
+/// Job body — the intrinsic-`then` invocation of the adoption job. For a
+/// settled inner the adoption must land as a REACTION (one more tick), never
+/// a synchronous copy, matching V8's reaction-job. A still-pending inner
+/// falls back to the existing chain wiring: its settlement path already
+/// delivers through the microtask runner.
+extern "C" fn native_promise_adoption_job(closure: *const crate::closure::ClosureHeader) -> f64 {
+    use crate::closure::js_closure_get_capture_ptr;
+
+    let outer = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let inner = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    if outer.is_null() || inner.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let settled = unsafe {
+        match (*inner).state {
+            PromiseState::Fulfilled => Some(((*inner).value, false)),
+            PromiseState::Rejected => Some(((*inner).reason, true)),
+            PromiseState::Pending => None,
+        }
+    };
+    match settled {
+        Some((value, is_error)) => {
+            // Null-closure AsyncStep = a pure propagation task: the runner
+            // resolves/rejects `outer` with `value` on the next tick.
+            TASK_QUEUE.with(|q| {
+                q.borrow_mut().push_back(Task::AsyncStep(
+                    std::ptr::null(),
+                    value,
+                    outer,
+                    is_error,
+                    capture_context(),
+                ));
+            });
+            crate::event_pump::js_notify_main_thread();
+        }
+        None => {
+            super::then::js_promise_resolve_with_promise(outer, inner);
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 #[inline]

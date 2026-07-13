@@ -18,6 +18,7 @@ mod id_scan;
 mod iter_result_rewrite;
 mod linearize;
 mod lower;
+mod per_iteration;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via
@@ -41,6 +42,7 @@ pub(crate) use linearize::{
 pub(crate) use lower::{
     transform_generator_function, transform_generator_function_with_extra_captures,
 };
+pub(crate) use per_iteration::{collect_per_iteration_ids, snapshot_suspended_loop_captures};
 pub(crate) use rewrite_returns::{
     body_contains_return, prepend_done_before_returns, rewrite_catch_returns_to_iter_result,
     rewrite_iter_results_in_stmts, rewrite_returns_as_done, rewrite_returns_to_labeled_break,

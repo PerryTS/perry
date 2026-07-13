@@ -1,7 +1,7 @@
 use super::{
-    byte_index_to_char_index, char_index_to_byte, is_valid_ptr, is_valid_regex_ptr, js_regexp_new,
-    js_string_from_str, set_exec_array_metadata_value, string_as_str,
-    throw_match_all_non_global_regex, RegExpHeader,
+    byte_index_to_utf16_index, is_valid_ptr, is_valid_regex_ptr, js_regexp_new, js_string_from_str,
+    set_exec_array_metadata_value, string_as_str, throw_match_all_non_global_regex,
+    utf16_index_to_byte, RegExpHeader,
 };
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
@@ -90,7 +90,7 @@ unsafe fn materialize_match_all_results(
     // needed because the never-match placeholder in `regex_ptr` would yield
     // an empty iterator otherwise.
     let str_data = string_as_str(s);
-    let search_start = char_index_to_byte(str_data, start_char_index);
+    let search_start = utf16_index_to_byte(str_data, start_char_index);
     let search_str = &str_data[search_start..];
 
     let mut owned: Vec<OwnedMatchAllData> = Vec::new();
@@ -112,7 +112,7 @@ unsafe fn materialize_match_all_results(
                     .collect(),
                 match_index: caps
                     .get(0)
-                    .map(|m| byte_index_to_char_index(str_data, search_start + m.start()))
+                    .map(|m| byte_index_to_utf16_index(str_data, search_start + m.start()) as f64)
                     .unwrap_or(start_char_index as f64),
             });
         }
@@ -134,7 +134,7 @@ unsafe fn materialize_match_all_results(
                     .collect(),
                 match_index: caps
                     .get(0)
-                    .map(|m| byte_index_to_char_index(str_data, search_start + m.start()))
+                    .map(|m| byte_index_to_utf16_index(str_data, search_start + m.start()) as f64)
                     .unwrap_or(start_char_index as f64),
             });
         }

@@ -292,6 +292,26 @@ unsafe fn collection_iter_obj_for_receiver(arr: *const ArrayHeader, kind: u8) ->
             _ => crate::collection_iter_object::js_set_values_iter_obj(s),
         });
     }
+    // Native URLSearchParams (ordinary heap object, `_entries`-leading shape —
+    // NOT a fetch-band handle): the #597 any-typed fold lands here too, e.g.
+    // `const sp = new URL(u).searchParams; sp.entries()` where `sp`'s static
+    // type erased to Any. Reading the params object as an `ArrayHeader`
+    // yielded an EMPTY iterator. Materialize the requested view as an eager
+    // array and drive it with the standard array iterator object.
+    {
+        let obj = raw as *mut crate::object::ObjectHeader;
+        if crate::url::search_params::shape_is_url_search_params(obj) {
+            let boxed = match kind {
+                1 => crate::url::js_url_search_params_keys_arr(obj),
+                2 => crate::url::js_url_search_params_entries_arr(obj),
+                _ => crate::url::js_url_search_params_values_arr(obj),
+            };
+            let ptr = (boxed.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+            if !ptr.is_null() {
+                return Some(array_iter_obj_raw(ptr, KIND_VALUES));
+            }
+        }
+    }
     // `class X extends Map|Set` instance — probe the hidden backing field via
     // the reconstructed NaN-boxed pointer value.
     let boxed = f64::from_bits(JSValue::pointer(arr as *const u8).bits());

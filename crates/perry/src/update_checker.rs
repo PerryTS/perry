@@ -4,15 +4,16 @@
 //! Runs non-blocking background checks on CLI invocation.
 
 use anyhow::{bail, Context, Result};
+use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fs;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const HUB_URL: &str = "https://hub.perryts.com/api/v1/version/latest";
 const GITHUB_URL: &str = "https://api.github.com/repos/PerryTS/perry/releases/latest";
@@ -477,8 +478,168 @@ fn require_https(url: &str, what: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn perform_self_update(verbose: bool) -> Result<()> {
+/// CLI output preferences forwarded into the self-update flow.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpdateOutput {
+    /// `-v`: log the extra "fetching"/"authenticated" steps.
+    pub verbose: bool,
+    /// `--quiet`: no download progress at all.
+    pub quiet: bool,
+    /// Colors are allowed (i.e. not `--no-color` / `NO_COLOR`).
+    pub color: bool,
+}
+
+/// Buffer size for the streaming download. Big enough that the progress bar
+/// isn't redrawn per-syscall on a fast link, small enough that a slow link
+/// still ticks several times a second.
+const DOWNLOAD_CHUNK: usize = 64 * 1024;
+
+/// How self-update download progress is reported.
+///
+/// The mode is chosen once, up front, from the CLI flags and the TTY state, so
+/// the non-interactive paths can never emit ANSI escapes or repaint: `perry
+/// update > update.log` and CI runs get exactly two plain lines.
+enum DownloadProgress {
+    /// Interactive stderr: a live bar with transferred/total, rate and ETA —
+    /// or a byte spinner when the download size is unknown.
+    Interactive(ProgressBar),
+    /// Piped stderr: one line when the download starts, one when it ends.
+    Plain { start: Instant },
+    /// `--quiet`: silent.
+    Silent,
+}
+
+impl DownloadProgress {
+    /// `total` is the download size when it is known (`Content-Length`, or the
+    /// size from the signed manifest); `None` selects the spinner fallback.
+    fn start(artifact: &str, total: Option<u64>, output: UpdateOutput) -> Self {
+        if output.quiet {
+            return Self::Silent;
+        }
+
+        // Wording mirrors packaging/install.sh (#4869) so the CLI and the
+        // install script read the same way.
+        if !std::io::stderr().is_terminal() {
+            match total {
+                Some(len) => eprintln!("Downloading {} ({})...", artifact, HumanBytes(len)),
+                None => eprintln!("Downloading {}...", artifact),
+            }
+            return Self::Plain {
+                start: Instant::now(),
+            };
+        }
+
+        eprintln!("Downloading {}...", artifact);
+        let bar = match total {
+            Some(len) => {
+                let bar = ProgressBar::new(len);
+                bar.set_style(download_bar_style(output.color));
+                bar
+            }
+            None => {
+                let bar = ProgressBar::new_spinner();
+                bar.set_style(download_spinner_style(output.color));
+                bar.enable_steady_tick(Duration::from_millis(120));
+                bar
+            }
+        };
+        Self::Interactive(bar)
+    }
+
+    fn advance(&self, bytes: u64) {
+        if let Self::Interactive(bar) = self {
+            bar.inc(bytes);
+        }
+    }
+
+    fn finish(&self, downloaded: u64) {
+        let elapsed = match self {
+            Self::Interactive(bar) => {
+                let elapsed = bar.elapsed();
+                bar.finish_and_clear();
+                elapsed
+            }
+            Self::Plain { start } => start.elapsed(),
+            Self::Silent => return,
+        };
+        eprintln!(
+            "  Done in {} ({})",
+            HumanDuration(elapsed),
+            HumanBytes(downloaded)
+        );
+    }
+}
+
+fn download_bar_style(color: bool) -> ProgressStyle {
+    let template = if color {
+        "  {spinner:.cyan} [{bar:30.cyan/dim}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})"
+    } else {
+        "  {spinner} [{bar:30}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})"
+    };
+    ProgressStyle::default_bar()
+        .template(template)
+        .expect("static download bar template")
+        .progress_chars("━╸─")
+}
+
+fn download_spinner_style(color: bool) -> ProgressStyle {
+    let template = if color {
+        "  {spinner:.cyan} {bytes} downloaded ({bytes_per_sec})"
+    } else {
+        "  {spinner} {bytes} downloaded ({bytes_per_sec})"
+    };
+    ProgressStyle::default_spinner()
+        .template(template)
+        .expect("static download spinner template")
+}
+
+/// A body that ends cleanly but short reads as `Ok(0)` and would otherwise sail
+/// through as success. `verify_cli_artifact` does catch it — but as a hash
+/// mismatch, which reads like a tampered or corrupt release rather than the
+/// dropped connection it actually is. The signed manifest already carries the
+/// exact size, so say so plainly.
+///
+/// `expected == 0` means the manifest carries no size; nothing to check.
+fn ensure_complete_download(downloaded: u64, expected: u64) -> Result<()> {
+    if expected > 0 && downloaded != expected {
+        anyhow::bail!(
+            "update artifact is truncated: expected {expected} bytes, received {downloaded} \
+             (the download ended early — check your connection and retry)"
+        );
+    }
+    Ok(())
+}
+
+/// Stream `reader` into `writer`, reporting bytes as they land.
+///
+/// Split out of `perform_self_update` so the streaming path can be exercised in
+/// tests without downloading a release or overwriting the running binary. The
+/// bytes written are exactly the bytes read — the staged artifact is still
+/// hash-verified against the signed manifest afterwards.
+fn copy_with_progress<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    progress: &DownloadProgress,
+) -> std::io::Result<u64> {
+    let mut buf = vec![0u8; DOWNLOAD_CHUNK];
+    let mut downloaded: u64 = 0;
+    loop {
+        let read = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        writer.write_all(&buf[..read])?;
+        downloaded += read as u64;
+        progress.advance(read as u64);
+    }
+    Ok(downloaded)
+}
+
+pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
+    let verbose = output.verbose;
     if verbose {
         eprintln!("Fetching latest version info...");
     }
@@ -583,8 +744,23 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
         .context("Failed to download update")?
         .error_for_status()
         .context("Failed to download update")?;
-    std::io::copy(&mut response, &mut archive).context("failed to stage update artifact")?;
-    use std::io::Write as _;
+    // Prefer the transfer's own Content-Length; fall back to the size in the
+    // already-verified manifest (a transfer-encoded body reports no length).
+    // If neither is usable we still show a spinner rather than a bogus 0%.
+    let total = response
+        .content_length()
+        .or(Some(manifest.artifact.size))
+        .filter(|len| *len > 0);
+    let progress = DownloadProgress::start(artifact_name, total, output);
+    let downloaded = copy_with_progress(&mut response, &mut archive, &progress)
+        .context("failed to stage update artifact")?;
+    progress.finish(downloaded);
+    // A body that ends cleanly but short reads as `Ok(0)` and would otherwise
+    // sail through as success. `verify_cli_artifact` below does catch it — but
+    // as a hash mismatch, which reads like a tampered or corrupt release rather
+    // than the dropped connection it actually is. The signed manifest already
+    // tells us the exact size, so say so plainly.
+    ensure_complete_download(downloaded, manifest.artifact.size)?;
     archive.flush()?;
     archive.sync_all()?;
     drop(archive);
@@ -1080,6 +1256,158 @@ fn entry_install_dir(journal: &RecoveryJournal) -> Result<&std::path::Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reader that hands back short reads and one `Interrupted` error, the
+    /// way a real socket does — the streaming copy must still land every byte.
+    struct ChunkyReader {
+        data: Vec<u8>,
+        pos: usize,
+        interrupt_at: Option<usize>,
+    }
+
+    impl Read for ChunkyReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.interrupt_at == Some(self.pos) {
+                self.interrupt_at = None;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "interrupted",
+                ));
+            }
+            let remaining = self.data.len() - self.pos;
+            if remaining == 0 {
+                return Ok(0);
+            }
+            // Short reads: at most 7 bytes at a time.
+            let take = remaining.min(buf.len()).min(7);
+            buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+            self.pos += take;
+            Ok(take)
+        }
+    }
+
+    #[test]
+    fn copy_with_progress_is_byte_identical() {
+        // Larger than DOWNLOAD_CHUNK so the buffered loop runs many times.
+        let data: Vec<u8> = (0..(DOWNLOAD_CHUNK * 2 + 1234))
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let mut reader = ChunkyReader {
+            data: data.clone(),
+            pos: 0,
+            interrupt_at: Some(9),
+        };
+        let mut sink: Vec<u8> = Vec::new();
+        let downloaded =
+            copy_with_progress(&mut reader, &mut sink, &DownloadProgress::Silent).unwrap();
+
+        assert_eq!(downloaded, data.len() as u64);
+        assert_eq!(sink, data, "staged bytes must match the transfer exactly");
+    }
+
+    #[test]
+    fn copy_with_progress_ticks_the_bar_to_completion() {
+        let data = vec![7u8; 4096];
+        let bar = ProgressBar::hidden();
+        bar.set_length(data.len() as u64);
+        let progress = DownloadProgress::Interactive(bar);
+
+        let mut reader = std::io::Cursor::new(data.clone());
+        let mut sink: Vec<u8> = Vec::new();
+        let downloaded = copy_with_progress(&mut reader, &mut sink, &progress).unwrap();
+
+        assert_eq!(downloaded, data.len() as u64);
+        match &progress {
+            DownloadProgress::Interactive(bar) => {
+                assert_eq!(bar.position(), data.len() as u64);
+            }
+            _ => panic!("expected an interactive bar"),
+        }
+    }
+
+    /// A body that ends CLEANLY but short (`Ok(0)` before the signed size) must
+    /// not be accepted. Before this check it slipped through `copy_with_progress`
+    /// as success; `verify_cli_artifact` caught it later, but as a hash mismatch
+    /// — which reads like a tampered release rather than a dropped connection.
+    #[test]
+    fn clean_eof_short_of_the_signed_size_is_rejected() {
+        /// Yields `len` bytes, then a clean EOF — no `UnexpectedEof`.
+        struct ShortBody {
+            left: usize,
+        }
+        impl Read for ShortBody {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.left == 0 {
+                    return Ok(0); // clean EOF, mid-artifact
+                }
+                let n = self.left.min(buf.len());
+                buf[..n].fill(b'x');
+                self.left -= n;
+                Ok(n)
+            }
+        }
+
+        let mut sink = Vec::new();
+        let downloaded = copy_with_progress(
+            &mut ShortBody { left: 500 },
+            &mut sink,
+            &DownloadProgress::Silent,
+        )
+        .expect("a clean EOF is not an io error — the copy itself succeeds");
+        assert_eq!(downloaded, 500);
+
+        let err = ensure_complete_download(downloaded, 1000).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("truncated"), "unexpected message: {msg}");
+        assert!(
+            msg.contains("1000") && msg.contains("500"),
+            "message should name both sizes: {msg}"
+        );
+
+        // A complete download passes, and a manifest with no size is not checked.
+        ensure_complete_download(1000, 1000).expect("complete download must pass");
+        ensure_complete_download(500, 0).expect("no manifest size => nothing to check");
+    }
+
+    #[test]
+    fn copy_with_progress_propagates_read_errors() {
+        struct Failing;
+        impl Read for Failing {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection reset",
+                ))
+            }
+        }
+        let mut sink: Vec<u8> = Vec::new();
+        let err = copy_with_progress(&mut Failing, &mut sink, &DownloadProgress::Silent)
+            .expect_err("a truncated download must not be reported as success");
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn quiet_selects_silent_progress_even_on_a_tty() {
+        let output = UpdateOutput {
+            verbose: false,
+            quiet: true,
+            color: true,
+        };
+        assert!(matches!(
+            DownloadProgress::start("perry-macos-aarch64.tar.gz", Some(1024), output),
+            DownloadProgress::Silent
+        ));
+    }
+
+    #[test]
+    fn download_styles_are_valid_templates() {
+        // `.expect()` inside these would panic on a malformed template; build
+        // every variant so a typo cannot reach a user mid-download.
+        let _ = download_bar_style(true);
+        let _ = download_bar_style(false);
+        let _ = download_spinner_style(true);
+        let _ = download_spinner_style(false);
+    }
 
     #[test]
     fn test_compare_versions() {

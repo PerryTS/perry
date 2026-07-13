@@ -599,6 +599,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     perry_runtime::js_set_native_crypto_dispatch(crate::crypto::js_crypto_native_dispatch);
     #[cfg(feature = "crypto")]
     perry_runtime::js_set_native_webcrypto_dispatch(crate::webcrypto::js_webcrypto_native_dispatch);
+    // Prune the stdlib CryptoKey-material map when the GC sweeps a key's
+    // backing buffer (otherwise it leaks an entry per key and a recycled
+    // address inherits the dead key's material).
+    #[cfg(feature = "crypto")]
+    perry_runtime::buffer::js_set_crypto_key_death_hook(crate::webcrypto::crypto_key_buffer_died);
     #[cfg(feature = "compression")]
     perry_runtime::js_set_native_zlib_dispatch(crate::zlib::js_zlib_native_dispatch);
     perry_runtime::js_set_native_querystring_dispatch(

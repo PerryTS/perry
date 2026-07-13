@@ -912,6 +912,10 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
             let captures_ref = captures_arc.clone();
 
             let handle = scope.spawn(move || {
+                // #6185: own agent id before any allocation or enqueue, so this
+                // worker's drains can't touch the spawner's queued work (and
+                // anything it queues is tagged as its own).
+                let worker_agent = crate::agent::enter_worker_agent();
                 // Each thread has its own arena (via thread_local!).
                 // Register this thread's root scanners BEFORE any allocation
                 // can cross a GC trigger — a fresh worker otherwise collects
@@ -953,6 +957,11 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                     results.push(serialize_nanbox_for_thread(result.to_bits()));
                 }
 
+                // #6185: results are already serialized into agent-independent
+                // form; this arena is about to go away with the scope, so purge
+                // anything this worker left in a global queue.
+                drop(gc_scope);
+                crate::agent::retire_agent(worker_agent);
                 (idx, results)
             });
             handles.push(handle);
@@ -1139,9 +1148,11 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
             let captures_ref = captures_arc.clone();
 
             let handle = scope.spawn(move || {
-                // See parallel_map's worker: scanner registration must precede
+                // See parallel_map's worker: own agent (#6185) before anything
+                // can allocate or enqueue, scanner registration must precede
                 // any allocation, and the rebuilt closure must be rooted
                 // across the per-element deserialization allocations.
+                let worker_agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
                 let mut kept = Vec::new();
 
@@ -1178,6 +1189,10 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                     }
                 }
 
+                // #6185: see parallel_map's worker — purge this agent's queue
+                // entries before its arena goes away.
+                drop(gc_scope);
+                crate::agent::retire_agent(worker_agent);
                 (idx, kept)
             });
             handles.push(handle);
@@ -1317,10 +1332,18 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     (*promise_header).gc_flags |= gc::GC_FLAG_PINNED;
 
     let promise_usize = promise as usize;
+    // #6185: the promise lives in the SPAWNING agent's heap, so that is the
+    // agent allowed to settle it. Captured here, on the spawning thread —
+    // reading it inside the worker would yield the worker's own agent.
+    let owner_agent = crate::agent::current_agent();
 
     // ── 3. Spawn background thread ───────────────────────────────────
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
+        // #6185: claim an agent id for this worker BEFORE it can allocate or
+        // enqueue anything, so every pointer it puts in a global queue is
+        // tagged as its own — and so its own drains skip the spawner's work.
+        let worker_agent = crate::agent::enter_worker_agent();
         // Register this thread's root scanners before any allocation can
         // cross a GC trigger (see the parallel_map worker for rationale).
         crate::gc::ensure_gc_initialized();
@@ -1356,15 +1379,28 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
 
         match call_result {
             Ok(result) => {
-                // Serialize result for transfer back to main thread
+                // Serialize result for transfer back to the spawning agent.
                 let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
-                queue_thread_result(promise_usize, serialized_result);
+                queue_thread_result(owner_agent, promise_usize, serialized_result);
             }
             Err(_) => {
                 // Thread panicked — resolve with undefined to avoid hanging promise
-                queue_thread_result(promise_usize, SerializedValue::Inline(TAG_UNDEFINED));
+                queue_thread_result(
+                    owner_agent,
+                    promise_usize,
+                    SerializedValue::Inline(TAG_UNDEFINED),
+                );
             }
         }
+
+        // #6185: this worker's arena is about to be unmapped. Drop the shadow
+        // scope first (the result is already serialized into owner-independent
+        // form above), then purge any queue entry still tagged with this agent —
+        // nothing can ever legally settle those, and their pointers are about to
+        // dangle. Must run AFTER the result is queued: that entry is tagged with
+        // `owner_agent`, not `worker_agent`, so it survives the purge.
+        drop(gc_scope);
+        crate::agent::retire_agent(worker_agent);
     });
 
     promise
@@ -1375,7 +1411,11 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
 /// Uses the stdlib's PENDING_DEFERRED mechanism. The converter function
 /// runs on the main thread during `js_stdlib_process_pending()`, which
 /// deserializes the value into the main thread's arena.
-fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
+fn queue_thread_result(
+    owner: crate::agent::AgentId,
+    promise_usize: usize,
+    result: SerializedValue,
+) {
     // We need to interact with perry-stdlib's deferred resolution queue.
     // Since perry-runtime cannot depend on perry-stdlib, we use the same
     // pattern as timer resolution: store the result and let the pump pick it up.
@@ -1389,6 +1429,7 @@ fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
             Err(poisoned) => poisoned.into_inner(),
         };
         pending.push(PendingThreadResult {
+            owner,
             promise_ptr: promise_usize,
             result,
         });
@@ -1418,24 +1459,42 @@ pub unsafe fn pin_promise(promise: *mut crate::promise::Promise) {
     (*header).gc_flags |= gc::GC_FLAG_PINNED;
 }
 
-/// Resolve the promise at `promise_usize` with a UTF-8 string on the main
-/// thread. Routes through the same pending-result path `spawn` uses (which
-/// unpins the promise, deserializes the value into the main arena, decrements
-/// the active-job count, and wakes the event loop). Used by `Atomics.waitAsync`.
-pub fn queue_promise_string_result(promise_usize: usize, value: &str) {
+/// Resolve the promise at `promise_usize` with a UTF-8 string on the agent that
+/// owns it. Routes through the same pending-result path `spawn` uses (which
+/// unpins the promise, deserializes the value into that agent's arena,
+/// decrements the active-job count, and wakes the event loop). Used by
+/// `Atomics.waitAsync`.
+///
+/// `owner` must be captured on the thread that CREATED the promise (#6185). The
+/// futex-waiter thread that calls this never runs JS and owns no heap, so it
+/// cannot derive the right agent from itself.
+pub fn queue_promise_string_result(
+    owner: crate::agent::AgentId,
+    promise_usize: usize,
+    value: &str,
+) {
     queue_thread_result(
+        owner,
         promise_usize,
         SerializedValue::String(value.as_bytes().to_vec()),
     );
 }
 
-/// A pending thread result waiting to be resolved on the main thread.
+/// A pending thread result waiting to be resolved on the agent that spawned it.
 struct PendingThreadResult {
+    /// #6185: the agent whose heap `promise_ptr` lives in — captured at spawn
+    /// time from the *spawning* thread, not the worker. Only that agent may
+    /// drain this entry; a worker pumping the global queue would otherwise
+    /// resolve a foreign-heap promise with a pointer into its own arena, which
+    /// is unmapped when it exits.
+    owner: crate::agent::AgentId,
     promise_ptr: usize,
     result: SerializedValue,
 }
 
-// Safety: SerializedValue is Send, usize is Send.
+// Safety: SerializedValue is Send, usize is Send. `promise_ptr` is a raw
+// pointer into `owner`'s arena; the `owner` tag plus the owner-filtered drain
+// in `js_thread_process_pending` is what makes dereferencing it sound.
 unsafe impl Send for PendingThreadResult {}
 
 /// Global queue for pending thread results.
@@ -1452,13 +1511,30 @@ static PENDING_THREAD_RESULTS: std::sync::Mutex<Vec<PendingThreadResult>> =
 /// Number of results processed.
 #[no_mangle]
 pub extern "C" fn js_thread_process_pending() -> i32 {
-    let mut pending = match PENDING_THREAD_RESULTS.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+    // #6185: take only the entries THIS agent owns. Every remaining entry names
+    // a promise in another agent's arena; draining it here would resolve a
+    // foreign-heap promise with a value deserialized into our arena (and, once
+    // that agent exits, dereference freed memory). Leave them for their owner —
+    // `retire_agent` purges any whose owner dies first.
+    let mine: Vec<PendingThreadResult> = {
+        let mut pending = match PENDING_THREAD_RESULTS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // Order-preserving partition: results must settle in the order they
+        // were queued (a `swap_remove` filter would reorder them).
+        let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(&mut *pending)
+            .into_iter()
+            .partition(|item| crate::agent::owns(item.owner));
+        *pending = theirs;
+        mine
     };
-    let count = pending.len() as i32;
+    let count = mine.len() as i32;
 
-    for item in pending.drain(..) {
+    // The lock is released before we settle anything: `js_promise_resolve` runs
+    // user `.then` callbacks, which can call `spawn` and re-enter
+    // `queue_thread_result` (deadlock on a re-entrant lock of the same Mutex).
+    for item in mine {
         unsafe {
             let promise = item.promise_ptr as *mut crate::promise::Promise;
 
@@ -1493,12 +1569,27 @@ pub extern "C" fn js_thread_has_pending() -> i32 {
     if ACTIVE_THREAD_JOBS.load(Ordering::SeqCst) != 0 {
         return 1;
     }
-    let pending = PENDING_THREAD_RESULTS.lock().unwrap();
-    if pending.is_empty() {
-        0
-    } else {
-        1
-    }
+    // #6185: only entries THIS agent can actually settle count as work keeping
+    // its loop alive. Reporting a foreign entry here would spin the event loop
+    // forever on a result the drain (correctly) refuses to touch.
+    let pending = match PENDING_THREAD_RESULTS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    i32::from(pending.iter().any(|item| crate::agent::owns(item.owner)))
+}
+
+/// Drop every queued result owned by `agent`. Called from
+/// `agent::retire_agent` when a worker thread exits: those entries name
+/// promises in an arena that is being unmapped, so no thread can ever settle
+/// them, and leaving them would keep `js_thread_has_pending` honest but the
+/// pointers dangling.
+pub(crate) fn purge_agent_thread_results(agent: crate::agent::AgentId) {
+    let mut pending = match PENDING_THREAD_RESULTS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    pending.retain(|item| item.owner != agent);
 }
 
 #[cfg(test)]

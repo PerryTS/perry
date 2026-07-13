@@ -233,6 +233,27 @@ pub(super) fn try_global_builtins(
                     args: vec![specifier],
                 }));
             }
+            // require.resolve fallback: node_modules subpath probing for
+            // specifiers never statically required (styled-jsx/package.json).
+            "__perry_require_resolve_node_modules" => {
+                let from = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                let specifier = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "requireResolveNodeModules".to_string(),
+                    args: vec![from, specifier],
+                }));
+            }
             // Wall 54: register an AOT-compiled module's exports under its
             // absolute source path (emitted at the tail of each CJS wrapper).
             "__perry_register_path_module" => {

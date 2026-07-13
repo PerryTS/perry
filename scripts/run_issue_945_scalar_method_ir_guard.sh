@@ -2,8 +2,20 @@
 # Regression for #945: a non-escaping `new C()` followed by a trivial
 # `obj.method()` where `method() { return this.field; }` should scalar-replace
 # the instance instead of heap-allocating and dispatching the method.
+#
+# The mirror half is just as important: when method lookup is NOT statically
+# stable (own-property write, prototype mutation, …) the instance MUST be
+# heap-allocated and the method MUST be dispatched (#5872).
 
 set -e
+
+# Every helper a `new C()` site may lower to. #5294 outlined the per-new-site
+# inline bump allocator, so class instances now allocate through
+# `js_object_alloc_class_inline_keys` instead of emitting an inline
+# `js_inline_arena_state` sequence; array literals still use the inline form.
+# Both spellings count as "this object was heap-allocated".
+ALLOC_RE='call .*@(js_inline_arena_state|js_object_alloc)'
+DISPATCH_RE='call .*@(js_native_call_value|js_native_call_method|perry_method_.*__getValue)'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -309,11 +321,11 @@ for fn in \
     grep -En "^define .*@perry_fn_unsafe_ts__${fn}\\(" "$UNSAFE_IR_FILE" || true
     exit 1
   fi
-  if ! grep -q 'call .*@js_inline_arena_state' "$FN_IR"; then
+  if ! grep -Eq "$ALLOC_RE" "$FN_IR"; then
     echo "FAIL: unsafe ${fn}() was scalarized instead of allocated"
     exit 1
   fi
-  if ! grep -Eq 'call .*@(js_native_call_value|js_native_call_method|perry_method_.*__getValue)' "$FN_IR"; then
+  if ! grep -Eq "$DISPATCH_RE" "$FN_IR"; then
     echo "FAIL: unsafe ${fn}() lost method dispatch"
     exit 1
   fi

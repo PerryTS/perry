@@ -779,15 +779,18 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         return val;
     }
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if ptr < 0x10000 {
+    // #6320: the old `< 0x10000` floor is an order of magnitude below
+    // `HANDLE_BAND_MAX`, so a registry handle NaN-boxed under POINTER_TAG — most
+    // sharply a revocable-Proxy id at `0xF0000 + id` — passed it and the
+    // CLOSURE_MAGIC probe below dereferenced unmapped low memory. Detaching a
+    // proxy-valued method (`const g = obj.m` where `obj.m = new Proxy(fn, {})`)
+    // reaches exactly here. `is_closure_ptr` subsumes the band, heap-range,
+    // alignment and magic checks; a non-closure value has no `this` slot to
+    // unbind, so it flows through untouched.
+    if !is_closure_ptr(ptr) {
         return val;
     }
-    // Check CLOSURE_MAGIC
     unsafe {
-        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
-        if type_tag != CLOSURE_MAGIC {
-            return val;
-        }
         let header = ptr as *const ClosureHeader;
         let raw_count = (*header).capture_count;
         // Only unbind if the closure has the CAPTURES_THIS_FLAG

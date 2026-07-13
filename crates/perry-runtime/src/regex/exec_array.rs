@@ -6,6 +6,7 @@
 //!
 //! Split out of `regex.rs` under the 2000-line CI cap.
 
+pub(super) use super::utf16::{byte_index_to_utf16_index, utf16_index_to_byte};
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::value::js_nanbox_string;
@@ -103,12 +104,12 @@ pub(super) fn set_exec_array_indices(
     for (i, cap) in caps.iter().enumerate() {
         let indices_arr_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
         if let Some(m) = cap {
-            // Convert byte offsets to char indices (JS spec uses UTF-16 code units,
-            // but we use char indices for simplicity — matches existing .index behavior)
+            // Convert byte offsets to JS string indices (UTF-16 code units),
+            // consistent with `.index` / `lastIndex` / `str.length`.
             let start_byte = m.start() + search_start_byte;
             let end_byte = m.end() + search_start_byte;
-            let start_char = str_data[..start_byte].chars().count() as f64;
-            let end_char = str_data[..end_byte].chars().count() as f64;
+            let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+            let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
             // Create [start, end] pair
             let pair = crate::array::js_array_alloc(2);
@@ -155,8 +156,8 @@ pub(super) fn set_exec_array_indices(
             let val = if let Some(m) = m {
                 let start_byte = m.start() + search_start_byte;
                 let end_byte = m.end() + search_start_byte;
-                let start_char = str_data[..start_byte].chars().count() as f64;
-                let end_char = str_data[..end_byte].chars().count() as f64;
+                let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+                let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
                 // Create [start, end] pair for named group
                 let pair = crate::array::js_array_alloc(2);
@@ -206,22 +207,6 @@ pub(super) fn set_exec_array_indices(
     );
 }
 
-pub(super) fn char_index_to_byte(s: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
-    }
-    for (idx, (byte, _)) in s.char_indices().enumerate() {
-        if idx == char_index {
-            return byte;
-        }
-    }
-    s.len()
-}
-
-pub(super) fn byte_index_to_char_index(s: &str, byte_index: usize) -> f64 {
-    s[..byte_index.min(s.len())].chars().count() as f64
-}
-
 /// Build and attach the `indices` property for fancy-regex captures (lookbehind/backreference fallback).
 pub(super) unsafe fn set_exec_array_indices_fancy(
     arr: *mut ArrayHeader,
@@ -246,8 +231,8 @@ pub(super) unsafe fn set_exec_array_indices_fancy(
         if let Some(m) = caps.get(i) {
             let start_byte = m.start() + search_start_byte;
             let end_byte = m.end() + search_start_byte;
-            let start_char = str_data[..start_byte].chars().count() as f64;
-            let end_char = str_data[..end_byte].chars().count() as f64;
+            let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+            let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
             // Create [start, end] pair
             let pair = crate::array::js_array_alloc(2);
@@ -288,8 +273,8 @@ pub(super) unsafe fn set_exec_array_indices_fancy(
             let val = if let Some(m) = m {
                 let start_byte = m.start() + search_start_byte;
                 let end_byte = m.end() + search_start_byte;
-                let start_char = str_data[..start_byte].chars().count() as f64;
-                let end_char = str_data[..end_byte].chars().count() as f64;
+                let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+                let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
                 // Create [start, end] pair for named group
                 let pair = crate::array::js_array_alloc(2);

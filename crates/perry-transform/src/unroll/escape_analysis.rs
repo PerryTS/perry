@@ -121,13 +121,20 @@ fn each_child_stmt_list<F: FnMut(&[Stmt])>(stmt: &Stmt, f: &mut F) {
 /// `stmts`. Mirrors the id-bearing variants of `scan_expr_for_max_local`
 /// but accumulates per-id counts so the #2308 analysis can tell whether an
 /// id is used outside a given loop body.
-fn count_local_refs_stmts(stmts: &[Stmt], counts: &mut HashMap<LocalId, usize>) {
+///
+/// Also reused by the generator's #6345 per-iteration analysis
+/// (`generator::per_iteration`), which needs the same "is this id used
+/// outside the loop that declares it?" question answered. Kept in one place
+/// so a newly-added id-bearing `Expr` variant only has to be taught to
+/// `count_local_refs_expr` once — missing one would silently under-count and
+/// let a `var` be mistaken for a block-scoped binding.
+pub(crate) fn count_local_refs_stmts(stmts: &[Stmt], counts: &mut HashMap<LocalId, usize>) {
     for s in stmts {
         count_local_refs_stmt(s, counts);
     }
 }
 
-fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, usize>) {
+pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, usize>) {
     match stmt {
         // A `Stmt::Let` id is a DECLARATION, not a use — don't count it;
         // only walk its initializer for uses.
@@ -209,7 +216,7 @@ fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, usize>) {
     }
 }
 
-fn count_local_refs_expr(expr: &Expr, counts: &mut HashMap<LocalId, usize>) {
+pub(crate) fn count_local_refs_expr(expr: &Expr, counts: &mut HashMap<LocalId, usize>) {
     fn bump(counts: &mut HashMap<LocalId, usize>, id: LocalId) {
         *counts.entry(id).or_insert(0) += 1;
     }

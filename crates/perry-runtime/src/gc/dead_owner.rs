@@ -4,7 +4,8 @@
 //! Around a dozen runtime side tables are keyed by the raw address of an
 //! owning heap object (descriptor tables, symbol-keyed properties, closure
 //! dynamic props, arguments metadata, recorded prototypes, exotic expandos,
-//! `node:vm` metadata, fs FileHandle fds). The owning GC types mostly have no
+//! array expandos and iterator brands, `node:vm` metadata, fs FileHandle fds).
+//! The owning GC types mostly have no
 //! finalize hook, so nothing told those tables when the owner died: entries —
 //! and any strongly-rooted values inside them (accessor closures, symbol
 //! property values, expando values) — leaked forever, and a NEW object
@@ -212,6 +213,9 @@ fn fan_out(
     is_dead_closure: &dyn Fn(usize) -> bool,
     is_dead_symbol: &dyn Fn(usize) -> bool,
 ) {
+    crate::array::prune_dead_array_named_property_owners(is_dead_owner);
+    crate::map::prune_dead_map_iterator_array_owners(is_dead_owner);
+    crate::set::prune_dead_set_iterator_array_owners(is_dead_owner);
     crate::object::prune_dead_descriptor_owner_entries(is_dead_owner);
     crate::object::prune_dead_arguments_object_entries(is_dead_owner);
     crate::object::prototype_chain::prune_dead_object_prototype_owners(is_dead_owner);

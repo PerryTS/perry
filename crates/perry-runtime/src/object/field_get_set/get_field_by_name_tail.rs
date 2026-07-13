@@ -1968,6 +1968,21 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // #6301: `EventTarget`'s method surface, read as a VALUE
+        // (`typeof b.dispatchEvent`, `const add = t.addEventListener`).
+        // Deliberately LAST in the tail so an own property and a real
+        // class-vtable method (a subclass that *overrides* `dispatchEvent`) are
+        // resolved earlier and keep winning. See
+        // `event_target::event_target_value_read` for why placing it after the
+        // `keys_array.is_null()` early return above is correct.
+        if !key.is_null() {
+            if let Some(bound) =
+                crate::event_target::event_target_value_read(obj as *mut ObjectHeader, key_bytes)
+            {
+                return JSValue::from_bits(bound.to_bits());
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }

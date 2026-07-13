@@ -16,6 +16,7 @@ mod let_stmt;
 mod loops;
 mod switch_stmt;
 mod try_stmt;
+mod unused_expr;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
@@ -259,13 +260,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             }
             let v = lower_return_expr(ctx, e)?;
             // Phase E: async functions wrap their return value in
-            // js_promise_resolved so callers can await the result.
-            // If the value is already a promise (e.g. `return
-            // Promise.resolve(x)`), js_promise_resolved is a no-op
-            // wrap that the caller's await loop unwraps anyway.
+            // js_async_fn_result so callers can await the result. Unlike
+            // js_promise_resolved (whose Promise.resolve(p) === p identity
+            // is spec for Promise.resolve only), an async fn returning a
+            // promise must produce a FRESH promise that adopts the inner
+            // via the two-tick thenable job (V8 microtask-hop parity).
             let final_v = if ctx.is_async_fn {
                 let blk = ctx.block();
-                let handle = blk.call(crate::types::I64, "js_promise_resolved", &[(DOUBLE, &v)]);
+                let handle = blk.call(crate::types::I64, "js_async_fn_result", &[(DOUBLE, &v)]);
                 crate::expr::nanbox_pointer_inline_pub(blk, &handle)
             } else {
                 v
