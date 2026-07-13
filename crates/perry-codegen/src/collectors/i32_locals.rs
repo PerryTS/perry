@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -26,12 +26,28 @@ pub(crate) fn integer_literal_fits_i32(n: i64) -> bool {
     i32::try_from(n).is_ok()
 }
 
+/// Is `e` a write whose value provably fits in i32?
+///
+/// `known_i32_ranged_locals` is the *oracle*: locals already proven to hold an
+/// i32-ranged value. Only the `LocalGet` and `Update` arms consult it — every
+/// other arm is a self-contained proof (a small literal, an explicit `| 0` /
+/// `>>> 0` coercion, a bitwise op, `Math.imul`, a clamp call, a byte load).
+/// That split is what keeps the oracle's greatest fixpoint (#6339) away from
+/// intentionally-i32 code: an FNV / `imul32` / bit-mixing chain proves itself
+/// and never asks the oracle anything, so shrinking the oracle cannot cost it
+/// its i32 slot.
+///
+/// Every oracle lookup the verdict *relied on* is reported through `on_dep`, so
+/// judgment and provenance come from one match and can never drift apart: a new
+/// oracle-consulting arm is automatically both judged and tracked. Callers that
+/// only want the verdict pass `&mut |_| {}`.
 pub fn is_strictly_i32_bounded_expr(
     e: &perry_hir::Expr,
-    known_int_locals: &HashSet<u32>,
+    known_i32_ranged_locals: &HashSet<u32>,
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
+    on_dep: &mut dyn FnMut(u32),
 ) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match e {
@@ -40,12 +56,18 @@ pub fn is_strictly_i32_bounded_expr(
         // `y` as strict, `y` got an i32 shadow at its `Let` site, and the store
         // truncated to -1294967296.
         Expr::Integer(n) => integer_literal_fits_i32(*n),
-        // `x++`/`x--` is i32-bounded ONLY when the updated local is itself a
-        // known integer (a loop counter). The previous unconditional `true`
+        // `x++`/`x--` is i32-bounded ONLY when the updated local is itself
+        // i32-ranged (a loop counter). The previous unconditional `true`
         // truncated `var y = x++` to an i32 slot even when `x` held a
         // fractional/non-number value — so `var x = 1.1; var y = x++` stored
         // `y = (i32)1.1 = 1` instead of the spec's coerced old value `1.1`.
-        Expr::Update { id, .. } => known_int_locals.contains(id),
+        Expr::Update { id, .. } => {
+            let ok = known_i32_ranged_locals.contains(id);
+            if ok {
+                on_dep(*id);
+            }
+            ok
+        }
         // `expr | 0` / `expr >>> 0` ToInt32/ToUint32 idioms — explicit i32
         // coercion, hard-bounded.
         Expr::Binary { op, right, .. }
@@ -71,7 +93,17 @@ pub fn is_strictly_i32_bounded_expr(
                 false
             }
         }
-        Expr::LocalGet(id) => known_int_locals.contains(id),
+        // #6339: a plain copy is i32-bounded only if the *source* is proven
+        // i32-RANGED. Answering this from `integer_locals` (merely
+        // integer-VALUED, which by design admits overflowing `Add`/`Sub`/`Mul`)
+        // is what let `let big2 = big1 + big1; t = big2;` truncate `t`.
+        Expr::LocalGet(id) => {
+            let ok = known_i32_ranged_locals.contains(id);
+            if ok {
+                on_dep(*id);
+            }
+            ok
+        }
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true,
         Expr::IndexGet { object, .. } => match object.as_ref() {
@@ -85,19 +117,92 @@ pub fn is_strictly_i32_bounded_expr(
     }
 }
 
-/// (Issue #436) Compute the set of locals where every write (including
-/// the `Stmt::Let` init) has a strictly-i32-bounded rhs per
-/// `is_strictly_i32_bounded_expr`. These locals are correctness-safe to
-/// put on the i32 fast path even when they're not used as an array index
-/// — the bounded writes guarantee the value fits in i32 by construction
-/// rather than mathematical induction over loop iterations.
+/// Output of the strict-write walk.
 ///
-/// Used to extend the Let-site `needs_i32_slot` gate beyond
-/// `index_used_locals`. Image_convolution's FNV-1a `h` accumulator is the
-/// motivating shape: writes are `(h ^ dst[i]) | 0` (explicit `| 0` coerce)
-/// and `imul32(h, K)` (returns_integer call) — both strict — so `h`
-/// qualifies even though it's never used as an index. #435's `sum`,
-/// `prod`, etc. write through bare `Add | Sub | Mul` and stay out.
+/// `saw_any` / `disqualified` are the per-local verdicts. `copy_deps` is the
+/// #6339 provenance: `copy_deps[d]` lists the locals whose *strict* verdict for
+/// some write relied on the oracle vouching for `d` (i.e. the write was a copy
+/// `id = d` / `id = d++`). Disqualifying `d` must therefore disqualify them too.
+#[derive(Default)]
+pub struct StrictWriteFacts {
+    pub saw_any: HashSet<u32>,
+    pub disqualified: HashSet<u32>,
+    copy_deps: HashMap<u32, Vec<u32>>,
+}
+
+/// Judge one write to `id` against the oracle and fold the verdict into `out`.
+fn record_strict_write(
+    id: u32,
+    value: &perry_hir::Expr,
+    known_i32_ranged: &HashSet<u32>,
+    flat_const_ids: &HashSet<u32>,
+    flat_row_alias_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    out: &mut StrictWriteFacts,
+) {
+    out.saw_any.insert(id);
+    let mut deps: Vec<u32> = Vec::new();
+    let strict = is_strictly_i32_bounded_expr(
+        value,
+        known_i32_ranged,
+        flat_const_ids,
+        flat_row_alias_ids,
+        clamp_fn_ids,
+        &mut |d| deps.push(d),
+    );
+    if !strict {
+        out.disqualified.insert(id);
+        return;
+    }
+    // Strict — but conditionally so. Record the copy edges the verdict leaned
+    // on; `collect_strictly_i32_bounded_locals` revokes it if a source falls.
+    for d in deps {
+        if d != id {
+            out.copy_deps.entry(d).or_default().push(id);
+        }
+    }
+}
+
+/// Locals where every write (including the `Stmt::Let` init) is proven to fit
+/// in i32 (issue #436). These are correctness-safe on the i32 fast path even
+/// when they're never used as an array index — the bounded writes guarantee the
+/// value fits by construction rather than by induction over loop iterations.
+///
+/// Used to extend the Let-site `needs_i32_slot` gate beyond `index_used_locals`.
+/// Image_convolution's FNV-1a `h` accumulator is the motivating shape: writes
+/// are `(h ^ dst[i]) | 0` (explicit `| 0` coerce) and `imul32(h, K)`
+/// (returns_integer call) — both strict — so `h` qualifies even though it's
+/// never used as an index. #435's `sum`, `prod`, etc. write through bare
+/// `Add | Sub | Mul` and stay out.
+///
+/// ## Greatest fixpoint (#6339 — fourth face of #6072)
+///
+/// The set is defined by mutual recursion: a copy `t = big2` is strict iff
+/// `big2` is i32-ranged, which is this very set. The oracle used to be
+/// `integer_locals`, which is a *different* property — integer-VALUED, and by
+/// its own doc deliberately admits overflowing `Add`/`Sub`/`Mul`. So
+///
+/// ```text
+/// let big1 = 2000000000;
+/// let big2 = big1 + big1;   // 4e9: integer-valued, NOT i32-ranged
+/// let t = 0; t = big2;      // judged strict -> i32 shadow -> -294967296
+/// ```
+///
+/// truncated the copy while `big2` itself (whose `Add` write is not strict)
+/// stayed correct. The cure is to seed the oracle optimistically with
+/// `integer_locals` and take the GREATEST fixpoint of "every write is strict":
+/// `is_strictly_i32_bounded_expr` is monotone in the oracle, so starting at the
+/// top and only ever removing is exact and terminating.
+///
+/// It is computed in one walk rather than by re-walking per removal. The
+/// judgment is shallow and only two of its arms consult the oracle (`LocalGet`,
+/// `Update`), so each strict write records the exact local it leaned on; a
+/// worklist then propagates every disqualification backwards along those edges.
+///
+/// Locals that lose the shadow fall back to their f64 slot — correct, and only
+/// marginally slower. Index-used locals keep it through `index_used_locals`,
+/// an independent term in `needs_i32_slot`, so the numeric array-index fast
+/// path (#6299/#6312) and the loop counters (#6318) are untouched.
 pub fn collect_strictly_i32_bounded_locals(
     stmts: &[perry_hir::Stmt],
     integer_locals: &HashSet<u32>,
@@ -107,21 +212,37 @@ pub fn collect_strictly_i32_bounded_locals(
     let mut flat_row_alias_ids: HashSet<u32> = HashSet::new();
     collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
 
-    // Per-id state: (saw_any_write, all_writes_strict_so_far).
-    let mut saw_any: HashSet<u32> = HashSet::new();
-    let mut disqualified: HashSet<u32> = HashSet::new();
+    // Optimistic seed: assume every integer-valued local is also i32-ranged,
+    // then let the walk record which writes actually prove it and which merely
+    // borrowed the assumption.
+    let mut out = StrictWriteFacts::default();
     walk_writes_for_strict(
         stmts,
         integer_locals,
         flat_const_ids,
         &flat_row_alias_ids,
         clamp_fn_ids,
-        &mut saw_any,
-        &mut disqualified,
+        &mut out,
     );
-    saw_any
-        .into_iter()
-        .filter(|id| !disqualified.contains(id))
+
+    // Shrink to the fixpoint: a local with a non-strict write is not i32-ranged,
+    // and neither is anything that was only strict because it copied one.
+    let mut worklist: Vec<u32> = out.disqualified.iter().copied().collect();
+    while let Some(fallen) = worklist.pop() {
+        let Some(dependents) = out.copy_deps.get(&fallen) else {
+            continue;
+        };
+        for dependent in dependents.clone() {
+            if out.disqualified.insert(dependent) {
+                worklist.push(dependent);
+            }
+        }
+    }
+
+    out.saw_any
+        .iter()
+        .copied()
+        .filter(|id| !out.disqualified.contains(id))
         .collect()
 }
 
@@ -272,12 +393,11 @@ fn walk_writes_in_expr_for_unsigned_i32(
 
 pub fn walk_writes_for_strict(
     stmts: &[perry_hir::Stmt],
-    integer_locals: &HashSet<u32>,
+    known_i32_ranged: &HashSet<u32>,
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
-    saw_any: &mut HashSet<u32>,
-    disqualified: &mut HashSet<u32>,
+    out: &mut StrictWriteFacts,
 ) {
     use perry_hir::Stmt;
     for s in stmts {
@@ -287,48 +407,44 @@ pub fn walk_writes_for_strict(
                 init: Some(init),
                 ..
             } => {
-                saw_any.insert(*id);
-                if !is_strictly_i32_bounded_expr(
+                record_strict_write(
+                    *id,
                     init,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                ) {
-                    disqualified.insert(*id);
-                }
+                    out,
+                );
                 walk_writes_in_expr_for_strict(
                     init,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
             }
             Stmt::Let { init: None, .. } => {}
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 walk_writes_in_expr_for_strict(
                     e,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
             }
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
                     walk_writes_in_expr_for_strict(
                         e,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
             }
@@ -339,52 +455,47 @@ pub fn walk_writes_for_strict(
             } => {
                 walk_writes_in_expr_for_strict(
                     condition,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
                 walk_writes_for_strict(
                     then_branch,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
                 if let Some(eb) = else_branch {
                     walk_writes_for_strict(
                         eb,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 walk_writes_in_expr_for_strict(
                     condition,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
                 walk_writes_for_strict(
                     body,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
             }
             Stmt::For {
@@ -396,44 +507,40 @@ pub fn walk_writes_for_strict(
                 if let Some(init_stmt) = init {
                     walk_writes_for_strict(
                         std::slice::from_ref(init_stmt),
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
                 if let Some(cond) = condition {
                     walk_writes_in_expr_for_strict(
                         cond,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
                 if let Some(upd) = update {
                     walk_writes_in_expr_for_strict(
                         upd,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
                 walk_writes_for_strict(
                     body,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
             }
             Stmt::Try {
@@ -443,33 +550,30 @@ pub fn walk_writes_for_strict(
             } => {
                 walk_writes_for_strict(
                     body,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
                 if let Some(c) = catch {
                     walk_writes_for_strict(
                         &c.body,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
                 if let Some(f) = finally {
                     walk_writes_for_strict(
                         f,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
             }
@@ -479,45 +583,41 @@ pub fn walk_writes_for_strict(
             } => {
                 walk_writes_in_expr_for_strict(
                     discriminant,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
                 for c in cases {
                     if let Some(t) = &c.test {
                         walk_writes_in_expr_for_strict(
                             t,
-                            integer_locals,
+                            known_i32_ranged,
                             flat_const_ids,
                             flat_row_alias_ids,
                             clamp_fn_ids,
-                            saw_any,
-                            disqualified,
+                            out,
                         );
                     }
                     walk_writes_for_strict(
                         &c.body,
-                        integer_locals,
+                        known_i32_ranged,
                         flat_const_ids,
                         flat_row_alias_ids,
                         clamp_fn_ids,
-                        saw_any,
-                        disqualified,
+                        out,
                     );
                 }
             }
             Stmt::Labeled { body, .. } => {
                 walk_writes_for_strict(
                     std::slice::from_ref(body.as_ref()),
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
             }
             _ => {}
@@ -527,34 +627,31 @@ pub fn walk_writes_for_strict(
 
 pub fn walk_writes_in_expr_for_strict(
     e: &perry_hir::Expr,
-    integer_locals: &HashSet<u32>,
+    known_i32_ranged: &HashSet<u32>,
     flat_const_ids: &HashSet<u32>,
     flat_row_alias_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
-    saw_any: &mut HashSet<u32>,
-    disqualified: &mut HashSet<u32>,
+    out: &mut StrictWriteFacts,
 ) {
     use perry_hir::Expr;
     match e {
         Expr::LocalSet(id, value) => {
-            saw_any.insert(*id);
-            if !is_strictly_i32_bounded_expr(
+            record_strict_write(
+                *id,
                 value,
-                integer_locals,
+                known_i32_ranged,
                 flat_const_ids,
                 flat_row_alias_ids,
                 clamp_fn_ids,
-            ) {
-                disqualified.insert(*id);
-            }
+                out,
+            );
             walk_writes_in_expr_for_strict(
                 value,
-                integer_locals,
+                known_i32_ranged,
                 flat_const_ids,
                 flat_row_alias_ids,
                 clamp_fn_ids,
-                saw_any,
-                disqualified,
+                out,
             );
         }
         Expr::Update { id, .. } => {
@@ -568,8 +665,12 @@ pub fn walk_writes_in_expr_for_strict(
             // loop-bound path, and index-used accumulators via
             // `index_used_locals` — this only removes the unsound path that let
             // a bare `let big = 2147483640; ...; big++` overflow silently.
-            saw_any.insert(*id);
-            disqualified.insert(*id);
+            //
+            // #6339: the disqualification now also propagates — a local that
+            // *copies* `x` (`t = x`, `t = x++`) was only strict because the
+            // oracle vouched for `x`, so it falls with it.
+            out.saw_any.insert(*id);
+            out.disqualified.insert(*id);
         }
         _ => {
             // Recurse via the centralized walker so any future Expr
@@ -577,12 +678,11 @@ pub fn walk_writes_in_expr_for_strict(
             perry_hir::walker::walk_expr_children(e, &mut |child| {
                 walk_writes_in_expr_for_strict(
                     child,
-                    integer_locals,
+                    known_i32_ranged,
                     flat_const_ids,
                     flat_row_alias_ids,
                     clamp_fn_ids,
-                    saw_any,
-                    disqualified,
+                    out,
                 );
             });
         }
