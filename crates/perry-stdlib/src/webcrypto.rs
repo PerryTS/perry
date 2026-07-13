@@ -31,6 +31,10 @@ pub use self::{
     aes::*, digest::*, encapsulation::*, hmac::*, jwk::*, kdf::*, keys::*, supports::*, wrap::*,
 };
 
+// GC buffer-sweep callback for dead CryptoKey buffers, installed by
+// `js_stdlib_init_dispatch`. Re-exported here so `util` stays a private module.
+pub(crate) use self::util::crypto_key_buffer_died;
+
 /// Dispatcher for captured/dynamic `crypto.subtle.*` calls. Static
 /// `crypto.subtle.method(...)` call sites still lower directly in codegen;
 /// this keeps namespace property reads such as `const subtle = crypto.subtle`
