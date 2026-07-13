@@ -54,7 +54,10 @@ pub fn run(
                     });
                     println!("{}", serde_json::to_string_pretty(&output)?);
                 }
-                OutputFormat::Text => {
+                // `--quiet` silences the informational Text chatter. It does NOT
+                // silence `--format json` above: that is explicitly-requested
+                // structured output, not chatter. Errors are never silenced.
+                OutputFormat::Text if !quiet => {
                     if use_color {
                         println!(
                             "{} {} → {}",
@@ -67,14 +70,21 @@ pub fn run(
                     }
                     println!("  Release: {}", release_url);
                 }
+                OutputFormat::Text => {}
             }
 
             if !args.check_only {
-                println!();
+                if !quiet {
+                    println!();
+                }
                 // Progress goes to stderr, so it never corrupts `--format json`
                 // on stdout; `--quiet` silences it entirely.
+                //
+                // `quiet` beats `verbose`: `-q -v` must be silent, not verbose.
+                // Otherwise the two flags fight and the louder one wins, which
+                // is the opposite of what a user asking for quiet expects.
                 update_checker::perform_self_update(update_checker::UpdateOutput {
-                    verbose: verbose > 0,
+                    verbose: verbose > 0 && !quiet,
                     quiet,
                     color: use_color,
                 })?;
@@ -88,9 +98,10 @@ pub fn run(
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
             }
-            OutputFormat::Text => {
+            OutputFormat::Text if !quiet => {
                 println!("Perry is up to date (v{})", current);
             }
+            OutputFormat::Text => {}
         },
         update_checker::UpdateStatus::CheckFailed => match format {
             OutputFormat::Json => {

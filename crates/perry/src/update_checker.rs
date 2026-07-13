@@ -593,6 +593,23 @@ fn download_spinner_style(color: bool) -> ProgressStyle {
         .expect("static download spinner template")
 }
 
+/// A body that ends cleanly but short reads as `Ok(0)` and would otherwise sail
+/// through as success. `verify_cli_artifact` does catch it — but as a hash
+/// mismatch, which reads like a tampered or corrupt release rather than the
+/// dropped connection it actually is. The signed manifest already carries the
+/// exact size, so say so plainly.
+///
+/// `expected == 0` means the manifest carries no size; nothing to check.
+fn ensure_complete_download(downloaded: u64, expected: u64) -> Result<()> {
+    if expected > 0 && downloaded != expected {
+        anyhow::bail!(
+            "update artifact is truncated: expected {expected} bytes, received {downloaded} \
+             (the download ended early — check your connection and retry)"
+        );
+    }
+    Ok(())
+}
+
 /// Stream `reader` into `writer`, reporting bytes as they land.
 ///
 /// Split out of `perform_self_update` so the streaming path can be exercised in
@@ -738,6 +755,12 @@ pub fn perform_self_update(output: UpdateOutput) -> Result<()> {
     let downloaded = copy_with_progress(&mut response, &mut archive, &progress)
         .context("failed to stage update artifact")?;
     progress.finish(downloaded);
+    // A body that ends cleanly but short reads as `Ok(0)` and would otherwise
+    // sail through as success. `verify_cli_artifact` below does catch it — but
+    // as a hash mismatch, which reads like a tampered or corrupt release rather
+    // than the dropped connection it actually is. The signed manifest already
+    // tells us the exact size, so say so plainly.
+    ensure_complete_download(downloaded, manifest.artifact.size)?;
     archive.flush()?;
     archive.sync_all()?;
     drop(archive);
@@ -1300,6 +1323,50 @@ mod tests {
             }
             _ => panic!("expected an interactive bar"),
         }
+    }
+
+    /// A body that ends CLEANLY but short (`Ok(0)` before the signed size) must
+    /// not be accepted. Before this check it slipped through `copy_with_progress`
+    /// as success; `verify_cli_artifact` caught it later, but as a hash mismatch
+    /// — which reads like a tampered release rather than a dropped connection.
+    #[test]
+    fn clean_eof_short_of_the_signed_size_is_rejected() {
+        /// Yields `len` bytes, then a clean EOF — no `UnexpectedEof`.
+        struct ShortBody {
+            left: usize,
+        }
+        impl Read for ShortBody {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.left == 0 {
+                    return Ok(0); // clean EOF, mid-artifact
+                }
+                let n = self.left.min(buf.len());
+                buf[..n].fill(b'x');
+                self.left -= n;
+                Ok(n)
+            }
+        }
+
+        let mut sink = Vec::new();
+        let downloaded = copy_with_progress(
+            &mut ShortBody { left: 500 },
+            &mut sink,
+            &DownloadProgress::Silent,
+        )
+        .expect("a clean EOF is not an io error — the copy itself succeeds");
+        assert_eq!(downloaded, 500);
+
+        let err = ensure_complete_download(downloaded, 1000).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("truncated"), "unexpected message: {msg}");
+        assert!(
+            msg.contains("1000") && msg.contains("500"),
+            "message should name both sizes: {msg}"
+        );
+
+        // A complete download passes, and a manifest with no size is not checked.
+        ensure_complete_download(1000, 1000).expect("complete download must pass");
+        ensure_complete_download(500, 0).expect("no manifest size => nothing to check");
     }
 
     #[test]
