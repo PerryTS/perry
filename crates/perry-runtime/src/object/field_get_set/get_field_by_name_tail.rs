@@ -1979,6 +1979,22 @@ pub(crate) fn get_field_by_name_object_tail(
         // depth). Deliberately LAST in the tail: an own property and a real
         // class-vtable method (a subclass that *overrides* `dispatchEvent`)
         // are resolved earlier and keep winning.
+        //
+        // This sits AFTER the `keys_array.is_null()` early return above, and
+        // that is correct — a `class X extends EventTarget` instance never
+        // takes the keyless branch. Every class-instance allocator
+        // (`js_object_alloc_class_inline_keys`, `js_object_alloc_class_with_keys`,
+        // `js_object_alloc_class_dynamic_parent`) installs the shape-cached
+        // keys array unconditionally, and `js_build_class_keys_array` returns a
+        // zero-LENGTH array — never NULL — for a class with no declared fields.
+        // So even `class Bus extends EventTarget {}` (no fields, no ctor) lands
+        // on this shaped path with an empty keys array, not on the keyless one.
+        // The keyless branch is for `Object.create(proto)` / bare
+        // `js_new_function_construct` receivers, which resolve an inherited
+        // EventTarget method through the prototype-object hop
+        // (`resolve_proto_chain_field_with_receiver`) before ever reaching its
+        // dead end. Covered by the empty-shape cases in
+        // `test-files/test_gap_6301_event_target_subclass.ts`.
         if !key.is_null() && crate::event_target::is_event_target_method_name(key_bytes) {
             if let Some(bound) =
                 crate::event_target::event_target_method_bind(obj as *mut ObjectHeader, key_bytes)

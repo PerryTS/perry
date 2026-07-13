@@ -103,6 +103,65 @@ console.log("sub instanceof EventTarget:", bus instanceof EventTarget);
 console.log("two-level instanceof EventTarget:", deep instanceof EventTarget);
 console.log("plain object instanceof EventTarget:", {} instanceof EventTarget);
 
+// ── EMPTY-SHAPE receivers: a subclass instance with no own properties at all ──
+// The value-read fallback lives after the field-walk's `keys_array == null`
+// early return, so these pin the invariant that makes that placement correct:
+// a class instance ALWAYS carries a shape-cached keys array (a zero-LENGTH one
+// when the class declares no fields), so it takes the shaped path, never the
+// keyless one. Each of these has an empty own-key set at the moment the method
+// is read.
+class Empty extends EventTarget {
+  constructor() {
+    super(); // ctor that assigns nothing
+  }
+}
+const empty = new Empty();
+console.log("empty-ctor subclass:", typeof empty.addEventListener, typeof empty.dispatchEvent);
+
+// constructed through a variable (dynamic `new`) rather than a static class ref
+const BusRef = Bus;
+const viaRef = new BusRef();
+console.log("dynamic-new subclass:", typeof viaRef.addEventListener);
+
+// constructed via Reflect.construct
+const viaReflect = Reflect.construct(Bus, []) as Bus;
+console.log("Reflect.construct subclass:", typeof viaReflect.addEventListener);
+
+// a class *expression* bound to a const
+const AnonBus = class extends EventTarget {};
+const anon = new AnonBus();
+anon.addEventListener("anon", () => console.log("class-expression listener fired"));
+console.log("class-expression subclass:", typeof anon.dispatchEvent);
+anon.dispatchEvent(new Event("anon"));
+
+// a subclass declared inside a function body
+function makeLocal(): void {
+  class Local extends EventTarget {}
+  const local = new Local();
+  console.log("fn-local subclass:", typeof local.addEventListener);
+  local.addEventListener("local", () => console.log("fn-local listener fired"));
+  local.dispatchEvent(new Event("local"));
+}
+makeLocal();
+
+// an instance whose only own property has been deleted (own-key set now empty)
+class Deletable extends EventTarget {
+  x?: number;
+  constructor() {
+    super();
+    this.x = 1;
+  }
+}
+const del = new Deletable();
+delete del.x;
+console.log("deleted-own-prop subclass:", typeof del.addEventListener, typeof del.dispatchEvent);
+del.addEventListener("del", () => console.log("deleted-own-prop listener fired"));
+del.dispatchEvent(new Event("del"));
+
+// a frozen no-field subclass instance
+const frozen = Object.freeze(new Bus());
+console.log("frozen subclass:", typeof frozen.addEventListener, typeof frozen.dispatchEvent);
+
 // ── Event / CustomEvent construction is untouched ──
 const ev = new Event("basic");
 console.log("event type:", ev.type, "cancelable:", ev.cancelable);
