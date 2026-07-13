@@ -567,6 +567,9 @@ pub(super) fn compile_module_entry(
             &cross_module.clamp3_functions,
             &main_boxed_vars,
             module_globals,
+            // Module scope IS this body: its `Stmt::Let`s are walked directly, so
+            // there is nothing to seed from an enclosing scope (#6369).
+            &HashMap::new(),
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
@@ -1127,6 +1130,8 @@ pub(super) fn compile_module_entry(
             &cross_module.clamp3_functions,
             &init_boxed_vars,
             module_globals,
+            // Module scope IS this body — see the `main` fact graph above (#6369).
+            &HashMap::new(),
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,

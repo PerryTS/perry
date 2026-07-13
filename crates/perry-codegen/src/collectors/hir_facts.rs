@@ -304,6 +304,7 @@ pub(crate) fn collect_type_facts(
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, perry_types::Type>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
@@ -315,7 +316,8 @@ pub(crate) fn collect_type_facts(
         arg_dependent_clamp_fn_ids,
     );
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
-    let (array_facts, effect_facts, materialization_hazards) = collect_array_facts(stmts, params);
+    let (array_facts, effect_facts, materialization_hazards) =
+        collect_array_facts(stmts, params, module_globals, binding_types);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
@@ -419,6 +421,7 @@ pub(crate) fn collect_native_region_fact_graph(
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, perry_types::Type>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
@@ -431,6 +434,7 @@ pub(crate) fn collect_native_region_fact_graph(
         arg_dependent_clamp_fn_ids,
         boxed_vars,
         module_globals,
+        binding_types,
         classes,
         compile_time_constants,
         module_dispatch,
@@ -452,6 +456,7 @@ pub(crate) fn collect_hir_facts(
         clamp_fn_ids,
         &HashSet::new(),
         &HashSet::new(),
+        &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),
@@ -602,9 +607,12 @@ fn is_fresh_uint8array_length_literal(expr: &Expr) -> bool {
 fn collect_array_facts(
     stmts: &[Stmt],
     params: &[perry_hir::Param],
+    module_globals: &HashMap<u32, String>,
+    binding_types: &HashMap<u32, perry_types::Type>,
 ) -> (ArrayFacts, EffectFacts, MaterializationHazardFacts) {
     let mut collector = ArrayFactCollector::default();
     collector.seed_params(params);
+    collector.seed_module_bindings(module_globals, binding_types);
     collector.collect_stmts(stmts);
     collector.finish()
 }
@@ -616,11 +624,14 @@ struct ArrayFactCollector {
     aliased_locals: HashSet<u32>,
     length_mutation_locals: HashSet<u32>,
     materialization_hazard_locals: HashSet<u32>,
-    /// #6011: param ids seeded purely from a declared `Packed*` array type.
-    /// A param can receive ANY array at runtime, so these seeds are only
-    /// versioning hints for the runtime-guard-validated packed loop matcher;
-    /// body-observed mutations still downgrade them like any tracked local.
-    param_seeded_locals: HashSet<u32>,
+    /// #6011/#6369: ids seeded purely from a *declared* `Packed*` array type —
+    /// function params, and module-scope bindings read from an enclosing scope.
+    /// Neither can be proven packed from this body alone (a param receives any
+    /// array at runtime; a module global can be rewritten by another function),
+    /// so these seeds are only versioning hints for the runtime-guard-validated
+    /// packed loop matcher; body-observed mutations still downgrade them like
+    /// any tracked local.
+    declared_type_seeded_locals: HashSet<u32>,
     unknown_call_escape: bool,
     async_microtask_escape: bool,
 }
@@ -638,14 +649,48 @@ impl ArrayFactCollector {
             if param.is_rest {
                 continue;
             }
-            let kind = array_kind_from_declared_type(&param.ty);
-            if matches!(
-                kind,
-                ArrayKindFact::PackedI32 | ArrayKindFact::PackedU32 | ArrayKindFact::PackedF64
-            ) {
-                self.local_kinds.insert(param.id, kind);
-                self.param_seeded_locals.insert(param.id);
+            self.seed_declared_array_type(param.id, &param.ty);
+        }
+    }
+
+    /// #6369: same declared-type seed for a MODULE-SCOPE binding this body only
+    /// *reads through* — `const prices: number[] = […]` at module scope, used
+    /// inside a function or closure. Without it the binding has no array fact at
+    /// all in this body, so the packed-numeric loop matchers reject it and a
+    /// captured `number[]` is stuck one tier below the identical array passed as
+    /// a parameter (which #6011 already seeds this exact way).
+    ///
+    /// Soundness is the same as the param seed's, and rests on the same two
+    /// pillars: (1) the loop's entry guard
+    /// (`js_typed_feedback_packed_*_loop_guard`) re-validates the *actual*
+    /// runtime array — kind, packed-ness and the whole index window — and side
+    /// exits to the generic loop when it does not hold, so a wrong seed costs a
+    /// guard, never correctness; (2) the matched loop body is walked and admits
+    /// only pure element reads/writes and scalar updates — no call, no `await`,
+    /// no closure — so nothing reachable from the body can rebind the global or
+    /// change the array's shape between the guard and the last iteration. Any
+    /// mutation the body walk *does* see (push, alias, `length` write, identity
+    /// escape) downgrades the seed exactly like a `Stmt::Let`-declared array.
+    fn seed_module_bindings(
+        &mut self,
+        module_globals: &HashMap<u32, String>,
+        binding_types: &HashMap<u32, perry_types::Type>,
+    ) {
+        for id in module_globals.keys() {
+            if let Some(ty) = binding_types.get(id) {
+                self.seed_declared_array_type(*id, ty);
             }
+        }
+    }
+
+    fn seed_declared_array_type(&mut self, id: u32, ty: &perry_types::Type) {
+        let kind = array_kind_from_declared_type(ty);
+        if matches!(
+            kind,
+            ArrayKindFact::PackedI32 | ArrayKindFact::PackedU32 | ArrayKindFact::PackedF64
+        ) {
+            self.local_kinds.insert(id, kind);
+            self.declared_type_seeded_locals.insert(id);
         }
     }
 
@@ -1179,15 +1224,16 @@ impl ArrayFactCollector {
         self.unknown_call_escape = true;
         let ids: Vec<u32> = self.local_kinds.keys().copied().collect();
         for id in ids {
-            // #6011: param-seeded facts still lose their packed kind on an
-            // unknown call (conservative for every fact consumer), but do NOT
-            // gain a materialization hazard — params were never hazard-tracked
-            // before seeding existed, and hazards feed non-fact consumers
+            // #6011: declared-type-seeded facts still lose their packed kind on
+            // an unknown call (conservative for every fact consumer), but do NOT
+            // gain a materialization hazard — params (and, #6369, module-scope
+            // bindings) were never hazard-tracked before seeding existed, and
+            // hazards feed non-fact consumers
             // (`array_length_receiver_is_loop_local`'s length-hoist gate) that
             // must not regress for `i < param.length` loops in call-bearing
             // bodies. Explicit hazards (freeze/defineProperty/identity escape
-            // on the param itself) still mark normally.
-            if !self.param_seeded_locals.contains(&id) {
+            // on the binding itself) still mark normally.
+            if !self.declared_type_seeded_locals.contains(&id) {
                 self.mark_array_materialization_hazard(id);
             }
             self.update_array_kind_for_local(id, ArrayKindFact::Unknown);
@@ -1663,6 +1709,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &constants,
             &crate::collectors::ModuleDispatchFacts::default(),
         );
@@ -1751,6 +1798,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
