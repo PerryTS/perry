@@ -75,7 +75,7 @@ jobs:
             echo "$out" | grep -qi "GLIBC" || { echo "failed for some other reason than glibc"; exit 1; }
           fi
 
-      - name: Install the static build (npm skips it here — libc: musl)
+      - name: "Install the static build (npm skips it here: libc is musl)"
         run: |
           cd /tmp/e2e
           version=$(node -p "require('@perryts/perry/package.json').version")
