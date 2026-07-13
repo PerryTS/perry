@@ -206,9 +206,13 @@ pub fn transform_generator_function_with_extra_captures(
     // finally's completion-check state. After the finally body runs (on either
     // the happy path or an abrupt completion routed into it), re-raise a pending
     // throw/return; on the normal path (pending_type == 0) it's inert and the
-    // state falls through to post-finally. Sync only in practice — async never
-    // sets `pending_type`, so the checks are dead on the async path.
-    if !is_async_generator {
+    // state falls through to post-finally.
+    //
+    // Async generators need this for the same reason sync ones do: now that the
+    // dispatch loop routes body-internal throws (below), a throw routed into a
+    // yielding finally must be re-raised after the finally body — otherwise it is
+    // silently swallowed.
+    {
         let resume = build_completion_resume_stmts(pending_type_id, pending_value_id, done_id);
         for route in &finallys {
             if let Some(cc) = route.completion_check_state {
@@ -372,16 +376,25 @@ pub fn transform_generator_function_with_extra_captures(
     // when it routes into a yielding finally (so the finally's `yield`s suspend).
     let while_body_for_return = while_body.clone();
 
-    // #4438: for sync generators, wrap each state-dispatch loop body in a real
-    // try/catch so a `throw` *executing inside a try block during dispatch* is
-    // caught and routed to the matching catch/finally (or runs pending finally +
-    // completes the generator when unhandled). This applies to the `.next()`
-    // loop AND the `.throw()`/`.return()` continuation loops — e.g. a `catch`
-    // that rethrows must still run a non-yielding `finally` on the way out.
+    // #4438: wrap each state-dispatch loop body in a real try/catch so a `throw`
+    // *executing inside a try block during dispatch* is caught and routed to the
+    // matching catch/finally (or runs pending finally + completes the generator
+    // when unhandled). This applies to the `.next()` loop AND the
+    // `.throw()`/`.return()` continuation loops — e.g. a `catch` that rethrows
+    // must still run a non-yielding `finally` on the way out.
+    //
+    // Async generators need this exactly as much as sync ones. When a `try`
+    // contains a `yield`, the linearizer destroys the `Stmt::Try` and re-emits the
+    // catch body as its own states, reachable only by the dispatch handler setting
+    // `__gen_state = catch_entry_state`. Gating the wrapper off for async
+    // generators therefore left those states unreachable: every throw inside such a
+    // `try` unwound past the state loop to the resume-body handler, which force-
+    // completes the generator and rejects — i.e. `try {} catch {}` in an
+    // `async function*` never caught anything.
     let has_state_based_catch = catches.iter().any(|r| r.catch_entry_state.is_some());
     let has_inlineable_finally = finallys.iter().any(|r| !r.has_yields);
-    let wrap_dispatch = !is_async_generator
-        && (has_state_based_catch || has_inlineable_finally || has_yielding_finally);
+    let wrap_dispatch =
+        has_state_based_catch || has_inlineable_finally || has_yielding_finally;
     let dispatch_body = if wrap_dispatch {
         let disp_err_id = alloc_local(next_local_id);
         wrap_dispatch_loop(
@@ -859,15 +872,17 @@ pub fn transform_generator_function_with_extra_captures(
             &hoisted_ids,
             next_local_id,
         );
-        // #4374: sync generators continue the state machine after a catch
-        // (running the inlined finally + reaching the next yield/completion);
-        // async generators keep the existing deferred-resume behavior to stay
-        // byte-identical on the async path.
-        let throw_continuation = if is_async_generator {
-            None
-        } else {
-            Some(while_body_for_throw)
-        };
+        // #4374: continue the state machine after a catch — run the inlined
+        // finally and reach the next yield/completion within the `.throw()` call.
+        //
+        // Async generators took the legacy deferred-resume path here, which inlines
+        // the catch body into the `.throw()` closure. That only works when the catch
+        // body is still inline; once the `try` contains a `yield` the linearizer has
+        // moved the catch into its own states, so the inlined copy had nothing to run
+        // and `gen.throw(e)` resolved to `{value: undefined, done: false}` instead of
+        // the value the catch yields. Routing to the catch's states (as sync
+        // generators do) is what Node's semantics require.
+        let throw_continuation = Some(while_body_for_throw);
         // #4374: fresh binding for the inner catch that re-runs a try's finally
         // when its catch handler itself throws (catch-rethrow-with-finally).
         let inner_catch_id = alloc_local(next_local_id);
