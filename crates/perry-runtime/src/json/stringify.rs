@@ -1980,13 +1980,13 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                     // must not reach the object catch-all (segfault).
                     buf.push_str("{}");
                 }
-            // A Promise has no enumerable own properties — Node emits "{}". Its
-            // `PromiseHeader` is not the JSObject keys/values layout, so falling
-            // through to the structural heuristics below read its slots as a
-            // StringHeader and emitted `""`.
-            crate::gc::GC_TYPE_PROMISE => {
-                buf.push_str("{}");
-            }
+                // A Promise has no enumerable own properties — Node emits "{}". Its
+                // `PromiseHeader` is not the JSObject keys/values layout, so falling
+                // through to the structural heuristics below read its slots as a
+                // StringHeader and emitted `""`.
+                crate::gc::GC_TYPE_PROMISE => {
+                    buf.push_str("{}");
+                }
                 _ => {
                     if is_object_pointer(elem_ptr) {
                         stringify_object_inner(elem_ptr, buf, depth);
