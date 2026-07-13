@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1258
+**Current Version:** 0.5.1239
 
 
 ## TypeScript Parity Status
@@ -173,6 +173,24 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ### objc2 v0.6 API
 - `define_class!` with `#[unsafe(super(NSObject))]`, `msg_send!` returns `Retained` directly
 - All AppKit constructors require `MainThreadMarker`
+
+### Verifying a runtime change (read before you trust an A/B)
+Build outputs are invisible to `git status`, so a clean tree tells you nothing about what you are actually linking. Three ways this bites:
+
+- **Wrong build command → stale archive.** `perry-runtime`/`perry-stdlib` are `crate-type = ["rlib"]`; `libperry_{runtime,stdlib}.a` come from the `perry-runtime-static`/`perry-stdlib-static` wrappers (see Build Commands). `cargo build -p perry-runtime -p perry-stdlib` does **not** emit them, so `perry compile` links a stale `.a`: your fix looks like a no-op **and both arms of an A/B behave identically** (a vacuous "zero regressions"). Build `-p perry -p perry-runtime-static -p perry-stdlib-static`, pin `PERRY_RUNTIME_DIR`, and confirm the `.a` mtime moved *after* your edit. Keep the package set identical across builds/bisect hops — dropping `-p perry` changes cargo feature unification. (`run_parity_tests.sh` builds the wrappers itself, so gap runs are safe; hand-rolled `.ts` probes are not.)
+- **A prebuilt binary in another worktree is not evidence about the commit it's checked out to** — it may be built from that worktree's WIP tree. Never use one as a bisect `good` endpoint or a perf baseline; build your own reference and *verify the good endpoint is actually good* first.
+- **Check the harness's exit code, not a wrapper shell's.** A job piping the gap harness through `grep` can report exit 0 while the harness itself failed.
+
+### CI gates that surprise people
+- **2000-line-per-file cap** (`scripts/check_file_size.sh`) — run it before pushing; adding a long doc comment can trip it.
+- **addr-class ratchet** (`scripts/addr_class_inventory.py`) — a file gaining a bare-address site fails `lint`.
+- **`conformance-smoke` shards are flaky.** Before believing a red shard, re-run it and A/B the named tests against a pristine `main` build; several are already in `test-parity/known_failures.json`.
+- **Integration suites under `crates/*/tests/*.rs` do not run per-PR** (nightly/tag only) — a regression there can land green and sit red for days. Prefer putting acceptance coverage in `cargo-test`-visible unit tests (#5960).
+
+### Known-weak areas (symptom is often not the bug)
+- **Async-to-generator transform, body locals.** It boxes every body local into a shared mutable cell typed `Any`. Two consequences seen in the wild: per-iteration `let`/`const` bindings collapse for closures created in a loop, and computed numeric-key calls (`arr[i](x)`) lose their type proof and silently resolve by *method name*, evaporating the call.
+- **Native base-class subclassing.** A native base's surface is installed at `super()` time and its parent edge lives in the class registry; keying any of that on a literal `extends` name loses it for fieldless classes, indirect subclasses, and class expressions.
+- **Two prototype-resolution paths.** `CLASS_PROTOTYPE_OBJECTS` (synthetic: `Object.create`, plain-function ctors) vs `CLASS_DECL_PROTOTYPE_OBJECTS` (declared classes). `in`/`for…in` and `getPrototypeOf` have disagreed about the same chain.
 
 ## Recent Changes
 
