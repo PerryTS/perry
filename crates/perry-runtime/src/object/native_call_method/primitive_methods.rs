@@ -470,11 +470,32 @@ pub(super) unsafe fn dispatch_primitive(
     // (#1731). The helper returns None for non-regex so generic dispatch resumes.
     #[cfg(feature = "regex-engine")]
     if matches!(method_name, "test" | "exec" | "toString") && jsval.is_pointer() {
-        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        let arg0 = refreshed_args().first().copied().unwrap_or(undef);
         let p = jsval.as_pointer::<u8>();
-        if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
-            return Some(r);
+        // An OWN property SHADOWS the `RegExp.prototype` method — ordinary
+        // `[[Get]]` consults the receiver's own properties before walking the
+        // prototype chain. `__re.toString = Object.prototype.toString;
+        // __re.toString()` must therefore call the *assigned* function (giving
+        // `[object RegExp]`), not the builtin `RegExp.prototype.toString`
+        // (which returns the `/source/flags` literal). The same holds for
+        // `re.exec` / `re.test` overrides, which libraries use to instrument a
+        // regex. Expando writes on a RegExp land in the `exotic_expando` side
+        // table (a `RegExpHeader` is not an `ObjectHeader`), so consult it here
+        // and fall through to generic dispatch — which invokes the own value,
+        // or throws `is not a function` for a non-callable — whenever the key
+        // is present (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897).
+        let shadowed_by_own = crate::regex::is_regex_pointer(p)
+            && crate::object::exotic_expando::value_lookup(
+                crate::object::exotic_expando::ExoticKind::RegExp,
+                p as usize,
+                method_name,
+            )
+            .is_some();
+        if !shadowed_by_own {
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            let arg0 = refreshed_args().first().copied().unwrap_or(undef);
+            if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
+                return Some(r);
+            }
         }
     }
 

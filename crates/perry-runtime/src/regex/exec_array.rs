@@ -103,12 +103,12 @@ pub(super) fn set_exec_array_indices(
     for (i, cap) in caps.iter().enumerate() {
         let indices_arr_ptr = indices_handle.get_raw_mut_ptr::<ArrayHeader>();
         if let Some(m) = cap {
-            // Convert byte offsets to char indices (JS spec uses UTF-16 code units,
-            // but we use char indices for simplicity — matches existing .index behavior)
+            // Convert byte offsets to JS string indices (UTF-16 code units),
+            // consistent with `.index` / `lastIndex` / `str.length`.
             let start_byte = m.start() + search_start_byte;
             let end_byte = m.end() + search_start_byte;
-            let start_char = str_data[..start_byte].chars().count() as f64;
-            let end_char = str_data[..end_byte].chars().count() as f64;
+            let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+            let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
             // Create [start, end] pair
             let pair = crate::array::js_array_alloc(2);
@@ -155,8 +155,8 @@ pub(super) fn set_exec_array_indices(
             let val = if let Some(m) = m {
                 let start_byte = m.start() + search_start_byte;
                 let end_byte = m.end() + search_start_byte;
-                let start_char = str_data[..start_byte].chars().count() as f64;
-                let end_char = str_data[..end_byte].chars().count() as f64;
+                let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+                let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
                 // Create [start, end] pair for named group
                 let pair = crate::array::js_array_alloc(2);
@@ -206,20 +206,43 @@ pub(super) fn set_exec_array_indices(
     );
 }
 
-pub(super) fn char_index_to_byte(s: &str, char_index: usize) -> usize {
-    if char_index == 0 {
+/// A JS string index (UTF-16 code units) → the byte offset of that position in
+/// the UTF-8 buffer. Inverse of [`byte_index_to_utf16_index`].
+///
+/// An index that lands *inside* a surrogate pair (i.e. addresses the low
+/// surrogate of an astral scalar, which has no UTF-8 boundary of its own)
+/// resolves to the byte offset just past that scalar; an index at or beyond the
+/// end resolves to `s.len()`.
+pub(super) fn utf16_index_to_byte(s: &str, utf16_index: usize) -> usize {
+    if utf16_index == 0 {
         return 0;
     }
-    for (idx, (byte, _)) in s.char_indices().enumerate() {
-        if idx == char_index {
+    let mut units = 0usize;
+    for (byte, ch) in s.char_indices() {
+        if units >= utf16_index {
             return byte;
         }
+        units += ch.len_utf16();
     }
     s.len()
 }
 
-pub(super) fn byte_index_to_char_index(s: &str, byte_index: usize) -> f64 {
-    s[..byte_index.min(s.len())].chars().count() as f64
+/// A byte offset in the UTF-8 buffer → the JS string index (UTF-16 code units).
+///
+/// Every JS-observable string index — `match.index`, `lastIndex`, the offset
+/// passed to a `String.prototype.replace` callback — is counted in UTF-16 code
+/// units, which is exactly what Perry's own `StringHeader::utf16_len`
+/// (`js_string_length`, i.e. `str.length`) reports. A non-BMP scalar such as
+/// U+1D306 is ONE `char` but TWO UTF-16 code units, so the previous
+/// `chars().count()` under-reported every index at or past an astral character
+/// and left the regex module inconsistent with `str.length` / `charAt`:
+/// `/./ug.exec('𝌆')` parked `lastIndex` at 1 where the spec (and Node) require 2
+/// (test262 built-ins/RegExp/prototype/exec/u-lastindex-value, #5897).
+pub(super) fn byte_index_to_utf16_index(s: &str, byte_index: usize) -> usize {
+    s[..byte_index.min(s.len())]
+        .chars()
+        .map(char::len_utf16)
+        .sum()
 }
 
 /// Build and attach the `indices` property for fancy-regex captures (lookbehind/backreference fallback).
@@ -246,8 +269,8 @@ pub(super) unsafe fn set_exec_array_indices_fancy(
         if let Some(m) = caps.get(i) {
             let start_byte = m.start() + search_start_byte;
             let end_byte = m.end() + search_start_byte;
-            let start_char = str_data[..start_byte].chars().count() as f64;
-            let end_char = str_data[..end_byte].chars().count() as f64;
+            let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+            let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
             // Create [start, end] pair
             let pair = crate::array::js_array_alloc(2);
@@ -288,8 +311,8 @@ pub(super) unsafe fn set_exec_array_indices_fancy(
             let val = if let Some(m) = m {
                 let start_byte = m.start() + search_start_byte;
                 let end_byte = m.end() + search_start_byte;
-                let start_char = str_data[..start_byte].chars().count() as f64;
-                let end_char = str_data[..end_byte].chars().count() as f64;
+                let start_char = byte_index_to_utf16_index(str_data, start_byte) as f64;
+                let end_char = byte_index_to_utf16_index(str_data, end_byte) as f64;
 
                 // Create [start, end] pair for named group
                 let pair = crate::array::js_array_alloc(2);

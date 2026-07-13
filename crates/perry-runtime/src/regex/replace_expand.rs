@@ -247,7 +247,7 @@ pub(super) unsafe fn replace_regex_fn_fancy(
         matches.push(OwnedMatchData {
             start: full_match.start(),
             end: full_match.end(),
-            char_offset: str_data[..full_match.start()].chars().count(),
+            char_offset: super::exec_array::byte_index_to_utf16_index(str_data, full_match.start()),
             groups: (0..caps.len())
                 .map(|gi| caps.get(gi).map(|m| m.as_str().to_string()))
                 .collect(),
@@ -337,7 +337,10 @@ pub extern "C" fn js_string_replace_regex_fn(
             matches.push(OwnedMatchData {
                 start: full_match.start(),
                 end: full_match.end(),
-                char_offset: str_data[..full_match.start()].chars().count(),
+                char_offset: super::exec_array::byte_index_to_utf16_index(
+                    str_data,
+                    full_match.start(),
+                ),
                 groups: (0..caps.len())
                     .map(|gi| caps.get(gi).map(|m| m.as_str().to_string()))
                     .collect(),
