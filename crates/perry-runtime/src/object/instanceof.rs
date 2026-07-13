@@ -117,7 +117,8 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
     let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = crate::string::str_bytes_from_jsvalue(name_value, &mut scratch)?;
-    let name = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len as usize) }).ok()?;
+    let name =
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len as usize) }).ok()?;
     Some(match name {
         "ReadableStream" => 0xFFFF_0060,
         "WritableStream" => 0xFFFF_0061,
