@@ -79,8 +79,8 @@ use crate::unroll::escape_analysis::{
     count_local_refs_expr, count_local_refs_stmt, count_local_refs_stmts,
 };
 use perry_hir::walker::walk_expr_children_mut;
-use perry_hir::{Expr, Stmt, Type};
-use perry_types::LocalId;
+use perry_hir::{Expr, Stmt};
+use perry_types::{LocalId, Type};
 use std::collections::{HashMap, HashSet};
 
 /// Ids whose `Stmt::Let` the state-machine transform must leave in place so
@@ -110,8 +110,8 @@ fn scan_stmts(
     out: &mut HashSet<LocalId>,
 ) {
     for s in stmts {
-        if is_loop(s) {
-            analyze_loop(s, total, decl_sites, out);
+        if let Some(l) = as_loop(s) {
+            analyze_loop(l, total, decl_sites, out);
         }
         each_child_stmt_list(s, &mut |list| scan_stmts(list, total, decl_sites, out));
     }
@@ -208,11 +208,23 @@ fn used_after_suspend(id: LocalId, rest: &[Stmt]) -> bool {
     false
 }
 
+/// The loop `stmt` is, looking through any `Stmt::Labeled` wrappers.
+///
+/// `outer: for (…) { … continue outer; … }` lowers to `Labeled { body: For }`,
+/// so a bare `matches!(stmt, Stmt::For { .. })` test silently skips every
+/// labeled loop — and `each_child_stmt_list` unwraps `Labeled` straight to the
+/// inner loop's BODY, so the loop statement itself would never be analyzed at
+/// all. Its per-iteration bindings would then keep collapsing onto one box.
+fn as_loop(stmt: &Stmt) -> Option<&Stmt> {
+    match stmt {
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => Some(stmt),
+        Stmt::Labeled { body, .. } => as_loop(body),
+        _ => None,
+    }
+}
+
 fn is_loop(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. }
-    )
+    as_loop(stmt).is_some()
 }
 
 fn loop_body(stmt: &Stmt) -> &[Stmt] {
@@ -475,12 +487,16 @@ fn walk_snapshot(
     // Descend first: a suspending loop adds its still-hoisted per-iteration
     // bindings to the set visible to closures built anywhere inside it.
     for stmt in stmts.iter_mut() {
-        let nested = if is_loop(stmt) && loop_contains_suspend(stmt) {
-            let mut a = active.clone();
-            a.extend(hoisted_loop_bindings(stmt, ctx));
-            a
-        } else {
-            active.clone()
+        // `as_loop` looks through `Stmt::Labeled` — `outer: for (…)` is a
+        // labeled wrapper around the loop, and its bindings are per-iteration
+        // just the same.
+        let nested = match as_loop(stmt) {
+            Some(l) if loop_contains_suspend(l) => {
+                let mut a = active.clone();
+                a.extend(hoisted_loop_bindings(l, ctx));
+                a
+            }
+            _ => active.clone(),
         };
         each_child_stmt_list_mut(stmt, &mut |list| {
             walk_snapshot(list, &nested, ctx, next_local_id, introduced)
