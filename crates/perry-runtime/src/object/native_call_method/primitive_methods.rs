@@ -479,22 +479,58 @@ pub(super) unsafe fn dispatch_primitive(
         // (which returns the `/source/flags` literal). The same holds for
         // `re.exec` / `re.test` overrides, which libraries use to instrument a
         // regex. Expando writes on a RegExp land in the `exotic_expando` side
-        // table (a `RegExpHeader` is not an `ObjectHeader`), so consult it here
-        // and fall through to generic dispatch — which invokes the own value,
-        // or throws `is not a function` for a non-callable — whenever the key
-        // is present (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897).
-        let shadowed_by_own = crate::regex::is_regex_pointer(p)
-            && crate::object::exotic_expando::value_lookup(
+        // table, because a `RegExpHeader` is not an `ObjectHeader`.
+        //
+        // The own value is invoked HERE rather than by declining the regex
+        // dispatch and letting the generic path pick it up: `toString` has a
+        // downstream catch-all arm that stringifies any pointer receiver via
+        // `js_jsvalue_to_string`, which maps a regex straight back to
+        // `/source/flags` — so a bare fall-through would still miss the
+        // override (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897).
+        let own_override = if crate::regex::is_regex_pointer(p) {
+            crate::object::exotic_expando::value_lookup(
                 crate::object::exotic_expando::ExoticKind::RegExp,
                 p as usize,
                 method_name,
             )
-            .is_some();
-        if !shadowed_by_own {
-            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let arg0 = refreshed_args().first().copied().unwrap_or(undef);
-            if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
-                return Some(r);
+        } else {
+            None
+        };
+        match own_override {
+            Some(own_bits) => {
+                let raw = (own_bits & crate::value::POINTER_MASK) as usize;
+                if (own_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                    && crate::closure::is_closure_ptr(raw)
+                {
+                    // Bind `this` to the regex, exactly as the class-static and
+                    // prototype method-dispatch arms above do.
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        own_bits,
+                        object_handle.get_nanbox_f64(),
+                    );
+                    let prop_handle = root_scope.root_nanbox_f64(f64::from_bits(bound));
+                    let args = refreshed_args();
+                    let prev_this =
+                        IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+                    let result = crate::closure::js_native_call_value(
+                        prop_handle.get_nanbox_f64(),
+                        args.as_ptr(),
+                        args.len(),
+                    );
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return Some(result);
+                }
+                // Own key present but NOT callable (`re.exec = 5; re.exec()`).
+                // Fall through to generic dispatch, which raises the
+                // `is not a function` TypeError — never run the builtin.
+            }
+            None => {
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg0 = refreshed_args().first().copied().unwrap_or(undef);
+                if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0)
+                {
+                    return Some(r);
+                }
             }
         }
     }
