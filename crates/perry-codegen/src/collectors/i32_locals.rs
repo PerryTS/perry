@@ -2,6 +2,30 @@ use std::collections::HashSet;
 
 use super::*;
 
+/// An integer literal only proves an int32 value when it *is* one (#6319).
+///
+/// `Expr::Integer` carries an `i64`, so it happily holds `3000000000` or
+/// `9007199254740991` — values that are integral but do NOT fit in i32. Every
+/// judgment in the i32 fast-path chain used to accept `Expr::Integer(_)`
+/// unconditionally, which is how a literal past 2^31 reached an i32 shadow
+/// slot and got silently `ToInt32`-wrapped (`3000000000` → `-1294967296`).
+///
+/// This is the one predicate all four of those judgments now share:
+/// `is_strictly_i32_bounded_expr` (the write-is-i32-bounded proof),
+/// `collect_integer_let_ids` (the syntactic seed), `is_int32_producing_expr`
+/// (the forward-closure admission) and `int32_producing_deps` (the
+/// disqualification judgment). Narrowing only the seed would not have held:
+/// the forward closure re-admits from the init, and the judgment re-admits
+/// from every `LocalSet` rhs.
+///
+/// Deliberately *not* widened to "any value ToInt32 can wrap". `| 0`, `>>> 0`,
+/// bitwise ops and `Math.imul` all wrap by spec, so their results are genuinely
+/// int32 and keep their own arms below; a bare literal does not wrap — `let x =
+/// 3000000000` is the Number 3000000000 and must stay a double.
+pub(crate) fn integer_literal_fits_i32(n: i64) -> bool {
+    i32::try_from(n).is_ok()
+}
+
 pub fn is_strictly_i32_bounded_expr(
     e: &perry_hir::Expr,
     known_int_locals: &HashSet<u32>,
@@ -11,7 +35,11 @@ pub fn is_strictly_i32_bounded_expr(
 ) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match e {
-        Expr::Integer(_) => true,
+        // #6319: an out-of-i32-range literal is NOT i32-bounded. Without the
+        // magnitude check, `let y = 0; y = 3000000000;` counted every write to
+        // `y` as strict, `y` got an i32 shadow at its `Let` site, and the store
+        // truncated to -1294967296.
+        Expr::Integer(n) => integer_literal_fits_i32(*n),
         // `x++`/`x--` is i32-bounded ONLY when the updated local is itself a
         // known integer (a loop counter). The previous unconditional `true`
         // truncated `var y = x++` to an i32 slot even when `x` held a
@@ -627,7 +655,7 @@ pub fn collect_integer_let_ids(
                 init: Some(init),
                 mutable,
                 ..
-            } if matches!(init, Expr::Integer(_))
+            } if matches!(init, Expr::Integer(n) if integer_literal_fits_i32(*n))
                     || is_flat_const_indexget(init, flat_const_ids, flat_row_alias_ids)
                     || is_clamp_call(init, clamp_fn_ids)
                     // Seed immutable (const) Lets whose init is a bitwise expression

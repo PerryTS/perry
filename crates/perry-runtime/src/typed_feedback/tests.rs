@@ -1761,13 +1761,21 @@ fn typed_feedback_object_set_fast_hits_learned_dynamic_key_transition() {
     let stored = crate::object::js_object_get_field_by_name_f64(second_obj, key);
     assert_eq!(stored.to_bits(), 12.0f64.to_bits());
 
+    // #6084 item 6: the dynamic-write fast path is vetted PER RECEIVER, not by
+    // the process-global `GLOBAL_DESCRIPTORS_IN_USE` latch. That latch flips on
+    // any descriptor install anywhere — including ones the runtime itself
+    // performs and ones earlier tests in this process performed — and it used to
+    // force this learned transition onto the fallback path (the old expectation
+    // here was `fallback_calls == 2` whenever `descriptors_in_use()`).
+    //
+    // `second_obj` is a fresh plain object: no own descriptor
+    // (`OBJ_FLAG_HAS_DESCRIPTORS` clear), no recorded `setPrototypeOf` target,
+    // and `Object.prototype` owns no `dyn_fast_key_34` — so nothing can
+    // intercept the write and it must hit the learned transition regardless of
+    // what descriptors exist elsewhere in the process.
     let site = &typed_feedback_snapshot().sites[0];
-    if crate::object::descriptors_in_use() {
-        assert_eq!(site.fallback_calls, 2);
-    } else {
-        assert_eq!(site.fallback_calls, 1);
-        assert!(site.guard_passes >= 1);
-    }
+    assert_eq!(site.fallback_calls, 1);
+    assert!(site.guard_passes >= 1);
 }
 
 #[test]

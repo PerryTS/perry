@@ -36,9 +36,10 @@ pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
     is_any_array_buffer, is_array_buffer, is_data_view, is_registered_buffer, is_secret_key,
-    is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer, mark_as_asymmetric_key,
-    mark_as_crypto_key, mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer,
-    mark_as_uint8array, register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
+    is_shared_array_buffer, is_uint8array_buffer, js_set_crypto_key_death_hook,
+    mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key, mark_as_data_view,
+    mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array, register_buffer,
+    resolve_buffer_ab_alias, set_buffer_ab_alias, CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{
     collect_dead_registered_buffers_post_trace, finalize_collected_dead_buffer,
@@ -145,6 +146,51 @@ pub use iter::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GC buffer sweep must drop the CryptoKey/secret-key side tables
+    /// along with the buffer identity ones. They are plain `addr -> metadata`
+    /// maps that never rooted the `BufferHeader`, so leaving them behind both
+    /// leaked an entry per key and let a recycled address inherit CryptoKey
+    /// identity (`crypto_key_meta`/`is_secret_key` gate `instanceof CryptoKey`,
+    /// `util.types.isCryptoKey`, `KeyObject.from`, `.export()` …) — the #6080
+    /// ABA class this finalizer exists to prevent.
+    #[test]
+    fn test_dead_buffer_finalize_prunes_crypto_key_side_tables() {
+        let buf = buffer_alloc(32);
+        assert!(!buf.is_null());
+        let addr = buf as usize;
+
+        // Shape a WebCrypto secret CryptoKey: HMAC / SHA-256 / secret.
+        mark_as_uint8array(addr);
+        mark_as_crypto_key(addr, 1, 2, 1);
+        mark_as_secret_key(addr);
+
+        assert!(crypto_key_meta(addr).is_some(), "meta registered");
+        assert!(is_secret_key(addr), "secret-key flag registered");
+        assert!(is_uint8array_buffer(addr), "uint8array flag registered");
+        assert!(is_registered_buffer(addr), "buffer registered");
+
+        // Exactly what the sweep subphase runs once the header is proven dead.
+        finalize_collected_dead_buffer(addr);
+
+        assert!(
+            crypto_key_meta(addr).is_none(),
+            "dead buffer must not keep CryptoKey metadata — a recycled address \
+             would answer to instanceof CryptoKey / KeyObject.from()"
+        );
+        assert!(
+            !is_secret_key(addr),
+            "dead buffer must not keep the secret-key flag"
+        );
+        assert!(
+            !is_uint8array_buffer(addr),
+            "dead buffer must not keep the uint8array flag"
+        );
+        assert!(
+            !is_registered_buffer(addr),
+            "dead buffer must not stay registered"
+        );
+    }
 
     #[test]
     fn test_small_buffer_slab_unique_addresses() {

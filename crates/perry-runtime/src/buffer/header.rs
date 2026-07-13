@@ -56,6 +56,32 @@ fn external_crypto_keys() -> &'static Mutex<HashMap<usize, CryptoKeyMeta>> {
     EXTERNAL_CRYPTO_KEY_META_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Called by the GC's buffer sweep when a CryptoKey-flagged `BufferHeader`
+/// dies, so perry-stdlib can drop the matching entry from its own
+/// `addr -> CryptoKeyMaterial` map. Registered by
+/// `js_set_crypto_key_death_hook` at startup; stays null when stdlib isn't
+/// linked. Must not allocate — it runs inside the sweep.
+pub type CryptoKeyDeathHookFn = extern "C" fn(usize);
+static CRYPTO_KEY_DEATH_HOOK: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Install the dead-CryptoKey callback (called by perry-stdlib at startup —
+/// this crate can't call into perry-stdlib, which depends on it). Same
+/// contract as the `js_set_native_*_dispatch` family in `value::handle`.
+#[no_mangle]
+pub extern "C" fn js_set_crypto_key_death_hook(func: CryptoKeyDeathHookFn) {
+    CRYPTO_KEY_DEATH_HOOK.store(func as *mut (), std::sync::atomic::Ordering::SeqCst);
+}
+
+fn notify_crypto_key_death(addr: usize) {
+    let ptr = CRYPTO_KEY_DEATH_HOOK.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr.is_null() {
+        return;
+    }
+    let hook: CryptoKeyDeathHookFn = unsafe { std::mem::transmute(ptr) };
+    hook(addr);
+}
+
 pub type CryptoKeyMeta = (u8, u8, u8, bool, u32);
 
 thread_local! {
@@ -490,6 +516,50 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     BUFFER_AB_ALIAS.with(|r| {
         r.borrow_mut().remove(&addr);
     });
+    // The WebCrypto/KeyObject side tables were missing from this list. They are
+    // plain `addr -> metadata` maps that do not root the `BufferHeader`, so a
+    // collected CryptoKey/secret-key buffer left its entries behind forever.
+    // Two consequences, both real:
+    //
+    //  * an unbounded leak — every CryptoKey ever created kept an entry in the
+    //    thread-local map AND in the process-global one (a 60k-key run leaked
+    //    59,998 of them);
+    //  * the #6080 ABA class this very function exists to prevent: the old
+    //    arena resets a fully-empty block's offset to 0 while keeping its base
+    //    pointer (`arena_reset_empty_blocks` + the block-reuse forward scan in
+    //    `Arena::alloc`), so a recycled address inherits CryptoKey identity.
+    //    `crypto_key_meta`/`is_secret_key` gate `instanceof CryptoKey`,
+    //    `util.types.isCryptoKey`/`isKeyObject`, the `[object CryptoKey]` tag,
+    //    the `.algorithm`/`.type`/`.usages` property surface, `KeyObject.from`
+    //    and `.export()` — an unrelated fresh Buffer landing on a dead key's
+    //    address would answer to all of them.
+    CRYPTO_KEY_META_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    SECRET_KEY_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    UINT8ARRAY_FROM_CTOR.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    // `js_buffer_mark_as_crypto_key_external` writes all three global maps, and
+    // `is_registered_buffer`/`is_uint8array_buffer` consult them, so a dead
+    // external key buffer has to be dropped from every one of them.
+    if let Ok(mut r) = external_buffers().lock() {
+        r.remove(&addr);
+    }
+    if let Ok(mut r) = external_uint8arrays().lock() {
+        r.remove(&addr);
+    }
+    if let Ok(mut r) = external_crypto_keys().lock() {
+        r.remove(&addr);
+    }
+    // perry-stdlib keeps its own `addr -> CryptoKeyMaterial` map (the primary
+    // one `lookup_crypto_key` consults; the runtime table above is only its
+    // fallback), and this crate cannot call into perry-stdlib. Notify it
+    // through the hook it installs at startup. The callback only removes a
+    // HashMap entry — no allocation, so it is safe to run inside the sweep.
+    notify_crypto_key_death(addr);
     super::detach::remove_detached_entry_for_dead_buffer(addr);
     super::view::remove_entries_for_dead_buffer(addr);
 }

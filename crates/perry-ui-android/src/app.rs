@@ -359,6 +359,7 @@ pub fn add_keyboard_shortcut(_key_ptr: *const u8, _modifiers: f64, _callback: f6
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
 thread_local! {
@@ -406,7 +407,11 @@ pub fn on_terminate(callback: f64) {
 pub fn handle_activate() {
     ON_ACTIVATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
-            let ptr = callback.to_bits() as *const u8;
+            // Unbox NaN-boxed closure (same as callback.rs / iOS/macOS).
+            let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
             unsafe {
                 js_closure_call1(ptr, 0.0);
             }
@@ -418,7 +423,11 @@ pub fn handle_activate() {
 pub fn handle_terminate() {
     ON_TERMINATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
-            let ptr = callback.to_bits() as *const u8;
+            // Unbox NaN-boxed closure — see invoke0 / callback.rs for details.
+            let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
             unsafe {
                 js_closure_call1(ptr, 0.0);
             }

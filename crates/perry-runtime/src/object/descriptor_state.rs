@@ -331,6 +331,75 @@ pub(crate) fn object_has_descriptors(obj: usize) -> bool {
     false
 }
 
+/// #6084 (item 6): can anything intercept a plain-data write of `key` to the
+/// `GC_TYPE_OBJECT` at `addr` (own accessor / non-writable descriptor, or an
+/// inherited setter / non-writable data property), so the dynamic-write
+/// transition-cache fast path must be skipped for THIS write?
+///
+/// Replaces the process-global `GLOBAL_DESCRIPTORS_IN_USE` latch that used to
+/// gate both dynamic-write fast paths. That latch flips on *any* descriptor
+/// install anywhere — so a single `Object.freeze` on a completely unrelated
+/// object (or any library that freezes one config object at import time)
+/// permanently pushed EVERY dynamic property write in the process onto the
+/// O(own-key-count) slow walk. Measured: 1M objects × 3 new props = 5281 ms;
+/// the identical loop after one unrelated `Object.freeze` = 6807 ms (+29%,
+/// and it never recovers).
+///
+/// The vetting here is the same predicate `ordinary_set`'s #5054 fast path
+/// (`proxy.rs`) already applies per receiver, and the same receiver-level /
+/// prototype-level split as the #5654 read-side guard:
+///   - own descriptors are visible per-object in `OBJ_FLAG_HAS_DESCRIPTORS`
+///     (set by [`note_descriptor_target`], travels with the object on
+///     evacuation, and is clear on every fresh allocation);
+///   - only *prototype*-level installs can intercept a write to an object whose
+///     own flag is clear, and those are checked against the actual prototype
+///     chain — `Object.prototype` per-key via [`object_proto_may_intercept_key`]
+///     (a blanket check made wide dynamic builds O(n²), see #5054), a recorded
+///     `setPrototypeOf` target, or the class chain via
+///     [`class_instance_set_may_intercept`].
+///
+/// Conservative in every uncertain case (returns `true` = take the slow path).
+/// `caller` must have already established that `addr` is a `GC_TYPE_OBJECT`
+/// whose frozen/sealed/non-extensible flags are clear.
+pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, key: f64) -> bool {
+    // Nothing has ever installed a descriptor or accessor: no per-object work at
+    // all, just the one relaxed load the old gate did.
+    if !descriptors_in_use() {
+        return false;
+    }
+
+    // A descriptor exists SOMEWHERE. Vet this receiver and its prototype chain
+    // instead of latching the whole process onto the slow path.
+
+    // Own accessor / non-writable descriptor on this exact object.
+    if object_has_descriptors(addr) {
+        return true;
+    }
+
+    // `note_descriptor_target` cannot record the per-object flag for typed
+    // arrays (small ones are plain-alloc'd without a GcHeader) or for exotic
+    // expando hosts, so their descriptors are invisible to the flag check
+    // above — never fast-path them once any descriptor exists.
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        return true;
+    }
+    let value = crate::value::js_nanbox_pointer(addr as i64);
+    if super::exotic_expando::exotic_expando_kind_of_value(value).is_some() {
+        return true;
+    }
+
+    if class_id == 0 {
+        // Plain object. Its prototype is exactly `Object.prototype` unless a
+        // `setPrototypeOf` target was recorded for it.
+        super::prototype_chain::object_static_prototype(addr).is_some()
+            || object_proto_may_intercept_key(key)
+    } else {
+        // Class instance: an inherited accessor / non-writable data property
+        // anywhere in the chain intercepts the write.
+        class_instance_set_may_intercept(addr, class_id, key)
+    }
+}
+
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     note_descriptor_target(obj);
