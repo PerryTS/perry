@@ -1157,11 +1157,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // exists (the local shadows it; constructing the class instead
             // ran the WRONG constructor for mysql2's bundled factories).
             if let Some(local_id) = callee_local_at_entry {
-                return Ok(Expr::NewDynamic {
-                    callee: Box::new(Expr::LocalGet(local_id)),
-                    args,
-                    byte_offset: new_byte_offset,
-                });
+                // …but NOT when the local IS the class's own alias binding
+                // (`const E2 = class extends Event {}` — `let_class_aliases`
+                // maps E2 to its class): the static path carries the exact
+                // builtin-parent construction (#6336's Event/Map native
+                // attach), which the generic dynamic construct does not.
+                // A shadowing local over an UNRELATED same-named class
+                // declaration has no alias entry, so wall 7's reroute keeps
+                // firing.
+                let local_is_class_alias =
+                    ctx.inferred_class_bindings.contains(class_name.as_str());
+                if !local_is_class_alias {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::LocalGet(local_id)),
+                        args,
+                        byte_offset: new_byte_offset,
+                    });
+                }
             }
             // Issue #838 followup (b): when `<Ident>` is NOT a real
             // class but resolves to a local binding, route through

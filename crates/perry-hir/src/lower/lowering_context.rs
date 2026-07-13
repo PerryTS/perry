@@ -300,6 +300,15 @@ pub struct LoweringContext {
     /// identifier lhs can provide the `NamedEvaluation` name for an anonymous
     /// function/class rhs. This slot is set only while lowering that rhs.
     pub(crate) assignment_inferred_name: Option<String>,
+    /// Binding names whose class registration was created BY the binding's
+    /// own class-expression init (`const E2 = class extends Event {}` — the
+    /// anonymous expression claimed the inferred binding name as its
+    /// registration key, and `var K = class Inner {}` registers under the
+    /// bind name too). At a `new <name>()` site, such a name's local provably
+    /// holds that same class, so the static construct path (with its exact
+    /// builtin-parent handling) is correct; any OTHER in-scope local shadows
+    /// whatever same-named class exists and must construct dynamically.
+    pub(crate) inferred_class_bindings: std::collections::HashSet<String>,
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.

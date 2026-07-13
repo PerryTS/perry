@@ -61,6 +61,9 @@ fn emit_class_expression_value_binding(
         ctx.mark_local_immutable(id);
     }
     ctx.register_let_class_alias(bind_name.to_string(), bind_name.to_string());
+    // The binding's local holds ITS OWN class — `new <bind_name>()` must keep
+    // the static construct path (see `inferred_class_bindings`).
+    ctx.inferred_class_bindings.insert(bind_name.to_string());
     module.init.push(Stmt::Let {
         id,
         name: bind_name.to_string(),
@@ -688,6 +691,9 @@ pub(crate) fn lower_stmt(
                                         let class_id = ctx.fresh_class();
                                         ctx.register_class(bind_name.clone(), class_id);
                                         ctx.register_class(inner_name.clone(), class_id);
+                                        // The bind-name local holds ITS OWN
+                                        // class (see inferred_class_bindings).
+                                        ctx.inferred_class_bindings.insert(bind_name.clone());
                                         ctx.class_expr_aliases
                                             .insert(inner_name.clone(), bind_name.clone());
                                     }

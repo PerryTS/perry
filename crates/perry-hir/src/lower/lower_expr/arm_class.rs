@@ -68,7 +68,13 @@ pub(crate) fn lower_class_expr(
             match inferred {
                 // First class expression to claim this inferred binding name —
                 // reuse it directly as the registration key (and thus `.name`).
-                Some(name) if ctx.lookup_class(&name).is_none() => name,
+                Some(name) if ctx.lookup_class(&name).is_none() => {
+                    // Record that this binding's local holds ITS OWN class, so
+                    // `new <name>()` keeps the exact static construct path
+                    // (see `inferred_class_bindings`).
+                    ctx.inferred_class_bindings.insert(name.clone());
+                    name
+                }
                 // #5592: a second anonymous class expression assigned to the
                 // SAME binding (`C = class {…}; C = class {…}`) infers the same
                 // name. Reusing the key would alias both onto one ClassId
@@ -77,6 +83,12 @@ pub(crate) fn lower_class_expr(
                 // registration key but keep its user-visible `.name` as the
                 // binding name.
                 Some(name) => {
+                    // The binding's local still holds ITS OWN class even when
+                    // the registration key is disambiguated (#5592) — or when
+                    // the Phase-1.5 pre-scan already claimed the inferred name
+                    // for this same expression. Record the BINDING name so
+                    // `new <name>()` keeps the static construct path.
+                    ctx.inferred_class_bindings.insert(name.clone());
                     display_override = Some(name.clone());
                     format!("{}__anon_dup_{}", name, ctx.fresh_class())
                 }
