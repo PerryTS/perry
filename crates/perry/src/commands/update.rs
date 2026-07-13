@@ -17,7 +17,13 @@ pub struct UpdateArgs {
     pub force: bool,
 }
 
-pub fn run(args: UpdateArgs, format: OutputFormat, use_color: bool, verbose: u8) -> Result<()> {
+pub fn run(
+    args: UpdateArgs,
+    format: OutputFormat,
+    use_color: bool,
+    verbose: u8,
+    quiet: bool,
+) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
 
     let status = if !args.force && !update_checker::is_cache_stale() {
@@ -65,7 +71,13 @@ pub fn run(args: UpdateArgs, format: OutputFormat, use_color: bool, verbose: u8)
 
             if !args.check_only {
                 println!();
-                update_checker::perform_self_update(verbose > 0)?;
+                // Progress goes to stderr, so it never corrupts `--format json`
+                // on stdout; `--quiet` silences it entirely.
+                update_checker::perform_self_update(update_checker::UpdateOutput {
+                    verbose: verbose > 0,
+                    quiet,
+                    color: use_color,
+                })?;
             }
         }
         update_checker::UpdateStatus::UpToDate => match format {

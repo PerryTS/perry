@@ -456,7 +456,9 @@ fn main_inner() -> Result<()> {
         Commands::Publish(args) => commands::publish::run(args, cli.format, use_color, cli.verbose),
         #[cfg(feature = "mobile-cli")]
         Commands::Setup(args) => commands::setup::run(args),
-        Commands::Update(args) => commands::update::run(args, cli.format, use_color, cli.verbose),
+        Commands::Update(args) => {
+            commands::update::run(args, cli.format, use_color, cli.verbose, cli.quiet)
+        }
         #[cfg(feature = "audit-cli")]
         Commands::Audit(args) => commands::audit::run(args, cli.format, use_color),
         #[cfg(feature = "audit-cli")]
