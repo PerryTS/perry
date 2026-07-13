@@ -1129,3 +1129,32 @@ pub(crate) fn event_target_method_bind(target: *mut ObjectHeader, name: &[u8]) -
     crate::closure::js_closure_set_capture_ptr(closure, 0, target_bits as i64);
     Some(boxed_ptr(closure))
 }
+
+/// Value-read entry point for the object field-get tail (#6301): resolve
+/// `addEventListener` / `removeEventListener` / `dispatchEvent` off the
+/// receiver's class chain when nothing earlier in the property walk claimed the
+/// name. Gated on the name first, so a non-EventTarget read pays only a
+/// length+compare, never the receiver probe.
+///
+/// The call site sits AFTER the tail's `keys_array.is_null()` early return, and
+/// that placement is correct: a `class X extends EventTarget` instance never
+/// takes the keyless branch. Every class-instance allocator
+/// (`js_object_alloc_class_inline_keys`, `js_object_alloc_class_with_keys`,
+/// `js_object_alloc_class_dynamic_parent`) installs the shape-cached keys array
+/// unconditionally, and `js_build_class_keys_array` hands back a zero-LENGTH
+/// array — never NULL — for a class that declares no fields. So even the
+/// emptiest subclass (`class Bus extends EventTarget {}`, no fields, no ctor)
+/// lands on the shaped path with an empty keys array and reaches this fallback.
+///
+/// The keyless branch is for `Object.create(proto)` / bare
+/// `js_new_function_construct` receivers, whose inherited methods resolve one
+/// hop earlier through `resolve_proto_chain_field_with_receiver` (the prototype
+/// object is itself a shaped, class-id-stamped receiver) — so they never reach
+/// that branch's dead end either. The empty-shape cases in
+/// `test-files/test_gap_6301_event_target_subclass.ts` pin this.
+pub(crate) fn event_target_value_read(target: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
+    if !is_event_target_method_name(name) {
+        return None;
+    }
+    event_target_method_bind(target, name)
+}

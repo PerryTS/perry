@@ -1969,35 +1969,15 @@ pub(crate) fn get_field_by_name_object_tail(
         }
 
         // #6301: `EventTarget`'s method surface, read as a VALUE
-        // (`typeof b.dispatchEvent`, `const add = t.addEventListener`). The
-        // methods have no prototype home — they were only ever compile-time
-        // lowerings keyed on a receiver statically named `EventTarget` — so a
-        // plain `new EventTarget()` read them as `undefined` and a
-        // `class Bus extends EventTarget {}` instance inherited nothing.
-        // Materialize a bound method for a receiver that is an event target by
-        // marker (the plain instance) or by class chain (a subclass at any
-        // depth). Deliberately LAST in the tail: an own property and a real
-        // class-vtable method (a subclass that *overrides* `dispatchEvent`)
-        // are resolved earlier and keep winning.
-        //
-        // This sits AFTER the `keys_array.is_null()` early return above, and
-        // that is correct — a `class X extends EventTarget` instance never
-        // takes the keyless branch. Every class-instance allocator
-        // (`js_object_alloc_class_inline_keys`, `js_object_alloc_class_with_keys`,
-        // `js_object_alloc_class_dynamic_parent`) installs the shape-cached
-        // keys array unconditionally, and `js_build_class_keys_array` returns a
-        // zero-LENGTH array — never NULL — for a class with no declared fields.
-        // So even `class Bus extends EventTarget {}` (no fields, no ctor) lands
-        // on this shaped path with an empty keys array, not on the keyless one.
-        // The keyless branch is for `Object.create(proto)` / bare
-        // `js_new_function_construct` receivers, which resolve an inherited
-        // EventTarget method through the prototype-object hop
-        // (`resolve_proto_chain_field_with_receiver`) before ever reaching its
-        // dead end. Covered by the empty-shape cases in
-        // `test-files/test_gap_6301_event_target_subclass.ts`.
-        if !key.is_null() && crate::event_target::is_event_target_method_name(key_bytes) {
+        // (`typeof b.dispatchEvent`, `const add = t.addEventListener`).
+        // Deliberately LAST in the tail so an own property and a real
+        // class-vtable method (a subclass that *overrides* `dispatchEvent`) are
+        // resolved earlier and keep winning. See
+        // `event_target::event_target_value_read` for why placing it after the
+        // `keys_array.is_null()` early return above is correct.
+        if !key.is_null() {
             if let Some(bound) =
-                crate::event_target::event_target_method_bind(obj as *mut ObjectHeader, key_bytes)
+                crate::event_target::event_target_value_read(obj as *mut ObjectHeader, key_bytes)
             {
                 return JSValue::from_bits(bound.to_bits());
             }
