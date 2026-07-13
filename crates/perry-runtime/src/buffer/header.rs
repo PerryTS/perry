@@ -161,6 +161,19 @@ pub fn is_data_view(addr: usize) -> bool {
     DATA_VIEW_REGISTRY.with(|r| r.borrow().contains(&addr))
 }
 
+/// Live entry counts for the two registries the GC buffer sweep prunes (#6337).
+/// Test-only: the leak regression asserts these DRAIN after the owning buffers
+/// are collected, which a per-address `is_*` probe cannot show.
+#[cfg(test)]
+pub(crate) fn test_data_view_registry_len() -> usize {
+    DATA_VIEW_REGISTRY.with(|r| r.borrow().len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_shared_array_buffer_registry_len() -> usize {
+    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().len())
+}
+
 /// Register a buffer pointer in the thread-local registry
 pub fn register_buffer(ptr: *const BufferHeader) {
     BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
@@ -465,6 +478,30 @@ pub(crate) fn collect_dead_registered_buffers_post_trace(full_trace: bool) -> Ve
 }
 
 unsafe fn registered_buffer_is_dead_post_trace(addr: usize) -> bool {
+    // A process-global `SharedArrayBuffer` backing is NOT a GC allocation:
+    // `shared_sab::alloc_shared_sab` takes it straight from `alloc_zeroed`, it
+    // carries no `GcHeader`, and it is never freed (#4913 — that is what lets
+    // the same bytes alias across `perry/thread` agents). But
+    // `js_shared_array_buffer_new` DOES `register_buffer` it, so it lands in
+    // `BUFFER_REGISTRY` and reaches this scan on every full trace.
+    //
+    // `try_read_gc_header` below would then read the 8 bytes BEFORE the malloc
+    // block — the allocator's own metadata — and interpret them as a `GcHeader`:
+    // one arbitrary byte compared against `GC_TYPE_BUFFER` (10), the next
+    // against the mark/pin/forward bits. A chance match declares a LIVE,
+    // never-freed SAB dead, and `finalize_collected_dead_buffer` then runs on
+    // it — including `view::remove_entries_for_dead_buffer`, which retains on
+    // `info.backing != addr` and so unregisters EVERY live typed-array view
+    // over that SAB. Those views are exactly how cross-agent `Atomics`
+    // wait/notify resolve their absolute slot addresses.
+    //
+    // So: veto first, and never sniff a header the object does not have. The
+    // registry is behind a latch (`SHARED_SAB_NONEMPTY`), so the processes that
+    // never allocate a SAB — nearly all of them — pay one relaxed atomic load
+    // here and never take the lock.
+    if crate::shared_sab::is_shared_sab(addr) {
+        return false;
+    }
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return false;
     };
@@ -485,6 +522,34 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
         r.borrow_mut().remove(&addr);
     });
     ARRAY_BUFFER_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    // #6337: the two sibling buffer-identity registries were missing from this
+    // list — they had no `.remove`/`.retain` site anywhere in the tree. Like
+    // the three above they are plain address-keyed sets that never rooted the
+    // `BufferHeader`, so a collected view left its entry behind forever:
+    //
+    //  * an unbounded leak — one permanent entry per `DataView` (and per
+    //    SAB-flagged buffer) ever created;
+    //  * the #6080 ABA class this function exists to prevent —
+    //    `arena_reset_empty_blocks` resets a fully-empty block's offset to 0
+    //    while KEEPING its base pointer, so a reset block re-issues the same
+    //    addresses. A recycled address then inherits the dead view's identity:
+    //    `is_data_view`/`is_shared_array_buffer` gate `util.types.isDataView`/
+    //    `isSharedArrayBuffer`, `ArrayBuffer.isView`, the `[object DataView]`
+    //    tag, and the structuredClone/`.slice()` re-marking above — an
+    //    unrelated fresh Buffer landing there would answer to all of them.
+    //
+    // Only GC-heap buffers reach here. A process-global SAB backing is never
+    // freed and is vetoed as a dead candidate in
+    // `registered_buffer_is_dead_post_trace`, so the entries pruned from
+    // SHARED_ARRAY_BUFFER_REGISTRY are the arena-allocated SAB-flagged copies
+    // (`SharedArrayBuffer.prototype.slice`, structuredClone) — the ones that
+    // genuinely die and whose addresses genuinely get recycled.
+    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    DATA_VIEW_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
     BUFFER_AB_ALIAS.with(|r| {
