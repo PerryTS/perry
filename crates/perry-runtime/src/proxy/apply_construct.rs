@@ -99,6 +99,33 @@ fn forward_apply(target: f64, this_arg: f64, args_array: f64) -> f64 {
     result
 }
 
+/// Call a Proxy VALUE as a function with an explicit `this` and a plain
+/// argument slice — the `Call(F, V, args)` shape that runtime sites use when a
+/// proxy turns up where a raw `ClosureHeader*` was expected (#6320: a Proxy
+/// stored at `obj[Symbol.toPrimitive]`, or used as a JSX function component).
+///
+/// [`js_proxy_apply`] takes the spec `argArray`; this builds it, keeping every
+/// operand rooted across the allocations so a GC in `js_array_push_f64` cannot
+/// invalidate an already-boxed argument.
+pub fn call_proxy_value_with_this(proxy: f64, this_arg: f64, args: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proxy_h = scope.root_nanbox_f64(proxy);
+    let this_h = scope.root_nanbox_f64(this_arg);
+    let arg_handles: Vec<_> = args.iter().map(|a| scope.root_nanbox_f64(*a)).collect();
+    let arr_h = scope
+        .root_nanbox_u64(POINTER_TAG | (crate::array::js_array_alloc(0) as u64 & POINTER_MASK));
+    for h in &arg_handles {
+        let arr = (arr_h.get_nanbox_u64() & POINTER_MASK) as *mut crate::ArrayHeader;
+        let grown = crate::array::js_array_push_f64(arr, h.get_nanbox_f64());
+        arr_h.set_nanbox_u64(POINTER_TAG | (grown as u64 & POINTER_MASK));
+    }
+    js_proxy_apply(
+        proxy_h.get_nanbox_f64(),
+        this_h.get_nanbox_f64(),
+        f64::from_bits(arr_h.get_nanbox_u64()),
+    )
+}
+
 /// `proxy(arg0, arg1)` / `p.call(thisArg, …)` / `Reflect.apply(p, thisArg, …)`.
 ///
 /// Implements the Proxy `[[Call]]` exotic behavior (#3656):
