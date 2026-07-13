@@ -134,8 +134,13 @@ function reportResolutionFailure() {
         `        in the dynamic loader with "GLIBC_${GLIBC_BUILD_FLOOR} not found".\n` +
         `\n` +
         `        Perry also ships a fully-static Linux build that needs no glibc at all, but\n` +
-        `        npm skipped it here because that package is tagged libc: ["musl"]. Install it:\n` +
+        `        npm skipped it here because that package is tagged libc: ["musl"]. Install it\n` +
+        `        the same way you installed perry:\n` +
         `\n` +
+        `          if perry is GLOBAL (npm i -g @perryts/perry):\n` +
+        `            npm install -g --force ${pkg}${version}\n` +
+        `\n` +
+        `          if perry is a PROJECT dependency:\n` +
         `            npm install --force ${pkg}${version}\n` +
         `\n` +
         `        ...then re-run perry — this launcher picks it up automatically.\n` +
@@ -151,7 +156,9 @@ function reportResolutionFailure() {
   console.error(
     `[perry] The ${pkg} package is not installed.\n` +
       `This usually means npm skipped the optional dependency for ${key}.\n` +
-      `Try: npm install --force ${pkg}${version}\n` +
+      `Install it the same way you installed perry:\n` +
+      `  global:  npm install -g --force ${pkg}${version}\n` +
+      `  project: npm install --force ${pkg}${version}\n` +
       `Or reinstall @perryts/perry with a matching npm (≥8.12) so os/cpu/libc selectors apply.\n` +
       `Underlying error: ${resolveErrors.join("; ")}`
   );

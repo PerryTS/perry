@@ -15,6 +15,12 @@ on:
       - ".github/workflows/npm-launcher.yml"
   workflow_dispatch:
 
+# This workflow installs and executes published registry content (the platform
+# packages) — so it must not carry a writable token, and checkout must not leave
+# a git credential on disk for that content to find.
+permissions:
+  contents: read
+
 jobs:
   # Hermetic: no network, no platform packages — just the resolution rules.
   detect-self-test:
@@ -23,6 +29,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: "22.23.1"
@@ -40,6 +48,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: "22.23.1"
