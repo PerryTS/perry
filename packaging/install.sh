@@ -63,6 +63,7 @@ if [ "$OS" = "linux" ]; then
   if [ -f /etc/alpine-release ] || (ldd --version 2>&1 | head -1 | grep -qi musl); then
     LIBC="musl"
     echo "Detected musl libc — using the fully-static build."
+    echo "(Note: the static build cannot build perry/ui GTK4 apps.)"
   else
     # getconf: "glibc 2.35". ldd: "ldd (Ubuntu GLIBC 2.35-0ubuntu3) 2.35".
     GLIBC_VER=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
