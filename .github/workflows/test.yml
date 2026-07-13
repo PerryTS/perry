@@ -37,9 +37,17 @@ on:
         type: boolean
         default: false
 
+# Superseded PR pushes cancel their in-flight run (the real minute saver); the
+# nightly cron and release-tag runs never do (#5960). Keying the group on the
+# event as well as the ref means a manual `workflow_dispatch` on `main` — the
+# only other run that shares `refs/heads/main` with the cron, since pushes to
+# main don't trigger this workflow — can't cancel a nightly mid-flight, and
+# `cancel-in-progress` is off for those events regardless. The nightly is the
+# only backstop for integration-suite regressions a scoped PR run can't see, so
+# it must always reach a conclusion.
 concurrency:
-  group: test-${{ github.ref }}
-  cancel-in-progress: true
+  group: test-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -392,10 +400,16 @@ jobs:
             # ---- FAST per-PR run (<10 min target) ----
             # Unit / lib / bin tests for the affected crates only. The slow
             # auto-optimize *integration* tests (tests/*.rs — each shells out to
-            # `perry compile`, ~4–6 min apiece, ~30 of them) are NOT run per-PR;
-            # they run in the nightly full job, on release tags, and on demand
-            # via the `run-extended-tests` label. No staticlib dependency to
-            # build (no integration tests).
+            # `perry compile`, ~4–6 min apiece, 163 of them in crates/perry
+            # alone) are NOT run wholesale per-PR; they run in the nightly full
+            # job, on release tags, and on demand via the `run-extended-tests`
+            # label. No staticlib dependency to build here (no integration
+            # tests).
+            #
+            # #5960: the suites the DIFF NAMES — i.e. a PR's own new/edited
+            # acceptance suite — do run per-PR, in the separate `e2e-scoped`
+            # job below. Without it a PR's acceptance test could not fail its
+            # own CI (#5938).
             #
             # Run each crate in its OWN `cargo test` invocation — NOT one
             # multi-package invocation. Building several crates together unifies
@@ -430,6 +444,137 @@ jobs:
               echo "::endgroup::"
             done
           fi
+
+  # ---------------------------------------------------------------------------
+  # Scoped e2e: run the integration suites NAMED BY THE DIFF (#5960)
+  #
+  # The per-PR `cargo-test` gate is `--lib --bins` only, so *no* `tests/*.rs`
+  # integration suite runs on a PR — including the PR's own. That is how #5938
+  # landed with its acceptance suite (`capture_rereg_renamed_class.rs`) red
+  # through green required checks: the suite was in the diff, was compiled into
+  # the scope listing, and was never executed. Running every suite per-PR is not
+  # an option (163 in `crates/perry` alone, each shelling out to `perry
+  # compile`), so this tier runs exactly the ones the diff names:
+  #
+  #   changed `crates/<pkg>/tests/<suite>.rs`  ->  cargo test -p <pkg> --test <suite>
+  #
+  # (plus suite module dirs and `common/` helper dirs — see
+  # scripts/ci_e2e_scope.py, capped at 12 suites).
+  #
+  # Cost: PRs that touch no integration suite — the large majority — finish in
+  # ~20-30s of checkout + scope computation and never install a toolchain or
+  # build anything (the scope step parses Cargo.toml directly, no `cargo
+  # metadata`). Only a PR that adds or edits a suite pays the build, and it pays
+  # it in PARALLEL with `cargo-test`, which is the longer pole anyway.
+  #
+  # NOT covered: a source change that regresses an *existing* suite the diff
+  # doesn't name (#6037 class). There is no coverage data to map that with, and
+  # a crate-level map (perry-codegen -> all of perry's suites) is precisely the
+  # full run we're avoiding. The nightly full `cargo test` remains the backstop
+  # for that class — hence the concurrency carve-out above.
+  # ---------------------------------------------------------------------------
+  e2e-scoped:
+    # PR-only: tags / nightly / workflow_dispatch already run every suite in the
+    # full `cargo-test` path.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      # Cheap gate: no toolchain, no cargo, no cache restore. Every step below
+      # is skipped when the diff names no suite.
+      - name: Compute e2e suite scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci_e2e_scope.py --self-test
+          changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
+            --json files --jq '.files[].path')"
+          suites="$(printf '%s\n' "$changed_files" | python3 scripts/ci_e2e_scope.py)"
+          if [ -z "$suites" ]; then
+            echo "No integration suite named by this diff — nothing to run."
+            echo "suites=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Integration suites in scope:"
+            printf '%s\n' "$suites"
+            {
+              echo 'suites<<PERRY_EOF'
+              printf '%s\n' "$suites"
+              echo 'PERRY_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.scope.outputs.suites != ''
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        if: steps.scope.outputs.suites != ''
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Cache sccache objects
+        if: steps.scope.outputs.suites != ''
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.suites != ''
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Same reasoning as cargo-test: a rust-cache-restored auto-opt archive dir
+      # keys only on perry-runtime's source hash and would link stale ext
+      # archives into the binaries these suites compile (#5892).
+      - name: Evict stale auto-opt archives (#5892)
+        if: steps.scope.outputs.suites != ''
+        run: rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
+
+      - name: Run scoped integration suites
+        if: steps.scope.outputs.suites != ''
+        env:
+          # lld has repeatedly SIGBUS'd large test links on the shared runner.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          # Bound the heavy per-binary runtime link so the runner doesn't OOM.
+          CARGO_BUILD_JOBS: "1"
+          SUITES: ${{ steps.scope.outputs.suites }}
+        run: |
+          # `cargo test` never builds the `staticlib` crate-type, so
+          # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
+          # and the suites that compile with PERRY_NO_AUTO_OPTIMIZE=1 link them
+          # directly ("Could not find libperry_runtime.a" otherwise).
+          if printf '%s\n' "$SUITES" | grep -qE '^(perry|perry-stdlib) '; then
+            cargo build -p perry-runtime -p perry-stdlib \
+              -p perry-runtime-static -p perry-stdlib-static
+          fi
+
+          status=0
+          while read -r package suite; do
+            [ -n "$package" ] || continue
+            echo "::group::cargo test -p $package --test $suite"
+            # Per-suite wall-clock bound: a hung compile must not eat the whole
+            # job budget and hide the other suites' results.
+            if ! timeout 1500 cargo test -p "$package" --test "$suite"; then
+              echo "::error::integration suite failed: $package --test $suite"
+              status=1
+            fi
+            echo "::endgroup::"
+          done <<< "$SUITES"
+          exit "$status"
 
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
