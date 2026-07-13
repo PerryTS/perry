@@ -334,6 +334,151 @@ fn is_primitive_value(value: f64) -> bool {
             && crate::symbol::is_registered_symbol((value.to_bits() & POINTER_MASK) as usize))
 }
 
+/// Result of consulting an exotic instance's OWN `toString` (#6370).
+pub(crate) enum ExoticOwnToString {
+    /// No own `toString` — the caller runs the built-in prototype conversion
+    /// (`RegExp.prototype.toString` → `/source/flags`,
+    /// `Date.prototype.toString` → the full local date string).
+    UseBuiltin,
+    /// An own override produced a primitive; ToString *that* instead.
+    Primitive(f64),
+}
+
+/// `OrdinaryToPrimitive(O, "string")` step 1 for an exotic instance whose own
+/// properties live in the `exotic_expando` side table.
+///
+/// A `RegExpHeader` / `DateCell` is NOT an `ObjectHeader`, so the generic
+/// `ordinary_to_primitive_string` (which resolves `toString` with
+/// `js_object_get_field_by_name`) cannot see their own properties — the regex
+/// and date arms of [`js_jsvalue_to_string`] therefore jumped straight to the
+/// built-in conversion and an own `toString` was silently ignored. That made
+/// the SAME regex stringify two different ways depending on how you asked:
+/// `re.toString()` honoured the override (the method fold, #6358) while
+/// `String(re)` / `` `${re}` `` / `[re].join("")` printed `/source/flags`.
+/// Ordinary `[[Get]]` consults own properties before the prototype chain, so
+/// the override must win on EVERY ToString site (#6370).
+///
+/// Hot-path note: `js_jsvalue_to_string` runs on every string concat, so this
+/// is only ever reached behind the existing `is_date_cell_addr` /
+/// `is_regex_pointer` gates, and `exotic_get_own_property` itself early-outs
+/// before any map lookup while no expando/descriptor has been installed on the
+/// thread. A value that is not a Date/RegExp pays nothing.
+pub(crate) unsafe fn exotic_own_to_string(
+    addr: usize,
+    kind: crate::object::exotic_expando::ExoticKind,
+    receiver: f64,
+) -> ExoticOwnToString {
+    // Bound the recursion exactly as `ordinary_to_primitive_string` does. An
+    // override whose body string-coerces `this`
+    // (`re.toString = function () { return "" + this; }`) re-enters this
+    // helper through `js_jsvalue_to_string` and would recurse until the Rust
+    // stack overflows and SIGSEGVs the process. Node raises
+    // `RangeError: Maximum call stack size exceeded`; Perry's convention in
+    // this file is to cap the depth and fall back to the built-in conversion.
+    let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
+    if depth >= 200 {
+        return ExoticOwnToString::UseBuiltin;
+    }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth + 1));
+    let outcome = exotic_own_to_string_inner(addr, kind, receiver);
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth));
+    match outcome {
+        ExoticOwnOutcome::UseBuiltin => ExoticOwnToString::UseBuiltin,
+        ExoticOwnOutcome::Primitive(primitive) => ExoticOwnToString::Primitive(primitive),
+        // Thrown out here, AFTER the depth counter is restored.
+        ExoticOwnOutcome::NoPrimitive => throw_cannot_convert_to_primitive(),
+    }
+}
+
+/// Non-throwing core of [`exotic_own_to_string`], so the depth counter can be
+/// restored before the `TypeError` leaves the helper.
+enum ExoticOwnOutcome {
+    UseBuiltin,
+    Primitive(f64),
+    NoPrimitive,
+}
+
+unsafe fn exotic_own_to_string_inner(
+    addr: usize,
+    kind: crate::object::exotic_expando::ExoticKind,
+    receiver: f64,
+) -> ExoticOwnOutcome {
+    // Accessor-aware: the override may be installed as
+    // `Object.defineProperty(re, "toString", { get() {…} })`, which a
+    // data-only expando read cannot see. `exotic_get_own_property` checks
+    // accessor descriptors first (invoking the getter with `receiver` as the
+    // receiver) and falls back to the expando data lookup.
+    let Some(own) =
+        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "toString", receiver)
+    else {
+        return ExoticOwnOutcome::UseBuiltin;
+    };
+    if let Some(primitive) = call_own_method_for_primitive(own, receiver) {
+        return ExoticOwnOutcome::Primitive(primitive);
+    }
+    // An own `toString` that is NOT callable (`re.toString = 5`) or that
+    // returns an object still SHADOWS the built-in — it is never a licence to
+    // fall back to `RegExp.prototype.toString`. OrdinaryToPrimitive continues
+    // with `valueOf`, and only an OWN `valueOf` can yield a primitive here:
+    // the inherited `Object.prototype.valueOf` returns `this`, an object. When
+    // neither yields, ToPrimitive throws — Node agrees
+    // (`re.toString = 5; String(re)` → "TypeError: Cannot convert object to
+    // primitive value").
+    if let Some(own_value_of) =
+        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "valueOf", receiver)
+    {
+        if let Some(primitive) = call_own_method_for_primitive(own_value_of, receiver) {
+            return ExoticOwnOutcome::Primitive(primitive);
+        }
+    }
+    ExoticOwnOutcome::NoPrimitive
+}
+
+/// Invoke `method` with `this = receiver` when it is a callable closure.
+/// `None` means "not callable" — the value is an own property that shadows the
+/// builtin but cannot be called (`re.toString = 5`).
+pub(crate) unsafe fn call_own_method(method: f64, receiver: f64) -> Option<f64> {
+    let bits = method.to_bits();
+    if (bits & TAG_MASK) != POINTER_TAG
+        || !crate::closure::is_closure_ptr((bits & POINTER_MASK) as usize)
+    {
+        return None;
+    }
+    // Rebind `this` to the receiver — an assigned closure may have baked a
+    // different value into its reserved `this` slot (an inherited or bound
+    // method), exactly as the method-dispatch tower does (#1982).
+    let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(ret)
+}
+
+/// [`call_own_method`], but the result counts only when it is a primitive —
+/// a non-callable value or an object result makes OrdinaryToPrimitive move on
+/// to the next method name.
+unsafe fn call_own_method_for_primitive(method: f64, receiver: f64) -> Option<f64> {
+    call_own_method(method, receiver).filter(|ret| is_primitive_value(*ret))
+}
+
+/// `OrdinaryToPrimitive(O, "default"|"number")` step 1 for an exotic instance:
+/// the `valueOf` step, restricted to the receiver's OWN property.
+///
+/// The "default" hint (`"" + re`) tries `valueOf` BEFORE `toString`, unlike the
+/// "string" hint. `RegExp.prototype` has no `valueOf`, so only an OWN one can
+/// yield a primitive here — the inherited `Object.prototype.valueOf` returns
+/// `this`, an object, and OrdinaryToPrimitive then moves on to `toString`.
+/// `None` therefore means "caller continues with the toString step".
+pub(crate) unsafe fn exotic_own_value_of_primitive(
+    addr: usize,
+    kind: crate::object::exotic_expando::ExoticKind,
+    receiver: f64,
+) -> Option<f64> {
+    let own =
+        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "valueOf", receiver)?;
+    call_own_method_for_primitive(own, receiver)
+}
+
 /// `ToPrimitive(O, "number"|"default")`: consult a user
 /// `[Symbol.toPrimitive]("number")` method first, then fall back to the
 /// ordinary `valueOf`/`toString` order.
@@ -900,6 +1045,21 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // before GC-header object dispatch (the 8-byte cell is smaller
             // than an ObjectHeader), after non-GC native buffer handles.
             if crate::date::is_date_cell_addr(ptr as usize) {
+                // #6370: an own `toString` (data or accessor) shadows
+                // `Date.prototype.toString` on every coercion site, exactly as
+                // it already does for the explicit `date.toString()` call.
+                match unsafe {
+                    exotic_own_to_string(
+                        ptr as usize,
+                        crate::object::exotic_expando::ExoticKind::Date,
+                        value,
+                    )
+                } {
+                    ExoticOwnToString::Primitive(primitive) => {
+                        return js_jsvalue_to_string(primitive)
+                    }
+                    ExoticOwnToString::UseBuiltin => {}
+                }
                 return crate::date::js_date_to_string(value);
             }
             // Temporal (#4686): `String(temporal)`, `` `${temporal}` ``, and
@@ -915,6 +1075,24 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // A RegExp stringifies to `/source/flags` (RegExp.prototype.toString),
             // not "[object Object]" — covers `String(re)` and `` `${re}` ``.
             if crate::regex::is_regex_pointer(ptr) {
+                // …unless an own `toString` shadows the prototype method
+                // (#6370). This is the SAME lookup the `re.toString()` method
+                // fold performs (#6358); doing it here too is what makes the
+                // two agree, and it reaches every implicit ToString —
+                // `String(re)`, `` `${re}` ``, `[re].join("")`,
+                // `"".concat(re)`, `[re].toString()`.
+                match unsafe {
+                    exotic_own_to_string(
+                        ptr as usize,
+                        crate::object::exotic_expando::ExoticKind::RegExp,
+                        value,
+                    )
+                } {
+                    ExoticOwnToString::Primitive(primitive) => {
+                        return js_jsvalue_to_string(primitive)
+                    }
+                    ExoticOwnToString::UseBuiltin => {}
+                }
                 return crate::regex::js_regexp_to_string(ptr as *const crate::regex::RegExpHeader);
             }
             unsafe {
@@ -1164,16 +1342,21 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
     // live in the `exotic_expando` side table — a `RegExpHeader` is not an
     // `ObjectHeader` — and the `is_regex_pointer` gate keeps every other
     // receiver on the existing fast path.
+    //
+    // Accessor-aware: the override may be installed via
+    // `Object.defineProperty(re, "toString", { get() {…} })`, which a data-only
+    // `value_lookup` cannot see (it would silently fall back to the
+    // `/source/flags` literal). `exotic_get_own_property` checks accessor
+    // descriptors first, invoking the getter with `value` as the receiver, then
+    // falls back to the same expando data lookup.
+    //
+    // A non-callable own `toString` (`re.toString = 5`) declines here and lands
+    // in `js_jsvalue_to_string` below, whose own-property arm (#6370) reports
+    // the same TypeError the coercion path does.
     #[cfg(feature = "regex-engine")]
     if jsval.is_pointer() {
         let p = jsval.as_pointer::<u8>();
         if crate::regex::is_regex_pointer(p) {
-            // Accessor-aware: the override may be installed via
-            // `Object.defineProperty(re, "toString", { get() {…} })`, which a
-            // data-only `value_lookup` cannot see (it would silently fall back
-            // to the `/source/flags` literal). `exotic_get_own_property` checks
-            // accessor descriptors first, invoking the getter with `value` as
-            // the receiver, then falls back to the same expando data lookup.
             let own = unsafe {
                 crate::object::exotic_expando::exotic_get_own_property(
                     p as usize,
@@ -1181,26 +1364,9 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
                     "toString",
                     value,
                 )
-            }
-            .map(|v| v.to_bits());
-            if let Some(own_bits) = own {
-                let raw = (own_bits & crate::value::POINTER_MASK) as usize;
-                if (own_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
-                    && crate::closure::is_closure_ptr(raw)
-                {
-                    let bound = crate::closure::clone_closure_rebind_this(own_bits, value);
-                    let prev_this =
-                        crate::object::IMPLICIT_THIS.with(|c| c.replace(value.to_bits()));
-                    let result = unsafe {
-                        crate::closure::js_native_call_value(
-                            f64::from_bits(bound),
-                            std::ptr::null(),
-                            0,
-                        )
-                    };
-                    crate::object::IMPLICIT_THIS.with(|c| c.set(prev_this));
-                    return js_jsvalue_to_string(result);
-                }
+            };
+            if let Some(result) = own.and_then(|own| unsafe { call_own_method(own, value) }) {
+                return js_jsvalue_to_string(result);
             }
         }
     }

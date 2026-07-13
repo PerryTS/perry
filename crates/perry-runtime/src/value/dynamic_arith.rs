@@ -175,8 +175,44 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return crate::value::function_to_primitive_for_add(value);
     }
 
+    // A `RegExpHeader` is NOT an `ObjectHeader` either, and — unlike Buffer /
+    // TypedArray / Date above — it had no guard here at all: `"" + re` fell
+    // through to `ordinary_to_primitive_number_for_add`, which bit-casts `ptr`
+    // to an `ObjectHeader` and reads `valueOf`/`toString` out of garbage field
+    // slots. It came back `undefined`, so `"" + /c/gi` printed "undefined"
+    // instead of "/c/gi" (release builds; the read is UB, and a lower opt level
+    // happened to mask it). Route the regex through the same ToPrimitive steps
+    // the spec prescribes (#6370):
+    //
+    //   OrdinaryToPrimitive(re, "default") = valueOf, then toString.
+    //
+    // `RegExp.prototype` has no `valueOf`, so only an OWN `valueOf` can win the
+    // first step (`re.valueOf = () => "V"; re + ""` → "V"); otherwise the
+    // `toString` step runs, and `js_jsvalue_to_string` performs it — own
+    // override first (data or accessor), else the `/source/flags` literal.
+    // `Symbol.toPrimitive` was already consulted by `js_to_primitive` above.
+    if crate::regex::is_regex_pointer(ptr as *const u8) {
+        if let Some(primitive) = crate::value::to_string::exotic_own_value_of_primitive(
+            ptr,
+            crate::object::exotic_expando::ExoticKind::RegExp,
+            value,
+        ) {
+            return primitive;
+        }
+        let s = crate::value::js_jsvalue_to_string(value);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+
     if crate::date::is_date_cell_addr(ptr) {
-        let s = crate::date::js_date_to_string(value);
+        // `Date.prototype[@@toPrimitive]` maps the "default" hint to "string",
+        // so `"" + date` is OrdinaryToPrimitive(date, "string") — an own
+        // `toString` (data or accessor) shadows `Date.prototype.toString` here
+        // exactly as it does for `String(date)` (#6370). Route through
+        // `js_jsvalue_to_string`, whose date arm now performs that own-property
+        // lookup and otherwise still yields `js_date_to_string`. (An own
+        // `valueOf` correctly does NOT win: the string hint tries `toString`
+        // first and the built-in one already returns a primitive.)
+        let s = crate::value::js_jsvalue_to_string(value);
         return crate::value::js_nanbox_string(s as i64);
     }
 
