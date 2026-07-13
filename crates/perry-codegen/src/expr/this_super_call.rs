@@ -841,6 +841,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered_args.push(lower_expr(ctx, a)?);
             }
 
+            // #6326: the parent is a real user class, but the chain BOTTOMS OUT
+            // in a native base whose surface perry stamps onto the instance —
+            // `class Counter extends B { constructor() { super(); … } }` with
+            // `class B extends EventEmitter {}`. The builtin arms above only fire
+            // when the IMMEDIATE parent name IS the base, so they never see this
+            // shape; and the parent-chain walk below finds no constructor to
+            // inline (no ancestor has one), so `super()` silently no-oped and the
+            // instance came out with no emitter/collection surface at all.
+            //
+            // The walk yields `None` the moment any ancestor has a constructor —
+            // that ancestor's own `super()` installs the base — so this arm fires
+            // exactly when nothing else will.
+            if let Some(base) = crate::lower_call::native_instance_base_in_chain(ctx, current_class)
+            {
+                let this_box = match ctx.this_stack.last().cloned() {
+                    Some(slot) => ctx.block().load(DOUBLE, &slot),
+                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                };
+                crate::lower_call::emit_native_instance_base_init(
+                    ctx,
+                    base,
+                    &this_box,
+                    &lowered_args,
+                );
+                // Spec: derived-class field initializers run AFTER `super()`
+                // returns. The native base is the chain root and has no TS
+                // fields, so everything after it still needs initializing —
+                // including ctor-less intermediates, which write no `super()`
+                // of their own and so have no other site that would do it.
+                // `AncestorsOnly` only covers the root, so `SelfOnly` here
+                // would leave a middle class like `B` in
+                // `C -> B -> A -> EventEmitter` uninitialized.
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::AfterRoot,
+                )?;
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+
             // Inline the parent constructor with the SAME this and a
             // fresh param scope for the parent's params.
             //

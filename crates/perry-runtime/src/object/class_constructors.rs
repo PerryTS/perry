@@ -689,7 +689,19 @@ unsafe fn call_displaced_native_base_method(
 ) -> f64 {
     let Some(method_value) = crate::node_stream::displaced_native_base_method(this_value, name)
     else {
-        return undef;
+        // #6325: the `Map`/`Set` bases serve their surface by redirecting the
+        // OPERATION onto a hidden backing collection, not by stamping method
+        // closures onto the instance — so an override displaces nothing and
+        // there is no closure here to call. `super.get(k)` / `super.set(k, v)` /
+        // … dispatch on the backing instead. Returns `undef` for a receiver with
+        // no backing, keeping the ordinary `super.m()`-miss contract.
+        let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        return crate::object::map_set_subclass::super_collection_method(this_value, name, args)
+            .unwrap_or(undef);
     };
     // The stashed closure already captures the receiver in slot 0, but bind
     // IMPLICIT_THIS too: the shared emitter/stream stubs read their receiver

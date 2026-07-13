@@ -440,17 +440,6 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
         return value_handle.get_nanbox_f64();
     }
     let method_handle = scope.root_nanbox_f64(method);
-    let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
-    if closure_ptr.is_null() || (closure_ptr as usize) < 0x1000 {
-        return value_handle.get_nanbox_f64();
-    }
-    // Validate CLOSURE_MAGIC before calling.
-    let type_tag = std::ptr::read_volatile(
-        (closure_ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
-    );
-    if type_tag != crate::closure::CLOSURE_MAGIC {
-        return value_handle.get_nanbox_f64();
-    }
     let hint_str: &[u8] = match hint {
         1 => b"number",
         2 => b"string",
@@ -458,10 +447,45 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     };
     let hint_ptr = js_string_from_bytes(hint_str.as_ptr(), hint_str.len() as u32);
     let hint_handle = scope.root_string_ptr(hint_ptr);
+
+    // #6320: `obj[Symbol.toPrimitive]` may hold a *Proxy* of a function. A
+    // proxy is a small registry id NaN-boxed under POINTER_TAG (`PROXY_ID_BAND_
+    // START + id`), NOT a `ClosureHeader*` — the CLOSURE_MAGIC probe below used
+    // to accept anything above an 0x1000 floor, so it read `*(0xF000D + 12)` and
+    // SIGSEGV'd (`EXC_BAD_ACCESS at 0x000f000d`). Node calls the proxy's
+    // `[[Call]]` here (`Call(method, obj, «hint»)`), so route it through the
+    // apply trap / target forwarding with `this` bound to the object, exactly
+    // like a closure method would be. A proxy whose (possibly nested) target is
+    // not callable falls through to the "not a method" return below, matching
+    // how this path already treats a non-callable `@@toPrimitive` value.
+    let method_now = method_handle.get_nanbox_f64();
+    if crate::proxy::js_proxy_is_proxy(method_now) == 1 {
+        if !crate::proxy::proxy_wraps_callable(method_now) {
+            return value_handle.get_nanbox_f64();
+        }
+        let hint_f64 = f64::from_bits(
+            STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
+        );
+        return crate::proxy::call_proxy_value_with_this(
+            method_handle.get_nanbox_f64(),
+            value_handle.get_nanbox_f64(),
+            &[hint_f64],
+        );
+    }
+
+    // Not a proxy: validate a real heap `ClosureHeader` (band-safe floor +
+    // CLOSURE_MAGIC) before calling. Every other small-handle band (fetch,
+    // zlib, stdlib registry ids) is rejected here too — none of them is a
+    // closure, and all of them fault when probed at `+12`.
+    // (`method_bits` above is stale — the hint-string allocation may have moved
+    // the closure — so re-read every operand from its handle.)
+    let method_bits = method_handle.get_nanbox_f64().to_bits();
+    if !crate::closure::is_closure_ptr((method_bits & POINTER_MASK) as usize) {
+        return value_handle.get_nanbox_f64();
+    }
     let hint_f64 = f64::from_bits(
         STRING_TAG | (hint_handle.get_raw_const_ptr::<StringHeader>() as u64 & POINTER_MASK),
     );
-    let method_bits = method_handle.get_nanbox_f64().to_bits();
     let closure_ptr = (method_bits & POINTER_MASK) as *const crate::closure::ClosureHeader;
 
     // Spec says the return value must be a primitive; if it's still an

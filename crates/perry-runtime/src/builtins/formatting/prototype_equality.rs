@@ -75,16 +75,19 @@ pub(super) fn prototype_token(value: f64) -> Option<u64> {
         // while a `{}`-born object mutated afterwards keeps class_id 0 — both
         // have Object.prototype, so normalize unregistered ids to 0 or the
         // two would spuriously compare as prototype-different.
+        //
+        // The test is REGISTERED, not "registered under a non-empty name": an
+        // anonymous class expression (`const M = Mixin(Base)`, issue #5952)
+        // registers the empty string as its `.name` and is every bit a real
+        // constructor, so its instances must keep their own prototype identity
+        // rather than collapse onto Object.prototype.
         let class_id = (*obj).class_id;
-        let proto_class_id = if class_id != 0
-            && crate::object::class_name_for_id(class_id)
-                .filter(|name| !name.is_empty())
-                .is_none()
-        {
-            0
-        } else {
-            class_id
-        };
+        let proto_class_id =
+            if class_id != 0 && crate::object::class_name_for_id(class_id).is_none() {
+                0
+            } else {
+                class_id
+            };
         Some(CLASS_PROTO_NAMESPACE | proto_class_id as u64)
     }
 }

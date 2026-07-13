@@ -306,6 +306,7 @@ pub(crate) fn collect_type_facts(
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
+    module_dispatch: &super::ModuleDispatchFacts,
 ) -> TypeFacts {
     let integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
@@ -323,8 +324,13 @@ pub(crate) fn collect_type_facts(
         clamp_fn_ids,
     );
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
-    let non_escaping_news =
-        super::escape_news::collect_non_escaping_news(stmts, boxed_vars, module_globals, classes);
+    let non_escaping_news = super::escape_news::collect_non_escaping_news(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+    );
     let non_escaping_new_used_fields =
         super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
     let non_escaping_arrays =
@@ -415,6 +421,7 @@ pub(crate) fn collect_native_region_fact_graph(
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
+    module_dispatch: &super::ModuleDispatchFacts,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -426,6 +433,7 @@ pub(crate) fn collect_native_region_fact_graph(
         module_globals,
         classes,
         compile_time_constants,
+        module_dispatch,
     )
 }
 
@@ -447,6 +455,9 @@ pub(crate) fn collect_hir_facts(
         &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),
+        // No class table here, so no scalar-method summary can apply; the
+        // conservative default keeps it that way if one ever could.
+        &super::ModuleDispatchFacts::default(),
     )
 }
 
@@ -1653,6 +1664,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &constants,
+            &crate::collectors::ModuleDispatchFacts::default(),
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
@@ -1742,6 +1754,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &crate::collectors::ModuleDispatchFacts::default(),
         );
 
         assert!(graph.integer_locals().contains(&1));

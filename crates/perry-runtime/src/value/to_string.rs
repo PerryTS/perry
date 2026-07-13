@@ -1148,6 +1148,62 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
             }
         }
     }
+    // An OWN `toString` shadows the built-in conversion. Codegen's "universal
+    // `.toString()`" fold (lower_call/property_get/number_string.rs) rewrites
+    // EVERY `x.toString()` into a direct call to this function whenever the
+    // receiver isn't a user class that declares `toString` — bypassing the
+    // runtime method-dispatch arms entirely. So the own-property check that
+    // `dispatch_primitive` applies to `re.exec` / `re.test` has to be repeated
+    // at this fold target, or an assigned `re.toString` is silently ignored and
+    // the regex renders as its `/source/flags` literal instead:
+    //
+    //     __re.toString = Object.prototype.toString;
+    //     __re.toString()   // must be "[object RegExp]", was "/(?:)/"
+    //
+    // (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897.) Expandos on a RegExp
+    // live in the `exotic_expando` side table — a `RegExpHeader` is not an
+    // `ObjectHeader` — and the `is_regex_pointer` gate keeps every other
+    // receiver on the existing fast path.
+    #[cfg(feature = "regex-engine")]
+    if jsval.is_pointer() {
+        let p = jsval.as_pointer::<u8>();
+        if crate::regex::is_regex_pointer(p) {
+            // Accessor-aware: the override may be installed via
+            // `Object.defineProperty(re, "toString", { get() {…} })`, which a
+            // data-only `value_lookup` cannot see (it would silently fall back
+            // to the `/source/flags` literal). `exotic_get_own_property` checks
+            // accessor descriptors first, invoking the getter with `value` as
+            // the receiver, then falls back to the same expando data lookup.
+            let own = unsafe {
+                crate::object::exotic_expando::exotic_get_own_property(
+                    p as usize,
+                    crate::object::exotic_expando::ExoticKind::RegExp,
+                    "toString",
+                    value,
+                )
+            }
+            .map(|v| v.to_bits());
+            if let Some(own_bits) = own {
+                let raw = (own_bits & crate::value::POINTER_MASK) as usize;
+                if (own_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                    && crate::closure::is_closure_ptr(raw)
+                {
+                    let bound = crate::closure::clone_closure_rebind_this(own_bits, value);
+                    let prev_this =
+                        crate::object::IMPLICIT_THIS.with(|c| c.replace(value.to_bits()));
+                    let result = unsafe {
+                        crate::closure::js_native_call_value(
+                            f64::from_bits(bound),
+                            std::ptr::null(),
+                            0,
+                        )
+                    };
+                    crate::object::IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return js_jsvalue_to_string(result);
+                }
+            }
+        }
+    }
     js_jsvalue_to_string(value)
 }
 

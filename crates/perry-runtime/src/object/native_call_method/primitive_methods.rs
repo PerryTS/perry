@@ -470,11 +470,76 @@ pub(super) unsafe fn dispatch_primitive(
     // (#1731). The helper returns None for non-regex so generic dispatch resumes.
     #[cfg(feature = "regex-engine")]
     if matches!(method_name, "test" | "exec" | "toString") && jsval.is_pointer() {
-        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        let arg0 = refreshed_args().first().copied().unwrap_or(undef);
         let p = jsval.as_pointer::<u8>();
-        if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
-            return Some(r);
+        // An OWN property SHADOWS the `RegExp.prototype` method — ordinary
+        // `[[Get]]` consults the receiver's own properties before walking the
+        // prototype chain. `__re.toString = Object.prototype.toString;
+        // __re.toString()` must therefore call the *assigned* function (giving
+        // `[object RegExp]`), not the builtin `RegExp.prototype.toString`
+        // (which returns the `/source/flags` literal). The same holds for
+        // `re.exec` / `re.test` overrides, which libraries use to instrument a
+        // regex. Expando writes on a RegExp land in the `exotic_expando` side
+        // table, because a `RegExpHeader` is not an `ObjectHeader`.
+        //
+        // The own value is invoked HERE rather than by declining the regex
+        // dispatch and letting the generic path pick it up: `toString` has a
+        // downstream catch-all arm that stringifies any pointer receiver via
+        // `js_jsvalue_to_string`, which maps a regex straight back to
+        // `/source/flags` — so a bare fall-through would still miss the
+        // override (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897).
+        // `exotic_get_own_property` rather than `value_lookup`: the override
+        // may be an ACCESSOR (`Object.defineProperty(re, "test", { get() {…} })`),
+        // which `value_lookup` — a data-property-only side-table read — cannot
+        // see, so the builtin would run instead. It checks accessor descriptors
+        // first (invoking the getter with `object` as the receiver) and falls
+        // back to the same expando data lookup.
+        let own_override = if crate::regex::is_regex_pointer(p) {
+            crate::object::exotic_expando::exotic_get_own_property(
+                p as usize,
+                crate::object::exotic_expando::ExoticKind::RegExp,
+                method_name,
+                object,
+            )
+            .map(|v| v.to_bits())
+        } else {
+            None
+        };
+        match own_override {
+            Some(own_bits) => {
+                let raw = (own_bits & crate::value::POINTER_MASK) as usize;
+                if (own_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                    && crate::closure::is_closure_ptr(raw)
+                {
+                    // Bind `this` to the regex, exactly as the class-static and
+                    // prototype method-dispatch arms above do.
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        own_bits,
+                        object_handle.get_nanbox_f64(),
+                    );
+                    let prop_handle = root_scope.root_nanbox_f64(f64::from_bits(bound));
+                    let args = refreshed_args();
+                    let prev_this =
+                        IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+                    let result = crate::closure::js_native_call_value(
+                        prop_handle.get_nanbox_f64(),
+                        args.as_ptr(),
+                        args.len(),
+                    );
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return Some(result);
+                }
+                // Own key present but NOT callable (`re.exec = 5; re.exec()`).
+                // Fall through to generic dispatch, which raises the
+                // `is not a function` TypeError — never run the builtin.
+            }
+            None => {
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg0 = refreshed_args().first().copied().unwrap_or(undef);
+                if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0)
+                {
+                    return Some(r);
+                }
+            }
         }
     }
 

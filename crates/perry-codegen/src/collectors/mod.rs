@@ -21,6 +21,7 @@ mod local_refs;
 mod mutation;
 mod pointer_locals;
 mod refs;
+mod scalar_method_dispatch;
 mod scalar_methods;
 mod shadow_slots;
 mod this_as_value;
@@ -75,8 +76,13 @@ pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };
+pub(crate) use scalar_method_dispatch::{
+    collect_module_dispatch_facts, mark_unstable_scalar_method_receivers, ModuleDispatchFacts,
+};
 pub(crate) use scalar_methods::simple_scalar_method_summary;
 pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
-pub(crate) use this_as_value::{class_chain_extends_builtin_error, class_uses_this_as_value};
+pub(crate) use this_as_value::{
+    class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,
+};

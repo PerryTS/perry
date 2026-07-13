@@ -141,6 +141,113 @@ pub(crate) fn subclass_backing_for_default_iteration(value: f64) -> Option<Colle
     subclass_backing_of(value)
 }
 
+/// `super.<method>(…)` from inside a `class X extends Map | Set` OVERRIDE
+/// (#6325).
+///
+/// The other native bases perry models — `EventEmitter`, the `node:stream`
+/// classes — install their surface as method CLOSURES on the instance, so an
+/// override displaces a real value that `super.<m>()` can still reach
+/// (`node_stream::displaced_native_base_method`, #6316/#6322). Map/Set have no
+/// such closures: their surface is served by redirecting the OPERATION onto the
+/// hidden backing collection at each dispatch point. There is therefore nothing
+/// for `js_super_method_call_dynamic` to find, and `super.get(k)` returned
+/// `undefined` — the base was unreachable from an override. Run the base
+/// operation on the backing directly instead.
+///
+/// Returns `None` for a receiver with no backing, and for any name that is not a
+/// base collection method, so an ordinary `super.m()` miss still yields
+/// `undefined` (the #774 instance-field-shadow contract).
+pub(crate) fn super_collection_method(this_value: f64, name: &str, args: &[f64]) -> Option<f64> {
+    let backing = subclass_backing_of(this_value)?;
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // `js_map_set` / `js_set_add` allocate (entry storage, boxed keys) and can
+    // therefore GC-move the RECEIVER — which `Map.prototype.set` and
+    // `Set.prototype.add` must RETURN, so a stale bit pattern here would hand
+    // the override a dead `this`. Root it and re-read from the handle after the
+    // call. The backing `MapHeader`/`SetHeader` needs no handle: it is a
+    // registered, header-less allocation the GC never moves (the same reason the
+    // raw-collection dispatch in `native_call_method` holds it across calls).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_handle = scope.root_nanbox_f64(this_value);
+    let boxed = |ptr: i64| f64::from_bits(JSValue::pointer(ptr as *const u8).bits());
+    let boolean = |b: bool| f64::from_bits(JSValue::bool(b).bits());
+    unsafe {
+        match backing {
+            CollectionBacking::Map(map) => match name {
+                "get" => Some(crate::map::js_map_get(map, *args.first()?)),
+                "set" => {
+                    let key = *args.first()?;
+                    let value = args.get(1).copied().unwrap_or(undefined);
+                    crate::map::js_map_set(map, key, value);
+                    Some(this_handle.get_nanbox_f64())
+                }
+                "has" => Some(boolean(crate::map::js_map_has(map, *args.first()?) != 0)),
+                "delete" => Some(boolean(crate::map::js_map_delete(map, *args.first()?) != 0)),
+                "clear" => {
+                    crate::map::js_map_clear(map);
+                    Some(undefined)
+                }
+                "forEach" => {
+                    let callback = *args.first()?;
+                    let this_arg = args.get(1).copied().unwrap_or(undefined);
+                    // The callback's 3rd argument must be the SUBCLASS instance,
+                    // not the backing — same receiver-identity rule the ordinary
+                    // dispatch path applies.
+                    crate::map::js_map_foreach_with_collection(
+                        map,
+                        callback,
+                        this_arg,
+                        this_handle.get_nanbox_f64(),
+                    );
+                    Some(undefined)
+                }
+                "keys" => Some(boxed(crate::collection_iter_object::js_map_keys_iter_obj(
+                    map,
+                ))),
+                "values" => Some(boxed(
+                    crate::collection_iter_object::js_map_values_iter_obj(map),
+                )),
+                "entries" | "Symbol.iterator" | "@@iterator" => Some(boxed(
+                    crate::collection_iter_object::js_map_entries_iter_obj(map),
+                )),
+                _ => None,
+            },
+            CollectionBacking::Set(set) => match name {
+                "add" => {
+                    crate::set::js_set_add(set, *args.first()?);
+                    Some(this_handle.get_nanbox_f64())
+                }
+                "has" => Some(boolean(crate::set::js_set_has(set, *args.first()?) != 0)),
+                "delete" => Some(boolean(crate::set::js_set_delete(set, *args.first()?) != 0)),
+                "clear" => {
+                    crate::set::js_set_clear(set);
+                    Some(undefined)
+                }
+                "forEach" => {
+                    let callback = *args.first()?;
+                    let this_arg = args.get(1).copied().unwrap_or(undefined);
+                    crate::set::js_set_foreach_with_collection(
+                        set,
+                        callback,
+                        this_arg,
+                        this_handle.get_nanbox_f64(),
+                    );
+                    Some(undefined)
+                }
+                // `Set.prototype.keys` is an alias of `values`, and the default
+                // iterator is `values` — matching the builtin.
+                "keys" | "values" | "Symbol.iterator" | "@@iterator" => Some(boxed(
+                    crate::collection_iter_object::js_set_values_iter_obj(set),
+                )),
+                "entries" => Some(boxed(
+                    crate::collection_iter_object::js_set_entries_iter_obj(set),
+                )),
+                _ => None,
+            },
+        }
+    }
+}
+
 /// `super()` for a `class X extends Map | Set`. `kind`: 0 = Map, 1 = Set.
 /// `iterable` is the (optional) first constructor argument; `undefined`/`null`
 /// seed an empty collection.

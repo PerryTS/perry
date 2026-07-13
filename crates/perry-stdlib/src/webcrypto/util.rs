@@ -345,6 +345,21 @@ fn runtime_key_kind_id(kind: KeyKind) -> u8 {
     }
 }
 
+/// GC buffer-sweep callback: the `BufferHeader` backing this CryptoKey died,
+/// so drop its material entry. Registered with the runtime by
+/// `js_stdlib_init_dispatch` via `js_set_crypto_key_death_hook`.
+///
+/// Without this the map grew without bound (one entry per CryptoKey ever
+/// created) and — worse — a recycled buffer address inherited the dead key's
+/// material, so `lookup_crypto_key` would hand an unrelated fresh Buffer to
+/// the subtle sign/verify/encrypt paths. Runs inside the sweep: only removes a
+/// HashMap entry, never allocates.
+pub(crate) extern "C" fn crypto_key_buffer_died(buf_addr: usize) {
+    if let Ok(mut r) = CRYPTO_KEY_REGISTRY.lock() {
+        r.remove(&buf_addr);
+    }
+}
+
 pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {
     CRYPTO_KEY_REGISTRY
         .lock()

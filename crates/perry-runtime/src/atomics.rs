@@ -775,13 +775,17 @@ pub extern "C" fn js_atomics_wait_async(
     }
     crate::thread::thread_job_begin();
     let promise_usize = promise as usize;
+    // #6185: the promise belongs to the agent calling `waitAsync`. The futex
+    // waiter below owns no heap (it never runs JS), so it cannot infer the
+    // right agent from itself — capture it here, on the calling thread.
+    let owner_agent = crate::agent::current_agent();
     std::thread::spawn(move || {
         let outcome = crate::atomics_futex::block(handle, deadline);
         let result = match outcome {
             crate::atomics_futex::WaitOutcome::Ok => "ok",
             _ => "timed-out",
         };
-        crate::thread::queue_promise_string_result(promise_usize, result);
+        crate::thread::queue_promise_string_result(owner_agent, promise_usize, result);
     });
     wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
 }

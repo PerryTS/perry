@@ -876,8 +876,46 @@ unsafe fn ordinary_has_property(
                 // and could spuriously hop. Arrays never model a synthetic
                 // prototype, so skip the lookup for them.
                 if !cur_is_array {
-                    let synth_proto =
-                        crate::object::class_prototype_object(unsafe { (*cur).class_id });
+                    let cur_class_id = unsafe { (*cur).class_id };
+                    // A DECLARED class instance (`class C {}; new C()`) records no
+                    // static `[[Prototype]]`: its prototype is the reflective
+                    // `C.prototype` object in the SEPARATE `CLASS_DECL_PROTOTYPE_OBJECTS`
+                    // table, which the synthetic-proto lookup below cannot see.
+                    // `js_object_get_prototype_of` already resolves it (that is why
+                    // `Object.getPrototypeOf(inst) === C.prototype` holds), so without
+                    // the same hop here `in` and `getPrototypeOf` disagreed about the
+                    // very same chain: `"m" in new C()` was false for any member that
+                    // is not a vtable method — notably a method added by ASSIGNMENT
+                    // (`C.prototype.m = fn`, stored in `CLASS_PROTOTYPE_METHODS` and
+                    // mirrored onto the decl-proto object), which the
+                    // `class_instance_has_member` vtable fallback below does not cover.
+                    // That divergence silently emptied `for…in` over an instance: the
+                    // #6147 for-in desugar re-checks every snapshotted key with
+                    // `key in obj` (so a key deleted mid-iteration is not visited), and
+                    // this `false` filtered the inherited keys back out again.
+                    //
+                    // Resolve through the materializing accessor — the same one
+                    // `js_object_get_prototype_of` uses — so the walk is
+                    // order-independent: a `C.prototype.m = fn` assignment registers the
+                    // method long before any reflective `C.prototype` read materializes
+                    // the decl-proto object.
+                    if let Some(decl_proto) =
+                        crate::object::class_decl_prototype_value_for_instance_class(cur_class_id)
+                    {
+                        let decl_ptr = (decl_proto.to_bits() & crate::value::POINTER_MASK)
+                            as *const ObjectHeader;
+                        // The decl-proto object is allocated WITH the class's own id
+                        // (`js_object_alloc(class_id, 0)`), so re-resolving it from the
+                        // proto itself yields the same pointer — hopping again would
+                        // spin. Stop at the self-edge; the decl-proto records a real
+                        // static `[[Prototype]]` to its parent, which the walk above
+                        // follows on the next turn.
+                        if !decl_ptr.is_null() && decl_ptr != cur {
+                            cur = decl_ptr;
+                            continue;
+                        }
+                    }
+                    let synth_proto = crate::object::class_prototype_object(cur_class_id);
                     if !synth_proto.is_null() && synth_proto as *const ObjectHeader != cur {
                         cur = synth_proto as *const ObjectHeader;
                         continue;

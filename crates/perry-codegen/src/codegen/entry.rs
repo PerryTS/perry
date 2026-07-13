@@ -552,6 +552,7 @@ pub(super) fn compile_module_entry(
             module_globals,
             classes,
             &cross_module.compile_time_constants,
+            &cross_module.module_dispatch,
         );
         let mut init_local_types: HashMap<u32, perry_types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
@@ -1112,6 +1113,7 @@ pub(super) fn compile_module_entry(
             module_globals,
             classes,
             &cross_module.compile_time_constants,
+            &cross_module.module_dispatch,
         );
         let mut ctx = FnCtx {
             func: init_fn,

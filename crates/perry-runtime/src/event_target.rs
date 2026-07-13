@@ -17,6 +17,13 @@ use std::sync::{Mutex, OnceLock};
 pub const CLASS_ID_EVENT: u32 = 0xFFFF_2403;
 pub const CLASS_ID_CUSTOM_EVENT: u32 = 0xFFFF_2404;
 pub const CLASS_ID_DOM_EXCEPTION: u32 = 0xFFFF_2405;
+/// `EventTarget` base class. Stamped on `new EventTarget()` instances and used
+/// as the PARENT class id of a user `class X extends EventTarget` (wired by
+/// `js_register_class_parent_dynamic` via `global_builtin_constructor_class_id`).
+/// Walking to it through the class chain is what lets a subclass instance be
+/// recognized as an event target (#6301). Keep in sync with the reserved id in
+/// perry-codegen/src/expr/instance_misc1.rs.
+pub const CLASS_ID_EVENT_TARGET: u32 = 0xFFFF_2406;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -491,7 +498,35 @@ pub(crate) fn abort_dom_exception_value() -> f64 {
     crate::value::js_nanbox_pointer(err as i64)
 }
 
-unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
+/// True for `EventTarget`'s own reserved class id and for any user class whose
+/// registered parent chain reaches it — `class Bus extends EventTarget {}` and
+/// `class B extends A extends EventTarget` alike. The edge is wired at class-
+/// definition time by `js_register_class_parent_dynamic`, which resolves the
+/// `EventTarget` global through `global_builtin_constructor_class_id` (#6301).
+/// Mirrors `is_event_instance`'s walk for the `Event` base.
+pub(crate) fn class_chain_is_event_target(class_id: u32) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    if class_id == CLASS_ID_EVENT_TARGET {
+        return true;
+    }
+    let mut cur = class_id;
+    for _ in 0..64 {
+        match crate::object::get_parent_class_id(cur) {
+            Some(parent) if parent != 0 && parent != cur => {
+                if parent == CLASS_ID_EVENT_TARGET {
+                    return true;
+                }
+                cur = parent;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+pub(crate) unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
     if target.is_null() {
         return false;
     }
@@ -507,8 +542,57 @@ unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
+    // A subclass instance carries its own class id and never ran
+    // `js_event_target_new`, so it has no `_eventTarget` marker field until
+    // `seed_event_target_state` lazily installs one. The class-chain edge is
+    // what identifies it (#6301).
+    if class_chain_is_event_target((*target).class_id) {
+        return true;
+    }
     let marker = js_object_get_field_by_name_f64(target, key(b"_eventTarget"));
     marker.to_bits() == JSValue::bool(true).bits()
+}
+
+/// Install the hidden EventTarget state (marker + listener bag + max-listener
+/// count) on an object that is an event target by class chain but has never
+/// been seeded — i.e. a `class Bus extends EventTarget` instance, whose
+/// constructor path allocates a plain subclass object rather than calling
+/// `js_event_target_new`. Seeding on first listener/dispatch use keeps the
+/// subclass ctor lowering untouched.
+///
+/// `js_object_alloc` and `key` (which interns a string) both allocate and can
+/// therefore GC-move `target`, so every heap value is rooted up front and
+/// re-read from its handle at each use. The bag and all three key strings are
+/// allocated BEFORE the first store on purpose: the inline form
+/// `js_object_set_field_by_name(target, key(b"…"), …)` allocates the key
+/// *after* Rust has already evaluated `target` (arguments evaluate
+/// left-to-right), which would leave a stale receiver pointer if interning that
+/// key triggered a collection.
+unsafe fn seed_event_target_state(target: *mut ObjectHeader) -> *mut ObjectHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_raw_mut_ptr(target);
+    let bag_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    let marker_key = scope.root_string_ptr(key(b"_eventTarget"));
+    let listeners_key = scope.root_string_ptr(key(b"_eventTargetListeners"));
+    let max_listeners_key = scope.root_string_ptr(key(b"_eventTargetMaxListeners"));
+
+    js_object_set_field_by_name(
+        target_handle.get_raw_mut_ptr::<ObjectHeader>(),
+        marker_key.get_raw_mut_ptr::<StringHeader>(),
+        bool_value(true),
+    );
+    js_object_set_field_by_name(
+        target_handle.get_raw_mut_ptr::<ObjectHeader>(),
+        listeners_key.get_raw_mut_ptr::<StringHeader>(),
+        boxed_ptr(bag_handle.get_raw_mut_ptr::<ObjectHeader>()),
+    );
+    js_object_set_field_by_name(
+        target_handle.get_raw_mut_ptr::<ObjectHeader>(),
+        max_listeners_key.get_raw_mut_ptr::<StringHeader>(),
+        10.0,
+    );
+
+    bag_handle.get_raw_mut_ptr::<ObjectHeader>()
 }
 
 unsafe fn listeners_bag(target: *mut ObjectHeader) -> Option<*mut ObjectHeader> {
@@ -516,7 +600,10 @@ unsafe fn listeners_bag(target: *mut ObjectHeader) -> Option<*mut ObjectHeader> 
         return None;
     }
     let bag = js_object_get_field_by_name_f64(target, key(b"_eventTargetListeners"));
-    value_as_ptr::<ObjectHeader>(bag)
+    if let Some(bag) = value_as_ptr::<ObjectHeader>(bag) {
+        return Some(bag);
+    }
+    Some(seed_event_target_state(target))
 }
 
 unsafe fn event_array(
@@ -655,9 +742,16 @@ extern "C" fn event_target_abort_remove_listener(
 }
 
 /// `new EventTarget()`.
+///
+/// The instance carries `CLASS_ID_EVENT_TARGET` on its header (mirroring
+/// `construct_event`'s `CLASS_ID_EVENT`), so `t instanceof EventTarget` holds
+/// for the base the same way it holds for a subclass through the registered
+/// parent edge (#6301). The `_eventTarget` marker field stays: the Node
+/// `events` helpers' target probe predates the class id, and a subclass
+/// instance is seeded with the same marker on first use.
 #[no_mangle]
 pub extern "C" fn js_event_target_new() -> *mut ObjectHeader {
-    let target = js_object_alloc(0, 0);
+    let target = js_object_alloc(CLASS_ID_EVENT_TARGET, 0);
     let bag = js_object_alloc(0, 0);
     js_object_set_field_by_name(
         target,
@@ -912,4 +1006,155 @@ pub unsafe extern "C" fn js_event_target_set_max_listeners(
     }
     js_object_set_field_by_name(target, key(b"_eventTargetMaxListeners"), n);
     1
+}
+
+// ─────────────────────────────────────────────────────────────────
+// #6301 — the EventTarget method surface as real function VALUES.
+//
+// `addEventListener` / `removeEventListener` / `dispatchEvent` used to exist
+// only as compile-time lowerings keyed on a receiver whose static class name
+// was literally `EventTarget` (`lower_call/event_target.rs`). Nothing lived on
+// a prototype, so `typeof t.addEventListener` was `undefined` even on a plain
+// `new EventTarget()`, and a `class Bus extends EventTarget {}` instance —
+// whose static class name is `Bus` — inherited nothing at all and died with
+// `TypeError: value is not a function` (the real root cause of #5931: cac v7's
+// `class CAC extends EventTarget` calls `this.dispatchEvent(...)`).
+//
+// The methods are now resolved off the receiver's *class chain* — the same
+// mechanism `Event` subclasses already use — and materialized as bound-method
+// closures (the AbortSignal `abort_signal_method_bind` shape, and the
+// value-read-materializes-a-bound-method shape of #6281). Both the value-read
+// path (`object/field_get_set/get_field_by_name_tail.rs`) and the dynamic-call
+// path (`object/native_call_method.rs`) consult `event_target_method_bind`, so
+// a subclass instance at any depth reads them as functions AND calls them.
+// ─────────────────────────────────────────────────────────────────
+
+/// The receiver a bound EventTarget method closure captured in slot 0 (stored
+/// as NaN-boxed bits so the GC's closure scan keeps it alive and relocates it).
+unsafe fn bound_event_target(closure: *const crate::closure::ClosureHeader) -> *mut ObjectHeader {
+    let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut ObjectHeader
+}
+
+/// Shared body of the add/remove listener thunks. `string_from_value` can
+/// allocate (a non-string `type` is coerced), so the receiver and the value
+/// arguments are rooted across it and re-read afterwards.
+unsafe fn bound_listener_call(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+    options: f64,
+    add: bool,
+) -> f64 {
+    let listener_value = JSValue::from_bits(listener.to_bits());
+    if !listener_value.is_pointer() {
+        // Node ignores a nullish listener and rejects a non-object one; a
+        // non-pointer here is neither a closure nor a handler object, so there
+        // is nothing to register or remove.
+        return undefined_value();
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_raw_mut_ptr(bound_event_target(closure));
+    let listener_handle = scope.root_nanbox_f64(listener);
+    let options_handle = scope.root_nanbox_f64(options);
+
+    let name_handle = scope.root_string_ptr(string_from_value(event_type));
+
+    let target = target_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let name = name_handle.get_raw_const_ptr::<StringHeader>();
+    let callback_ptr = crate::value::js_nanbox_get_pointer(listener_handle.get_nanbox_f64());
+    let options = options_handle.get_nanbox_f64();
+    if add {
+        js_event_target_add_event_listener_with_options(target, name, callback_ptr, options);
+    } else {
+        js_event_target_remove_event_listener_with_options(target, name, callback_ptr, options);
+    }
+    undefined_value()
+}
+
+extern "C" fn event_target_add_event_listener_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+    options: f64,
+) -> f64 {
+    unsafe { bound_listener_call(closure, event_type, listener, options, true) }
+}
+
+extern "C" fn event_target_remove_event_listener_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    listener: f64,
+    options: f64,
+) -> f64 {
+    unsafe { bound_listener_call(closure, event_type, listener, options, false) }
+}
+
+extern "C" fn event_target_dispatch_event_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    event: f64,
+) -> f64 {
+    unsafe { js_event_target_dispatch_event(bound_event_target(closure), event) }
+}
+
+/// The EventTarget method names, in the order Node's `EventTarget.prototype`
+/// declares them. Callers gate on this before paying for the receiver probe.
+pub(crate) fn is_event_target_method_name(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"addEventListener" | b"removeEventListener" | b"dispatchEvent"
+    )
+}
+
+/// Materialize a bound EventTarget method for `name` when `target` is an event
+/// target (a plain `new EventTarget()` or a subclass instance at any depth).
+/// Returns `None` for any other name or receiver, so an unknown property still
+/// reads as `undefined` and a non-target object keeps its existing dispatch.
+pub(crate) fn event_target_method_bind(target: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
+    let (func, arity): (*const u8, u32) = match name {
+        b"addEventListener" => (event_target_add_event_listener_thunk as *const u8, 3),
+        b"removeEventListener" => (event_target_remove_event_listener_thunk as *const u8, 3),
+        b"dispatchEvent" => (event_target_dispatch_event_thunk as *const u8, 1),
+        _ => return None,
+    };
+    if !unsafe { is_event_target(target) } {
+        return None;
+    }
+    crate::closure::js_register_closure_arity(func, arity);
+    // `js_closure_alloc` can GC-move the receiver — root it and re-read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_raw_mut_ptr(target);
+    let closure = crate::closure::js_closure_alloc(func, 1);
+    let target_bits = boxed_ptr(target_handle.get_raw_mut_ptr::<ObjectHeader>()).to_bits();
+    crate::closure::js_closure_set_capture_ptr(closure, 0, target_bits as i64);
+    Some(boxed_ptr(closure))
+}
+
+/// Value-read entry point for the object field-get tail (#6301): resolve
+/// `addEventListener` / `removeEventListener` / `dispatchEvent` off the
+/// receiver's class chain when nothing earlier in the property walk claimed the
+/// name. Gated on the name first, so a non-EventTarget read pays only a
+/// length+compare, never the receiver probe.
+///
+/// The call site sits AFTER the tail's `keys_array.is_null()` early return, and
+/// that placement is correct: a `class X extends EventTarget` instance never
+/// takes the keyless branch. Every class-instance allocator
+/// (`js_object_alloc_class_inline_keys`, `js_object_alloc_class_with_keys`,
+/// `js_object_alloc_class_dynamic_parent`) installs the shape-cached keys array
+/// unconditionally, and `js_build_class_keys_array` hands back a zero-LENGTH
+/// array — never NULL — for a class that declares no fields. So even the
+/// emptiest subclass (`class Bus extends EventTarget {}`, no fields, no ctor)
+/// lands on the shaped path with an empty keys array and reaches this fallback.
+///
+/// The keyless branch is for `Object.create(proto)` / bare
+/// `js_new_function_construct` receivers, whose inherited methods resolve one
+/// hop earlier through `resolve_proto_chain_field_with_receiver` (the prototype
+/// object is itself a shaped, class-id-stamped receiver) — so they never reach
+/// that branch's dead end either. The empty-shape cases in
+/// `test-files/test_gap_6301_event_target_subclass.ts` pin this.
+pub(crate) fn event_target_value_read(target: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
+    if !is_event_target_method_name(name) {
+        return None;
+    }
+    event_target_method_bind(target, name)
 }

@@ -1535,6 +1535,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         compile_time_constants,
         target_triple: triple.clone(),
         app_metadata: opts.app_metadata.clone(),
+        module_dispatch: crate::collectors::collect_module_dispatch_facts(hir),
         clamp3_functions: hir
             .functions
             .iter()

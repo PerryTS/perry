@@ -81,6 +81,23 @@ HANDLE_FLOOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# HANDLE FLOOR, RANGE FORM (#6320) — the same too-low floor written as a Rust
+# range test instead of a comparison:
+#
+#     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) { return false; }
+#
+# HANDLE_FLOOR_RE structurally cannot see this: the literal is followed by `..`,
+# never by a comparison operator, and the address operand appears AFTER it
+# inside `.contains(&…)`.  That blind spot is exactly why the closure-validation
+# probes in `symbol/iterator.rs`, `symbol/properties.rs` and `jsx.rs` survived
+# the #6279 sweep and kept SIGSEGV-ing on a Proxy id (#5976 / #6320).
+#
+# The established remediation (#6321) keeps the range and adds a band predicate
+# next to it, so a band predicate in the surrounding lines clears the finding —
+# same pairing contract as `lone-valid-obj-ptr` below.  Reported under the
+# `handle-floor` rule so it shares that rule's per-file ratchet.
+HANDLE_FLOOR_RANGE_RE = re.compile(r"\(\s*0x1_?0?000\s*\.\.")
+
 # LONE is_valid_obj_ptr (#6279) — `is_valid_obj_ptr` used as the ONLY guard
 # before a dereference.  Its own doc says it is not sufficient:
 #
@@ -99,6 +116,10 @@ BAND_PREDICATE_RE = re.compile(
 )
 # How many lines above the call may satisfy the pairing requirement.
 BAND_PREDICATE_LOOKBACK = 5
+# ...and how many CODE lines below (blank lines and comments don't count: the
+# #6321 shape puts the band guard right after the coarse range pre-filter, but
+# behind a long justification comment).
+BAND_PREDICATE_LOOKAHEAD_CODE = 6
 
 DEFAULT_RATCHET_BASELINE = REPO_ROOT / "scripts" / "addr_class_ratchet_baseline.txt"
 
@@ -140,6 +161,26 @@ def strip_comment(line: str) -> str:
     return LINE_COMMENT_RE.sub("", line)
 
 
+def band_predicate_near(lines: list[str], idx: int) -> bool:
+    """True when a band predicate guards the statement at `lines[idx]`.
+
+    Looks back a few raw lines and forward over the next few CODE lines
+    (comments/blanks skipped) — the guard is a statement, not a neighbour.
+    """
+
+    start = max(0, idx - BAND_PREDICATE_LOOKBACK)
+    context = [strip_comment(line) for line in lines[start : idx + 1]]
+    taken = 0
+    cursor = idx + 1
+    while cursor < len(lines) and taken < BAND_PREDICATE_LOOKAHEAD_CODE:
+        code = strip_comment(lines[cursor])
+        if code.strip():
+            context.append(code)
+            taken += 1
+        cursor += 1
+    return bool(BAND_PREDICATE_RE.search("\n".join(context)))
+
+
 def scan_text(rel_path: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
     if any(rel_path.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
@@ -153,6 +194,10 @@ def scan_text(rel_path: str, text: str) -> list[Finding]:
         if GC_HEADER_CAST_RE.search(code):
             findings.append(Finding(rel_path, line_no, "gcheader-cast", raw))
         if HANDLE_FLOOR_RE.search(code):
+            findings.append(Finding(rel_path, line_no, "handle-floor", raw))
+        elif HANDLE_FLOOR_RANGE_RE.search(code) and not band_predicate_near(lines, idx):
+            # A band predicate in the enclosing guard clears it — the range test
+            # is then just a coarse pre-filter, not the real gate (#6321).
             findings.append(Finding(rel_path, line_no, "handle-floor", raw))
         if VALID_OBJ_PTR_RE.search(code) and "fn is_valid_obj_ptr" not in code:
             # A band predicate anywhere in the enclosing guard clears it.
@@ -276,6 +321,46 @@ def run_self_tests() -> int:
             for f in scan_text(runtime, "// the old floor was ptr < 0x10000\n")
         ),
         "handle-floor must ignore comments",
+    )
+
+    # --- handle-floor, RANGE form (#6320) -----------------------------------
+    # The same too-low floor written as a range test. The comparison-operator
+    # regex structurally cannot see it, which is how the closure-validation
+    # probes survived the #6279 sweep and kept faulting on a Proxy id.
+    for src in (
+        "    if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {\n        return false;\n    }\n",
+        "    } else if (0x10000..=RAW_PTR_MAX).contains(&bits) {\n        deref(bits)\n",
+    ):
+        expect(
+            any(f.rule == "handle-floor" for f in scan_text(runtime, src)),
+            f"handle-floor should flag the range form: {src.splitlines()[0].strip()}",
+        )
+    # Paired with a band predicate on the next statement -> cleared. This is the
+    # #6321 fix shape (coarse range pre-filter, real gate right below, behind a
+    # long justification comment), so the rule must accept it.
+    paired_range = (
+        "    if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {\n"
+        "        return std::ptr::null();\n"
+        "    }\n"
+        "    // #5976: reject the small-handle band BEFORE the magic probe.\n"
+        "    // Revocable-proxy ids and stdlib registry ids are NaN-boxed\n"
+        "    // POINTER_TAG values, not heap pointers.\n"
+        "\n"
+        "    if crate::value::addr_class::is_handle_band(addr as usize) {\n"
+        "        return std::ptr::null();\n"
+        "    }\n"
+    )
+    expect(
+        not any(f.rule == "handle-floor" for f in scan_text(runtime, paired_range)),
+        "handle-floor must accept a range pre-filter paired with a band predicate",
+    )
+    # A range whose floor is already the CORRECT boundary is not a finding.
+    expect(
+        not any(
+            f.rule == "handle-floor"
+            for f in scan_text(runtime, "if (0x100000..MAX).contains(&addr) {\n")
+        ),
+        "handle-floor must not fire on a range starting at HANDLE_BAND_MAX",
     )
 
     # --- lone-valid-obj-ptr rule (#6279) ------------------------------------

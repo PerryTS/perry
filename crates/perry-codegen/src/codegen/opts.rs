@@ -728,6 +728,12 @@ pub(crate) struct CrossModuleCtx {
     pub target_triple: String,
     /// App metadata backing compile-time `perry/system` introspection APIs.
     pub app_metadata: AppMetadata,
+    /// Issue #5872: module-wide record of the prototype mutations that can
+    /// change what `obj.method` resolves to. Scalar replacement consults this
+    /// before it lets a summarized method call keep its receiver off the heap —
+    /// the mutation usually lives in a *different* function (or a constructor,
+    /// or a field initializer) than the `new`, so a per-function walk misses it.
+    pub module_dispatch: crate::collectors::ModuleDispatchFacts,
     /// Functions with a 3-param clamp pattern: fid → true. Call sites
     /// emit `@llvm.smax.i32` + `@llvm.smin.i32` instead of a function call.
     pub clamp3_functions: std::collections::HashSet<u32>,

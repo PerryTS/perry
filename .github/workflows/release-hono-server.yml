@@ -26,6 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
+      # *publishing* toolchain, not a test oracle — it never runs a parity diff.
+      #
       # Node 24 ships npm 11.x. OIDC Trusted Publishing needs npm >= 11.5.1;
       # Node 22's npm 10.x silently fails the OIDC handshake and the registry
       # returns a misleading 404 on PUT. Do NOT set `registry-url` here — it

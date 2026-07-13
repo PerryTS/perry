@@ -347,7 +347,10 @@ fn int32_producing_deps(
         )
     };
     match e {
-        Expr::Integer(_) => true,
+        // #6319: only a literal that actually fits in i32 proves an int32
+        // value. `let x = 3000000000` is integral but not int32, and admitting
+        // it here let every copy of `x` inherit an unearned i32 shadow.
+        Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::Update { id, .. } if candidates.contains(id) => {
             deps.insert(*id);
             true
@@ -623,7 +626,11 @@ pub fn collect_flat_row_aliases(
 /// `int32_producing_deps` during disqualification — see the module comment.
 ///
 /// Accepted shapes:
-///   - `Expr::Integer(_)`: trivially integer.
+///   - `Expr::Integer(n)` **when `n` fits in i32** (#6319). `Expr::Integer`
+///     carries an `i64`, so `let x = 3000000000` and `let x =
+///     Number.MAX_SAFE_INTEGER` parse into it too — integral, but not int32.
+///     Admitting them let a plain copy (`let y = 0; y = x`) be judged
+///     i32-bounded and take a wrapping i32 shadow.
 ///   - `(expr) | 0` and `(expr) >>> 0`: the JS ToInt32 / ToUint32 idiom —
 ///     always yields a 32-bit integer regardless of the inner expression.
 ///   - Pure bitwise ops (`&`, `|`, `^`, `<<`, `>>`, `>>>`): per JS spec
@@ -653,7 +660,10 @@ pub fn is_int32_producing_expr(
 ) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match e {
-        Expr::Integer(_) => true,
+        // #6319: an `Expr::Integer` holds an i64. Only accept it when it really
+        // is an int32 — otherwise the forward-closure pass re-admits the very
+        // `let x = 3000000000` that the syntactic seed now rejects.
+        Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::Update { .. } => true,
         Expr::Binary { op, right, .. }
             if matches!(op, BinaryOp::BitOr | BinaryOp::UShr)

@@ -371,6 +371,7 @@ pub(super) fn compile_method(
         module_globals,
         classes,
         &cross_module.compile_time_constants,
+        &cross_module.module_dispatch,
     );
 
     let mut ctx = FnCtx {
@@ -1295,6 +1296,7 @@ pub(super) fn compile_static_method(
         module_globals,
         classes,
         &cross_module.compile_time_constants,
+        &cross_module.module_dispatch,
     );
 
     let mut ctx = FnCtx {

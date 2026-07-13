@@ -46,6 +46,7 @@ mod replace_fn;
 mod unicode17;
 #[cfg(feature = "regex-engine")]
 mod unicode17_data;
+mod utf16;
 #[cfg(feature = "regex-engine")]
 use class_range_validate::has_out_of_order_double_dash_class_range;
 #[cfg(feature = "regex-engine")]
@@ -53,8 +54,9 @@ pub use compile::js_regexp_compile_value;
 pub use escape::js_regexp_escape;
 #[cfg(feature = "regex-engine")]
 use exec_array::{
-    byte_index_to_char_index, char_index_to_byte, set_exec_array_groups, set_exec_array_indices,
+    byte_index_to_utf16_index, set_exec_array_groups, set_exec_array_indices,
     set_exec_array_indices_fancy, set_exec_array_metadata, set_exec_array_metadata_value,
+    utf16_index_to_byte,
 };
 #[cfg(feature = "regex-engine")]
 use grammar::{
@@ -1335,7 +1337,7 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
         // placeholder in `regex_ptr` would always report -1 otherwise.
         if let Some(fre) = lookup_fancy_regex(re) {
             return match fre.find(str_data) {
-                Ok(Some(m)) => str_data[..m.start()].chars().count() as i32,
+                Ok(Some(m)) => byte_index_to_utf16_index(str_data, m.start()) as i32,
                 _ => -1,
             };
         }
@@ -1343,11 +1345,9 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
         let regex = &*(*re).regex_ptr;
         match regex.find(str_data) {
             Some(m) => {
-                // Convert byte offset to char offset (JS indices are UTF-16 code units,
-                // but for ASCII/BMP this matches char offset)
-                let byte_offset = m.start();
-                let char_offset = str_data[..byte_offset].chars().count();
-                char_offset as i32
+                // `String.prototype.search` returns a JS string index — UTF-16
+                // code units, matching `.index` / `lastIndex` / `str.length`.
+                byte_index_to_utf16_index(str_data, m.start()) as i32
             }
             None => -1,
         }

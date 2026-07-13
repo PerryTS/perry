@@ -184,14 +184,20 @@ unsafe fn register_closure_name_if_absent(val_bits: u64, name: &str) {
     if val_tag != POINTER_TAG {
         return;
     }
-    let val_ptr = (val_bits & POINTER_MASK) as *const u8;
-    if val_ptr.is_null() || (val_ptr as usize) <= 0x10000 {
+    let val_addr = (val_bits & POINTER_MASK) as usize;
+    // #6320: the old `<= 0x10000` floor sits an order of magnitude below
+    // `HANDLE_BAND_MAX`, so a registry id NaN-boxed under POINTER_TAG passed it
+    // and the `*(addr - 8)` GcHeader read faulted on unmapped low memory:
+    // `{ [Symbol.toPrimitive]: new Proxy(fn, {}) }` routes the proxy VALUE
+    // through here for `fn.name` inference (proxy id 0xF000D → read at 0xF0005).
+    // `try_read_gc_header` owns the band + heap-range + slab checks.
+    let Some(gc_header) = crate::value::addr_class::try_read_gc_header(val_addr) else {
+        return;
+    };
+    if gc_header.obj_type != crate::gc::GC_TYPE_CLOSURE {
         return;
     }
-    let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
-        return;
-    }
+    let val_ptr = val_addr as *const u8;
     let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
     let func_ptr = (*closure_ptr).func_ptr;
     if func_ptr.is_null() {
@@ -563,28 +569,41 @@ pub unsafe extern "C" fn js_object_set_symbol_method(
     sym_f64: f64,
     closure_f64: f64,
 ) -> f64 {
-    let c_bits = closure_f64.to_bits();
-    let c_tag = c_bits & 0xFFFF_0000_0000_0000;
-    if c_tag == POINTER_TAG {
-        let c_ptr = (c_bits & POINTER_MASK) as *mut crate::closure::ClosureHeader;
-        if !c_ptr.is_null() && (c_ptr as usize) >= 0x1000 {
-            // Read the type_tag at offset 12 (layout: func_ptr u64, capture_count u32, type_tag u32).
-            let type_tag = std::ptr::read_volatile(
-                (c_ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
-            );
-            if type_tag == crate::closure::CLOSURE_MAGIC {
-                let raw_count = (*c_ptr).capture_count;
-                let real_count = crate::closure::real_capture_count(raw_count);
-                if real_count >= 1 {
-                    let captures_ptr = (c_ptr as *mut u8)
-                        .add(std::mem::size_of::<crate::closure::ClosureHeader>())
-                        as *mut f64;
-                    *captures_ptr.add((real_count - 1) as usize) = obj_f64;
-                }
-            }
-        }
-    }
+    bind_reserved_this_slot(closure_f64, obj_f64);
     js_object_set_symbol_property_infer_name(obj_f64, sym_f64, closure_f64)
+}
+
+/// Patch the closure's reserved (LAST) capture slot with `obj_f64` so a
+/// `this`-reading object-literal method reads its container. No-op for any
+/// value that is not a real heap `ClosureHeader` — shared by
+/// [`js_object_set_symbol_method`] and [`js_object_set_method_by_name`].
+///
+/// #6320: both call sites hand-rolled the CLOSURE_MAGIC probe behind an
+/// `0x1000` floor — an order of magnitude below `HANDLE_BAND_MAX`, so a
+/// registry handle (revocable-proxy id, fetch/zlib stream, stdlib id) NaN-boxed
+/// under POINTER_TAG passed the floor and the `*(addr + 12)` read faulted on
+/// unmapped low memory. `closure::is_closure_ptr` owns the check: it rejects the
+/// handle band, non-heap addresses and misalignment before any dereference. A
+/// non-closure value (e.g. a Proxy of a function) has no capture array to patch,
+/// so it is simply stored as-is; the call site then dispatches it through the
+/// proxy `[[Call]]` path.
+unsafe fn bind_reserved_this_slot(closure_f64: f64, obj_f64: f64) {
+    let c_bits = closure_f64.to_bits();
+    if c_bits & 0xFFFF_0000_0000_0000 != POINTER_TAG {
+        return;
+    }
+    let c_addr = (c_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(c_addr) {
+        return;
+    }
+    let c_ptr = c_addr as *mut crate::closure::ClosureHeader;
+    let real_count = crate::closure::real_capture_count((*c_ptr).capture_count);
+    if real_count >= 1 {
+        let captures_ptr = (c_ptr as *mut u8)
+            .add(std::mem::size_of::<crate::closure::ClosureHeader>())
+            as *mut f64;
+        *captures_ptr.add((real_count - 1) as usize) = obj_f64;
+    }
 }
 
 /// #809: string-key analog of [`js_object_set_symbol_method`]. Sets
@@ -607,26 +626,8 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
     closure_f64: f64,
 ) -> f64 {
     // 1) Patch the closure's reserved (last) `this` capture slot with obj.
-    let c_bits = closure_f64.to_bits();
-    let c_tag = c_bits & 0xFFFF_0000_0000_0000;
-    if c_tag == POINTER_TAG {
-        let c_ptr = (c_bits & POINTER_MASK) as *mut crate::closure::ClosureHeader;
-        if !c_ptr.is_null() && (c_ptr as usize) >= 0x1000 {
-            let type_tag = std::ptr::read_volatile(
-                (c_ptr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32,
-            );
-            if type_tag == crate::closure::CLOSURE_MAGIC {
-                let raw_count = (*c_ptr).capture_count;
-                let real_count = crate::closure::real_capture_count(raw_count);
-                if real_count >= 1 {
-                    let captures_ptr = (c_ptr as *mut u8)
-                        .add(std::mem::size_of::<crate::closure::ClosureHeader>())
-                        as *mut f64;
-                    *captures_ptr.add((real_count - 1) as usize) = obj_f64;
-                }
-            }
-        }
-    }
+    //    No-op for anything that is not a real heap closure (#6320).
+    bind_reserved_this_slot(closure_f64, obj_f64);
 
     // 2) Set the field by name. `js_object_set_field_by_name` strips the
     //    NaN-box tag off `obj` itself, so passing the raw bits is fine; the
@@ -634,7 +635,7 @@ pub unsafe extern "C" fn js_object_set_method_by_name(
     let key_bits = key_f64.to_bits();
     let key_ptr = (key_bits & POINTER_MASK) as *const StringHeader;
     let obj_ptr = obj_f64.to_bits() as *mut crate::object::ObjectHeader;
-    if !key_ptr.is_null() && (key_ptr as usize) >= 0x1000 {
+    if crate::value::addr_class::is_above_handle_band(key_ptr as usize) {
         crate::object::js_object_set_field_by_name(obj_ptr, key_ptr, closure_f64);
     }
     obj_f64

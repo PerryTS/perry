@@ -20,6 +20,7 @@ use jni::objects::JValue;
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_pointer_event_new(x: f64, y: f64, button: u32, pointer_type: u32) -> f64;
 }
 
@@ -42,7 +43,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokePointerCallback(
     let Some(closure_f64) = closure_f64 else {
         return;
     };
-    let closure_ptr = closure_f64.to_bits() as *const u8;
+    let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) } as *const u8;
     if closure_ptr.is_null() {
         return;
     }

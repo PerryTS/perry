@@ -24,7 +24,7 @@ pub use bound::{dispatch_bound_function, dispatch_bound_method, js_function_bind
 pub(crate) use errors::reset_throw_not_callable_counter;
 pub use errors::throw_not_callable;
 
-pub use validate::{clean_closure_ptr, get_valid_func_ptr};
+pub use validate::{clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_func_ptr};
 
 pub(crate) use calln::{
     dispatch_registered_call, dispatch_rest_or_declared_arity, resolve_call2_direct,

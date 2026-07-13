@@ -56,6 +56,32 @@ fn external_crypto_keys() -> &'static Mutex<HashMap<usize, CryptoKeyMeta>> {
     EXTERNAL_CRYPTO_KEY_META_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Called by the GC's buffer sweep when a CryptoKey-flagged `BufferHeader`
+/// dies, so perry-stdlib can drop the matching entry from its own
+/// `addr -> CryptoKeyMaterial` map. Registered by
+/// `js_set_crypto_key_death_hook` at startup; stays null when stdlib isn't
+/// linked. Must not allocate — it runs inside the sweep.
+pub type CryptoKeyDeathHookFn = extern "C" fn(usize);
+static CRYPTO_KEY_DEATH_HOOK: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Install the dead-CryptoKey callback (called by perry-stdlib at startup —
+/// this crate can't call into perry-stdlib, which depends on it). Same
+/// contract as the `js_set_native_*_dispatch` family in `value::handle`.
+#[no_mangle]
+pub extern "C" fn js_set_crypto_key_death_hook(func: CryptoKeyDeathHookFn) {
+    CRYPTO_KEY_DEATH_HOOK.store(func as *mut (), std::sync::atomic::Ordering::SeqCst);
+}
+
+fn notify_crypto_key_death(addr: usize) {
+    let ptr = CRYPTO_KEY_DEATH_HOOK.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr.is_null() {
+        return;
+    }
+    let hook: CryptoKeyDeathHookFn = unsafe { std::mem::transmute(ptr) };
+    hook(addr);
+}
+
 pub type CryptoKeyMeta = (u8, u8, u8, bool, u32);
 
 thread_local! {
@@ -159,6 +185,19 @@ pub fn mark_as_data_view(addr: usize) {
 
 pub fn is_data_view(addr: usize) -> bool {
     DATA_VIEW_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+/// Live entry counts for the two registries the GC buffer sweep prunes (#6337).
+/// Test-only: the leak regression asserts these DRAIN after the owning buffers
+/// are collected, which a per-address `is_*` probe cannot show.
+#[cfg(test)]
+pub(crate) fn test_data_view_registry_len() -> usize {
+    DATA_VIEW_REGISTRY.with(|r| r.borrow().len())
+}
+
+#[cfg(test)]
+pub(crate) fn test_shared_array_buffer_registry_len() -> usize {
+    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().len())
 }
 
 /// Register a buffer pointer in the thread-local registry
@@ -455,16 +494,49 @@ pub(crate) fn collect_dead_registered_buffers_post_trace(full_trace: bool) -> Ve
     if !full_trace {
         return Vec::new();
     }
+    // Lock the process-global SAB registry ONCE for the whole scan rather than
+    // once per registered buffer (see `registered_buffer_is_dead_post_trace`).
+    // `None` — nearly every process — means no SAB was ever allocated.
+    let shared_sabs = crate::shared_sab::snapshot_shared_sabs();
     BUFFER_REGISTRY.with(|r| {
         r.borrow()
             .iter()
             .copied()
-            .filter(|&addr| unsafe { registered_buffer_is_dead_post_trace(addr) })
+            .filter(|&addr| unsafe {
+                registered_buffer_is_dead_post_trace(addr, shared_sabs.as_ref())
+            })
             .collect()
     })
 }
 
-unsafe fn registered_buffer_is_dead_post_trace(addr: usize) -> bool {
+unsafe fn registered_buffer_is_dead_post_trace(
+    addr: usize,
+    shared_sabs: Option<&std::collections::HashSet<usize>>,
+) -> bool {
+    // A process-global `SharedArrayBuffer` backing is NOT a GC allocation:
+    // `shared_sab::alloc_shared_sab` takes it straight from `alloc_zeroed`, it
+    // carries no `GcHeader`, and it is never freed (#4913 — that is what lets
+    // the same bytes alias across `perry/thread` agents). But
+    // `js_shared_array_buffer_new` DOES `register_buffer` it, so it lands in
+    // `BUFFER_REGISTRY` and reaches this scan on every full trace.
+    //
+    // `try_read_gc_header` below would then read the 8 bytes BEFORE the malloc
+    // block — the allocator's own metadata — and interpret them as a `GcHeader`:
+    // one arbitrary byte compared against `GC_TYPE_BUFFER` (10), the next
+    // against the mark/pin/forward bits. A chance match declares a LIVE,
+    // never-freed SAB dead, and `finalize_collected_dead_buffer` then runs on
+    // it — including `view::remove_entries_for_dead_buffer`, which retains on
+    // `info.backing != addr` and so unregisters EVERY live typed-array view
+    // over that SAB. Those views are exactly how cross-agent `Atomics`
+    // wait/notify resolve their absolute slot addresses.
+    //
+    // So: veto first, and never sniff a header the object does not have. The
+    // set is snapshotted once per scan by the caller and is `None` for the
+    // processes that never allocate a SAB — nearly all of them — so the common
+    // path here is a single null check.
+    if shared_sabs.is_some_and(|sabs| sabs.contains(&addr)) {
+        return false;
+    }
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
         return false;
     };
@@ -487,9 +559,81 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     ARRAY_BUFFER_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
+    // #6337: the two sibling buffer-identity registries were missing from this
+    // list — they had no `.remove`/`.retain` site anywhere in the tree. Like
+    // the three above they are plain address-keyed sets that never rooted the
+    // `BufferHeader`, so a collected view left its entry behind forever:
+    //
+    //  * an unbounded leak — one permanent entry per `DataView` (and per
+    //    SAB-flagged buffer) ever created;
+    //  * the #6080 ABA class this function exists to prevent —
+    //    `arena_reset_empty_blocks` resets a fully-empty block's offset to 0
+    //    while KEEPING its base pointer, so a reset block re-issues the same
+    //    addresses. A recycled address then inherits the dead view's identity:
+    //    `is_data_view`/`is_shared_array_buffer` gate `util.types.isDataView`/
+    //    `isSharedArrayBuffer`, `ArrayBuffer.isView`, the `[object DataView]`
+    //    tag, and the structuredClone/`.slice()` re-marking above — an
+    //    unrelated fresh Buffer landing there would answer to all of them.
+    //
+    // Only GC-heap buffers reach here. A process-global SAB backing is never
+    // freed and is vetoed as a dead candidate in
+    // `registered_buffer_is_dead_post_trace`, so the entries pruned from
+    // SHARED_ARRAY_BUFFER_REGISTRY are the arena-allocated SAB-flagged copies
+    // (`SharedArrayBuffer.prototype.slice`, structuredClone) — the ones that
+    // genuinely die and whose addresses genuinely get recycled.
+    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    DATA_VIEW_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
     BUFFER_AB_ALIAS.with(|r| {
         r.borrow_mut().remove(&addr);
     });
+    // The WebCrypto/KeyObject side tables were missing from this list. They are
+    // plain `addr -> metadata` maps that do not root the `BufferHeader`, so a
+    // collected CryptoKey/secret-key buffer left its entries behind forever.
+    // Two consequences, both real:
+    //
+    //  * an unbounded leak — every CryptoKey ever created kept an entry in the
+    //    thread-local map AND in the process-global one (a 60k-key run leaked
+    //    59,998 of them);
+    //  * the #6080 ABA class this very function exists to prevent: the old
+    //    arena resets a fully-empty block's offset to 0 while keeping its base
+    //    pointer (`arena_reset_empty_blocks` + the block-reuse forward scan in
+    //    `Arena::alloc`), so a recycled address inherits CryptoKey identity.
+    //    `crypto_key_meta`/`is_secret_key` gate `instanceof CryptoKey`,
+    //    `util.types.isCryptoKey`/`isKeyObject`, the `[object CryptoKey]` tag,
+    //    the `.algorithm`/`.type`/`.usages` property surface, `KeyObject.from`
+    //    and `.export()` — an unrelated fresh Buffer landing on a dead key's
+    //    address would answer to all of them.
+    CRYPTO_KEY_META_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    SECRET_KEY_REGISTRY.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    UINT8ARRAY_FROM_CTOR.with(|r| {
+        r.borrow_mut().remove(&addr);
+    });
+    // `js_buffer_mark_as_crypto_key_external` writes all three global maps, and
+    // `is_registered_buffer`/`is_uint8array_buffer` consult them, so a dead
+    // external key buffer has to be dropped from every one of them.
+    if let Ok(mut r) = external_buffers().lock() {
+        r.remove(&addr);
+    }
+    if let Ok(mut r) = external_uint8arrays().lock() {
+        r.remove(&addr);
+    }
+    if let Ok(mut r) = external_crypto_keys().lock() {
+        r.remove(&addr);
+    }
+    // perry-stdlib keeps its own `addr -> CryptoKeyMaterial` map (the primary
+    // one `lookup_crypto_key` consults; the runtime table above is only its
+    // fallback), and this crate cannot call into perry-stdlib. Notify it
+    // through the hook it installs at startup. The callback only removes a
+    // HashMap entry — no allocation, so it is safe to run inside the sweep.
+    notify_crypto_key_death(addr);
     super::detach::remove_detached_entry_for_dead_buffer(addr);
     super::view::remove_entries_for_dead_buffer(addr);
 }

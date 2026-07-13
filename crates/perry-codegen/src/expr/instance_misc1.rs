@@ -479,6 +479,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Event" | "globalThis.Event" => 0xFFFF2403u32,
                 "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
                 "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,
+                // #6301. Keep in sync with
+                // perry-runtime/src/event_target.rs::CLASS_ID_EVENT_TARGET.
+                // A plain `new EventTarget()` carries this id on its header; a
+                // `class X extends EventTarget` instance reaches it through the
+                // parent edge the class registry wires at definition time.
+                "EventTarget" | "globalThis.EventTarget" => 0xFFFF2406u32,
                 // node:fs constructor exports. Keep these ids in sync with
                 // perry-runtime/src/fs/mod.rs and instanceof.rs.
                 "fs.Dir" => 0xFFFF0086u32,

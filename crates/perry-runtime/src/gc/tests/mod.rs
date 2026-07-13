@@ -1,6 +1,7 @@
 mod alloc;
 mod barrier;
 mod budgeted_step_api;
+mod buffer_side_tables;
 mod contract;
 mod copying;
 mod copying_side_tables;

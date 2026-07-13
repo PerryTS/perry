@@ -22,6 +22,7 @@ pub mod assimilate;
 pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
+pub(crate) mod keyed_table;
 pub mod microtasks;
 pub mod native_async;
 pub mod reactions;

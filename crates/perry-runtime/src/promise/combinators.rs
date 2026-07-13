@@ -5,6 +5,8 @@
 use super::*;
 use std::os::raw::c_int;
 
+use super::keyed_table::PromiseKeyedTable;
+
 use super::assimilate::{
     assimilate_via_then_property, enqueue_thenable_job, get_then_action,
     promise_resolve_assimilating, thenable_job_reject_fn, thenable_job_resolve_fn,
@@ -19,8 +21,12 @@ pub(super) struct PromiseAllState {
 }
 
 thread_local! {
-    pub(super) static PROMISE_ALL_STATES: RefCell<Vec<(usize, PromiseAllState)>> =
-        const { RefCell::new(Vec::new()) };
+    /// Keyed by input-promise address. See `keyed_table.rs`: a dense `Vec` is
+    /// still the GC scanners' traversal/rewrite surface, with an O(1) key index
+    /// layered on top (#6084 item 2 — this used to be a raw `Vec` that every
+    /// settlement scanned end to end).
+    pub(super) static PROMISE_ALL_STATES: RefCell<PromiseKeyedTable<PromiseAllState>> =
+        const { RefCell::new(PromiseKeyedTable::new()) };
 }
 
 /// Drain ALL `PromiseAllState` entries associated with `promise`.
@@ -42,20 +48,7 @@ pub(super) fn promise_all_take_all_handlers(promise: *mut Promise) -> Vec<Promis
     if promise.is_null() {
         return Vec::new();
     }
-    PROMISE_ALL_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let key = promise as usize;
-        let mut drained = Vec::new();
-        let mut i = 0;
-        while i < states.len() {
-            if states[i].0 == key {
-                drained.push(states.swap_remove(i).1);
-            } else {
-                i += 1;
-            }
-        }
-        drained
-    })
+    PROMISE_ALL_STATES.with(|states| states.borrow_mut().take_all(promise as usize))
 }
 
 #[inline]
@@ -70,11 +63,17 @@ pub(super) fn promise_all_settle(state: PromiseAllState, value: f64, is_fulfille
 pub(super) fn scan_promise_all_states_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     PROMISE_ALL_STATES.with(|states| {
         let mut states = states.borrow_mut();
-        for (key, state) in states.iter_mut() {
-            visitor.visit_metadata_usize_slot(key);
-            visitor.visit_raw_mut_ptr_slot(&mut state.result_promise);
-            visitor.visit_raw_mut_ptr_slot(&mut state.results_arr);
-            visitor.visit_raw_mut_ptr_slot(&mut state.state_arr);
+        let mut rekeyed = false;
+        for entry in states.iter_mut() {
+            // Evacuation rewrites the key IN PLACE — the position stays valid,
+            // but the key → position index no longer does. Rebuild it lazily.
+            rekeyed |= visitor.visit_metadata_usize_slot(&mut entry.key);
+            visitor.visit_raw_mut_ptr_slot(&mut entry.value.result_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut entry.value.results_arr);
+            visitor.visit_raw_mut_ptr_slot(&mut entry.value.state_arr);
+        }
+        if rekeyed {
+            states.note_key_rewritten();
         }
     });
 }
@@ -88,12 +87,7 @@ pub(super) fn remove_all_states_for_dead_promise(promise: *mut Promise) {
         return;
     }
     let key = promise as usize;
-    PROMISE_ALL_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        if !states.is_empty() {
-            states.retain(|(k, _)| *k != key);
-        }
-    });
+    PROMISE_ALL_STATES.with(|states| states.borrow_mut().remove_key(key));
 }
 
 /// Copied-minor from-space cleanup for `PROMISE_ALL_STATES` — see
@@ -101,11 +95,11 @@ pub(super) fn remove_all_states_for_dead_promise(promise: *mut Promise) {
 pub(super) fn cleanup_copied_minor_all_states_for_gc() {
     use super::CopiedMinorPromiseKeyFate::*;
     PROMISE_ALL_STATES.with(|states| {
-        states.borrow_mut().retain_mut(|(key, _)| {
-            match super::copied_minor_promise_key_fate(*key) {
+        states.borrow_mut().retain_mut(|entry| {
+            match super::copied_minor_promise_key_fate(entry.key) {
                 Keep => true,
                 Rekey(new_key) => {
-                    *key = new_key;
+                    entry.key = new_key;
                     true
                 }
                 Drop => false,
@@ -891,7 +885,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
                 }
                 PromiseState::Pending => {
                     PROMISE_ALL_STATES.with(|states| {
-                        states.borrow_mut().push((promise_ptr as usize, state));
+                        states.borrow_mut().push(promise_ptr as usize, state);
                     });
                     set_promise_callback_context(promise_ptr);
                 }
@@ -1721,12 +1715,8 @@ mod tests {
             assert_eq!((*all_b).state, PromiseState::Pending);
 
             // PROMISE_ALL_STATES must hold TWO entries keyed on `shared`.
-            let registered = PROMISE_ALL_STATES.with(|s| {
-                s.borrow()
-                    .iter()
-                    .filter(|(k, _)| *k == shared as usize)
-                    .count()
-            });
+            let registered =
+                PROMISE_ALL_STATES.with(|s| s.borrow_mut().count_for_key(shared as usize));
             assert_eq!(
                 registered, 2,
                 "expected two Promise.all states keyed on the shared pending promise"

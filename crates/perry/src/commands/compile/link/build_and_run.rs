@@ -831,10 +831,14 @@ pub(crate) fn build_and_run_link(
         cmd.arg("-ltime_service_ndk");
     } else if is_android {
         // Android system libraries
+        // libandroid provides ANativeWindow_fromSurface etc. used by perry-ui-android
+        // (camera / surface paths). Without -landroid the .so links clean but
+        // dlopen fails at runtime: cannot locate symbol "ANativeWindow_fromSurface".
         cmd.arg("-Wl,--allow-multiple-definition")
             .arg("-lm")
             .arg("-ldl")
-            .arg("-llog");
+            .arg("-llog")
+            .arg("-landroid");
 
         // Stub for JNI_GetCreatedJavaVMs: the jni-sys crate declares this extern
         // symbol, but Android has no libjvm.so and libnativehelper.so is only

@@ -30,6 +30,39 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     })
 }
 
+/// `Text(content, id)` — create + register for `setText(id, value)`.
+/// Other platforms export this; Android was missing it, so dlopen of apps
+/// that use reactive Text ids failed with:
+/// `cannot locate symbol "perry_ui_text_create_with_id"`.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i64 {
+    catch_panic("perry_ui_text_create_with_id", || {
+        let handle = widgets::text::create(text_ptr as *const u8);
+        if id_ptr != 0 {
+            let id = app::str_from_header(id_ptr as *const u8);
+            widgets::text_registry::register_text_id_handler(handle, id.as_ptr(), id.len());
+        }
+        handle
+    })
+}
+
+/// Direct `setText(id, value)` entry for the `import { setText }` surface.
+#[no_mangle]
+pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
+    if id_ptr == 0 {
+        return;
+    }
+    catch_panic_void("perry_ui_set_text", || {
+        let id = app::str_from_header(id_ptr as *const u8);
+        let val = if value_ptr == 0 {
+            ""
+        } else {
+            app::str_from_header(value_ptr as *const u8)
+        };
+        widgets::text_registry::set_text_handler(id.as_ptr(), id.len(), val.as_ptr(), val.len());
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     catch_panic("perry_ui_button_create", || {

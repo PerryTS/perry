@@ -61,17 +61,12 @@ pub extern "C" fn js_regexp_exec(
         // read above only drives the search start for a stateful regex.
         let last_index = if use_last_index { last_index_read } else { 0 };
 
+        // `lastIndex` is a JS string index — UTF-16 code units, like
+        // `str.length` — so map it back through the UTF-16 ↔ byte conversion
+        // rather than counting `chars()` (which walks one step per astral
+        // scalar instead of two, over-shooting the intended start).
         let search_start_byte = if use_last_index && last_index > 0 {
-            let mut byte_off = 0;
-            let mut char_count = 0;
-            for ch in str_data.chars() {
-                if char_count >= last_index {
-                    break;
-                }
-                byte_off += ch.len_utf8();
-                char_count += 1;
-            }
-            byte_off
+            super::exec_array::utf16_index_to_byte(str_data, last_index)
         } else {
             0
         };
@@ -103,7 +98,8 @@ pub extern "C" fn js_regexp_exec(
                         return Some(ptr::null_mut());
                     }
                     let match_byte_offset = full.start() + search_start_byte;
-                    let match_char_offset = str_data[..match_byte_offset].chars().count();
+                    let match_char_offset =
+                        super::exec_array::byte_index_to_utf16_index(str_data, match_byte_offset);
                     let arr = crate::array::js_array_alloc(caps.len() as u32);
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let arr_handle = scope.root_raw_mut_ptr(arr);
@@ -122,8 +118,11 @@ pub extern "C" fn js_regexp_exec(
                         }
                     }
                     if use_last_index {
-                        let match_str = full.as_str();
-                        set_last_index_throwing(re, match_char_offset + match_str.chars().count());
+                        let match_end_byte = full.end() + search_start_byte;
+                        set_last_index_throwing(
+                            re,
+                            super::exec_array::byte_index_to_utf16_index(str_data, match_end_byte),
+                        );
                     }
                     set_exec_array_metadata(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
@@ -173,11 +172,13 @@ pub extern "C" fn js_regexp_exec(
         match standard_caps {
             Some(caps) => {
                 let match_byte_offset = caps.get(0).unwrap().start() + search_start_byte;
-                let match_char_offset = str_data[..match_byte_offset].chars().count();
+                let match_char_offset =
+                    super::exec_array::byte_index_to_utf16_index(str_data, match_byte_offset);
 
                 if use_last_index {
                     let match_end_byte = caps.get(0).unwrap().end() + search_start_byte;
-                    let match_end_char = str_data[..match_end_byte].chars().count();
+                    let match_end_char =
+                        super::exec_array::byte_index_to_utf16_index(str_data, match_end_byte);
                     set_last_index_throwing(re, match_end_char);
                 }
 

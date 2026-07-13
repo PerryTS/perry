@@ -57,7 +57,12 @@ jobs:
       - name: Setup Node.js (for perf comparison)
         uses: actions/setup-node@v6
         with:
-          node-version: '22.23.1'
+          # Single source of truth: .node-version at the repo root. Node here is
+          # an informational peer (the hard regression gate is perry-vs-perry
+          # baseline), but keeping it on the same Node the correctness suites
+          # diff against keeps the published comparison honest. The pin is exact
+          # for the same reason bun/oha are exact: run-to-run comparability.
+          node-version-file: .node-version
 
       - name: Setup Bun (for perf comparison)
         uses: oven-sh/setup-bun@v2

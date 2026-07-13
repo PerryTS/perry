@@ -1514,17 +1514,34 @@ fn lower_new_impl(
                 found_inherited_ctor = true;
             }
         }
-        // #5137: implicit-ctor `class X extends EventEmitter {}` — install the
-        // emitter surface (the explicit-`super()` arm does this when a ctor is
-        // written). Gated `!has_imported_ctor` so an imported class whose real
-        // ctor lives in another module (commander's `Command`) still reaches
-        // the imported-ctor fallback below and runs its real `super()`.
-        if !found_inherited_ctor
-            && !has_imported_ctor
-            && class.extends_name.as_deref() == Some("EventEmitter")
-        {
-            crate::expr::lower_event_emitter_subclass_init(ctx, &obj_box);
-            found_inherited_ctor = true;
+        // #5137 / #6325 / #6326: implicit-ctor subclass of a native base whose
+        // surface perry stamps onto the INSTANCE — `EventEmitter`, `Map`/`Set`,
+        // `Event`/`CustomEvent`. The explicit-`super()` arm
+        // (`expr/this_super_call.rs`) installs it when a constructor is written;
+        // a class with no own constructor writes no `super()`, so the install
+        // has to happen here or the instance is left bare (`class M extends Map
+        // {}` → `m.set` is not a function).
+        //
+        // Keyed on the class CHAIN reaching the base rather than on a literal
+        // `extends` name: an INDIRECT subclass names an intermediate USER class
+        // (`class D extends B {}` with `class B extends EventEmitter {}`), so the
+        // old one-level name test lost the base entirely. The walk stops at any
+        // ancestor with a constructor — its `super()` does the install — so this
+        // never double-initializes.
+        //
+        // Gated `!has_imported_ctor` so an imported class whose real ctor lives
+        // in another module (commander's `Command`) still reaches the
+        // imported-ctor fallback below and runs its real `super()`.
+        if !found_inherited_ctor && !has_imported_ctor {
+            if let Some(base) = crate::lower_call::native_instance_base_in_chain(ctx, class) {
+                crate::lower_call::emit_native_instance_base_init(
+                    ctx,
+                    base,
+                    &obj_box,
+                    &lowered_args,
+                );
+                found_inherited_ctor = true;
+            }
         }
         // Issue #573: if the parent walk reached an Error-like built-in
         // without finding any user-class constructor, synthesize the JS
