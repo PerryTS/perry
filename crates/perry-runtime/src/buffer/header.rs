@@ -468,16 +468,25 @@ pub(crate) fn collect_dead_registered_buffers_post_trace(full_trace: bool) -> Ve
     if !full_trace {
         return Vec::new();
     }
+    // Lock the process-global SAB registry ONCE for the whole scan rather than
+    // once per registered buffer (see `registered_buffer_is_dead_post_trace`).
+    // `None` — nearly every process — means no SAB was ever allocated.
+    let shared_sabs = crate::shared_sab::snapshot_shared_sabs();
     BUFFER_REGISTRY.with(|r| {
         r.borrow()
             .iter()
             .copied()
-            .filter(|&addr| unsafe { registered_buffer_is_dead_post_trace(addr) })
+            .filter(|&addr| unsafe {
+                registered_buffer_is_dead_post_trace(addr, shared_sabs.as_ref())
+            })
             .collect()
     })
 }
 
-unsafe fn registered_buffer_is_dead_post_trace(addr: usize) -> bool {
+unsafe fn registered_buffer_is_dead_post_trace(
+    addr: usize,
+    shared_sabs: Option<&std::collections::HashSet<usize>>,
+) -> bool {
     // A process-global `SharedArrayBuffer` backing is NOT a GC allocation:
     // `shared_sab::alloc_shared_sab` takes it straight from `alloc_zeroed`, it
     // carries no `GcHeader`, and it is never freed (#4913 — that is what lets
@@ -496,10 +505,10 @@ unsafe fn registered_buffer_is_dead_post_trace(addr: usize) -> bool {
     // wait/notify resolve their absolute slot addresses.
     //
     // So: veto first, and never sniff a header the object does not have. The
-    // registry is behind a latch (`SHARED_SAB_NONEMPTY`), so the processes that
-    // never allocate a SAB — nearly all of them — pay one relaxed atomic load
-    // here and never take the lock.
-    if crate::shared_sab::is_shared_sab(addr) {
+    // set is snapshotted once per scan by the caller and is `None` for the
+    // processes that never allocate a SAB — nearly all of them — so the common
+    // path here is a single null check.
+    if shared_sabs.is_some_and(|sabs| sabs.contains(&addr)) {
         return false;
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {

@@ -97,6 +97,21 @@ pub fn is_shared_sab(addr: usize) -> bool {
         .unwrap_or(false)
 }
 
+/// Snapshot the SAB backing set for one GC dead-buffer scan.
+///
+/// The scan tests every registered buffer, and calling [`is_shared_sab`] per
+/// buffer would take the registry mutex once per buffer per full trace. The set
+/// is tiny (a handful of entries even in heavy `Atomics` users) and the GC is
+/// stop-the-world here, so lock it once and hand the scan a plain set. `None` —
+/// the case for nearly every process — means no SAB was ever allocated and the
+/// scan can skip the check entirely without allocating anything.
+pub(crate) fn snapshot_shared_sabs() -> Option<HashSet<usize>> {
+    if !SHARED_SAB_NONEMPTY.load(Ordering::Acquire) {
+        return None;
+    }
+    registry().lock().ok().map(|r| r.clone())
+}
+
 /// Test-only: pretend `addr` is a process-global SAB backing.
 ///
 /// A real backing has no `GcHeader`, so the GC's dead-buffer scan can only
