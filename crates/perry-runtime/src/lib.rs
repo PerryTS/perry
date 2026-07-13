@@ -31,6 +31,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 static GLOBAL: std::alloc::System = std::alloc::System;
 
 pub mod abi_trampoline;
+pub mod agent;
+#[cfg(test)]
+mod agent_dispatch_tests;
 pub mod app_group;
 pub mod arena;
 pub mod array;

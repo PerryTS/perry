@@ -7,6 +7,7 @@ pub fn collect_non_escaping_news(
     boxed_vars: &HashSet<u32>,
     module_globals: &std::collections::HashMap<u32, String>,
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    module_dispatch: &super::ModuleDispatchFacts,
 ) -> std::collections::HashMap<u32, String> {
     // Pass 1: find candidates — Let bindings of New that aren't boxed/global.
     let mut candidates: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
@@ -50,6 +51,24 @@ pub fn collect_non_escaping_news(
             }
         }
     }
+
+    // Pass 4 (issue #5872): a method call only keeps its receiver scalar-
+    // replaced when `simple_scalar_method_summary` accepts it (see the
+    // `Expr::Call` arm of `check_escapes_in_expr`). The summary proves the
+    // method *body* is a numeric read of `this.<field>` — it does NOT prove
+    // that `obj.method` still RESOLVES to that class method. An own-property
+    // write (`(obj as any).getValue = () => 99`) or a prototype mutation
+    // (`C.prototype.getValue = fn`, possibly from another function or from the
+    // constructor) replaces the target, and the inlined field read then returns
+    // the wrong value. Escape those receivers so they take the ordinary
+    // heap-allocate + dispatch path.
+    super::mark_unstable_scalar_method_receivers(
+        stmts,
+        &candidates,
+        classes,
+        module_dispatch,
+        &mut escaped,
+    );
 
     candidates.retain(|id, _| !escaped.contains(id));
     candidates

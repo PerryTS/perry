@@ -375,6 +375,54 @@ pub extern "C" fn js_string_to_upper_case(s: *const StringHeader) -> *mut String
     case_convert(s, true)
 }
 
+/// Find a substring in `s.toUpperCase()` without allocating that intermediate
+/// JS string for ASCII inputs. Used only by scalar replacement of a
+/// non-escaping uppercase local.
+#[no_mangle]
+pub extern "C" fn js_string_to_upper_case_index_of(
+    s: *const StringHeader,
+    needle: *const StringHeader,
+) -> i32 {
+    if !is_valid_string_ptr(s) || !is_valid_string_ptr(needle) {
+        return -1;
+    }
+    let source = string_as_str(s);
+    let needle = string_as_str(needle);
+    if is_ascii_string(s) {
+        if !needle.is_ascii() {
+            return -1;
+        }
+        let needle = needle.as_bytes();
+        if needle.is_empty() {
+            return 0;
+        }
+        let bytes = source.as_bytes();
+        if needle.len() > bytes.len() {
+            return -1;
+        }
+        for start in 0..=bytes.len() - needle.len() {
+            if bytes[start..start + needle.len()].iter().zip(needle).all(
+                |(&source_byte, &needle_byte)| {
+                    let upper = if source_byte.is_ascii_lowercase() {
+                        source_byte - (b'a' - b'A')
+                    } else {
+                        source_byte
+                    };
+                    upper == needle_byte
+                },
+            ) {
+                return start as i32;
+            }
+        }
+        return -1;
+    }
+
+    let upper = source.to_uppercase();
+    upper.find(needle).map_or(-1, |byte_offset| {
+        byte_offset_to_utf16_index(&upper, byte_offset) as i32
+    })
+}
+
 /// Find index of substring (-1 if not found)
 #[no_mangle]
 pub extern "C" fn js_string_index_of(

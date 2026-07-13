@@ -58,6 +58,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Setup Node.js for benchmark harness tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.1'
+
+      - name: Validate benchmark artifact and fallback gates
+        run: |
+          python3 -m unittest discover -s tests -p 'test_benchmark_gate.py' -v
+          ./tests/test_benchmark_peer_fallback.sh
+          ./tests/test_benchmark_output_verifier.sh
+          bash -n benchmarks/compare.sh benchmarks/honest_bench/run.sh \
+            benchmarks/honest_bench/harness/run_http_bench.sh \
+            tests/test_benchmark_peer_fallback.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:

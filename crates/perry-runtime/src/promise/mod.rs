@@ -25,6 +25,7 @@ pub mod combinators;
 pub mod microtasks;
 pub mod native_async;
 pub mod reactions;
+pub mod rejection;
 pub mod scanners;
 pub mod spec_combinators;
 pub mod subclass;
@@ -48,7 +49,7 @@ pub use combinators::{
     js_promise_all_settled, js_promise_any, js_promise_new_with_executor, js_promise_race,
     js_promise_rejected, js_promise_schedule_resolve, js_promise_try, js_value_is_promise,
 };
-pub use microtasks::js_promise_run_microtasks;
+pub use microtasks::{js_promise_run_microtasks, js_promise_run_microtasks_event_loop};
 pub use native_async::{
     js_native_async_completion_attach_handle, js_native_async_completion_cancel,
     js_native_async_completion_new, js_native_async_completion_promise,
@@ -63,6 +64,11 @@ pub use native_async::{
     PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 pub(crate) use reactions::js_promise_attach_settle_listener;
+pub(crate) use rejection::mark_rejection_handled;
+pub use rejection::{
+    js_promise_mark_internally_handled, js_promise_report_unhandled_rejections,
+    scan_unhandled_rejection_roots_mut,
+};
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
 pub use spec_combinators::{
@@ -73,16 +79,15 @@ pub use spec_combinators::{
 pub use subclass::js_promise_subclass_init;
 pub(crate) use subclass::subclass_backing_promise;
 pub(crate) use then::{
-    box_promise_ptr, js_promise_attach_handlers, mark_rejection_handled,
-    promise_has_own_constructor, promise_has_own_property, promise_proto_method,
-    promise_prototype_catch_thunk, promise_prototype_finally_thunk, promise_prototype_then_thunk,
+    box_promise_ptr, js_promise_attach_handlers, promise_has_own_constructor,
+    promise_has_own_property, promise_proto_method, promise_prototype_catch_thunk,
+    promise_prototype_finally_thunk, promise_prototype_then_thunk,
 };
 pub use then::{
-    js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free,
-    js_promise_mark_internally_handled, js_promise_new, js_promise_new_cross_thread,
-    js_promise_reason, js_promise_reject, js_promise_resolve, js_promise_resolve_with_promise,
-    js_promise_result, js_promise_state, js_promise_then, js_promise_value,
-    scan_unhandled_rejection_roots_mut,
+    js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free, js_promise_new,
+    js_promise_new_cross_thread, js_promise_reason, js_promise_reject, js_promise_resolve,
+    js_promise_resolve_with_promise, js_promise_result, js_promise_state, js_promise_then,
+    js_promise_value,
 };
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ use crate::expr::{variant_name, FnCtx};
 mod atomics;
 mod buffer_intrinsic;
 mod builtin;
+mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
 mod console_promise;

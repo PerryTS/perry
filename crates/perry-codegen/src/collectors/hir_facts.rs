@@ -83,6 +83,8 @@ pub(crate) struct EscapeFacts {
     pub non_escaping_new_used_fields: HashMap<u32, HashSet<String>>,
     pub non_escaping_arrays: HashMap<u32, u32>,
     pub non_escaping_array_used_indices: HashMap<u32, HashSet<u32>>,
+    pub non_escaping_array_length_only_indices: HashMap<u32, HashSet<u32>>,
+    pub fusible_uppercase_locals: HashSet<u32>,
     pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
     pub non_escaping_object_literal_used_fields: HashMap<u32, HashSet<String>>,
 }
@@ -220,6 +222,14 @@ impl TypeFacts {
         &self.escape.non_escaping_array_used_indices
     }
 
+    pub(crate) fn non_escaping_array_length_only_indices(&self) -> &HashMap<u32, HashSet<u32>> {
+        &self.escape.non_escaping_array_length_only_indices
+    }
+
+    pub(crate) fn fusible_uppercase_locals(&self) -> &HashSet<u32> {
+        &self.escape.fusible_uppercase_locals
+    }
+
     pub(crate) fn non_escaping_object_literals(&self) -> &HashMap<u32, Vec<String>> {
         &self.escape.non_escaping_object_literals
     }
@@ -296,6 +306,7 @@ pub(crate) fn collect_type_facts(
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
+    module_dispatch: &super::ModuleDispatchFacts,
 ) -> TypeFacts {
     let integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
@@ -313,14 +324,30 @@ pub(crate) fn collect_type_facts(
         clamp_fn_ids,
     );
     let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
-    let non_escaping_news =
-        super::escape_news::collect_non_escaping_news(stmts, boxed_vars, module_globals, classes);
+    let non_escaping_news = super::escape_news::collect_non_escaping_news(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+    );
     let non_escaping_new_used_fields =
         super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
     let non_escaping_arrays =
         super::escape_arrays::collect_non_escaping_arrays(stmts, boxed_vars, module_globals);
     let non_escaping_array_used_indices =
         super::escape_arrays::collect_non_escaping_array_used_indices(stmts, &non_escaping_arrays);
+    let non_escaping_array_length_only_indices =
+        super::escape_arrays::collect_non_escaping_array_length_only_indices(
+            stmts,
+            &non_escaping_arrays,
+        );
+    let fusible_uppercase_locals = super::uppercase_strings::collect_fusible_uppercase_locals(
+        stmts,
+        &non_escaping_arrays,
+        &non_escaping_array_used_indices,
+        &non_escaping_array_length_only_indices,
+    );
     let non_escaping_object_literals = super::escape_objects::collect_non_escaping_object_literals(
         stmts,
         boxed_vars,
@@ -358,6 +385,8 @@ pub(crate) fn collect_type_facts(
             non_escaping_new_used_fields,
             non_escaping_arrays,
             non_escaping_array_used_indices,
+            non_escaping_array_length_only_indices,
+            fusible_uppercase_locals,
             non_escaping_object_literals,
             non_escaping_object_literal_used_fields,
         },
@@ -392,6 +421,7 @@ pub(crate) fn collect_native_region_fact_graph(
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
+    module_dispatch: &super::ModuleDispatchFacts,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -403,6 +433,7 @@ pub(crate) fn collect_native_region_fact_graph(
         module_globals,
         classes,
         compile_time_constants,
+        module_dispatch,
     )
 }
 
@@ -424,6 +455,9 @@ pub(crate) fn collect_hir_facts(
         &HashMap::new(),
         &HashMap::new(),
         &HashMap::new(),
+        // No class table here, so no scalar-method summary can apply; the
+        // conservative default keeps it that way if one ever could.
+        &super::ModuleDispatchFacts::default(),
     )
 }
 
@@ -1630,6 +1664,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &constants,
+            &crate::collectors::ModuleDispatchFacts::default(),
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
@@ -1719,6 +1754,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &crate::collectors::ModuleDispatchFacts::default(),
         );
 
         assert!(graph.integer_locals().contains(&1));

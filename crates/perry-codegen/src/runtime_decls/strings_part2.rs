@@ -680,6 +680,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // branch so `await thenable` enters the polling path.
     module.declare_function("js_assimilate_thenable", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_run_microtasks", I32, &[]);
+    // #6077: the entry event loop's pump — `js_promise_run_microtasks` plus the
+    // unhandled-rejection checkpoint (Node's `processPromiseRejections`) between
+    // the microtask drain and the timer queues. Emitted only by
+    // `codegen::entry`'s event loop, whose JS stack is fully unwound.
+    module.declare_function("js_promise_run_microtasks_event_loop", I32, &[]);
     module.declare_function("js_promise_run_microtasks_await_loop", I32, &[]);
     module.declare_function("js_await_loop_tick_timers", I32, &[]);
     // ESM entry marker: first microtask drain finishes promise jobs before

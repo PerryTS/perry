@@ -57,12 +57,20 @@ jobs:
       - name: Setup Node.js (for perf comparison)
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.1'
+
+      - name: Setup Bun (for perf comparison)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install pinned HTTP load generator
+        run: cargo install oha --version 1.15.0 --locked
 
       - name: Build release perry
         run: cargo build --release
 
-      - name: Run benchmarks (median of 3 runs)
+      - name: Run benchmarks (median of 5 runs)
         id: compare
         run: |
           # The default runner shell is `bash -e` WITHOUT pipefail, so the
@@ -81,10 +89,10 @@ jobs:
 
           mkdir -p .bench-results
 
-          # Run full suite (15 base benchmarks + 7 regression-probe benchmarks)
+          # Run full suite (15 base benchmarks + 9 regression-probe benchmarks)
           ./benchmarks/compare.sh \
             --full \
-            --runs 3 \
+            --runs 5 \
             --json-out .bench-results/current.json \
             --speed-threshold 20 \
             --memory-threshold 30 \
@@ -110,6 +118,27 @@ jobs:
             echo "status=ok" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Track deterministic Fastify HTTP signals
+        if: always()
+        env:
+          HONEST_BENCH_ONLY: '4'
+          HONEST_BENCH_WARMUP: '1'
+          HONEST_BENCH_MEASURED: '5'
+          HONEST_BENCH_HTTP_WARMUP_DUR: '5s'
+          HONEST_BENCH_HTTP_DURATION: '15s'
+          HONEST_BENCH_HTTP_CONC: '10'
+        run: |
+          test -x target/release/perry
+          export HONEST_BENCH_OHA="$(command -v oha)"
+          ./benchmarks/honest_bench/run.sh
+          cp benchmarks/honest_bench/results/results.json .bench-results/http-fastify-raw.json
+          cp benchmarks/honest_bench/results/metadata.json .bench-results/http-fastify-metadata.json
+          python3 benchmarks/benchmark_gate.py http-summary \
+            --input .bench-results/http-fastify-raw.json \
+            --metadata .bench-results/http-fastify-metadata.json \
+            --samples 5 \
+            --output .bench-results/http-fastify.json
+
       - name: Generate GitHub Actions summary
         if: always()
         run: |
@@ -121,15 +150,23 @@ jobs:
               print("## Benchmark run failed")
               print("No current results JSON produced.")
               exit(0)
-          cur = json.load(open(cur_path))
-          base = json.load(open(base_path)) if os.path.exists(base_path) else {"benchmarks": {}}
+          from benchmarks.benchmark_gate import evaluate_regressions, load_artifact
+
+          cur = load_artifact(cur_path)
+          base = load_artifact(base_path) if os.path.exists(base_path) else {"benchmarks": {}}
+          gate = evaluate_regressions(base, cur, speed_threshold_pct=20, memory_threshold_pct=30)
+          gate_rows = {row.name: row for row in gate.rows}
           mode = "RELEASE GATE" if os.environ.get("IS_RELEASE") == "true" else "tracking (warn-only)"
 
           print(f"## Performance Regression Check — {mode}")
           print()
           print(f"- Baseline commit: `{base.get('commit','?')}`")
           print(f"- Current commit:  `{cur.get('commit','?')}`")
-          print(f"- Runner: macos-14 / median of 3 runs")
+          print(f"- Runner: macos-14 / median of 5 runs")
+          for runtime, metadata in cur.get("runtimes", {}).items():
+              availability = metadata.get("version") if metadata.get("available") else "unavailable"
+              command = " ".join(metadata.get("command", []))
+              print(f"- {runtime.title()}: `{availability}` via `{command}`")
           print()
           def md(value):
               return str(value).replace("|", "\\|")
@@ -153,15 +190,19 @@ jobs:
                   return "<br>".join(f"`{md(line)}`" for line in lines)
               return md(correctness.get("reason", ""))
 
-          print("| Benchmark | Correctness | Evidence | Perry (ms) | Node (ms) | Ratio | Perry RAM (KB) | Node RAM (KB) | Δ Speed | Δ RAM |")
-          print("|-----------|-------------|----------|-----------:|----------:|------:|---------------:|--------------:|--------:|------:|")
+          def dist(entry, runtime, metric="wall_ms"):
+              values = entry.get("runtimes", {}).get(runtime, {}).get(metric)
+              if not values:
+                  return "-"
+              return f"{values['median']} [{values['min']}–{values['p95']}]"
+
+          def ratio(entry, peer):
+              values = entry.get("ratios", {}).get(f"perry_to_{peer}")
+              return "-" if not values else values.get("wall_time", "-")
+
+          print("| Benchmark | Correctness | Evidence | Perry ms med [min–p95] | Node | Bun | P/Node | P/Bun | Noise | Δ Speed | Perry RAM KB |")
+          print("|-----------|-------------|----------|------------------------:|-----:|----:|-------:|------:|------:|--------:|-------------:|")
           for name, c in cur["benchmarks"].items():
-              b = base.get("benchmarks", {}).get(name, {})
-              p_ms = c.get("perry_ms")
-              n_ms = c.get("node_ms", "-")
-              p_rss = c.get("perry_rss_kb", 0)
-              n_rss = c.get("node_rss_kb", 0)
-              ratio = c.get("speed_ratio", "-")
               correctness = c.get("correctness", {
                   "status": "unchecked",
                   "reference": "none",
@@ -171,20 +212,27 @@ jobs:
               })
               correctness_status = correctness.get("status", "unchecked")
               correctness_evidence = evidence(correctness)
-              d_speed = "-"
-              d_ram = "-"
+              row = gate_rows[name]
+              d_speed = "-" if row.speed_delta_pct is None else f"{row.speed_delta_pct:+.1f}% ({row.status})"
               if correctness_status == "fail":
                   d_speed = "invalid"
-                  d_ram = "invalid"
-              elif b.get("perry_ms") and p_ms is not None and b["perry_ms"] > 0:
-                  pct = (p_ms - b["perry_ms"]) / b["perry_ms"] * 100
-                  emoji = "🔴" if pct > 20 else ("🟡" if pct > 10 else ("🟢" if pct < -10 else ""))
-                  d_speed = f"{emoji} {pct:+.1f}%"
-              if correctness_status != "fail" and b.get("perry_rss_kb") and p_rss and b["perry_rss_kb"] > 0:
-                  pct = (p_rss - b["perry_rss_kb"]) / b["perry_rss_kb"] * 100
-                  emoji = "🔴" if pct > 30 else ("🟡" if pct > 15 else ("🟢" if pct < -15 else ""))
-                  d_ram = f"{emoji} {pct:+.1f}%"
-              print(f"| `{name}` | {correctness_status} | {correctness_evidence} | {p_ms} | {n_ms} | {ratio} | {p_rss} | {n_rss} | {d_speed} | {d_ram} |")
+              print(f"| `{name}` | {correctness_status} | {correctness_evidence} | {dist(c, 'perry')} | {dist(c, 'node')} | {dist(c, 'bun')} | {ratio(c, 'node')} | {ratio(c, 'bun')} | {row.speed_noise_ms:.1f} ms | {d_speed} | {dist(c, 'perry', 'rss_kb')} |")
+
+          http_path = ".bench-results/http-fastify.json"
+          if os.path.exists(http_path):
+              http = json.load(open(http_path))
+              print()
+              print("## Fastify HTTP tracking")
+              print()
+              print("Fixed loopback load: 1 warmup, 5 × 15s samples, concurrency 10. No HTTP performance threshold is applied; missing or unhealthy samples still fail collection.")
+              print()
+              print("| Kernel | Runtime | RPS med [min–p95] | p50 ms | p95 ms | p99 ms |")
+              print("|--------|---------|------------------:|-------:|-------:|-------:|")
+              for workload, workload_data in http["workloads"].items():
+                  kernel = workload.removeprefix("http_fastify_")
+                  for runtime, runtime_data in workload_data["runtimes"].items():
+                      rps = runtime_data["rps"]
+                      print(f"| `{kernel}` | {runtime} | {rps['median']} [{rps['min']}–{rps['p95']}] | {runtime_data['p50_ms']['median']} | {runtime_data['p95_ms']['median']} | {runtime_data['p99_ms']['median']} |")
           PY
 
       - name: Upload benchmark results
@@ -195,6 +243,9 @@ jobs:
           path: |
             .bench-results/current.json
             .bench-results/output.txt
+            .bench-results/http-fastify.json
+            .bench-results/http-fastify-raw.json
+            .bench-results/http-fastify-metadata.json
             benchmarks/baseline.json
           retention-days: 90
 

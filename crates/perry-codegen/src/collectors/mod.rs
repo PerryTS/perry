@@ -21,9 +21,11 @@ mod local_refs;
 mod mutation;
 mod pointer_locals;
 mod refs;
+mod scalar_method_dispatch;
 mod scalar_methods;
 mod shadow_slots;
 mod this_as_value;
+mod uppercase_strings;
 
 // Public re-exports for the visible API (`pub fn emit_i64_function` etc.).
 pub use clamp_detect::{
@@ -73,6 +75,9 @@ pub(crate) use mutation::has_any_mutation;
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
+};
+pub(crate) use scalar_method_dispatch::{
+    collect_module_dispatch_facts, mark_unstable_scalar_method_receivers, ModuleDispatchFacts,
 };
 pub(crate) use scalar_methods::simple_scalar_method_summary;
 pub(crate) use shadow_slots::{

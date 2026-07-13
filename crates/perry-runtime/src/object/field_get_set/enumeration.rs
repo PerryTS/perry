@@ -1003,9 +1003,19 @@ pub(crate) unsafe fn instance_private_key_hidden(
 /// Matches each key EXACTLY (an allowlist), not a broad `__perry_*` prefix — a
 /// prefix test would wrongly hide legitimate user properties whose name happens
 /// to begin with `__perry_` (e.g. `this.__perry_user = 1`).
+///
+/// The one prefix family is `__perry_native_super__<method>` (#6316): the native
+/// base method a subclass override displaced. Its key set is parameterized by
+/// method name, so an exact allowlist cannot enumerate it. The prefix is a
+/// reserved, runtime-only spelling — narrow enough not to be a plausible user
+/// property, unlike a blanket `__perry_*` test. Hiding it also moves enumeration
+/// TOWARD Node: the displaced method previously sat on the instance under its
+/// plain name (`emit`), which `Object.keys` wrongly reported as an own key.
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
-    b == crate::object::map_set_subclass::BACKING_KEY || b == crate::weakref::WEAK_ENTRIES_KEY
+    b == crate::object::map_set_subclass::BACKING_KEY
+        || b == crate::weakref::WEAK_ENTRIES_KEY
+        || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].

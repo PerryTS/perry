@@ -2,16 +2,18 @@
 
 use super::*;
 
+use super::unused_expr::lower_unused_expr;
 use crate::expr::{
     box_i1_for_compat_shadow, emit_root_nanbox_store_on_block,
     expr_produces_non_pointer_bits_by_construction, lower_expr_value,
-    lower_expr_with_expected_type,
+    lower_expr_with_expected_type, unbox_str_handle,
 };
 use crate::native_value::{
     AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
     PodLocal, SemanticKind,
 };
+use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// #5271: does `init` provably evaluate to a plain object literal? Two
@@ -408,6 +410,148 @@ pub(crate) fn lower_let(
             }
             PodLayoutDecision::Rejected(reason) => record_pod_rejection(ctx, id, reason),
             PodLayoutDecision::NotPod => {}
+        }
+    }
+
+    // Keep a non-escaping uppercase result virtual when every consumer is a
+    // fused string operation. Store the original boxed receiver now so later
+    // writes to its source local cannot change the captured value.
+    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+        if ctx.fusible_uppercase_locals.contains(&id)
+            && args.is_empty()
+            && matches!(
+                callee.as_ref(),
+                perry_hir::Expr::PropertyGet { object, property }
+                    if is_string_expr(ctx, object) && property == "toUpperCase"
+            )
+        {
+            let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
+                unreachable!();
+            };
+            let source = lower_expr(ctx, object)?;
+            let source_slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.block().store(DOUBLE, &source, &source_slot);
+            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.func
+                .entry_allocas_push_store(DOUBLE, &undef, &dummy_slot);
+            ctx.scalar_replaced_uppercase_sources
+                .insert(id, source_slot);
+            ctx.local_types.insert(id, refined_ty);
+            ctx.locals.insert(id, dummy_slot);
+            return Ok(());
+        }
+    }
+
+    // Scalar replacement: a literal-separator split whose result only has
+    // small constant-index reads does not need an ArrayHeader or unobserved
+    // substring allocations. The escape collector admits this exact shape and
+    // rejects `.length`, mutation, captures, and dynamic indices.
+    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+        if ctx.non_escaping_arrays.contains_key(&id)
+            && matches!(args.as_slice(), [perry_hir::Expr::String(s)] if !s.is_empty())
+            && matches!(
+                callee.as_ref(),
+                perry_hir::Expr::PropertyGet { object, property }
+                    if is_string_expr(ctx, object)
+                        && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
+                        && property == "split"
+            )
+        {
+            let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
+                unreachable!();
+            };
+            let used_indices = ctx
+                .non_escaping_array_used_indices
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            let slot_count = used_indices
+                .iter()
+                .max()
+                .map_or(0usize, |index| *index as usize + 1);
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let mut slots = Vec::with_capacity(slot_count);
+            for _ in 0..slot_count {
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                slots.push(slot);
+            }
+
+            let uppercase_source_slot = match object.as_ref() {
+                perry_hir::Expr::LocalGet(id) => {
+                    ctx.scalar_replaced_uppercase_sources.get(id).cloned()
+                }
+                _ => None,
+            };
+            let receiver_box = if let Some(source_slot) = &uppercase_source_slot {
+                ctx.block().load(DOUBLE, source_slot)
+            } else {
+                lower_expr(ctx, object)?
+            };
+            let delimiter_box = lower_expr(ctx, &args[0])?;
+            let receiver = {
+                let blk = ctx.block();
+                unbox_str_handle(blk, &receiver_box)
+            };
+            let delimiter = {
+                let blk = ctx.block();
+                unbox_str_handle(blk, &delimiter_box)
+            };
+            let length_only_indices = ctx
+                .non_escaping_array_length_only_indices
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
+            debug_assert!(
+                uppercase_source_slot.is_none()
+                    || used_indices
+                        .iter()
+                        .all(|index| length_only_indices.contains(index)),
+                "virtual uppercase split may only feed direct part-length reads"
+            );
+            let mut length_slots = std::collections::HashMap::new();
+            for index in used_indices {
+                if length_only_indices.contains(&index) {
+                    let runtime_fn = if uppercase_source_slot.is_some() {
+                        "js_string_to_upper_case_split_part_utf16_length"
+                    } else {
+                        "js_string_split_part_utf16_length"
+                    };
+                    let length = ctx.block().call(
+                        DOUBLE,
+                        runtime_fn,
+                        &[
+                            (I64, &receiver),
+                            (I64, &delimiter),
+                            (I32, &index.to_string()),
+                        ],
+                    );
+                    let length_slot = ctx.func.alloca_entry(DOUBLE);
+                    ctx.block().store(DOUBLE, &length, &length_slot);
+                    length_slots.insert(index, length_slot);
+                } else {
+                    let value = ctx.block().call(
+                        DOUBLE,
+                        "js_string_split_part_value",
+                        &[
+                            (I64, &receiver),
+                            (I64, &delimiter),
+                            (I32, &index.to_string()),
+                        ],
+                    );
+                    ctx.block().store(DOUBLE, &value, &slots[index as usize]);
+                }
+            }
+            ctx.scalar_replaced_arrays.insert(id, slots);
+            if !length_slots.is_empty() {
+                ctx.scalar_replaced_split_part_lengths
+                    .insert(id, length_slots);
+            }
+            ctx.local_types.insert(id, refined_ty);
+            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+            ctx.locals.insert(id, dummy_slot);
+            return Ok(());
         }
     }
 
@@ -1721,145 +1865,6 @@ pub(crate) fn collect_scalar_class_data(
     Some((all_fields, ctor))
 }
 
-fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool> {
-    if unused_expr_is_pure_nonthrowing(ctx, expr) {
-        return Ok(true);
-    }
-    match expr {
-        perry_hir::Expr::New {
-            class_name, args, ..
-        } if class_name.starts_with("__AnonShape_") => {
-            // Anonymous-shape `new` is how object literals lower. When the
-            // constructed value is immediately discarded by scalar replacement
-            // we still must preserve evaluation order of every property value,
-            // but we can skip the synthetic object allocation/field stores.
-            for arg in args {
-                if !lower_unused_expr(ctx, arg)? {
-                    let _ = lower_expr(ctx, arg)?;
-                }
-            }
-            Ok(true)
-        }
-        perry_hir::Expr::ArrayMap { array, callback } => {
-            if array_map_callback_is_discard_pure(callback) {
-                // The map result is unused and the callback only builds an
-                // anonymous object from its parameter. Evaluate the receiver to
-                // preserve source-order effects, but skip closure allocation,
-                // callback dispatch, and all discarded object construction.
-                let _ = lower_expr(ctx, array)?;
-                return Ok(true);
-            }
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
-            let blk = ctx.block();
-            let arr_handle = crate::expr::unbox_to_i64(blk, &arr_box);
-            // #4091: throw TypeError for a non-callable callback before iterating
-            // (the discarded-result path still validates per spec).
-            let cb_handle = blk.call(
-                I64,
-                "js_validate_array_map_callback",
-                &[(I64, &arr_handle), (DOUBLE, &cb_box)],
-            );
-            blk.call_void(
-                "js_array_map_discard",
-                &[(I64, &arr_handle), (I64, &cb_handle)],
-            );
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
-}
-
-fn unused_expr_is_pure_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> bool {
-    match expr {
-        perry_hir::Expr::Undefined
-        | perry_hir::Expr::Null
-        | perry_hir::Expr::Bool(_)
-        | perry_hir::Expr::Number(_)
-        | perry_hir::Expr::Integer(_)
-        | perry_hir::Expr::String(_)
-        | perry_hir::Expr::WtfString(_)
-        | perry_hir::Expr::LocalGet(_) => true,
-        perry_hir::Expr::Unary { operand, .. } => {
-            crate::type_analysis::is_numeric_expr(ctx, operand)
-                && unused_expr_is_pure_nonthrowing(ctx, operand)
-        }
-        perry_hir::Expr::Binary { op, left, right } => {
-            unused_binary_is_pure_nonthrowing(ctx, op, left, right)
-                && unused_expr_is_pure_nonthrowing(ctx, left)
-                && unused_expr_is_pure_nonthrowing(ctx, right)
-        }
-        perry_hir::Expr::Compare { left, right, .. } => {
-            unused_primitive_expr_is_nonthrowing(ctx, left)
-                && unused_primitive_expr_is_nonthrowing(ctx, right)
-                && unused_expr_is_pure_nonthrowing(ctx, left)
-                && unused_expr_is_pure_nonthrowing(ctx, right)
-        }
-        perry_hir::Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            unused_expr_is_pure_nonthrowing(ctx, condition)
-                && unused_expr_is_pure_nonthrowing(ctx, then_expr)
-                && unused_expr_is_pure_nonthrowing(ctx, else_expr)
-        }
-        _ => false,
-    }
-}
-
-fn unused_binary_is_pure_nonthrowing(
-    ctx: &FnCtx<'_>,
-    op: &perry_hir::BinaryOp,
-    left: &perry_hir::Expr,
-    right: &perry_hir::Expr,
-) -> bool {
-    match op {
-        perry_hir::BinaryOp::Add => {
-            let l_num = crate::type_analysis::is_numeric_expr(ctx, left);
-            let r_num = crate::type_analysis::is_numeric_expr(ctx, right);
-            if l_num && r_num {
-                return true;
-            }
-            let l_str = crate::type_analysis::is_definitely_string_expr(ctx, left);
-            let r_str = crate::type_analysis::is_definitely_string_expr(ctx, right);
-            (l_str || r_str)
-                && unused_primitive_expr_is_nonthrowing(ctx, left)
-                && unused_primitive_expr_is_nonthrowing(ctx, right)
-        }
-        perry_hir::BinaryOp::Sub
-        | perry_hir::BinaryOp::Mul
-        | perry_hir::BinaryOp::Div
-        | perry_hir::BinaryOp::Mod
-        | perry_hir::BinaryOp::BitAnd
-        | perry_hir::BinaryOp::BitOr
-        | perry_hir::BinaryOp::BitXor
-        | perry_hir::BinaryOp::Shl
-        | perry_hir::BinaryOp::Shr
-        | perry_hir::BinaryOp::UShr => {
-            crate::type_analysis::is_numeric_expr(ctx, left)
-                && crate::type_analysis::is_numeric_expr(ctx, right)
-        }
-        _ => false,
-    }
-}
-
-fn unused_primitive_expr_is_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> bool {
-    crate::type_analysis::is_numeric_expr(ctx, expr)
-        || crate::type_analysis::is_definitely_string_expr(ctx, expr)
-        || crate::type_analysis::is_bool_expr(ctx, expr)
-        || matches!(
-            expr,
-            perry_hir::Expr::Undefined
-                | perry_hir::Expr::Null
-                | perry_hir::Expr::String(_)
-                | perry_hir::Expr::WtfString(_)
-                | perry_hir::Expr::Number(_)
-                | perry_hir::Expr::Integer(_)
-                | perry_hir::Expr::Bool(_)
-        )
-}
-
 fn record_pod_rejection(ctx: &mut FnCtx<'_>, id: u32, reason: String) {
     let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let lowered = LoweredValue::js_value(undef);
@@ -1876,52 +1881,4 @@ fn record_pod_rejection(ctx: &mut FnCtx<'_>, id: u32, reason: String) {
         false,
         vec![format!("reason={}", reason)],
     );
-}
-
-fn array_map_callback_is_discard_pure(callback: &perry_hir::Expr) -> bool {
-    let perry_hir::Expr::Closure {
-        params,
-        body,
-        captures,
-        mutable_captures,
-        captures_this,
-        is_async,
-        ..
-    } = callback
-    else {
-        return false;
-    };
-    if *is_async
-        || *captures_this
-        || !captures.is_empty()
-        || !mutable_captures.is_empty()
-        || params.is_empty()
-    {
-        return false;
-    }
-    let param_id = params[0].id;
-    matches!(body.as_slice(), [perry_hir::Stmt::Return(Some(expr))] if discard_pure_expr(expr, param_id))
-}
-
-fn discard_pure_expr(expr: &perry_hir::Expr, param_id: perry_types::LocalId) -> bool {
-    match expr {
-        perry_hir::Expr::Undefined
-        | perry_hir::Expr::Null
-        | perry_hir::Expr::Bool(_)
-        | perry_hir::Expr::Number(_)
-        | perry_hir::Expr::Integer(_)
-        | perry_hir::Expr::String(_)
-        | perry_hir::Expr::WtfString(_) => true,
-        perry_hir::Expr::LocalGet(id) => *id == param_id,
-        // PropertyGet is deliberately *not* in the pure set: TypeScript
-        // `get` accessors can run user code, so eliding the map body
-        // would drop visible side effects. The intended target of this
-        // optimization is the anonymous-shape `Expr::New` arm below.
-        perry_hir::Expr::New {
-            class_name, args, ..
-        } if class_name.starts_with("__AnonShape_") => {
-            args.iter().all(|arg| discard_pure_expr(arg, param_id))
-        }
-        _ => false,
-    }
 }

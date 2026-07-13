@@ -496,17 +496,51 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk_index_uses_in_expr(a, out);
             }
         }
+        // (#6299) `arr[i] = v` does NOT always lower to `IndexSet`: when the
+        // receiver isn't a statically-known local array — e.g. it arrived as a
+        // function's return value — the lowerer emits the spec-compliant
+        // `PutValue` form instead. Its `key` IS the array index, so it must be
+        // seeded exactly like `IndexSet`'s `index`; the stored `value` subtree
+        // also holds the matching `arr[i]` read.
+        //
+        // Missing this arm kept the loop counter out of `index_used_locals`, so
+        // it lost its i32 shadow slot at the Let site, which in turn dropped the
+        // guarded numeric array-index fast path for every `arr[i]` in the loop
+        // (6.8x). It was masked until #6258 (`x++`/`x--` no longer counts as
+        // strictly-i32-bounded, correctly — that was an unsound overflow path),
+        // which removed the crutch that had been covering this blind spot.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            collect_index_refs(key, out);
+            walk_index_uses_in_expr(target, out);
+            walk_index_uses_in_expr(key, out);
+            walk_index_uses_in_expr(value, out);
+            walk_index_uses_in_expr(receiver, out);
+        }
         // Closure bodies are intentionally NOT walked: a captured local can't
         // use the i32 slot anyway (boxed captures route through
         // `js_box_get`/`js_box_set` and non-boxed ones through
         // `js_closure_get_capture_bits`), so marking them as index-used would
-        // have no effect at the Let-site emission gate.
+        // have no effect at the Let-site emission gate. This arm precedes the
+        // catch-all below, so the generic walker never descends into a closure.
         Expr::Closure { .. } => {}
-        // Everything else: conservatively skipped. Missing a variant means we
-        // don't recurse further into that subtree — a local used as an index
-        // deeper inside may not be marked, in which case its i32 shadow is
-        // not emitted and the per-iteration `fptosi` cost returns. That's a
-        // missed optimization, not a correctness bug.
-        _ => {}
+        // Everything else: recurse structurally via the centralized walker
+        // (same contract as `collect_ref_ids_in_expr`). Only the explicit
+        // index-using arms above ever *mark* a local, so a total walk cannot
+        // widen the set beyond "locals that flow into an array index" — it just
+        // stops a variant that merely *wraps* an index use (as `PutValueSet`
+        // did) from silently hiding the whole subtree. The old `_ => {}` made
+        // every unlisted variant an opaque wall, which is what let #6299 hide
+        // in plain sight.
+        _ => {
+            perry_hir::walker::walk_expr_children(e, &mut |sub| {
+                walk_index_uses_in_expr(sub, out);
+            });
+        }
     }
 }

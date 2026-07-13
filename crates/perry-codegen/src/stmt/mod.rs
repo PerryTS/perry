@@ -16,6 +16,7 @@ mod let_stmt;
 mod loops;
 mod switch_stmt;
 mod try_stmt;
+mod unused_expr;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;

@@ -733,6 +733,12 @@ fn test_numeric_array_raw_f64_payload_tracks_sets_and_downgrades() {
 }
 
 #[test]
+fn pointer_only_array_allocation_clears_numeric_representation() {
+    let arr = js_array_alloc_pointer_elements(2);
+    assert_eq!(unsafe { super::header::array_numeric_layout(arr) }, None);
+}
+
+#[test]
 fn test_numeric_array_sparse_extend_fills_holes_and_downgrades_raw_layout() {
     let mut arr = js_array_alloc(8);
     arr = js_array_push_f64(arr, 1.0);

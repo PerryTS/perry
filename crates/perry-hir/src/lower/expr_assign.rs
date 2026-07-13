@@ -70,7 +70,7 @@ fn lower_rhs_with_assignment_name(
     result
 }
 
-fn throw_type_error_const_assignment(name: &str) -> Expr {
+pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_throw_type_error_const_assignment".to_string(),
@@ -413,6 +413,97 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
     lower_assignment_target(ctx, &assign.left, value)
 }
 
+/// Lower `<name> = value` where `<name>` is an identifier assignment target.
+///
+/// #6300: this is the ONE place identifier stores are resolved, so the
+/// `const`-immutability (and class-inner-name) checks can't be routed around.
+/// It is shared by the bare-`Ident` `AssignTarget` arm below and by
+/// `lower_expr_assignment`'s `Ident` arm, which is what the parenthesized /
+/// TS-cast targets (`(c) = 9`, `(c as any) = 9`, `(c satisfies T) = 9`,
+/// `(c!) = 9`) unwrap into. Before the extraction, only the bare-`Ident` arm
+/// checked immutability, so any wrapper on the LHS silently mutated a `const`.
+pub(crate) fn lower_ident_assignment(
+    ctx: &mut LoweringContext,
+    name: String,
+    value: Box<Expr>,
+) -> Result<Expr> {
+    if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+        let fallback = with_set_fallback_for_ident(ctx, &name);
+        return Ok(Expr::WithSet {
+            object: Box::new(Expr::LocalGet(env_id)),
+            property: name,
+            value,
+            fallback,
+            strict: ctx.current_strict,
+        });
+    }
+    if let Some(id) = ctx.lookup_local(&name) {
+        if ctx.is_local_immutable(id) {
+            // `const c = 1; c = 9` (and every wrapped spelling of the same
+            // target) evaluates the RHS for side effects, then throws
+            // `TypeError: Assignment to constant variable.`
+            return Ok(Expr::Sequence(vec![
+                *value,
+                throw_type_error_const_assignment(&name),
+            ]));
+        }
+        Ok(Expr::LocalSet(id, value))
+    } else if ctx.current_class_inner_name.as_deref() == Some(name.as_str()) {
+        // Assigning to the class own-name binding from inside the class
+        // body targets the immutable inner `const` binding -> TypeError
+        // (test262 language/statements/class/name-binding/const). Evaluate
+        // the RHS for side effects first, then throw. A local/param that
+        // shadows the name was already handled by the `lookup_local` arm
+        // above, so this only fires for the genuine class binding.
+        Ok(Expr::Sequence(vec![
+            *value,
+            throw_type_error_const_assignment(&name),
+        ]))
+    } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
+        // v0.5.757: don't shadow a class/function binding with an
+        // implicit local for `<Name> = X` patterns. Drizzle's
+        // sql.js uses `((sql2) => { ... })(sql || (sql = {}))`
+        // (and the same for SQL) — since the binding exists
+        // (truthy), the OR short-circuits and the assignment is
+        // dead. Pre-fix the implicit local hid the original
+        // binding from later reads. Just evaluate the RHS for
+        // side effects. Refs #420.
+        Ok(*value)
+    } else {
+        if ctx.current_strict {
+            // #5989: strict-mode assignment to an existing global
+            // builtin is a property write, not a ReferenceError. See
+            // `strict_global_assign_existing_or_throw` for the full
+            // rationale.
+            return Ok(strict_global_assign_existing_or_throw(name, value));
+        }
+        eprintln!(
+            "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
+            name
+        );
+        // Sloppy implicit global: the binding IS a property of globalThis
+        // (spec CreateGlobalVarBinding on the global object), so `foo = 1`
+        // must be visible as `globalThis.foo`, write through to a
+        // pre-existing global property, and observe a later
+        // `delete globalThis.foo`. Reads of the name resolve through the
+        // `js_global_get_or_throw_unresolved` fallback, so no module-local
+        // shadow may be created here (a stale local would keep serving
+        // deleted/overwritten values).
+        // NOTE: `GlobalGet(0)` alone is a by-name routing SENTINEL in
+        // codegen (bare reads lower to 0.0) — the write must target
+        // the VALUE globalThis, which the `PropertyGet { GlobalGet(0),
+        // "globalThis" }` shape resolves to the real global object.
+        Ok(Expr::PropertySet {
+            object: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "globalThis".to_string(),
+            }),
+            property: name,
+            value,
+        })
+    }
+}
+
 fn lower_assignment_target(
     ctx: &mut LoweringContext,
     target: &ast::AssignTarget,
@@ -420,74 +511,7 @@ fn lower_assignment_target(
 ) -> Result<Expr> {
     match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
-            let name = ident.id.sym.to_string();
-            if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
-                let fallback = with_set_fallback_for_ident(ctx, &name);
-                return Ok(Expr::WithSet {
-                    object: Box::new(Expr::LocalGet(env_id)),
-                    property: name,
-                    value,
-                    fallback,
-                    strict: ctx.current_strict,
-                });
-            }
-            if let Some(id) = ctx.lookup_local(&name) {
-                if ctx.is_local_immutable(id) {
-                    return Ok(Expr::Sequence(vec![
-                        *value,
-                        throw_type_error_const_assignment(&name),
-                    ]));
-                }
-                Ok(Expr::LocalSet(id, value))
-            } else if ctx.current_class_inner_name.as_deref() == Some(name.as_str()) {
-                // Assigning to the class own-name binding from inside the class
-                // body targets the immutable inner `const` binding -> TypeError
-                // (test262 language/statements/class/name-binding/const). Evaluate
-                // the RHS for side effects first, then throw. A local/param that
-                // shadows the name was already handled by the `lookup_local` arm
-                // above, so this only fires for the genuine class binding.
-                Ok(Expr::Sequence(vec![
-                    *value,
-                    throw_type_error_const_assignment(&name),
-                ]))
-            } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
-                // v0.5.757: don't shadow a class/function binding with an
-                // implicit local for `<Name> = X` patterns. Drizzle's
-                // sql.js uses `((sql2) => { ... })(sql || (sql = {}))`
-                // (and the same for SQL) — since the binding exists
-                // (truthy), the OR short-circuits and the assignment is
-                // dead. Pre-fix the implicit local hid the original
-                // binding from later reads. Just evaluate the RHS for
-                // side effects. Refs #420.
-                Ok(*value)
-            } else {
-                if ctx.current_strict {
-                    // #5989: strict-mode assignment to an existing global
-                    // builtin is a property write, not a ReferenceError. See
-                    // `strict_global_assign_existing_or_throw` for the full
-                    // rationale (shared with the sibling arm in
-                    // lower_expr/assignment.rs).
-                    return Ok(strict_global_assign_existing_or_throw(name, value));
-                }
-                eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
-                    name
-                );
-                // Sloppy implicit global — a real globalThis property, not
-                // a module local (see the sibling arm in lower_expr.rs).
-                // NOTE: `GlobalGet(0)` alone is a by-name routing SENTINEL in
-                // codegen (bare reads lower to 0.0) — the write must target
-                // the VALUE globalThis, which the `PropertyGet { GlobalGet(0),
-                // "globalThis" }` shape resolves to the real global object.
-                Ok(Expr::PropertySet {
-                    object: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::GlobalGet(0)),
-                        property: "globalThis".to_string(),
-                    }),
-                    property: name,
-                    value,
-                })
-            }
+            lower_ident_assignment(ctx, ident.id.sym.to_string(), value)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
             // Proxy set: `proxy.foo = v` / `proxy[k] = v`

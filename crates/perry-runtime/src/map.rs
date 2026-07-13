@@ -30,6 +30,38 @@ pub fn is_registered_map_iterator(addr: usize) -> bool {
     MAP_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
 }
 
+/// Rekey legacy materialized-iterator brands after array evacuation without
+/// treating the metadata key as a root.
+pub(crate) fn scan_map_iterator_array_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    MAP_ITERATOR_ARRAYS.with(|r| {
+        let mut arrays = r.borrow_mut();
+        let mut moved = Vec::new();
+        for old_addr in arrays.iter().copied() {
+            let mut new_addr = old_addr;
+            if visitor.visit_metadata_usize_slot(&mut new_addr) {
+                moved.push((old_addr, new_addr));
+            }
+        }
+        for (old_addr, new_addr) in moved {
+            arrays.remove(&old_addr);
+            arrays.insert(new_addr);
+        }
+    });
+}
+
+/// Remove legacy Map iterator brands whose array owners are provably dead
+/// under the centralized collection-specific liveness policy.
+pub(crate) fn prune_dead_map_iterator_array_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    MAP_ITERATOR_ARRAYS.with(|r| {
+        r.borrow_mut().retain(|owner| !is_dead_owner(*owner));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_map_iterator_arrays() {
+    MAP_ITERATOR_ARRAYS.with(|r| r.borrow_mut().clear());
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -105,7 +137,11 @@ pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
     let jsv = crate::value::JSValue::from_bits(bits);
     let addr = if jsv.is_pointer() {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if bits >> 48 == 0 && bits > 0x10000 {
+    } else if bits >> 48 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
+        // #6271 class: the bare-address branch must reject the handle bands, not
+        // just small integers. A hand-rolled `> 0x10000` floor sits an order of
+        // magnitude BELOW `HANDLE_BAND_MAX` (0x100000), so every fetch / zlib /
+        // proxy handle passed it and was treated as a candidate heap address.
         bits as usize
     } else {
         return None;
@@ -258,7 +294,9 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
     let upper = bits >> 48;
     let addr = if upper == (crate::value::BIGINT_TAG >> 48) || upper == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if upper == 0 && bits > 0x10000 {
+    } else if upper == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
+        // #6271 class — see `map_ptr_from_receiver_bits`: `> 0x10000` lets the
+        // whole handle band through; `is_above_handle_band` is the real floor.
         bits as usize
     } else {
         return std::ptr::null();
@@ -688,13 +726,13 @@ fn string_view_from_bits(
         return Some((scratch.as_ptr(), len as u32));
     }
     let ptr = extract_string_ptr_from_value(bits);
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    unsafe {
-        let len = (*ptr).byte_len;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        Some((data, len))
+    match unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) } {
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_STRING => unsafe {
+            let len = (*ptr).byte_len;
+            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+            Some((data, len))
+        },
+        _ => None,
     }
 }
 
@@ -723,14 +761,10 @@ fn is_string_like(bits: u64) -> bool {
         return !extract_string_ptr_from_value(bits).is_null();
     }
     let ptr = extract_string_ptr_from_value(bits);
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return false;
-    }
-    unsafe {
-        let gc_hdr =
-            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_hdr).obj_type == crate::gc::GC_TYPE_STRING
-    }
+    matches!(
+        unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) },
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_STRING
+    )
 }
 
 /// Check if two JSValues are equal (for map key comparison)
