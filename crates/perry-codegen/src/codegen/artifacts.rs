@@ -561,7 +561,16 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         {
             let ctor_body = if let Some(c) = class.constructor.as_ref() {
                 (c.params.clone(), c.body.clone(), c.captures.clone())
-            } else if class.extends_name.is_some() {
+            } else if class.extends_name.is_some() || class.extends_expr.is_some() {
+                // `extends_expr.is_some()` (with NO extends_name): a PURELY
+                // dynamic parent — `class extends <local var> {}`, the shape a
+                // bundled mysql2 promise-mixin takes (`module.exports = class
+                // extends Pool { promise() {…} }`). It needs the same
+                // forwarding signature; `synthesized_ctor_param_count` already
+                // resolves it to the unresolved-parent fixed band. Previously
+                // this fell to the empty-ctor branch, so the standalone ctor
+                // dropped every construction arg AND never called super — the
+                // instance silently lost all inherited ctor state (wall 7).
                 // No own ctor + heritage → JS spec default ctor
                 // `constructor(...args) { super(...args) }`. Synthesize forwarding
                 // params matching the closest ancestor ctor's arity (incl.
