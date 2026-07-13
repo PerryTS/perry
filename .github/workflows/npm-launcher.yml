@@ -88,7 +88,17 @@ jobs:
           cp "$GITHUB_WORKSPACE/npm/perry/bin/detect.cjs" node_modules/@perryts/perry/bin/detect.cjs
           node node_modules/@perryts/perry/bin/perry.js --version
 
+      # Perry's LLVM backend emits opaque-pointer IR (`ptr`) and shells out to
+      # `clang -c`. Jammy's default clang is 14, which predates opaque pointers
+      # and rejects the IR with "expected type" — nothing to do with libc, and it
+      # bites the glibc binary just as hard. Ubuntu 22.04 users need clang >= 15
+      # (in the jammy archive) on PATH or in PERRY_LLVM_CLANG.
+      - name: Install clang 15 (jammy default clang is too old for opaque-pointer IR)
+        run: sudo apt-get update && sudo apt-get install -y clang-15
+
       - name: Compile and run a TypeScript program with the fallback binary
+        env:
+          PERRY_LLVM_CLANG: /usr/bin/clang-15
         run: |
           cd /tmp/e2e
           cat > hello.ts <<'TS'
