@@ -85,7 +85,7 @@ pub(crate) use widget_decl::*;
 // so spelling them out keeps the public-and-internal API stable.
 mod lowering_context;
 pub(crate) use lowering_context::{
-    LoweringContext, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
+    LoweringContext, MixinFn, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
 };
 
 mod locals;

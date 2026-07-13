@@ -410,8 +410,14 @@ pub(crate) fn pre_scan_mixin_functions(ast_module: &ast::Module, ctx: &mut Lower
             return;
         }
         let fn_name = fn_decl.ident.sym.to_string();
-        ctx.mixin_funcs
-            .insert(fn_name, (param_name, Box::new((*class_expr.class).clone())));
+        ctx.mixin_funcs.insert(
+            fn_name,
+            crate::lower::MixinFn {
+                param_name,
+                class_expr_name: class_expr.ident.as_ref().map(|i| i.sym.to_string()),
+                class_ast: Box::new((*class_expr.class).clone()),
+            },
+        );
     }
     for item in &ast_module.body {
         match item {

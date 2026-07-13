@@ -805,8 +805,7 @@ pub(crate) fn lower_stmt(
                                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                                     if let ast::Expr::Ident(fn_ident) = callee_expr.as_ref() {
                                         let fn_name = fn_ident.sym.to_string();
-                                        if let Some((_param_name, mixin_class_box)) =
-                                            ctx.mixin_funcs.get(&fn_name).cloned()
+                                        if let Some(mixin) = ctx.mixin_funcs.get(&fn_name).cloned()
                                         {
                                             if call.args.len() == 1 {
                                                 if let ast::Expr::Ident(base_ident) =
@@ -819,7 +818,7 @@ pub(crate) fn lower_stmt(
                                                         let bind_name = ident.id.sym.to_string();
                                                         if ctx.lookup_class(&bind_name).is_none() {
                                                             let mut new_class =
-                                                                (*mixin_class_box).clone();
+                                                                (*mixin.class_ast).clone();
                                                             let base_id = ast::Ident::new(
                                                                 base_class_name.clone().into(),
                                                                 base_ident.span,
@@ -834,10 +833,45 @@ pub(crate) fn lower_stmt(
                                                                 &bind_name,
                                                                 false,
                                                             )?;
+                                                            // Issue #5952: the synthesized class is
+                                                            // registered under the BINDING name so
+                                                            // `new M()` / `instanceof M` resolve
+                                                            // statically, but its user-visible
+                                                            // `.name` is the class EXPRESSION's own
+                                                            // name — the empty string for the
+                                                            // canonical anonymous
+                                                            // `return class extends B {…}` (a
+                                                            // directly-returned class expression
+                                                            // gets no NamedEvaluation from the call
+                                                            // site's `const M =`). Record the
+                                                            // override so codegen registers the
+                                                            // spec name rather than the
+                                                            // registration key.
+                                                            ctx.class_display_names.insert(
+                                                                lowered_class.id,
+                                                                mixin
+                                                                    .class_expr_name
+                                                                    .clone()
+                                                                    .unwrap_or_default(),
+                                                            );
                                                             push_class_dedup(module, lowered_class);
                                                             ctx.class_expr_aliases.insert(
                                                                 bind_name.clone(),
                                                                 bind_name.clone(),
+                                                            );
+                                                            // Issue #5952: bind the VALUE too. The
+                                                            // sibling `const X = class {…}` arm
+                                                            // above ends with this call; this arm
+                                                            // used to `continue` straight from the
+                                                            // class synthesis, so `M` was never
+                                                            // bound — `typeof M` / `M.name` /
+                                                            // `String(M)` read an unassigned local
+                                                            // (undefined) even though `new M()` and
+                                                            // `instanceof M` worked (both key off
+                                                            // the class NAME, not the binding).
+                                                            emit_class_expression_value_binding(
+                                                                ctx, module, &bind_name, mutable,
+                                                                is_var,
                                                             );
                                                             continue;
                                                         }
