@@ -948,14 +948,25 @@ pub(crate) fn url_search_params_dynamic_call(
             }
         }
         "has" => {
-            if js_url_search_params_has(params, arg(0)) != 0.0 {
+            // Node 19+: `has(name, value)` matches on BOTH when a second
+            // argument is present.
+            let hit = if args_len >= 2 && arg(1).to_bits() != crate::value::TAG_UNDEFINED {
+                js_url_search_params_has2(params, arg(0), arg(1)) != 0.0
+            } else {
+                js_url_search_params_has(params, arg(0)) != 0.0
+            };
+            if hit {
                 f64::from_bits(crate::value::TAG_TRUE)
             } else {
                 f64::from_bits(crate::value::TAG_FALSE)
             }
         }
         "delete" => {
-            js_url_search_params_delete(params, arg(0));
+            if args_len >= 2 && arg(1).to_bits() != crate::value::TAG_UNDEFINED {
+                js_url_search_params_delete2(params, arg(0), arg(1));
+            } else {
+                js_url_search_params_delete(params, arg(0));
+            }
             undefined
         }
         "toString" => {
@@ -966,6 +977,28 @@ pub(crate) fn url_search_params_dynamic_call(
                 .collect::<Vec<_>>()
                 .join("&");
             create_string_f64(&joined)
+        }
+        // Iteration helpers surface as eager arrays, matching the convention
+        // the static lowering uses (`js_get_iterator` wraps an eager array in
+        // the runtime array iterator when driven through for-of). mysql2's
+        // `parseUrl` iterates `url.searchParams` and Node code commonly calls
+        // `.entries()` / `.getAll()` on dynamic receivers.
+        "entries" => js_url_search_params_entries_arr(params),
+        "keys" => js_url_search_params_keys_arr(params),
+        "values" => js_url_search_params_values_arr(params),
+        "getAll" => {
+            // The FFI helper returns RAW pointer bits (the static lowering
+            // boxes them); re-box for the dynamic call path.
+            let raw = js_url_search_params_get_all(params, arg(0));
+            crate::value::js_nanbox_pointer(f64::to_bits(raw).cast_signed())
+        }
+        "sort" => {
+            js_url_search_params_sort(params);
+            undefined
+        }
+        "forEach" => {
+            js_url_search_params_for_each(params, arg(0), arg(1));
+            undefined
         }
         _ => return None,
     })

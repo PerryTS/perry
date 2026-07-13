@@ -862,7 +862,18 @@ pub unsafe extern "C" fn js_native_call_method(
     // before the generic field-scan misses and throws "is not a function".
     if matches!(
         method_name,
-        "append" | "set" | "get" | "has" | "delete" | "toString"
+        "append"
+            | "set"
+            | "get"
+            | "has"
+            | "delete"
+            | "toString"
+            | "entries"
+            | "keys"
+            | "values"
+            | "getAll"
+            | "sort"
+            | "forEach"
     ) {
         let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
         if crate::url::search_params::shape_is_url_search_params(recv_ptr) {

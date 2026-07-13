@@ -256,6 +256,26 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // drive `.next()`. Matches the builtins' default iterator. Skipped when the
     // subclass overrides `[Symbol.iterator]`, so we fall through to the generic
     // symbol lookup below (which resolves the user's `@@iterator` method).
+    //
+    // A URLSearchParams object (shape-detected: `_entries` + `_owner` fields)
+    // has no symbol-table `[Symbol.iterator]` entry — its default iterator
+    // yields `[key, value]` pairs (`%URLSearchParamsIteratorPrototype%`).
+    // Without this branch the generic lookup below finds nothing and returns
+    // the params object as its own "iterator"; the lazy for-of then calls
+    // `.next()` on it → "next is not a function" (mysql2's `parseUrl` does
+    // `for (const [key, value] of url.searchParams)`, so `createPool` with a
+    // `uri:` option died on this).
+    {
+        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
+        if jsv.is_pointer() {
+            let obj =
+                jsv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+            if crate::url::search_params::shape_is_url_search_params(obj) {
+                let entries = crate::url::js_url_search_params_entries_arr(obj);
+                return crate::array::array_values_iter(entries);
+            }
+        }
+    }
     match crate::object::map_set_subclass::subclass_backing_for_default_iteration(val_f64) {
         Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
             return crate::value::js_nanbox_pointer(
