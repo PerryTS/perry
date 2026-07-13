@@ -5,8 +5,10 @@
 Perry compiles TypeScript to native binaries by linking with your system's C toolchain, so every install path needs a linker:
 
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `gcc` or `clang` — see your distro below
+- **Linux**: `gcc` or `clang` for linking, plus **clang ≥ 15** for codegen — see your distro below
 - **Windows**: LLVM (`winget install LLVM.LLVM`) + `perry setup windows` (lightweight, ~1.5 GB, no Visual Studio needed), or MSVC Build Tools with the "Desktop development with C++" workload — see the [Windows platform guide](../platforms/windows.md) for both options
+
+> **clang ≥ 15 on Linux.** Perry's LLVM backend emits opaque-pointer IR (`ptr`) and compiles it with `clang -c`. clang 14 and older reject it with `error: expected type`. Ubuntu 22.04's default `clang` is 14 — install a newer one (`sudo apt install clang-15`) and point Perry at it if it isn't the default: `export PERRY_LLVM_CLANG=/usr/bin/clang-15`. Ubuntu 24.04, Debian 13, Fedora 39+ and Arch all ship a new enough clang.
 
 Linux C toolchain by distribution:
 

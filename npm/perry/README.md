@@ -41,7 +41,7 @@ The launcher tells you this (with the exact command) instead of letting the bina
 Perry produces native binaries by linking its runtime and stdlib (shipped as static archives in the platform package) into your code. That link step uses your system C toolchain, so you need:
 
 - **macOS** — Xcode Command Line Tools (`xcode-select --install`)
-- **Linux** — `gcc` or `clang` (e.g. `apt install build-essential` on Debian/Ubuntu, `apk add build-base` on Alpine)
+- **Linux** — `gcc` or `clang` (e.g. `apt install build-essential` on Debian/Ubuntu, `apk add build-base` on Alpine), plus **clang ≥ 15**: codegen emits opaque-pointer LLVM IR, which clang 14 and older reject with `error: expected type`. Ubuntu 22.04 defaults to clang 14 — `apt install clang-15` and `export PERRY_LLVM_CLANG=/usr/bin/clang-15`.
 - **Windows** — MSVC / Visual Studio Build Tools with the C++ workload
 
 Node.js 16 or later is required for the wrapper itself.
