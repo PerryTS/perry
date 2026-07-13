@@ -496,6 +496,13 @@ pub(super) fn compile_module_entry(
             // the startup cost. The extern declaration at line ~3947
             // still emits for every non-entry prefix so the dispatch
             // site can resolve the symbol at link time.
+            // Seed `globalThis.AsyncLocalStorage` BEFORE any module init:
+            // Next.js modules (dist and the bundled app-page runtime alike)
+            // snapshot it at module scope, and the eager init order can run
+            // those snapshots before node-environment-baseline.js's own
+            // assignment — leaving a FakeAsyncLocalStorage that throws
+            // Next error E504 on the first request.
+            blk.call_void("js_globalthis_seed_async_local_storage", &[]);
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;

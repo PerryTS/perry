@@ -77,6 +77,22 @@
                     &[(DOUBLE, &specifier)],
                 ));
             }
+            // require.resolve node_modules subpath fallback.
+            "requireResolveNodeModules" => {
+                let from = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let specifier = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_require_resolve_node_modules",
+                    &[(DOUBLE, &from), (DOUBLE, &specifier)],
+                ));
+            }
             // Next.js wall 54: register an AOT-compiled module by absolute path.
             "registerPathModule" => {
                 let path = args.first().map_or_else(

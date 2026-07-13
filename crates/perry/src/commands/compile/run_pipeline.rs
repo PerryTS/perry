@@ -2064,6 +2064,16 @@ pub fn run_with_parse_cache(
                     .iter()
                     .filter(|(p, _)| {
                         self::collect_modules::is_nextjs_runtime_module(p)
+                            // A `perry.compilePackages` module may be reachable
+                            // ONLY through a runtime-computed require (Next's
+                            // require-hook aliases `styled-jsx` to its resolved
+                            // package directory); without a path-init anchor the
+                            // linker dead-strips it and the runtime require dies
+                            // with MODULE_NOT_FOUND even though it was compiled.
+                            || ctx
+                                .compile_package_dirs
+                                .values()
+                                .any(|dir| p.starts_with(dir))
                     })
                     .map(|(p, m)| {
                         (p.to_string_lossy().into_owned(), sanitize_name(&m.name))
