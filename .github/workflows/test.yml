@@ -478,7 +478,17 @@ jobs:
     # full `cargo-test` path.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # MUST cover the worst case the per-suite bound allows, or the job wall
+    # clock kills legitimately-running suites and we get an uninformative
+    # "cancelled" instead of the per-suite `::error::` — reintroducing, one
+    # level up, exactly what `timeout 1500` below exists to prevent.
+    #   DEFAULT_CAP (ci_e2e_scope.py) = 12 suites
+    #   per-suite bound below         = timeout 1500s = 25 min
+    #   12 x 25 = 300, + 30 min for toolchain/cache/staticlib build = 330
+    # Keep these three in sync. This is a backstop, not a budget: each suite is
+    # independently bounded, and the common case selects zero suites and exits
+    # in ~20-30s.
+    timeout-minutes: 330
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "false"
@@ -486,7 +496,11 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
+      # Nothing here pushes back to the repo, and the job compiles third-party
+      # crates (build scripts run), so don't leave a git credential on disk.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Cheap gate: no toolchain, no cargo, no cache restore. Every step below
       # is skipped when the diff names no suite.
