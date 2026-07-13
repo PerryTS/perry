@@ -13,9 +13,6 @@ on:
       - "npm/**"
       - "packaging/install.sh"
       - ".github/workflows/npm-launcher.yml"
-  push:
-    branches:
-      - "fix/6298-glibc-235-fallback"
   workflow_dispatch:
 
 jobs:
