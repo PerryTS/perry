@@ -103,11 +103,8 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
 /// `js_instanceof` brand-checks them via the kind probes rather than a chain walk.
 /// Heap-backed builtins already resolve through the class-id / prototype paths.
 fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
-    let jv = crate::JSValue::from_bits(type_ref.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let closure = jv.as_pointer::<crate::closure::ClosureHeader>();
+    let closure =
+        crate::value::js_nanbox_get_pointer(type_ref) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
         return None;
     }
@@ -117,9 +114,12 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
     let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = crate::string::str_bytes_from_jsvalue(name_value, &mut scratch)?;
+    if ptr.is_null() {
+        return None;
+    }
     let name =
         std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len as usize) }).ok()?;
-    Some(match name {
+    let class_id = match name {
         "ReadableStream" => 0xFFFF_0060,
         "WritableStream" => 0xFFFF_0061,
         "TransformStream" => 0xFFFF_0062,
@@ -128,7 +128,15 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
         "Headers" => 0xFFFF_002A,
         "Blob" => 0xFFFF_0026,
         _ => return None,
-    })
+    };
+    // The name alone is forgeable (`function Response() {}` in user code).
+    // Require IDENTITY with the builtin constructor installed on
+    // `globalThis`: only the genuine builtin value brand-checks instances.
+    let global_ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    if crate::value::js_nanbox_get_pointer(global_ctor) as usize != closure as usize {
+        return None;
+    }
+    Some(class_id)
 }
 
 #[no_mangle]
