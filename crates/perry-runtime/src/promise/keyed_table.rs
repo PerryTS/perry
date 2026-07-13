@@ -35,12 +35,21 @@
 //! index is layered on top as *derived* state:
 //!
 //! * `index` is a plain `HashMap<usize, Slots>` of positions into `entries`.
-//! * Any GC action that can invalidate it — a key rewritten by evacuation
+//! * `Entry::slot` is the *reverse* of that: an entry's own offset within its
+//!   key's slot list. Draining key A `swap_remove`s A's entries, and each
+//!   removal displaces one FOREIGN entry (the table's last) into the vacated
+//!   slot, whose key's slot list must then be repointed. Searching that list
+//!   for the old position is Θ(M) for a key with M parked entries — so
+//!   `a.then(f)×M; b.then(f)×M; resolveA()` drains A in Θ(M²), the very defect
+//!   this table exists to remove, just moved from the table to a slot list.
+//!   With `slot` the displaced entry names its own offset and the repoint is a
+//!   single indexed store.
+//! * Any GC action that can invalidate them — a key rewritten by evacuation
 //!   (`note_key_rewritten`), or the copied-minor cleanup dropping/rekeying
 //!   entries (`retain_mut`) — just sets `index_dirty`. Nothing tries to patch
-//!   the index incrementally from inside a GC path.
-//! * The next lookup rebuilds it from `entries` alone (`ensure_index`). That is
-//!   O(n log n) but happens at most once per GC cycle that actually moved a
+//!   the index (or `slot`) incrementally from inside a GC path.
+//! * The next lookup rebuilds both from `entries` alone (`ensure_index`). That
+//!   is O(n log n) but happens at most once per GC cycle that actually moved a
 //!   promise, and such a cycle already pays O(n) walking this table.
 //!
 //! This is the same "keys vector stays the GC traversal surface, map gives O(1)"
@@ -69,6 +78,15 @@ pub(super) struct Entry<T> {
     /// Monotonic registration counter — restores FIFO order after `swap_remove`
     /// shuffles `entries`, and is the sort key when the index is rebuilt.
     seq: u64,
+    /// Reverse position index: this entry's own offset within `index[key]`'s
+    /// slot list, i.e. `index[key].as_slice()[slot]` is this entry's position in
+    /// `entries`. Lets a displaced entry repoint its key's slot list with one
+    /// indexed store instead of scanning it (see `take_all`).
+    ///
+    /// Derived state, exactly like `index` itself: meaningful only while
+    /// `!index_dirty`, and rebuilt wholesale by `ensure_index`. No GC path
+    /// maintains it.
+    slot: u32,
     pub(super) value: T,
 }
 
@@ -81,11 +99,19 @@ enum Slots {
 }
 
 impl Slots {
+    /// Append `position` and return the offset it landed at — the caller stores
+    /// that in `Entry::slot` so the entry can find itself again in O(1).
     #[inline]
-    fn push(&mut self, pos: u32) {
+    fn push(&mut self, position: u32) -> u32 {
         match self {
-            Slots::One(first) => *self = Slots::Many(vec![*first, pos]),
-            Slots::Many(positions) => positions.push(pos),
+            Slots::One(first) => {
+                *self = Slots::Many(vec![*first, position]);
+                1
+            }
+            Slots::Many(positions) => {
+                positions.push(position);
+                (positions.len() - 1) as u32
+            }
         }
     }
 
@@ -97,21 +123,20 @@ impl Slots {
         }
     }
 
-    /// Point the entry that used to live at `old` at its new home `new`.
+    /// Repoint the slot at `offset` — the displaced entry's own `Entry::slot` —
+    /// at its new home in `entries`. O(1): no scan of the slot list, which is
+    /// what made draining one heavily-populated key ahead of another Θ(M²).
     #[inline]
-    fn relocate(&mut self, old: u32, new: u32) {
+    fn relocate(&mut self, offset: u32, new_position: u32) {
         match self {
             Slots::One(first) => {
-                if *first == old {
-                    *first = new;
-                }
+                debug_assert_eq!(offset, 0, "a One slot list has only offset 0");
+                *first = new_position;
             }
             Slots::Many(positions) => {
-                for position in positions.iter_mut() {
-                    if *position == old {
-                        *position = new;
-                        return;
-                    }
+                debug_assert!((offset as usize) < positions.len(), "slot offset in range");
+                if let Some(position) = positions.get_mut(offset as usize) {
+                    *position = new_position;
                 }
             }
         }
@@ -166,13 +191,30 @@ impl<T> PromiseKeyedTable<T> {
         let position = self.entries.len() as u32;
         let seq = self.next_seq;
         self.next_seq += 1;
-        self.entries.push(Entry { key, seq, value });
-        if !self.index_dirty {
-            match self.index.get_mut(&key) {
-                Some(slots) => slots.push(position),
-                None => {
-                    self.index.insert(key, Slots::One(position));
-                }
+        // While the index is dirty it is not maintained at all, and neither is
+        // `slot`: `ensure_index` rebuilds both together on the next lookup.
+        let slot = if self.index_dirty {
+            0
+        } else {
+            self.index_slot_for(key, position)
+        };
+        self.entries.push(Entry {
+            key,
+            seq,
+            slot,
+            value,
+        });
+    }
+
+    /// Record `position` under `key` in the index and return the entry's offset
+    /// within that key's slot list.
+    #[inline]
+    fn index_slot_for(&mut self, key: usize, position: u32) -> u32 {
+        match self.index.get_mut(&key) {
+            Some(slots) => slots.push(position),
+            None => {
+                self.index.insert(key, Slots::One(position));
+                0
             }
         }
     }
@@ -225,10 +267,19 @@ impl<T> PromiseKeyedTable<T> {
             let vacated = position as usize;
             if vacated < self.entries.len() {
                 // `swap_remove` moved what was the LAST entry into `vacated`.
-                let moved_from = self.entries.len() as u32;
-                let moved_key = self.entries[vacated].key;
+                // Per the argument above it is always a FOREIGN entry, so its
+                // key still has a slot list in the index (ours was removed) and
+                // that list has to point at `position` now. The entry knows its
+                // own offset within that list, so this is one indexed store —
+                // scanning the list instead is Θ(M) per removal and turns
+                // draining one heavily-populated key that sits ahead of another
+                // into Θ(M²).
+                let moved = &self.entries[vacated];
+                debug_assert_ne!(moved.key, key, "displaced entry must be foreign");
+                let moved_key = moved.key;
+                let moved_slot = moved.slot;
                 if let Some(slots) = self.index.get_mut(&moved_key) {
-                    slots.relocate(moved_from, position);
+                    slots.relocate(moved_slot, position);
                 }
             }
             drained.push(entry);
@@ -277,8 +328,9 @@ impl<T> PromiseKeyedTable<T> {
             .unwrap_or(0)
     }
 
-    /// Rebuild `index` from `entries` alone. Positions are grouped per key in
-    /// ascending `seq` order so each key's slot list stays registration-ordered.
+    /// Rebuild `index` — and every entry's reverse `slot` — from `entries`
+    /// alone. Positions are grouped per key in ascending `seq` order so each
+    /// key's slot list stays registration-ordered.
     fn ensure_index(&mut self) {
         if !self.index_dirty {
             return;
@@ -288,18 +340,15 @@ impl<T> PromiseKeyedTable<T> {
         order.sort_unstable_by_key(|&position| self.entries[position as usize].seq);
         for position in order {
             let key = self.entries[position as usize].key;
-            match self.index.get_mut(&key) {
-                Some(slots) => slots.push(position),
-                None => {
-                    self.index.insert(key, Slots::One(position));
-                }
-            }
+            let slot = self.index_slot_for(key, position);
+            self.entries[position as usize].slot = slot;
         }
         self.index_dirty = false;
     }
 
-    /// Debug-only: the index must describe `entries` exactly, and each key's
-    /// slot list must be in registration (seq) order.
+    /// Debug-only: the index must describe `entries` exactly, each key's slot
+    /// list must be in registration (seq) order, and every entry's reverse
+    /// `slot` must point back at the slot that points at it.
     #[cfg(test)]
     fn assert_invariants(&self) {
         if self.index_dirty {
@@ -309,9 +358,13 @@ impl<T> PromiseKeyedTable<T> {
         assert_eq!(indexed, self.entries.len(), "index must cover every entry");
         for (key, slots) in self.index.iter() {
             let mut last_seq = None;
-            for &position in slots.as_slice() {
+            for (offset, &position) in slots.as_slice().iter().enumerate() {
                 let entry = &self.entries[position as usize];
                 assert_eq!(entry.key, *key, "indexed position must hold that key");
+                assert_eq!(
+                    entry.slot as usize, offset,
+                    "entry must record its own offset in its key's slot list"
+                );
                 if let Some(previous) = last_seq {
                     assert!(entry.seq > previous, "slot list must be seq-ordered");
                 }
@@ -453,12 +506,21 @@ mod tests {
                 }
             }
             assert_eq!(table.len(), model.len());
+            // The reverse `slot` index is only observable through a later
+            // relocation, so check it as we go rather than once at the end.
+            if step % 128 == 0 {
+                table.assert_invariants();
+            }
         }
         table.assert_invariants();
     }
 
     /// The regression this exists to prevent: settling N distinct promises must
     /// not be O(N²). With the old full-table scan this is ~N²/2 comparisons.
+    ///
+    /// Shape: MANY keys, ONE entry each (`Promise.all([...N])`). This exercises
+    /// the *lookup* path but NOT the *relocation* path — see
+    /// `draining_a_heavily_populated_key_ahead_of_another_is_not_quadratic`.
     #[test]
     fn settling_many_keys_is_not_quadratic() {
         use std::time::Instant;
@@ -484,6 +546,59 @@ mod tests {
         assert!(
             large < small * 8.0 + 0.05,
             "drain looks super-linear: 20k took {small:.4}s, 80k took {large:.4}s"
+        );
+    }
+
+    /// The OTHER quadratic — the one the many-keys/one-entry benchmark above
+    /// cannot see (CodeRabbit review on #6327).
+    ///
+    /// Shape: a FEW keys, each with MANY parked entries. In TS:
+    /// `for (…M…) a.then(f); for (…M…) b.then(f); resolveA()`. All of A's
+    /// entries sit at the FRONT of `entries`, so every `swap_remove` of one
+    /// backfills the vacated slot with one of B's entries and has to repoint
+    /// B's slot list at the moved entry's new home. Finding the moved entry's
+    /// offset in B's slot list by scanning is Θ(M) per removal ⇒ Θ(M²) for the
+    /// drain. Each entry therefore records its own offset (`Entry::slot`), so
+    /// the relocation is a single indexed store.
+    #[test]
+    fn draining_a_heavily_populated_key_ahead_of_another_is_not_quadratic() {
+        use std::time::Instant;
+
+        const A: usize = 0x1000;
+        const B: usize = 0x2000;
+
+        fn drain_first_of_two(m: usize) -> std::time::Duration {
+            let mut table: PromiseKeyedTable<usize> = PromiseKeyedTable::new();
+            for i in 0..m {
+                table.push(A, i);
+            }
+            for i in 0..m {
+                table.push(B, m + i);
+            }
+
+            let start = Instant::now();
+            let drained = table.take_all(A);
+            let elapsed = start.elapsed();
+
+            // Correctness, not just speed: A drains in registration order and
+            // B is left whole (and still in registration order).
+            assert_eq!(drained, (0..m).collect::<Vec<_>>());
+            assert_eq!(table.len(), m);
+            table.assert_invariants();
+            assert_eq!(table.take_all(B), (m..2 * m).collect::<Vec<_>>());
+            assert!(table.is_empty());
+            elapsed
+        }
+
+        drain_first_of_two(1_000);
+        let small = drain_first_of_two(20_000).as_secs_f64();
+        let large = drain_first_of_two(80_000).as_secs_f64();
+        eprintln!("two-key drain: M=20k {small:.4}s, M=80k {large:.4}s");
+        // 4x the entries per key. Linear ⇒ ~4x. Quadratic ⇒ ~16x.
+        assert!(
+            large < small * 8.0 + 0.05,
+            "displaced-entry relocation looks super-linear: \
+             M=20k took {small:.4}s, M=80k took {large:.4}s"
         );
     }
 }
