@@ -40,11 +40,7 @@ pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i6
         let handle = widgets::text::create(text_ptr as *const u8);
         if id_ptr != 0 {
             let id = app::str_from_header(id_ptr as *const u8);
-            widgets::text_registry::register_text_id_handler(
-                handle,
-                id.as_ptr(),
-                id.len(),
-            );
+            widgets::text_registry::register_text_id_handler(handle, id.as_ptr(), id.len());
         }
         handle
     })
@@ -63,12 +59,7 @@ pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
         } else {
             app::str_from_header(value_ptr as *const u8)
         };
-        widgets::text_registry::set_text_handler(
-            id.as_ptr(),
-            id.len(),
-            val.as_ptr(),
-            val.len(),
-        );
+        widgets::text_registry::set_text_handler(id.as_ptr(), id.len(), val.as_ptr(), val.len());
     });
 }
 

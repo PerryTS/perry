@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * Minimal Activity that hosts a Perry-compiled native UI.
@@ -34,10 +36,20 @@ class PerryActivity : Activity() {
         // Switch from splash theme to normal theme before inflating layout
         setTheme(android.R.style.Theme_Material_Light_NoActionBar)
 
-        // Keep content below status / nav bars.
-        // Android 15 defaults to edge-to-edge. FLAG_LAYOUT_NO_LIMITS draws
-        // under the status bar; getSafeAreaInsets() on Android still returns
-        // zeros, so pad the host FrameLayout by status_bar_height.
+        // Keep content below the status / nav bars. Two layout regimes are in
+        // play and the host padding has to follow whichever one is live:
+        //   * API < 35 — the decor view fits system windows (explicitly on
+        //     30-34, by default below that), so the content view is already
+        //     inset and any padding we add here is just blank space.
+        //   * API >= 35 — we target SDK 35, so Android 15 forces edge-to-edge
+        //     and setDecorFitsSystemWindows() is a no-op. Nothing insets the
+        //     content; without padding the UI draws under the system bars.
+        // So pad from the insets we are actually handed rather than branching
+        // on SDK_INT: the decor consumes them in the first regime (leaving us
+        // to pad by zero) and passes them through in the second. This also
+        // covers the nav bar, display cutouts and landscape, which a top-only
+        // status_bar_height pad does not. getSafeAreaInsets() is no help here
+        // — it still returns zeros on Android.
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             @Suppress("DEPRECATION")
             window.setDecorFitsSystemWindows(true)
@@ -52,14 +64,13 @@ class PerryActivity : Activity() {
         }
 
         rootLayout = FrameLayout(this)
-        val statusPad = try {
-            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
-            if (resId > 0) resources.getDimensionPixelSize(resId)
-            else (24 * resources.displayMetrics.density).toInt()
-        } catch (_: Exception) {
-            (24 * resources.displayMetrics.density).toInt()
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, windowInsets ->
+            val bars = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
         }
-        rootLayout.setPadding(0, statusPad, 0, 0)
         setContentView(rootLayout)
 
         // Store device locale in SharedPreferences so preferencesGet("AppleLanguages") works
