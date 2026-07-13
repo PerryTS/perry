@@ -190,7 +190,7 @@ check("release matrix builds the musl targets the fallback relies on", () => {
 check(`glibc legs still build on the image GLIBC_BUILD_FLOOR=${GLIBC_BUILD_FLOOR} assumes`, () => {
   // The floor is a property of the *builder image*, not of Perry. If the glibc
   // legs move to another runner, this fails and whoever moved them has to
-  // revisit GLIBC_BUILD_FLOOR in bin/detect.js instead of silently shipping a
+  // revisit GLIBC_BUILD_FLOOR in bin/detect.cjs instead of silently shipping a
   // binary that the launcher's routing no longer describes.
   //   ubuntu-24.04 / ubuntu-24.04-arm → glibc 2.39
   const wf = fs.readFileSync(
@@ -208,13 +208,13 @@ check(`glibc legs still build on the image GLIBC_BUILD_FLOOR=${GLIBC_BUILD_FLOOR
     assert.ok(
       glibc,
       `${leg.target} now builds on '${leg.os}', an image this test doesn't know the ` +
-        `glibc of. Add it to IMAGE_GLIBC and re-check GLIBC_BUILD_FLOOR in bin/detect.js.`
+        `glibc of. Add it to IMAGE_GLIBC and re-check GLIBC_BUILD_FLOOR in bin/detect.cjs.`
     );
     assert.strictEqual(
       glibc,
       GLIBC_BUILD_FLOOR,
       `${leg.target} builds on ${leg.os} (glibc ${glibc}) but GLIBC_BUILD_FLOOR is ` +
-        `${GLIBC_BUILD_FLOOR} — update bin/detect.js.`
+        `${GLIBC_BUILD_FLOOR} — update bin/detect.cjs.`
     );
   }
 });
