@@ -502,7 +502,17 @@ pub(super) fn compile_module_entry(
             // those snapshots before node-environment-baseline.js's own
             // assignment — leaving a FakeAsyncLocalStorage that throws
             // Next error E504 on the first request.
-            blk.call_void("js_globalthis_seed_async_local_storage", &[]);
+            //
+            // Emitted ONLY for Next.js-shaped programs (the wall-54
+            // `.next/server/**` path-init list is non-empty). Node itself has
+            // NO `globalThis.AsyncLocalStorage` — Next's baseline assigns it
+            // at runtime — so seeding unconditionally diverges from node for
+            // ordinary programs AND installs the async_hooks surface at every
+            // program's entry (the native-ABI proof workload's write-barrier
+            // budget went 8 → 7921 on exactly that).
+            if !nextjs_path_inits.is_empty() {
+                blk.call_void("js_globalthis_seed_async_local_storage", &[]);
+            }
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
