@@ -1,7 +1,7 @@
 "use strict";
 // Self-test for the @perryts/perry launcher's platform resolution.
 //
-//   node npm/perry/test/detect.test.js
+//   node npm/perry/test/detect.test.cjs
 //
 // No dependencies, no network, no installed platform packages — it feeds
 // synthetic host descriptions (the shape of `process.report.getReport().header`
