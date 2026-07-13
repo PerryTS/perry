@@ -884,6 +884,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_promise_resolve", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_reject", VOID, &[I64, DOUBLE]);
     module.declare_function("js_promise_resolved", I64, &[DOUBLE]);
+    module.declare_function("js_async_fn_result", I64, &[DOUBLE]);
     module.declare_function("js_promise_rejected", I64, &[DOUBLE]);
     // Issue #100: build a module-namespace object from parallel key/
     // value arrays. Called from `__perry_init_<prefix>` (populate the

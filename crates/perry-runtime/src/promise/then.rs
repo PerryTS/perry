@@ -1662,7 +1662,22 @@ extern "C" fn finally_passthrough_fulfill(
     let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let value = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
-        js_promise_resolve(next, value);
+        // V8 hop parity: `.finally(cb).then(X)` fires `X` on the FOURTH tick
+        // in Node (hops.js `finally-then`: t0 t1 t2 t3 X) — the spec's
+        // ThenFinally resolves `next` through `promiseResolve(C, cb()).then(
+        // () => value)`, whose then-return propagation costs one more tick
+        // than this passthrough's old direct `js_promise_resolve(next, v)`.
+        // Settle `next` via a propagation task instead.
+        TASK_QUEUE.with(|q| {
+            q.borrow_mut().push_back(Task::AsyncStep(
+                std::ptr::null(),
+                value,
+                next,
+                false,
+                capture_context(),
+            ));
+        });
+        crate::event_pump::js_notify_main_thread();
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -1677,7 +1692,17 @@ extern "C" fn finally_passthrough_reject(
     let next = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
     let reason = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
-        js_promise_reject(next, reason);
+        // Same extra tick as the fulfilled passthrough (V8 hop parity).
+        TASK_QUEUE.with(|q| {
+            q.borrow_mut().push_back(Task::AsyncStep(
+                std::ptr::null(),
+                reason,
+                next,
+                true,
+                capture_context(),
+            ));
+        });
+        crate::event_pump::js_notify_main_thread();
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

@@ -58,7 +58,7 @@ mod transform;
 mod writable;
 
 pub use tee::js_readable_stream_tee;
-use tee::{tee_branches_of, tee_close_branches, tee_deliver, tee_error_branches, tee_source_of};
+use tee::{tee_branches_of, tee_error_branches, tee_source_of};
 
 pub use self::byob::{
     js_readable_stream_controller_byob_request, js_readable_stream_get_byob_reader,
@@ -704,7 +704,9 @@ pub(super) unsafe fn maybe_pull(stream_id: usize) {
     // `pull_cb` of its own; the source's enqueue fans the chunk out to both
     // branches. `force` so a highWaterMark-0 flight producer actually pulls.
     if let Some(source) = tee_source_of(stream_id) {
-        maybe_pull_force(source);
+        // Tick parity: the pull travels a microtask cycle (buffered chunks +
+        // close discovery included); a live producer is driven from that job.
+        tee::tee_schedule_pull(source);
         return;
     }
     maybe_pull_inner(stream_id, false);
@@ -1512,11 +1514,10 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
             "The \"buffer\" argument must be an instance of Buffer, TypedArray, or DataView",
         );
     }
-    // #5989: a tee'd source never queues its own chunks — each enqueue fans out
-    // to BOTH branches (delivering to a parked read or queueing per branch).
-    if let Some((a, b)) = tee_branches_of(id) {
-        tee_deliver(a, chunk_bits, is_byte_stream);
-        tee_deliver(b, chunk_bits, is_byte_stream);
+    // #5989 + Node tick parity: a tee'd source's enqueue stays in the SOURCE
+    // queue; branches receive chunks only through the demand-driven pull
+    // cycle (see `tee::tee_source_enqueue`).
+    if tee::tee_source_enqueue(id, chunk, chunk_bits, is_byte_stream) {
         return f64::from_bits(TAG_UNDEFINED);
     }
     // A pending BYOB read (byte streams only) takes the chunk before the
@@ -1577,8 +1578,10 @@ pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64)
             eprintln!("[STREAM] controller_close stream={id:#x}");
         }
     }
-    // #5989: closing a tee'd source closes both branches (each drains its queue
-    // first) rather than the source's own — absent — reader.
+    // #5989 + Node tick parity: closing a tee'd source marks it Closed; the
+    // branch close is DISCOVERED by the pull cycle draining the source queue
+    // empty (byte tee: prompt; default tee: nextTick-deferred) — never
+    // delivered eagerly ahead of undrained chunks.
     if tee_branches_of(id).is_some() {
         {
             let mut g = READABLE_STREAMS.lock().unwrap();
@@ -1588,7 +1591,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64)
                 }
             }
         }
-        tee_close_branches(id);
+        tee::tee_schedule_pull(id);
         return f64::from_bits(TAG_UNDEFINED);
     }
     {
@@ -1774,6 +1777,10 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
             None => Some((TAG_UNDEFINED, true, false)),
         }
     };
+    // Consumer progress: if this readable is a transform's output and its
+    // queue just drained (pop emptied it, or the read parked on an empty
+    // queue), release write promises parked on backpressure.
+    transform::transform_release_writes(stream_id);
     if let Some((reader_id, reason)) = closed_rejection {
         let p = READERS
             .lock()
