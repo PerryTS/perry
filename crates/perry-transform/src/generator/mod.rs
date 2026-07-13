@@ -34,7 +34,6 @@ pub(crate) use helpers::{
     alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
-pub(crate) use per_iteration::{collect_per_iteration_ids, snapshot_suspended_loop_captures};
 pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
 pub(crate) use iter_result_rewrite::rewrite_stmt;
 pub(crate) use linearize::{
@@ -43,6 +42,7 @@ pub(crate) use linearize::{
 pub(crate) use lower::{
     transform_generator_function, transform_generator_function_with_extra_captures,
 };
+pub(crate) use per_iteration::{collect_per_iteration_ids, snapshot_suspended_loop_captures};
 pub(crate) use rewrite_returns::{
     body_contains_return, prepend_done_before_returns, rewrite_catch_returns_to_iter_result,
     rewrite_iter_results_in_stmts, rewrite_returns_as_done, rewrite_returns_to_labeled_break,
