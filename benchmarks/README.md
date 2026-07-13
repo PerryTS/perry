@@ -135,9 +135,9 @@ The canonical refresh command is:
 ./benchmarks/run_public_baseline.sh
 ```
 
-The runner requires a clean tree, AC power on macOS, and a sustained quiet
-load before every suite. It refuses to assemble evidence if any required
-sample or correctness check is missing. `public_baseline.py check` verifies
+The runner requires a clean tree, AC power on macOS, and aggregate CPU usage
+at or below 25% for 60 consecutive seconds before every suite. It refuses
+to assemble evidence if any required sample or correctness check is missing. `public_baseline.py check` verifies
 the artifact age, source and harness fingerprints, and generated Markdown:
 
 ```bash

@@ -298,6 +298,12 @@ def assemble(
         "runtimes": runtimes,
         "policy": {
             "publishable": True,
+            "quiet_host": {
+                "metric": "aggregate CPU active percentage",
+                "maximum_percent": 25.0,
+                "consecutive_seconds": 60,
+                "checked_before_each_component": True,
+            },
             "requirements": [
                 "all required runtimes available",
                 "all requested raw samples present",
