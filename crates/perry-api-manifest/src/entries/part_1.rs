@@ -349,6 +349,7 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("ws", "on", true, None),
     method("ws", "send", true, None),
     method("ws", "close", true, None),
+    method("ws", "readyState", true, None),
     // Node-compatible WebSocket ready-state constants. The `ws` package
     // exposes these on both the module/default export and WebSocket class:
     // CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3.
