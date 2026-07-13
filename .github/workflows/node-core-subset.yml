@@ -75,10 +75,30 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Setup Node.js
+      # DELIBERATE EXEMPTION from the repo-wide .node-version pin.
+      #
+      # This job runs Node's OWN test/parallel corpus, sparse-checked-out at the
+      # ref in test-compat/node-core/pinned-version.txt. Those tests are written
+      # against the internals of that exact Node line, so the Node runtime here
+      # must match the vendored test suite — not the gap-suite oracle. Deriving
+      # the version from the same file that pins the corpus makes the coupling
+      # explicit and impossible to break: bump pinned-version.txt and the runtime
+      # follows. (A bare inline "22" here looked like drift from .node-version;
+      # it wasn't, and the next person to "fix" it would have broken the job.)
+      - name: Resolve Node version from the pinned test-corpus ref
+        id: node_core_version
+        run: |
+          set -euo pipefail
+          # pinned-version.txt holds a git branch name, e.g. "v22.x".
+          node_ref="$(tr -d '[:space:]' < test-compat/node-core/pinned-version.txt)"
+          node_version="${node_ref#v}"          # v22.x -> 22.x
+          echo "Pinned Node core corpus: $node_ref -> node-version $node_version"
+          echo "version=$node_version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js (matches the pinned test corpus, NOT .node-version)
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: ${{ steps.node_core_version.outputs.version }}
 
       - name: Sparse checkout pinned Node.js tests
         run: |

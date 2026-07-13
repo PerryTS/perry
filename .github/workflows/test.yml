@@ -61,7 +61,10 @@ jobs:
       - name: Setup Node.js for benchmark harness tests
         uses: actions/setup-node@v6
         with:
-          node-version: '22.23.1'
+          # Kept in lockstep with benchmark.yml's peer-comparison Node via the
+          # shared .node-version pin — these harness tests exercise the same
+          # comparison scripts that job runs.
+          node-version-file: .node-version
 
       - name: Validate benchmark artifact and fallback gates
         run: |
@@ -702,10 +705,19 @@ jobs:
     # behavioral regressions landed silently between tags (the 2026-06-23
     # 851-case test262 regression and the #5763 setPrototypeOf boot breakage
     # both shipped through green required checks). This job runs the gap
-    # suite — every test-files/test_gap_*.ts (258) AOT-compiled and diffed
+    # suite — every test-files/test_gap_*.ts AOT-compiled and diffed
     # byte-for-byte against `node --experimental-strip-types` — and fails on
     # any failure NOT already triaged in test-parity/known_failures.json
     # (run_gap_tests.sh's no-new-untriaged gate).
+    #
+    # THE ORACLE VERSION IS LOAD-BEARING. Node is what we diff against, so a
+    # test whose feature the pinned Node lacks makes *node* exit non-zero, the
+    # harness classifies it `node_fail`, and the test is dropped from the gate
+    # entirely — a silent hole, not a red build. This job sat on Node 22 while
+    # the suite grew Node 24/26 features, which hid 14 tests (all of Temporal,
+    # DisposableStack, Float16Array, Uint8Array base64/hex). The pin now lives
+    # in .node-version so it can't drift out from under the suite again; raise
+    # it deliberately, and re-measure the delta when you do (see #6364).
     #
     # Sharded across 8 parallel runners (--shard N/8) so the ~258-test suite
     # runs in ~1/8 the wall-time — the 258 sequential Perry compiles dominate
@@ -739,7 +751,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Single source of truth: .node-version at the repo root. Node is the
+          # gap/parity oracle (we byte-diff against it), so the version is a
+          # correctness input, not an incidental toolchain detail — never pin it
+          # inline here. See CLAUDE.md ("TypeScript Parity Status").
+          node-version-file: .node-version
 
       - name: Run gap suite (shard ${{ matrix.shard }}/8)
         run: ./scripts/run_gap_tests.sh --shard ${{ matrix.shard }}/8
@@ -825,7 +841,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Single source of truth: .node-version at the repo root. Node is the
+          # gap/parity oracle (we byte-diff against it), so the version is a
+          # correctness input, not an incidental toolchain detail — never pin it
+          # inline here. See CLAUDE.md ("TypeScript Parity Status").
+          node-version-file: .node-version
 
       - name: Build compiler
         run: cargo build --release
@@ -1399,7 +1419,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Single source of truth: .node-version at the repo root. Node is the
+          # gap/parity oracle (we byte-diff against it), so the version is a
+          # correctness input, not an incidental toolchain detail — never pin it
+          # inline here. See CLAUDE.md ("TypeScript Parity Status").
+          node-version-file: .node-version
 
       - name: Install mysql client (for fixture health probe)
         run: |
@@ -1461,7 +1485,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Single source of truth: .node-version at the repo root. Node is the
+          # gap/parity oracle (we byte-diff against it), so the version is a
+          # correctness input, not an incidental toolchain detail — never pin it
+          # inline here. See CLAUDE.md ("TypeScript Parity Status").
+          node-version-file: .node-version
 
       - name: Build perry compiler
         run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
@@ -1510,7 +1538,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          # Single source of truth: .node-version at the repo root. Node is the
+          # gap/parity oracle (we byte-diff against it), so the version is a
+          # correctness input, not an incidental toolchain detail — never pin it
+          # inline here. See CLAUDE.md ("TypeScript Parity Status").
+          node-version-file: .node-version
 
       - name: Build perry compiler
         run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
