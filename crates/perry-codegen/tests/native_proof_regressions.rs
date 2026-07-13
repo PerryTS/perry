@@ -13279,3 +13279,6 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
 
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
+
+#[path = "native_proof_regressions/integer_modulo.rs"]
+mod integer_modulo;
