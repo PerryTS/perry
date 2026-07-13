@@ -10,6 +10,7 @@ from benchmarks.public_baseline import (
     distribution,
     normalize_honest,
     readme_block,
+    utc_z_timestamp,
 )
 
 
@@ -28,6 +29,16 @@ class PublicBaselineTests(unittest.TestCase):
             "toolchains": {runtime: "1.0" for runtime in ("perry", "node", "bun")},
             "executables": {runtime: f"/{runtime}" for runtime in ("perry", "node", "bun")},
         }
+
+    def test_timestamp_normalization_uses_utc_z_suffix(self):
+        self.assertEqual(
+            utc_z_timestamp("2026-07-12T02:03:04.123456+00:00"),
+            "2026-07-12T02:03:04.123456Z",
+        )
+        self.assertEqual(
+            utc_z_timestamp("2026-07-12T04:03:04+02:00"),
+            "2026-07-12T02:03:04Z",
+        )
 
     def test_honest_component_requires_complete_correct_samples(self):
         metadata = self.honest_metadata()

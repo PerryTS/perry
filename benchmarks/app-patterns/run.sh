@@ -24,7 +24,7 @@ KERNELS_DIR="$SCRIPT_DIR/kernels"
 RESULTS_DIR="$SCRIPT_DIR/results"
 mkdir -p "$RESULTS_DIR"
 PUBLIC_JSON_OUT="${PUBLIC_BENCH_JSON_OUT:-}"
-RAW_JSONL=$(mktemp "${TMPDIR:-/tmp}/perry-app-patterns.XXXXXX.jsonl")
+RAW_JSONL=$(mktemp "${TMPDIR:-/tmp}/perry-app-patterns.XXXXXX")
 trap 'rm -f "$RAW_JSONL"' EXIT
 
 if [ ! -x "$PERRY_BIN" ]; then

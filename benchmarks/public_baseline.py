@@ -28,10 +28,17 @@ README = ROOT / "README.md"
 SUITE_RESULTS = ROOT / "benchmarks/suite/results/RESULTS.md"
 README_START = "<!-- public-node-bun:start -->"
 README_END = "<!-- public-node-bun:end -->"
-SOURCE_PATHS = ("Cargo.toml", "Cargo.lock", "src", "crates", "benchmarks/suite/*.ts")
+SOURCE_PATHS = (
+    "Cargo.toml",
+    "benchmarks/suite/*.ts",
+    "benchmarks/json_polyglot/*.ts",
+    "benchmarks/app-patterns/kernels/*.ts",
+)
 HARNESS_PATHS = (
     "benchmarks/public_baseline.py",
+    "benchmarks/run_public_baseline.sh",
     "benchmarks/compare.sh",
+    "benchmarks/verify_benchmark_output.py",
     "benchmarks/benchmark_gate.py",
     "benchmarks/polyglot/run_all.sh",
     "benchmarks/json_polyglot/run.sh",
@@ -44,6 +51,7 @@ HARNESS_PATHS = (
 )
 RUNTIMES = ("perry", "node", "bun")
 PINNED_VERSIONS = {"node": "v22.23.1", "bun": "1.3.14"}
+REFRESH_COMMAND = "./benchmarks/run_public_baseline.sh"
 EXPECTED_COMPONENT_BENCHMARKS = {
     "polyglot": {
         "fibonacci", "loop_overhead", "loop_data_dependent", "array_write",
@@ -83,6 +91,17 @@ def tracked_fingerprint(paths: Iterable[str]) -> str:
         digest.update((ROOT / name).read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def utc_z_timestamp(value: Any) -> str:
+    """Normalize an aware ISO-8601 timestamp to UTC with a Z suffix."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ArtifactError(f"invalid timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise ArtifactError(f"timestamp is missing a UTC offset: {value!r}")
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def distribution(samples: Iterable[float]) -> dict[str, Any]:
@@ -199,7 +218,7 @@ def normalize_honest(results: Mapping[str, Any], metadata: Mapping[str, Any]) ->
         "schema_version": 1,
         "suite": "honest_bench",
         "commit": metadata.get("commit"),
-        "generated_at": metadata.get("generated_at"),
+        "generated_at": utc_z_timestamp(metadata.get("generated_at")),
         "run_config": {
             "warmup": metadata.get("harness", {}).get("warmup"),
             "requested_samples": measured,
@@ -438,12 +457,18 @@ def validate_public(artifact: Mapping[str, Any], max_age_days: int) -> None:
     if age.total_seconds() < -300:
         raise ArtifactError("public artifact timestamp is in the future")
     if age.days > max_age_days:
-        raise ArtifactError(f"public artifact is stale ({age.days} days old)")
+        raise ArtifactError(
+            f"public artifact is stale ({age.days} days old); regenerate it with {REFRESH_COMMAND}"
+        )
     freshness = artifact.get("freshness", {})
     if freshness.get("source_fingerprint") != tracked_fingerprint(SOURCE_PATHS):
-        raise ArtifactError("public artifact source fingerprint is stale")
+        raise ArtifactError(
+            f"public artifact benchmark inputs changed; regenerate it with {REFRESH_COMMAND}"
+        )
     if freshness.get("harness_fingerprint") != tracked_fingerprint(HARNESS_PATHS):
-        raise ArtifactError("public artifact harness fingerprint is stale")
+        raise ArtifactError(
+            f"public artifact benchmark harness changed; regenerate it with {REFRESH_COMMAND}"
+        )
     for name in ("polyglot", "json_polyglot", "app_patterns", "honest_bench"):
         _validate_component(artifact["components"][name], name)
     _validate_suite(artifact["components"]["suite"])

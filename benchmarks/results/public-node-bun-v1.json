@@ -5,8 +5,8 @@
   "perry_version": "perry 0.5.1258",
   "generated_at": "2026-07-13T14:10:04Z",
   "freshness": {
-    "source_fingerprint": "5bae6a725cefac0df1c6eedc2e4a8efe4eafe944e4f11ea3777c67d2c98cf55e",
-    "harness_fingerprint": "3502cad910f9bd1e19b282183eef1406cf6d4f039240ff2d40db4bd43e876c9f"
+    "source_fingerprint": "6015afdb3a8ef4fb1410bf570e4b6b05d7314837d728121a87e3305ec347758f",
+    "harness_fingerprint": "e3d9291d775d9f5fc9f9e5a70b5eaed1cead9059bc1a0de754189809bf4b274f"
   },
   "host": {
     "os_version": "26.5.1",
@@ -5405,7 +5405,7 @@
       "schema_version": 1,
       "suite": "honest_bench",
       "commit": "36cf04e0147c68a55f362689ab6c56e2b39a3c67",
-      "generated_at": "2026-07-13T14:04:19.584429+00:00",
+      "generated_at": "2026-07-13T14:04:19.584429Z",
       "run_config": {
         "warmup": 5,
         "requested_samples": 20
