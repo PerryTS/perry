@@ -87,9 +87,14 @@ fn test_dead_shared_array_buffer_flag_pruned_on_full_gc() {
 
 /// The safety inverse: a LIVE (rooted) view keeps its flag. Full mark-sweep is
 /// non-moving, so the rooted buffers keep their addresses.
+///
+/// `CopyingNurseryTestGuard::new(2)` — not `GcTestIsolationGuard` — because
+/// only it pushes the shadow frame that makes `js_shadow_slot_set` an actual
+/// root. Under the plain isolation guard the slot writes land in no frame, the
+/// buffers stay unreachable, and the test would "pass" for the wrong reason.
 #[test]
 fn test_live_data_view_and_shared_array_buffer_flags_survive_full_gc() {
-    let _guard = GcTestIsolationGuard::new();
+    let _guard = CopyingNurseryTestGuard::new(2);
 
     let view = crate::buffer::buffer_alloc(32) as usize;
     crate::buffer::mark_as_data_view(view);
