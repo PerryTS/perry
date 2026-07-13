@@ -866,13 +866,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &lowered_args,
                 );
                 // Spec: derived-class field initializers run AFTER `super()`
-                // returns. The ancestors' fields were applied up-front by the
-                // own-ctor path (`FieldInitMode::AncestorsOnly`), so only the
-                // leaf's remain — same call every other builtin arm makes.
+                // returns. The native base is the chain root and has no TS
+                // fields, so everything after it still needs initializing —
+                // including ctor-less intermediates, which write no `super()`
+                // of their own and so have no other site that would do it.
+                // `AncestorsOnly` only covers the root, so `SelfOnly` here
+                // would leave a middle class like `B` in
+                // `C -> B -> A -> EventEmitter` uninitialized.
                 crate::lower_call::apply_field_initializers_recursive(
                     ctx,
                     &current_class_name,
-                    crate::lower_call::FieldInitMode::SelfOnly,
+                    crate::lower_call::FieldInitMode::AfterRoot,
                 )?;
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }

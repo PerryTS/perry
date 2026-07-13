@@ -103,3 +103,26 @@ console.log("plain emit returned:", plain.emit("go", 3));
 console.log("d listenerCount:", d.listenerCount("ping"));
 d.removeAllListeners("ping");
 console.log("d after removeAll:", d.listenerCount("ping"));
+
+// ── ctor-less INTERMEDIATE classes must still run their field initializers ──
+// The native base is the chain root and has no TS fields, so every class after
+// it needs initializing — including intermediates that write no `super()` of
+// their own. A middle class (`FieldB` below) was left uninitialized when the
+// post-super() pass only covered the leaf. Two intermediates are required to
+// expose it: with one, the leaf and the root-adjacent class both happen to be
+// covered. (Reported by review on #6342.)
+class FieldA extends EventEmitter {
+  aField = "a-ok";
+}
+class FieldB extends FieldA {
+  bField = "b-ok";
+}
+class FieldC extends FieldB {
+  cField = "c-ok";
+  constructor() {
+    super();
+  }
+}
+const fc = new FieldC();
+console.log("chain fields:", fc.aField, fc.bField, fc.cField);
+console.log("chain emit:", typeof fc.emit);
