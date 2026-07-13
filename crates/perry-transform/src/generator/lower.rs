@@ -393,8 +393,7 @@ pub fn transform_generator_function_with_extra_captures(
     // `async function*` never caught anything.
     let has_state_based_catch = catches.iter().any(|r| r.catch_entry_state.is_some());
     let has_inlineable_finally = finallys.iter().any(|r| !r.has_yields);
-    let wrap_dispatch =
-        has_state_based_catch || has_inlineable_finally || has_yielding_finally;
+    let wrap_dispatch = has_state_based_catch || has_inlineable_finally || has_yielding_finally;
     let dispatch_body = if wrap_dispatch {
         let disp_err_id = alloc_local(next_local_id);
         wrap_dispatch_loop(
