@@ -110,7 +110,21 @@ We deliberately don't lead with the trivially-foldable accumulator microbenchmar
 ### vs Node.js and Bun
 
 <!-- public-node-bun:start -->
-Current table pending a complete reproducible sweep.
+Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `36cf04e0147c`.
+Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks.
+
+| Benchmark | Perry | Node.js | Bun | Result | What it tests |
+|---|---:|---:|---:|---|---|
+| factorial | 1555 ms | 99 ms | 99 ms | loss vs both | Modular accumulation |
+| method_calls | 82 ms | 11 ms | 8 ms | loss vs both | Class method dispatch |
+| closure | 49 ms | 51 ms | 51 ms | win vs both | Closure creation and invocation |
+| binary_trees | 6 ms | 7 ms | 8 ms | win vs both | Tree allocation and traversal |
+| string_concat | 3 ms | 5 ms | 1 ms | mixed | String append loop |
+| prime_sieve | 254 ms | 7 ms | 5 ms | loss vs both | Sieve of Eratosthenes |
+| mandelbrot | 23 ms | 26 ms | 30 ms | win vs both | Complex-number iteration |
+| matrix_multiply | 2311 ms | 35 ms | 35 ms | loss vs both | Matrix multiplication |
+| json_roundtrip | 425 ms | 408 ms | 239 ms | loss vs both | Parse and stringify ~1 MB JSON |
+
 <!-- public-node-bun:end -->
 
 Perry compiles to native machine code via LLVM — no JIT warmup, no interpreter overhead. Key optimizations that apply in both modes: **scalar replacement** of non-escaping objects (escape analysis eliminates heap allocation entirely — object fields become registers), inline bump allocator for objects that do escape, i32 loop counters for bounded array access, integer-modulo fast path (`fptosi → srem → sitofp` instead of `fmod`), elimination of redundant `js_number_coerce` calls on numeric function returns, and i64 specialization for pure numeric recursive functions.

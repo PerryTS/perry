@@ -36,7 +36,11 @@ HARNESS_PATHS = (
     "benchmarks/polyglot/run_all.sh",
     "benchmarks/json_polyglot/run.sh",
     "benchmarks/app-patterns/run.sh",
-    "benchmarks/honest_bench",
+    "benchmarks/honest_bench/run.sh",
+    "benchmarks/honest_bench/harness",
+    "benchmarks/honest_bench/scripts",
+    "benchmarks/honest_bench/workloads",
+    "benchmarks/honest_bench/results/expected.json",
 )
 RUNTIMES = ("perry", "node", "bun")
 PINNED_VERSIONS = {"node": "v22.23.1", "bun": "1.3.14"}
