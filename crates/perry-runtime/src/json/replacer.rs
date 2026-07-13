@@ -359,7 +359,13 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
 
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = (*obj).field_count;
-    let keys_arr = (*obj).keys_array;
+    let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
+        // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
+        // reached here via a static TYPE_OBJECT hint). Node serializes those as
+        // `{}`; walking the slot as an ArrayHeader would fault.
+        buf.push_str("{}");
+        return;
+    };
     let keys_len = (*keys_arr).length;
     let keys_elements =
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -719,6 +725,21 @@ pub(crate) unsafe fn stringify_value_pretty(
             buf.push_str("null");
             return;
         }
+        // #2089: a Date is a NaN-boxed `DateCell` pointer — emit `toJSON()` (ISO
+        // string, or `null` for an Invalid Date) per ECMA-262 25.5.2, before any
+        // object/array deref of the small cell. The plain path has always done
+        // this; the pretty path did not, so `JSON.stringify(new Date(), null, 2)`
+        // walked the cell as a plain object and produced `""` instead of the ISO
+        // string — silently corrupting every indented JSON file with a date in it.
+        if crate::date::is_date_cell_addr(ptr as usize) {
+            let s_ptr = crate::date::js_date_to_json(value);
+            if let Some(s) = str_from_header(s_ptr) {
+                write_escaped_string(buf, s);
+            } else {
+                buf.push_str("null");
+            }
+            return;
+        }
         // #3857: a boxed primitive wrapper (`new String`/`Number`/`Boolean`,
         // `Object(1n)`) serializes as its underlying primitive. Must run before
         // the `is_object_pointer` probes below, which would deref the wrapper
@@ -749,9 +770,24 @@ pub(crate) unsafe fn stringify_value_pretty(
             buf.push_str(std::str::from_utf8(raw).unwrap_or("null"));
             return;
         }
+        // A RegExp has no enumerable own properties, so Node serializes it as `{}`.
+        // Perry's `RegExpHeader` is not an `ObjectHeader`, so without this the
+        // generic object walk below read its internal slots as fields and emitted
+        // `{"field0":null}`. Detected by the header magic (never a raw deref).
+        if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
+            buf.push_str("{}");
+            return;
+        }
         if matches!(
             gc_obj_type(ptr),
-            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_ERROR
+            crate::gc::GC_TYPE_MAP
+                | crate::gc::GC_TYPE_SET
+                | crate::gc::GC_TYPE_ERROR
+                // A Promise has no enumerable own properties either — Node emits `{}`.
+                // Perry's PromiseHeader is not an ObjectHeader, so the generic walk
+                // below read its slots as fields (it fell all the way through to the
+                // StringHeader fallback and emitted `""`).
+                | crate::gc::GC_TYPE_PROMISE
         ) {
             buf.push_str("{}");
             return;
@@ -812,6 +848,15 @@ pub(crate) unsafe fn stringify_object_pretty(
     indent: &str,
     depth: usize,
 ) {
+    // Same deref-safety gate the plain path applies in `is_object_pointer`: the
+    // `field_count` / `keys_array` reads below load straight through `ptr`, so an
+    // in-range-but-unmapped garbage address (a denormal double that survived the
+    // tag probes) SIGSEGVs here. Require a genuinely GC-tracked allocation first
+    // and emit `null` otherwise, rather than faulting inside JSON.stringify.
+    if !super::stringify::ptr_is_tracked_heap_object(ptr) {
+        buf.push_str("null");
+        return;
+    }
     // Circular reference check
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
@@ -836,7 +881,13 @@ pub(crate) unsafe fn stringify_object_pretty(
 
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = (*obj).field_count;
-    let keys_arr = (*obj).keys_array;
+    let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
+        // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
+        // reached here via a static TYPE_OBJECT hint). Node serializes those as
+        // `{}`; walking the slot as an ArrayHeader would fault.
+        buf.push_str("{}");
+        return;
+    };
     let keys_len = (*keys_arr).length;
     let keys_elements =
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -930,6 +981,13 @@ pub(crate) unsafe fn stringify_array_pretty(
     indent: &str,
     depth: usize,
 ) {
+    // Same gate as `stringify_object_pretty`: this is the fall-through branch for
+    // a pointer that failed the object probes, so a corrupted pointer lands here
+    // and the `(*arr).length` read below would fault.
+    if !super::stringify::ptr_is_tracked_heap_object(ptr) {
+        buf.push_str("null");
+        return;
+    }
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -948,7 +1006,16 @@ pub(crate) unsafe fn stringify_array_pretty(
         let elem = *elements.add(i as usize);
         let elem_bits = elem.to_bits();
         // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
-        if elem_bits == TAG_UNDEFINED || elem_bits == crate::value::TAG_HOLE {
+        // A function element also serializes as `null` (JSON.stringify only drops
+        // a function when it is an object *property*; in an array it becomes null).
+        // Every other array path already did this — without it here, the pretty
+        // printer fell through to `stringify_value_pretty`, which read the closure's
+        // pointer bits as a string payload: `[function(){}]` came out as `[""]`
+        // and, for most closures, dereferenced unmapped memory and segfaulted.
+        if elem_bits == TAG_UNDEFINED
+            || elem_bits == crate::value::TAG_HOLE
+            || is_closure_value(elem_bits)
+        {
             buf.push_str("null");
         } else {
             stringify_value_pretty(elem, TYPE_UNKNOWN, buf, indent, inner_indent_count);
@@ -989,7 +1056,13 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
 
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = (*obj).field_count;
-    let keys_arr = (*obj).keys_array;
+    let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
+        // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
+        // reached here via a static TYPE_OBJECT hint). Node serializes those as
+        // `{}`; walking the slot as an ArrayHeader would fault.
+        buf.push_str("{}");
+        return;
+    };
     let keys_len = (*keys_arr).length;
     let keys_elements =
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;

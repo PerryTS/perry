@@ -12,19 +12,52 @@ use std::fmt::Write as FmtWrite;
 // ─── JSON.stringify ───────────────────────────────────────────────────────────
 
 #[inline]
+/// True only when `ptr` is an address the GC actually tracks — an arena
+/// allocation (nursery/old/longlived per the page-map) or a registered malloc
+/// object. Both checks are dereference-FREE (page-metadata / registry lookups),
+/// so this rejects a forged pointer before any field read.
+///
+/// A magnitude check alone is not enough here: a type-erased `JSON.stringify`
+/// walk can reach `is_object_pointer` with a primitive `number` whose f64 bits
+/// land INSIDE the heap magnitude window (~2–5 TB, e.g. `0x0000_0347_0000_0000`)
+/// yet point at an UNMAPPED page — `is_valid_obj_ptr` accepts it and the
+/// subsequent `(*obj).keys_array` read then SIGSEGVs. Mirrors the `path.rs` /
+/// `current_heap_header_for_user_ptr` Unknown→malloc rule.
+#[inline]
+pub(super) unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
+        return false;
+    }
+    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    !matches!(
+        crate::arena::classify_heap_generation(ptr as usize),
+        crate::arena::HeapGeneration::Unknown
+    ) || crate::gc::gc_malloc_header_is_tracked(gc_header)
+}
+
 pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream handle) is
     // never a real ObjectHeader; reading its `keys_array` field would deref
     // unmapped memory (#4904/#1843 pattern). Reject by magnitude before any load.
-    if crate::value::addr_class::is_handle_band(ptr as usize) {
+    // The upper end matters too: a plausible-but-unmapped in-range garbage address
+    // (a primitive number whose f64 bits land in the heap window) would likewise
+    // SIGSEGV on the `keys_array` read below — require a genuinely GC-tracked
+    // allocation before dereferencing anything.
+    if !ptr_is_tracked_heap_object(ptr) {
         return false;
     }
     let obj = ptr as *const crate::ObjectHeader;
     let potential_keys_ptr = (*obj).keys_array as u64;
-    let top_16_bits = potential_keys_ptr >> 48;
-    let is_likely_heap_pointer = top_16_bits == 0 || top_16_bits == 1;
-    let looks_like_valid_pointer =
-        is_likely_heap_pointer && potential_keys_ptr > 0x10000 && (potential_keys_ptr & 0x7) == 0;
+    // `ptr` being GC-tracked only proves the *allocation* is real — not that it is
+    // an `ObjectHeader`. A Promise / WeakMap / ArrayBuffer / any other GC layout
+    // reaches here too (e.g. via a static TYPE_OBJECT hint), and then this slot is
+    // some unrelated field read as a pointer. The alignment/magnitude heuristic
+    // below is far too weak to catch that — a garbage word like 0x223af100 is
+    // 8-aligned and in range, and the `(*keys_arr).length` load below then faults.
+    // Require the *keys array itself* to be a tracked allocation before loading it.
+    let looks_like_valid_pointer = potential_keys_ptr > 0x10000
+        && (potential_keys_ptr & 0x7) == 0
+        && ptr_is_tracked_heap_object(potential_keys_ptr as *const u8);
 
     if looks_like_valid_pointer {
         let keys_arr = (*obj).keys_array;
@@ -58,14 +91,39 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
 /// to disambiguate an empty object from a corrupted pointer after the
 /// `keys_len > 0` `is_object_pointer` probe fails.
 pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
+    // Same deref-safety gate as `is_object_pointer`: this is called on the same
+    // value right after that probe returns false (to tell an empty object apart
+    // from a corrupted pointer), so an unmapped in-range garbage address must be
+    // rejected here too before the `keys_array` field read.
+    if !ptr_is_tracked_heap_object(ptr) {
+        return false;
+    }
     let keys = (*(ptr as *const crate::ObjectHeader)).keys_array;
     if keys.is_null() {
         return true;
     }
-    let kp = keys as u64;
-    let top_16 = kp >> 48;
-    let looks_valid = (top_16 == 0 || top_16 == 1) && kp > 0x10000 && (kp & 0x7) == 0;
-    looks_valid && (*keys).length == 0
+    // Same reasoning as `is_object_pointer`: a tracked `ptr` does not prove an
+    // `ObjectHeader` layout, so this slot may be an unrelated field. Require the
+    // keys array itself to be a tracked allocation before loading its length.
+    if !ptr_is_tracked_heap_object(keys as *const u8) {
+        return false;
+    }
+    (*keys).length == 0
+}
+
+/// The object's keys array, but only when it is genuinely a tracked heap
+/// allocation. A GC allocation that is not an `ObjectHeader` (a Promise, WeakMap,
+/// ArrayBuffer, ...) can still reach the object walkers — via a static
+/// `TYPE_OBJECT` hint from codegen — and its bytes at this offset are some other
+/// field. Loading that as an `ArrayHeader` faults. Walkers bail to `{}` on `None`.
+pub(super) unsafe fn object_keys_array_checked(
+    obj: *const crate::ObjectHeader,
+) -> Option<*const crate::ArrayHeader> {
+    let keys = (*obj).keys_array as *const crate::ArrayHeader;
+    if keys.is_null() || !ptr_is_tracked_heap_object(keys as *const u8) {
+        return None;
+    }
+    Some(keys)
 }
 
 #[inline]
@@ -738,6 +796,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
                 // as "{}" (their contents aren't enumerable own props).
                 buf.push_str("{}");
             }
+            // A Promise has no enumerable own properties — Node emits "{}". Its
+            // `PromiseHeader` is not the JSObject keys/values layout, so falling
+            // through to the structural heuristics below read its slots as a
+            // StringHeader and emitted `""`.
+            crate::gc::GC_TYPE_PROMISE => {
+                buf.push_str("{}");
+            }
             _ => {
                 // Unknown/untagged pointer: fall back to the structural
                 // heuristics for safety (e.g. pointers to non-GC-tracked
@@ -852,6 +917,14 @@ pub(crate) unsafe fn stringify_value_depth(
             stringify_value_depth(prim, TYPE_UNKNOWN, buf, depth);
             return;
         }
+        // A RegExp has no enumerable own properties, so Node serializes it as `{}`.
+        // Perry's `RegExpHeader` is not an `ObjectHeader`, so without this the
+        // generic object walk read its internal slots as fields and emitted
+        // `{"field0":null}`. Detected by the header magic (never a raw deref).
+        if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
+            buf.push_str("{}");
+            return;
+        }
         // #2089: a Date is a NaN-boxed `DateCell` pointer. JSON.stringify must
         // emit `toJSON()` → the ISO string (or `null` for an Invalid Date) per
         // ECMA-262 25.5.2. Check before any object/array handling so the small
@@ -926,6 +999,13 @@ pub(crate) unsafe fn stringify_value_depth(
             crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
                 // See the matching branch in `stringify_value` — Map/Set
                 // serialize as "{}" and must not reach the object catch-all.
+                buf.push_str("{}");
+            }
+            // A Promise has no enumerable own properties — Node emits "{}". Its
+            // `PromiseHeader` is not the JSObject keys/values layout, so falling
+            // through to the structural heuristics below read its slots as a
+            // StringHeader and emitted `""`.
+            crate::gc::GC_TYPE_PROMISE => {
                 buf.push_str("{}");
             }
             _ => {
@@ -1081,7 +1161,13 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             }
         }
     }
-    let keys_arr = (*obj).keys_array;
+    let Some(keys_arr) = object_keys_array_checked(obj) else {
+        // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
+        // reached here via a static TYPE_OBJECT hint). Node serializes those as
+        // `{}`; walking the slot as an ArrayHeader would fault.
+        buf.push_str("{}");
+        return;
+    };
     let keys_len = (*keys_arr).length;
     // Root the object for the enumeration below and re-derive the keys/field
     // buffers from the CURRENT header on every access: a user getter
@@ -1894,6 +1980,13 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                     // must not reach the object catch-all (segfault).
                     buf.push_str("{}");
                 }
+            // A Promise has no enumerable own properties — Node emits "{}". Its
+            // `PromiseHeader` is not the JSObject keys/values layout, so falling
+            // through to the structural heuristics below read its slots as a
+            // StringHeader and emitted `""`.
+            crate::gc::GC_TYPE_PROMISE => {
+                buf.push_str("{}");
+            }
                 _ => {
                     if is_object_pointer(elem_ptr) {
                         stringify_object_inner(elem_ptr, buf, depth);
