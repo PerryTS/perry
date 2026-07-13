@@ -83,4 +83,6 @@ pub(crate) use scalar_methods::simple_scalar_method_summary;
 pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
-pub(crate) use this_as_value::{class_chain_extends_builtin_error, class_uses_this_as_value};
+pub(crate) use this_as_value::{
+    class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,
+};

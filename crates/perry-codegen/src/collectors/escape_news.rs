@@ -49,6 +49,22 @@ pub fn collect_non_escaping_news(
             else if class_chain_extends_builtin_error(class, classes) {
                 escaped.insert(*id);
             }
+            // Issue #6343: the class chain reaches a base whose construction
+            // codegen cannot see — a NATIVE base that stamps its method
+            // surface onto the instance as own properties (`extends
+            // EventEmitter`, `extends Readable`, …), a dynamic `extends
+            // <expr>` parent, or a parent name that resolves to no visible
+            // class. Scalar replacement promotes only the DECLARED fields of
+            // the chain, so a runtime-installed own property has no slot in
+            // the promoted set: `class X extends EventEmitter { a = 1 }` read
+            // `x.a` correctly but `typeof x.emit` as `undefined`. The heap
+            // path runs the real subclass-init and looks the property up on
+            // the object. Same family as the #573 check above and the #5872
+            // dispatch-stability pass below — a chain of ordinary user classes
+            // is fully modeled and stays scalar-replaced.
+            else if class_chain_has_unmodeled_base(class, classes) {
+                escaped.insert(*id);
+            }
         }
     }
 
