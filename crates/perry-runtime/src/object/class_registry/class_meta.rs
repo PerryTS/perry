@@ -30,9 +30,16 @@ pub static CLASS_NAMES: RwLock<Option<HashMap<u32, String>>> = RwLock::new(None)
 
 /// Register the user-visible name of a class so the V8 bridge can label
 /// the V8-side wrapper for nice `metatype.name` reads. Idempotent.
+///
+/// A zero-length name is a legitimate registration, not a no-op: an anonymous
+/// class expression's `.name` IS the empty string per spec (issue #5952 —
+/// `const M = Mixin(Base)` over `function Mixin(B) { return class extends B {} }`
+/// binds a class whose `name` is `""`). Membership in `CLASS_NAMES` means "this
+/// id is a real class", which stays true for an anonymous one; only the null
+/// pointer and the reserved id 0 are rejected.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const u8, name_len: u32) {
-    if class_id == 0 || name_ptr.is_null() || name_len == 0 {
+    if class_id == 0 || name_ptr.is_null() {
         return;
     }
     let slice = std::slice::from_raw_parts(name_ptr, name_len as usize);
