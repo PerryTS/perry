@@ -698,6 +698,29 @@ fn lower_assignment_target(
                                     && ctx.lookup_func(&cls_name).is_none()
                                 {
                                     None
+                                } else if ctx.lookup_local(&cls_name).is_some()
+                                    && !ctx.inferred_class_bindings.contains(cls_name.as_str())
+                                {
+                                    // A lexical local shadows any same-named
+                                    // module-scope class for this write too
+                                    // (wall 7's disease, 4th surface): the
+                                    // vendored eventemitter3 `function s(){}`
+                                    // + `s.prototype.emit = fn` inside a
+                                    // turbopack chunk that ALSO has minified
+                                    // `class s {…}` declarations registered
+                                    // emit onto the unrelated class — the ES5
+                                    // constructor's prototype stayed EMPTY and
+                                    // every subclass (p-queue's PQueue) lost
+                                    // the inherited surface. A function-valued
+                                    // local keys the registration by the
+                                    // closure VALUE; any other local falls to
+                                    // the ordinary property-set path.
+                                    let local_id = ctx.lookup_local(&cls_name).unwrap();
+                                    if ctx.function_valued_locals.contains(&local_id) {
+                                        Some(ProtoOwner::Func(Expr::LocalGet(local_id)))
+                                    } else {
+                                        None
+                                    }
                                 } else if ctx.lookup_class(&cls_name).is_some()
                                     && class_has_accessor(ctx, &cls_name, &method_name)
                                 {
