@@ -18,6 +18,7 @@ mod id_scan;
 mod iter_result_rewrite;
 mod linearize;
 mod lower;
+mod per_iteration;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via
@@ -33,6 +34,7 @@ pub(crate) use helpers::{
     alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
+pub(crate) use per_iteration::collect_per_iteration_ids;
 pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
 pub(crate) use iter_result_rewrite::rewrite_stmt;
 pub(crate) use linearize::{

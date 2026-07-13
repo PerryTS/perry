@@ -219,8 +219,24 @@ pub fn transform_generator_function_with_extra_captures(
         }
     }
 
-    // Collect hoisted var IDs first so we know which Lets to rewrite
-    let hoisted_for_rewrite = collect_hoisted_vars(&func.body);
+    // Collect hoisted var IDs first so we know which Lets to rewrite.
+    //
+    // #6345: NOT every body `Let` may be hoisted. A `let`/`const` declared in a
+    // loop gets a FRESH binding per iteration, and a closure made in iteration
+    // k must capture iteration k's binding. Hoisting moves the declaration into
+    // the activation-wide `PreallocateBoxes` frame (one box per call), which
+    // collapses every iteration onto a single cell — so all closures read the
+    // last value (`for (let i…) { const j = i; fns.push(() => j) }` printed the
+    // final `j` N times). `collect_per_iteration_ids` returns the bindings that
+    // provably do NOT need to survive a suspend, so their `Let` can stay inside
+    // the loop where codegen re-executes (and re-boxes) it every iteration —
+    // exactly what the non-async path already does. `var` and anything live
+    // across an `await` are excluded there and keep today's hoisting.
+    let per_iteration = collect_per_iteration_ids(&func.body);
+    let hoisted_for_rewrite: Vec<(LocalId, String, Type)> = collect_hoisted_vars(&func.body)
+        .into_iter()
+        .filter(|(id, _, _)| !per_iteration.contains(id))
+        .collect();
     let mut hoisted_ids: std::collections::HashSet<LocalId> =
         hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
     // The lifted param prologue defines locals (destructured targets + temps)

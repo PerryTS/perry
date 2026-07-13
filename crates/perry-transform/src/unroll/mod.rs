@@ -73,7 +73,7 @@ use perry_hir::{CallArg, CompareOp, Expr, Module, Stmt, UpdateOp};
 use perry_types::{FuncId, LocalId};
 use std::collections::HashMap;
 
-mod escape_analysis;
+pub(crate) mod escape_analysis;
 use escape_analysis::compute_loop_escaping_ids;
 
 // #5293: the max-LocalId / max-FuncId scans were copy-pasted here; route through
