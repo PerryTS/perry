@@ -545,6 +545,18 @@ pub extern "C" fn js_gc_init() {
     gc_init();
 }
 
+/// Release external Map/Set storage owned by the current thread.
+///
+/// This is intentionally narrower than a general heap teardown: the arena
+/// headers remain owned by the arena, while the collection registries own the
+/// separately allocated buffers. The operation is idempotent and is called
+/// only once no more JavaScript work can run on this thread.
+#[no_mangle]
+pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
+    crate::map::release_current_thread_map_side_allocations();
+    crate::set::release_current_thread_set_side_allocations();
+}
+
 /// #5093: parse a boolean-ish env var by value (not mere presence): true for
 /// `1`/`true`/`on`/`yes` (case-insensitive), false for unset / `0`/`false`/`off`
 /// / `no` / empty / anything else.

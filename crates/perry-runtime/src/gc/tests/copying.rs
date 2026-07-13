@@ -228,6 +228,8 @@ fn test_copying_minor_relocates_managed_map() {
         map,
         f64::from_bits(key_bits)
     ));
+    let side_allocation_before = crate::map::test_map_side_allocation(map as usize)
+        .expect("managed Map should own its external entries buffer");
 
     js_shadow_slot_set(0, ptr_bits(map as usize));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -238,6 +240,11 @@ fn test_copying_minor_relocates_managed_map() {
     assert_ne!(map_after as usize, map as usize);
     assert!(!crate::map::is_registered_map(map as usize));
     assert!(crate::map::is_registered_map(map_after as usize));
+    assert_eq!(crate::map::test_map_side_allocation(map as usize), None);
+    assert_eq!(
+        crate::map::test_map_side_allocation(map_after as usize),
+        Some(side_allocation_before)
+    );
     assert!(crate::map::test_map_numeric_index_contains(map_after, 8.0));
     assert!(crate::map::test_map_string_index_contains(
         map_after,
@@ -245,6 +252,19 @@ fn test_copying_minor_relocates_managed_map() {
     ));
     assert_eq!(crate::map::js_map_get(map_after, 8.0), 80.0);
     assert_eq!(crate::map::js_map_get(map_after, stored_string_key), 900.0);
+
+    let release_before = crate::map::test_map_side_deallocation_snapshot();
+    unsafe {
+        crate::map::finalize_map_side_allocation_for_gc(map_after);
+    }
+    let release_after = crate::map::test_map_side_deallocation_snapshot();
+    assert_eq!(
+        (
+            release_after.0 - release_before.0,
+            release_after.1 - release_before.1
+        ),
+        (1, 256)
+    );
 }
 
 // #6084: an object key lives in MAP_PTR_INDEX keyed by its NaN-box bits, so
@@ -367,6 +387,8 @@ fn test_copying_minor_relocates_managed_set() {
         set,
         f64::from_bits(child_bits)
     ));
+    let side_allocation_before = crate::set::test_set_side_allocation(set as usize)
+        .expect("managed Set should own its external elements buffer");
 
     js_shadow_slot_set(0, ptr_bits(set as usize));
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -378,6 +400,11 @@ fn test_copying_minor_relocates_managed_set() {
     assert_ne!(set_after as usize, set as usize);
     assert!(!crate::set::is_registered_set(set as usize));
     assert!(crate::set::is_registered_set(set_after as usize));
+    assert_eq!(crate::set::test_set_side_allocation(set as usize), None);
+    assert_eq!(
+        crate::set::test_set_side_allocation(set_after as usize),
+        Some(side_allocation_before)
+    );
     assert_ne!(rewritten, child);
     assert!(crate::arena::pointer_in_nursery(rewritten));
     assert_eq!(crate::set::js_set_has(set_after, 8.0), 1);
@@ -393,6 +420,19 @@ fn test_copying_minor_relocates_managed_set() {
         set_after,
         f64::from_bits(rewritten_bits)
     ));
+
+    let release_before = crate::set::test_set_side_deallocation_snapshot();
+    unsafe {
+        crate::set::finalize_set_side_allocation_for_gc(set_after);
+    }
+    let release_after = crate::set::test_set_side_deallocation_snapshot();
+    assert_eq!(
+        (
+            release_after.0 - release_before.0,
+            release_after.1 - release_before.1
+        ),
+        (1, 128)
+    );
 }
 
 #[test]

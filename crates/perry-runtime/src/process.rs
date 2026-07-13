@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod credentials;
 mod env_misc;
-pub(crate) use env_misc::format_out_of_range_number;
+pub(crate) use env_misc::{
+    exit_after_current_thread_collection_teardown, format_out_of_range_number,
+};
 mod finalization;
 pub(crate) mod ipc;
 mod node_module;
