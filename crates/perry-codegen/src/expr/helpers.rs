@@ -307,6 +307,23 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "TextDecoderStream"
             | "CompressionStream"
             | "DecompressionStream"
+            // The three core Web Streams constructors. Perry already implements
+            // them (`new ReadableStream(…)` and `x instanceof ReadableStream` are
+            // both lowered, and `ReadableStream` has a class id), but the NAMES
+            // were never registered as globalThis builtins — so a bare
+            // `ReadableStream` identifier did not resolve: `typeof
+            // ReadableStream === "undefined"` and `"ReadableStream" in globalThis`
+            // was false, while Node exposes all three as functions.
+            //
+            // Libraries feature-detect exactly this (`typeof ReadableStream !==
+            // "undefined" ? … : …`) to decide how to consume a `fetch()` body.
+            // Getting "undefined" sent a large esbuild-bundled CLI app down the
+            // wrong branch, which then threw "The first argument must be a
+            // Readable, a ReadableStream, or an async iterable" and aborted its
+            // background tar-stream downloads entirely.
+            | "ReadableStream"
+            | "WritableStream"
+            | "TransformStream"
             | "Navigator"
             | "URL"
             | "URLSearchParams"

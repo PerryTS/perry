@@ -94,6 +94,43 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
 /// JS spec: `1 instanceof 2` throws, but Perry returns false defensively).
 /// Refs #420 / #618 followup.
 #[no_mangle]
+/// Map a builtin constructor VALUE (the `ClosureHeader`-backed function installed
+/// on `globalThis`) back to the class id that codegen passes to `js_instanceof`
+/// for the static `x instanceof <Identifier>` form.
+///
+/// Only the natively-backed builtins need this: their instances are handles
+/// (stream / fetch registries), not heap objects with a real prototype chain, so
+/// `js_instanceof` brand-checks them via the kind probes rather than a chain walk.
+/// Heap-backed builtins already resolve through the class-id / prototype paths.
+fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
+    let jv = crate::JSValue::from_bits(type_ref.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let closure = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if closure.is_null() {
+        return None;
+    }
+    if unsafe { (*closure).type_tag } != crate::closure::CLOSURE_MAGIC {
+        return None;
+    }
+    let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, len) = crate::string::str_bytes_from_jsvalue(name_value, &mut scratch)?;
+    let name = std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len as usize) }).ok()?;
+    Some(match name {
+        "ReadableStream" => 0xFFFF_0060,
+        "WritableStream" => 0xFFFF_0061,
+        "TransformStream" => 0xFFFF_0062,
+        "Response" => 0xFFFF_0028,
+        "Request" => 0xFFFF_0029,
+        "Headers" => 0xFFFF_002A,
+        "Blob" => 0xFFFF_0026,
+        _ => return None,
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
@@ -205,6 +242,29 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         if class_id != 0 {
             return js_instanceof(value, class_id);
         }
+    }
+    // A builtin constructor held in a VARIABLE — `const RS = ReadableStream; body
+    // instanceof RS` — arrives here as the ClosureHeader-backed function installed
+    // on `globalThis`, so none of the class-id paths above match and the prototype
+    // walk below returns false. Codegen only special-cases the *static identifier*
+    // form (`body instanceof ReadableStream`), where it hands the builtin class id
+    // straight to `js_instanceof`, which brand-checks these natively-backed values
+    // via the stream / fetch kind probes (their instances are handles, not heap
+    // objects with a real prototype chain).
+    //
+    // Minified bundles almost always alias constructors into locals, so the
+    // variable form is the common one in the wild: `x instanceof <alias>` for
+    // ReadableStream / Response / Headers silently returned `false` while Node
+    // returns `true`. That made a large esbuild-bundled CLI app mis-detect its
+    // `fetch()` body, throw "The first argument must be a Readable, a
+    // ReadableStream, or an async iterable", and abort its background
+    // tar-stream downloads entirely.
+    //
+    // Recover the builtin's name from the constructor closure (recorded by
+    // `set_bound_native_closure_name` when globalThis is populated) and reuse the
+    // static path's class id, so both spellings agree.
+    if let Some(class_id) = builtin_ctor_class_id_from_value(type_ref) {
+        return js_instanceof(value, class_id);
     }
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
         if module == "stream"
