@@ -487,12 +487,20 @@ pub(super) unsafe fn dispatch_primitive(
         // `js_jsvalue_to_string`, which maps a regex straight back to
         // `/source/flags` — so a bare fall-through would still miss the
         // override (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897).
+        // `exotic_get_own_property` rather than `value_lookup`: the override
+        // may be an ACCESSOR (`Object.defineProperty(re, "test", { get() {…} })`),
+        // which `value_lookup` — a data-property-only side-table read — cannot
+        // see, so the builtin would run instead. It checks accessor descriptors
+        // first (invoking the getter with `object` as the receiver) and falls
+        // back to the same expando data lookup.
         let own_override = if crate::regex::is_regex_pointer(p) {
-            crate::object::exotic_expando::value_lookup(
-                crate::object::exotic_expando::ExoticKind::RegExp,
+            crate::object::exotic_expando::exotic_get_own_property(
                 p as usize,
+                crate::object::exotic_expando::ExoticKind::RegExp,
                 method_name,
+                object,
             )
+            .map(|v| v.to_bits())
         } else {
             None
         };

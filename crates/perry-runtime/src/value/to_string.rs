@@ -1168,11 +1168,21 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
     if jsval.is_pointer() {
         let p = jsval.as_pointer::<u8>();
         if crate::regex::is_regex_pointer(p) {
-            let own = crate::object::exotic_expando::value_lookup(
-                crate::object::exotic_expando::ExoticKind::RegExp,
-                p as usize,
-                "toString",
-            );
+            // Accessor-aware: the override may be installed via
+            // `Object.defineProperty(re, "toString", { get() {…} })`, which a
+            // data-only `value_lookup` cannot see (it would silently fall back
+            // to the `/source/flags` literal). `exotic_get_own_property` checks
+            // accessor descriptors first, invoking the getter with `value` as
+            // the receiver, then falls back to the same expando data lookup.
+            let own = unsafe {
+                crate::object::exotic_expando::exotic_get_own_property(
+                    p as usize,
+                    crate::object::exotic_expando::ExoticKind::RegExp,
+                    "toString",
+                    value,
+                )
+            }
+            .map(|v| v.to_bits());
             if let Some(own_bits) = own {
                 let raw = (own_bits & crate::value::POINTER_MASK) as usize;
                 if (own_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
