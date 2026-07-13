@@ -122,6 +122,12 @@ pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
     ctor_body_uses_this,
 };
+// #6325 / #6326: the class-chain walk to a native base whose surface perry
+// stamps onto the instance, plus its init emitter. Shared by the implicit
+// (no-own-ctor) `new` path in `new.rs` and the explicit-`super()` arm in
+// `expr/this_super_call.rs`, which are the two places a derived constructor can
+// reach the base.
+pub(crate) use new_helpers::{emit_native_instance_base_init, native_instance_base_in_chain};
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
 pub(crate) use options::extract_options_fields;
