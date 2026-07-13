@@ -75,8 +75,11 @@
 //! fixed.
 
 use super::hoist_yields::expr_contains_yield;
-use crate::unroll::escape_analysis::{count_local_refs_stmt, count_local_refs_stmts};
-use perry_hir::{Expr, Stmt};
+use crate::unroll::escape_analysis::{
+    count_local_refs_expr, count_local_refs_stmt, count_local_refs_stmts,
+};
+use perry_hir::walker::walk_expr_children_mut;
+use perry_hir::{Expr, Stmt, Type};
 use perry_types::LocalId;
 use std::collections::{HashMap, HashSet};
 
@@ -351,6 +354,352 @@ fn each_child_stmt_list<F: FnMut(&[Stmt])>(stmt: &Stmt, f: &mut F) {
             }
         }
         Stmt::Labeled { body, .. } => each_child_stmt_list(body, f),
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #6345 part 2: per-iteration bindings that ARE live across a suspend
+// ---------------------------------------------------------------------------
+//
+// `collect_per_iteration_ids` can only un-hoist a binding whose live range
+// stays inside one state. When the binding really is read after an `await`,
+// it has to keep its cross-state box — and that box is shared by every
+// iteration, so a closure capturing it still sees the last value:
+//
+// ```ignore
+// for (let i = 0; i < 9; i++) { await step(); tasks.push(() => i); }
+// for (let i = 0; i < 9; i++) { const j = i; await step(); fns.push(() => j); }
+// ```
+//
+// The step closure is re-entered on every resume and its capture slots are
+// fixed for its lifetime, so the box pointer itself cannot be swapped per
+// iteration — the only per-activation storage that survives a suspend IS that
+// box. What we can do instead is give the CLOSURE the value rather than the
+// cell: at the moment the closure is built, the shared box holds the current
+// iteration's value, so copying it into a fresh local declared immediately
+// before the closure — a local that lives and dies inside a single state —
+// hands each closure its own binding.
+//
+// This is only sound when nothing may write the binding after the closure
+// captures it, and HIR already answers that question: a captured id lands in
+// `mutable_captures` when it is assigned anywhere (by a closure OR by the
+// enclosing scope — verified for both), and stays in plain `captures` when it
+// is only read. So we snapshot exactly `captures \ mutable_captures`. A
+// `for`-init counter is deliberately kept out of `mutable_captures` by HIR
+// despite `i++`, which is precisely the per-iteration semantics we want.
+// Bindings a closure writes (`let acc = 0; const add = () => acc += 5`) keep
+// their shared box and are untouched.
+
+/// Copy per-iteration bindings that outlive a suspend into a fresh local at
+/// each closure-creation site. Returns the ids of the locals it introduced;
+/// they must be kept out of the hoisted set (they are per-state by design).
+///
+/// Runs BEFORE linearization so the inserted `Let`s land in the same state as
+/// the closure that reads them.
+pub(crate) fn snapshot_suspended_loop_captures(
+    body: &mut Vec<Stmt>,
+    next_local_id: &mut LocalId,
+    per_iteration: &HashSet<LocalId>,
+) -> HashSet<LocalId> {
+    let mut total: HashMap<LocalId, usize> = HashMap::new();
+    count_local_refs_stmts(body, &mut total);
+    let mut decl_sites: HashMap<LocalId, usize> = HashMap::new();
+    count_decl_sites(body, &mut decl_sites);
+
+    let ctx = SnapshotCtx {
+        total,
+        decl_sites,
+        per_iteration: per_iteration.clone(),
+    };
+    let mut introduced = HashSet::new();
+    walk_snapshot(body, &HashSet::new(), &ctx, next_local_id, &mut introduced);
+    introduced
+}
+
+struct SnapshotCtx {
+    total: HashMap<LocalId, usize>,
+    decl_sites: HashMap<LocalId, usize>,
+    per_iteration: HashSet<LocalId>,
+}
+
+/// Per-iteration bindings of `loop_stmt` that are STILL hoisted — i.e. block
+/// scoped, declared by this loop, and not already un-hoisted by
+/// `collect_per_iteration_ids` (those need no snapshot; they keep a real
+/// per-iteration declaration, which also preserves write-sharing).
+fn hoisted_loop_bindings(loop_stmt: &Stmt, ctx: &SnapshotCtx) -> HashSet<LocalId> {
+    let mut inside: HashMap<LocalId, usize> = HashMap::new();
+    count_local_refs_stmt(loop_stmt, &mut inside);
+
+    let mut declared: HashSet<LocalId> = HashSet::new();
+    if let Stmt::For {
+        init: Some(init), ..
+    } = loop_stmt
+    {
+        if let Stmt::Let { id, .. } = init.as_ref() {
+            declared.insert(*id);
+        }
+    }
+    collect_block_lets(loop_body(loop_stmt), &mut declared);
+
+    declared
+        .into_iter()
+        .filter(|id| {
+            !ctx.per_iteration.contains(id)
+                && ctx.decl_sites.get(id).copied().unwrap_or(0) == 1
+                && ctx.total.get(id).copied().unwrap_or(0) == inside.get(id).copied().unwrap_or(0)
+        })
+        .collect()
+}
+
+/// `Stmt::Let` ids in this block and its non-loop nesting. Nested loops own
+/// their own bindings and are handled when the walk reaches them.
+fn collect_block_lets(block: &[Stmt], out: &mut HashSet<LocalId>) {
+    for s in block {
+        if let Stmt::Let { id, .. } = s {
+            out.insert(*id);
+        }
+        if !is_loop(s) {
+            each_child_stmt_list(s, &mut |list| collect_block_lets(list, out));
+        }
+    }
+}
+
+fn walk_snapshot(
+    stmts: &mut Vec<Stmt>,
+    active: &HashSet<LocalId>,
+    ctx: &SnapshotCtx,
+    next_local_id: &mut LocalId,
+    introduced: &mut HashSet<LocalId>,
+) {
+    // Descend first: a suspending loop adds its still-hoisted per-iteration
+    // bindings to the set visible to closures built anywhere inside it.
+    for stmt in stmts.iter_mut() {
+        let nested = if is_loop(stmt) && loop_contains_suspend(stmt) {
+            let mut a = active.clone();
+            a.extend(hoisted_loop_bindings(stmt, ctx));
+            a
+        } else {
+            active.clone()
+        };
+        each_child_stmt_list_mut(stmt, &mut |list| {
+            walk_snapshot(list, &nested, ctx, next_local_id, introduced)
+        });
+    }
+
+    // Then rewrite the closures created at THIS level, inserting each
+    // snapshot `Let` immediately before the statement that builds the closure
+    // (same block, no intervening `await` — so the same state).
+    let taken: Vec<Stmt> = stmts.drain(..).collect();
+    let mut out: Vec<Stmt> = Vec::with_capacity(taken.len());
+    for mut stmt in taken {
+        let mut snap_map: HashMap<LocalId, LocalId> = HashMap::new();
+        each_expr_mut(&mut stmt, &mut |e| {
+            snapshot_closures_in_expr(e, active, &mut snap_map, next_local_id)
+        });
+        let mut pairs: Vec<(LocalId, LocalId)> = snap_map.into_iter().collect();
+        pairs.sort();
+        for (orig, snap) in pairs {
+            introduced.insert(snap);
+            out.push(Stmt::Let {
+                id: snap,
+                name: format!("__periter_{}", snap),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::LocalGet(orig)),
+            });
+        }
+        out.push(stmt);
+    }
+    *stmts = out;
+}
+
+/// Find closures in `e` (not descending into a closure's own body — the whole
+/// subtree of a rewritten closure is handled in one go) and redirect their
+/// read-only captures of `active` bindings to per-iteration snapshots.
+fn snapshot_closures_in_expr(
+    e: &mut Expr,
+    active: &HashSet<LocalId>,
+    snap_map: &mut HashMap<LocalId, LocalId>,
+    next_local_id: &mut LocalId,
+) {
+    if let Expr::Closure {
+        captures,
+        mutable_captures,
+        ..
+    } = e
+    {
+        let targets: Vec<LocalId> = captures
+            .iter()
+            .copied()
+            .filter(|id| active.contains(id) && !mutable_captures.contains(id))
+            .collect();
+        if !targets.is_empty() {
+            let mut local_map: HashMap<LocalId, LocalId> = HashMap::new();
+            for orig in &targets {
+                let snap = *snap_map.entry(*orig).or_insert_with(|| {
+                    let id = *next_local_id;
+                    *next_local_id = next_local_id.saturating_add(1);
+                    id
+                });
+                local_map.insert(*orig, snap);
+            }
+            // Substitute on a copy, then prove — with the same exhaustive
+            // counter the `var` analysis trusts — that no reference to the
+            // original id survives anywhere in the closure. If one does, this
+            // rewrite would leave the closure reading an id it no longer
+            // captures, so roll the whole closure back and keep the (merely
+            // stale) shared-box behaviour instead of inventing a new bug.
+            let original = e.clone();
+            rename_in_expr(e, &local_map);
+            let mut leftover: HashMap<LocalId, usize> = HashMap::new();
+            count_local_refs_expr(e, &mut leftover);
+            if targets
+                .iter()
+                .any(|orig| leftover.get(orig).copied().unwrap_or(0) > 0)
+            {
+                *e = original;
+                for orig in &targets {
+                    snap_map.remove(orig);
+                }
+            }
+        }
+        return;
+    }
+    walk_expr_children_mut(e, &mut |child| {
+        snapshot_closures_in_expr(child, active, snap_map, next_local_id)
+    });
+}
+
+/// Rewrite USE sites of the mapped ids throughout an expression subtree,
+/// including capture lists and nested closure bodies. Declaration ids
+/// (`Stmt::Let`) are never rewritten: every binding owns a unique LocalId, so
+/// a mapped id can only ever appear as a use inside this subtree.
+fn rename_in_expr(e: &mut Expr, map: &HashMap<LocalId, LocalId>) {
+    let sub = |id: &mut LocalId| {
+        if let Some(new) = map.get(id) {
+            *id = *new;
+        }
+    };
+    match e {
+        Expr::LocalGet(id) | Expr::Update { id, .. } => sub(id),
+        Expr::LocalSet(id, _) => sub(id),
+        Expr::ArrayPush { array_id, .. }
+        | Expr::ArrayPushSpread { array_id, .. }
+        | Expr::ArrayUnshift { array_id, .. }
+        | Expr::ArraySplice { array_id, .. }
+        | Expr::ArrayCopyWithin { array_id, .. } => sub(array_id),
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => sub(id),
+        Expr::SetAdd { set_id, .. } => sub(set_id),
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            body,
+            ..
+        } => {
+            for c in captures.iter_mut() {
+                sub(c);
+            }
+            for c in mutable_captures.iter_mut() {
+                sub(c);
+            }
+            for s in body.iter_mut() {
+                rename_in_stmt(s, map);
+            }
+        }
+        _ => {}
+    }
+    walk_expr_children_mut(e, &mut |child| rename_in_expr(child, map));
+}
+
+fn rename_in_stmt(stmt: &mut Stmt, map: &HashMap<LocalId, LocalId>) {
+    each_expr_mut(stmt, &mut |e| rename_in_expr(e, map));
+    each_child_stmt_list_mut(stmt, &mut |list| {
+        for s in list.iter_mut() {
+            rename_in_stmt(s, map);
+        }
+    });
+}
+
+fn each_expr_mut<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                f(e);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => f(e),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                f(e);
+            }
+        }
+        Stmt::If { condition, .. } => f(condition),
+        Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => f(condition),
+        Stmt::For {
+            init,
+            condition,
+            update,
+            ..
+        } => {
+            if let Some(i) = init {
+                each_expr_mut(i, f);
+            }
+            if let Some(c) = condition {
+                f(c);
+            }
+            if let Some(u) = update {
+                f(u);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            f(discriminant);
+            for c in cases {
+                if let Some(t) = &mut c.test {
+                    f(t);
+                }
+            }
+        }
+        Stmt::Labeled { body, .. } => each_expr_mut(body, f),
+        _ => {}
+    }
+}
+
+fn each_child_stmt_list_mut<F: FnMut(&mut Vec<Stmt>)>(stmt: &mut Stmt, f: &mut F) {
+    match stmt {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            f(then_branch);
+            if let Some(eb) = else_branch {
+                f(eb);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => f(body),
+        Stmt::Switch { cases, .. } => {
+            for c in cases {
+                f(&mut c.body);
+            }
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            f(body);
+            if let Some(c) = catch {
+                f(&mut c.body);
+            }
+            if let Some(fin) = finally {
+                f(fin);
+            }
+        }
+        Stmt::Labeled { body, .. } => each_child_stmt_list_mut(body, f),
         _ => {}
     }
 }

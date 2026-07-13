@@ -216,7 +216,7 @@ pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, u
     }
 }
 
-fn count_local_refs_expr(expr: &Expr, counts: &mut HashMap<LocalId, usize>) {
+pub(crate) fn count_local_refs_expr(expr: &Expr, counts: &mut HashMap<LocalId, usize>) {
     fn bump(counts: &mut HashMap<LocalId, usize>, id: LocalId) {
         *counts.entry(id).or_insert(0) += 1;
     }

@@ -139,6 +139,17 @@ pub fn transform_generator_function_with_extra_captures(
         await_async_generator_yield_operands(&mut func.body, next_local_id);
     }
 
+    // #6345: decide which loop bindings must NOT be hoisted into the
+    // activation-wide box frame, and snapshot the ones that outlive a suspend
+    // into per-state locals. Both run BEFORE `linearize_body` so the inserted
+    // `Let`s land in the same state as the closure that reads them, and before
+    // `local_id_before` below so the new ids are not swept into
+    // `extra_local_ids` (which is force-preallocated).
+    let per_iteration_ids = collect_per_iteration_ids(&func.body);
+    let mut no_hoist_ids =
+        snapshot_suspended_loop_captures(&mut func.body, next_local_id, &per_iteration_ids);
+    no_hoist_ids.extend(per_iteration_ids);
+
     let state_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
     let sent_id = alloc_local(next_local_id); // value passed by caller via next(val)
@@ -227,15 +238,14 @@ pub fn transform_generator_function_with_extra_captures(
     // the activation-wide `PreallocateBoxes` frame (one box per call), which
     // collapses every iteration onto a single cell — so all closures read the
     // last value (`for (let i…) { const j = i; fns.push(() => j) }` printed the
-    // final `j` N times). `collect_per_iteration_ids` returns the bindings that
-    // provably do NOT need to survive a suspend, so their `Let` can stay inside
-    // the loop where codegen re-executes (and re-boxes) it every iteration —
-    // exactly what the non-async path already does. `var` and anything live
-    // across an `await` are excluded there and keep today's hoisting.
-    let per_iteration = collect_per_iteration_ids(&func.body);
+    // final `j` N times). `no_hoist_ids` (computed above) holds the bindings
+    // that keep their in-loop declaration — where codegen re-executes and
+    // re-boxes them every iteration, exactly as the non-async path does — plus
+    // the per-state snapshot locals. `var` and anything else live across an
+    // `await` is excluded there and keeps today's hoisting.
     let hoisted_for_rewrite: Vec<(LocalId, String, Type)> = collect_hoisted_vars(&func.body)
         .into_iter()
-        .filter(|(id, _, _)| !per_iteration.contains(id))
+        .filter(|(id, _, _)| !no_hoist_ids.contains(id))
         .collect();
     let mut hoisted_ids: std::collections::HashSet<LocalId> =
         hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
