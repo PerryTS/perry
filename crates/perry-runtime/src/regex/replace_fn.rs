@@ -85,7 +85,7 @@ pub extern "C" fn js_string_replace_string_fn(
         let Some(byte_idx) = str_data.find(pattern_str.as_str()) else {
             return js_string_from_str(str_data);
         };
-        let char_offset = super::exec_array::byte_index_to_utf16_index(str_data, byte_idx);
+        let char_offset = super::utf16::byte_index_to_utf16_index(str_data, byte_idx);
         let replacement = call_string_replace_callback(
             callback_handle.get_nanbox_f64(),
             &pattern_str,

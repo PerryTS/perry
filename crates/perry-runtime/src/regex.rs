@@ -46,6 +46,7 @@ mod replace_fn;
 mod unicode17;
 #[cfg(feature = "regex-engine")]
 mod unicode17_data;
+mod utf16;
 #[cfg(feature = "regex-engine")]
 use class_range_validate::has_out_of_order_double_dash_class_range;
 #[cfg(feature = "regex-engine")]

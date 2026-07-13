@@ -6,6 +6,7 @@
 //!
 //! Split out of `regex.rs` under the 2000-line CI cap.
 
+pub(super) use super::utf16::{byte_index_to_utf16_index, utf16_index_to_byte};
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 use crate::value::js_nanbox_string;
@@ -204,45 +205,6 @@ pub(super) fn set_exec_array_indices(
         indices_key,
         f64::from_bits(indices_nanboxed.to_bits()),
     );
-}
-
-/// A JS string index (UTF-16 code units) → the byte offset of that position in
-/// the UTF-8 buffer. Inverse of [`byte_index_to_utf16_index`].
-///
-/// An index that lands *inside* a surrogate pair (i.e. addresses the low
-/// surrogate of an astral scalar, which has no UTF-8 boundary of its own)
-/// resolves to the byte offset just past that scalar; an index at or beyond the
-/// end resolves to `s.len()`.
-pub(super) fn utf16_index_to_byte(s: &str, utf16_index: usize) -> usize {
-    if utf16_index == 0 {
-        return 0;
-    }
-    let mut units = 0usize;
-    for (byte, ch) in s.char_indices() {
-        if units >= utf16_index {
-            return byte;
-        }
-        units += ch.len_utf16();
-    }
-    s.len()
-}
-
-/// A byte offset in the UTF-8 buffer → the JS string index (UTF-16 code units).
-///
-/// Every JS-observable string index — `match.index`, `lastIndex`, the offset
-/// passed to a `String.prototype.replace` callback — is counted in UTF-16 code
-/// units, which is exactly what Perry's own `StringHeader::utf16_len`
-/// (`js_string_length`, i.e. `str.length`) reports. A non-BMP scalar such as
-/// U+1D306 is ONE `char` but TWO UTF-16 code units, so the previous
-/// `chars().count()` under-reported every index at or past an astral character
-/// and left the regex module inconsistent with `str.length` / `charAt`:
-/// `/./ug.exec('𝌆')` parked `lastIndex` at 1 where the spec (and Node) require 2
-/// (test262 built-ins/RegExp/prototype/exec/u-lastindex-value, #5897).
-pub(super) fn byte_index_to_utf16_index(s: &str, byte_index: usize) -> usize {
-    s[..byte_index.min(s.len())]
-        .chars()
-        .map(char::len_utf16)
-        .sum()
 }
 
 /// Build and attach the `indices` property for fancy-regex captures (lookbehind/backreference fallback).
