@@ -271,6 +271,10 @@ pub fn scan_handle_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
                             props.push((k.clone(), *v));
                         }
                     }
+                    // GC_STORE_AUDIT(ROOT): HANDLE_EXPANDO_PROPS entries are scanned by
+                    // scan_handle_expando_roots_mut (this function) — the merged vec holds
+                    // values this pass just traced/rewrote, plus any re-entrant write that
+                    // the mutator already barriered on its own way in.
                     *dst = props;
                 }
                 std::collections::hash_map::Entry::Vacant(e) => {
