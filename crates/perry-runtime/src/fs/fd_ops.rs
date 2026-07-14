@@ -68,6 +68,7 @@ fn open_options_from_flags(flags_value: f64) -> (fs::OpenOptions, bool) {
 
 #[cfg(unix)]
 fn apply_numeric_open_flags(opts: &mut fs::OpenOptions, flags: i32) -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
     match flags & libc::O_ACCMODE {
         libc::O_WRONLY => {
             opts.write(true);
@@ -91,6 +92,14 @@ fn apply_numeric_open_flags(opts: &mut fs::OpenOptions, flags: i32) -> bool {
     if append_mode {
         opts.append(true).write(true);
     }
+    // Everything `OpenOptions` does not model — O_NONBLOCK, O_NOCTTY, O_NOFOLLOW,
+    // O_SYNC, O_CLOEXEC… — still has to reach open(2); Node passes the flag word
+    // through verbatim. Dropping O_NONBLOCK left the descriptor blocking, so a
+    // `readSync` that Node answers with EAGAIN hung forever instead.
+    // `custom_flags` cannot clobber the access mode: std masks O_ACCMODE out.
+    const MODELED: i32 =
+        libc::O_ACCMODE | libc::O_CREAT | libc::O_EXCL | libc::O_TRUNC | libc::O_APPEND;
+    opts.custom_flags(flags & !MODELED);
     append_mode
 }
 
@@ -199,6 +208,33 @@ pub extern "C" fn js_fs_read_sync(
     position_value: f64,
 ) -> f64 {
     crate::fs::validate::validate_fd_open(fd_value, "read");
+    match read_sync_result(
+        fd_value,
+        buffer_value,
+        offset_value,
+        length_value,
+        position_value,
+    ) {
+        Ok(bytes) => bytes,
+        // Node surfaces the syscall error (EAGAIN on a non-blocking fd with no
+        // data ready, EISDIR, EIO…). Collapsing every failure to 0 made it
+        // indistinguishable from a clean EOF.
+        Err(err) => unsafe {
+            crate::exception::js_throw(build_fs_error_value_no_path(&err, "read"))
+        },
+    }
+}
+
+/// The `readSync` core, with the syscall error preserved so the throwing
+/// (`fs.readSync`) and reporting (`fs.read(…, cb)`) surfaces can each render it
+/// the way Node does.
+pub(crate) fn read_sync_result(
+    fd_value: f64,
+    buffer_value: f64,
+    offset_value: f64,
+    length_value: f64,
+    position_value: f64,
+) -> Result<f64, std::io::Error> {
     let fd = fd_value as i32;
     let offset = offset_value.max(0.0) as usize;
     let length = length_value.max(0.0) as usize;
@@ -209,12 +245,12 @@ pub extern "C" fn js_fs_read_sync(
     };
     let buf = buffer_ptr_from_value(buffer_value);
     if buf.is_null() {
-        return 0.0;
+        return Ok(0.0);
     }
     FD_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(file) = reg.get_mut(&fd) else {
-            return 0.0;
+            return Ok(0.0);
         };
         let restore_pos = position.and_then(|_| file.stream_position().ok());
         if let Some(pos) = position {
@@ -226,13 +262,13 @@ pub extern "C" fn js_fs_read_sync(
                 if let Some(pos) = restore_pos {
                     let _ = file.seek(SeekFrom::Start(pos));
                 }
-                return 0.0;
+                return Ok(0.0);
             }
             let n = length.min(cap - offset);
             let data = crate::buffer::buffer_data_mut(buf).add(offset);
             let result = match file.read(std::slice::from_raw_parts_mut(data, n)) {
-                Ok(read) => read as f64,
-                Err(_) => 0.0,
+                Ok(read) => Ok(read as f64),
+                Err(err) => Err(err),
             };
             if let Some(pos) = restore_pos {
                 let _ = file.seek(SeekFrom::Start(pos));
