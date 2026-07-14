@@ -122,6 +122,53 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             return crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
         }
 
+        // #6363: a native HANDLE receiver (zlib stream, fetch Headers/Request/
+        // Response/Blob, crypto hash, …) is a pointer-tagged registry id, not a
+        // heap object. Its own properties are exactly the user-assigned expandos
+        // — from a plain `handle.foo = v` write or an
+        // `Object.defineProperty(handle, …)`; both land in the `handle_expando`
+        // table. The handle's TYPED surface (`blob.size`, `response.status`) is
+        // prototype accessors in Node, so it is deliberately NOT reported here:
+        // `getOwnPropertyDescriptor(blob, "size")` is `undefined` in Node too.
+        // Falling through to the ordinary path would deref the id as an
+        // `ObjectHeader` and report `undefined` for a property that IS defined.
+        if obj_jv.is_pointer() {
+            let raw = obj_jv.as_pointer::<u8>() as usize;
+            if crate::value::addr_class::is_small_handle(raw) {
+                if crate::symbol::js_is_symbol(key_value) != 0 {
+                    return symbol_own_property_descriptor(obj_value, key_value);
+                }
+                let Some(name) = metadata_key_to_string(key_value) else {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                };
+                let hid = raw as i64;
+                if !crate::object::handle_expando::handle_expando_has(hid, &name) {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                let attrs = crate::object::handle_expando::handle_expando_attrs(hid, &name);
+                if let Some(acc) =
+                    crate::object::handle_expando::handle_expando_accessor(hid, &name)
+                {
+                    // A `0` half means "absent" — reflect it as `undefined`, not 0.
+                    let undef = crate::value::TAG_UNDEFINED;
+                    return build_accessor_descriptor(
+                        f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
+                        f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
+                }
+                let value = crate::object::handle_expando::handle_expando_data_get(hid, &name)
+                    .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+                return build_data_descriptor(
+                    value,
+                    attrs.writable(),
+                    attrs.enumerable(),
+                    attrs.configurable(),
+                );
+            }
+        }
+
         // A per-evaluation class object (`ClassExprFresh`, #1772/#1787) is a
         // POINTER-tagged heap object, not a `0x7FFE` class ref, so the
         // `class_ref_id` branch below never fires for it. Its static METHODS
@@ -203,35 +250,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         }
 
         if crate::symbol::js_is_symbol(key_value) != 0 {
-            let owner = crate::symbol::obj_key_from_f64(obj_value);
-            let sym_key = crate::symbol::sym_key_from_f64(key_value);
-            if owner == 0 || sym_key == 0 {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
-            let attrs = crate::symbol::get_symbol_property_attrs(owner, sym_key)
-                .unwrap_or(PropertyAttrs::new(true, true, true));
-            if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key)
-            {
-                // A `0` get/set means "absent half" — surface it as `undefined`
-                // (not the number `0`) so a get-only accessor reflects
-                // `{ get, set: undefined }`.
-                let undef = crate::value::TAG_UNDEFINED;
-                return build_accessor_descriptor(
-                    f64::from_bits(if get == 0 { undef } else { get }),
-                    f64::from_bits(if set == 0 { undef } else { set }),
-                    attrs.enumerable(),
-                    attrs.configurable(),
-                );
-            }
-            if let Some(value_bits) = crate::symbol::symbol_property_root_bits(owner, sym_key) {
-                return build_data_descriptor(
-                    f64::from_bits(value_bits),
-                    attrs.writable(),
-                    attrs.enumerable(),
-                    attrs.configurable(),
-                );
-            }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
+            return symbol_own_property_descriptor(obj_value, key_value);
         }
 
         // TypedArrays are Integer-Indexed exotic objects: a canonical numeric
@@ -856,6 +875,76 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
 
 /// Build a `{ value, writable, enumerable, configurable }` data descriptor
 /// object. Shared by the string-primitive descriptor path (#2818).
+/// #6363: the own STRING keys of a native HANDLE, as a NaN-boxed JS array.
+///
+/// A handle (zlib stream, fetch Headers/Request/Response/Blob, crypto hash, …)
+/// is a registry id, not a heap object; its typed surface (`blob.size`) is
+/// prototype accessors in Node and is therefore not an own key. What IS an own
+/// key is anything the user attached — a plain `handle.foo = v` write or an
+/// `Object.defineProperty(handle, …)` — all of which live in the
+/// `handle_expando` table. `enumerable_only` selects the `Object.keys` /
+/// for-in / spread surface over the `getOwnPropertyNames` one.
+pub(crate) unsafe fn handle_own_names_array(hid: i64, enumerable_only: bool) -> f64 {
+    let arr = handle_own_names_raw_array(hid, enumerable_only);
+    f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000)
+}
+
+/// Raw-`ArrayHeader` sibling of [`handle_own_names_array`], for the enumeration
+/// paths that build on `*mut ArrayHeader` rather than NaN-boxed values.
+pub(crate) unsafe fn handle_own_names_raw_array(
+    hid: i64,
+    enumerable_only: bool,
+) -> *mut crate::array::ArrayHeader {
+    let names = crate::object::handle_expando::handle_expando_own_keys(hid, enumerable_only);
+    // Exact capacity, so `js_array_push` cannot reallocate under us (the same
+    // contract `js_object_get_own_property_names`' own name-array builder relies
+    // on a few lines up).
+    let arr = crate::array::js_array_alloc(names.len() as u32);
+    for name in &names {
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::array::js_array_push(arr, JSValue::string_ptr(s));
+    }
+    arr
+}
+
+/// `[[GetOwnProperty]]` for a SYMBOL key, from the symbol side tables.
+///
+/// Both tables are keyed by the receiver's NaN-box PAYLOAD
+/// (`symbol::obj_key_from_f64`), never by a dereferenced address, so this works
+/// unchanged for a heap object and for a native HANDLE id (#6363) — which is why
+/// the handle branch in `js_object_get_own_property_descriptor` delegates here
+/// instead of re-deriving the lookup.
+pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
+    let owner = crate::symbol::obj_key_from_f64(obj_value);
+    let sym_key = crate::symbol::sym_key_from_f64(key_value);
+    if owner == 0 || sym_key == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let attrs = crate::symbol::get_symbol_property_attrs(owner, sym_key)
+        .unwrap_or(PropertyAttrs::new(true, true, true));
+    if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key) {
+        // A `0` get/set means "absent half" — surface it as `undefined`
+        // (not the number `0`) so a get-only accessor reflects
+        // `{ get, set: undefined }`.
+        let undef = crate::value::TAG_UNDEFINED;
+        return build_accessor_descriptor(
+            f64::from_bits(if get == 0 { undef } else { get }),
+            f64::from_bits(if set == 0 { undef } else { set }),
+            attrs.enumerable(),
+            attrs.configurable(),
+        );
+    }
+    if let Some(value_bits) = crate::symbol::symbol_property_root_bits(owner, sym_key) {
+        return build_data_descriptor(
+            f64::from_bits(value_bits),
+            attrs.writable(),
+            attrs.enumerable(),
+            attrs.configurable(),
+        );
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 pub(crate) unsafe fn build_data_descriptor(
     value: f64,
     writable: bool,
@@ -971,8 +1060,10 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                         return names;
                     }
                 }
-                let empty = crate::array::js_array_alloc(0);
-                return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
+                // #6363: the handle's own properties are the user-assigned
+                // expandos (`handle.foo = v`, `Object.defineProperty(handle, …)`).
+                // `getOwnPropertyNames` reports them regardless of enumerability.
+                return handle_own_names_array(raw as i64, false);
             }
         }
         // #5268: a native-module namespace/default object (`fs`, `path`, …)
