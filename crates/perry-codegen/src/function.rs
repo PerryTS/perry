@@ -16,12 +16,22 @@ pub struct LlFunction {
     /// Optional LLVM linkage string, e.g. `"internal"` or `"private"`. Empty
     /// string means external (default) linkage.
     pub linkage: String,
-    /// When true, the function body contains a `try` statement (setjmp/longjmp).
-    /// We must emit `#1` (noinline optnone) on the definition so LLVM doesn't
-    /// promote allocas to SSA registers across the setjmp call — otherwise
-    /// mutations performed in the try body are invisible in the catch block
-    /// after longjmp returns. `returns_twice` alone on the setjmp call is not
-    /// sufficient at -O2 on aarch64.
+    /// When true, the function body contains a `try` statement (setjmp/longjmp),
+    /// so the definition gets `#1` (`noinline`) and `to_ir` runs the volatile
+    /// promotion pass.
+    ///
+    /// The setjmp hazard: `longjmp` restores the callee-saved registers and
+    /// stack pointer that `setjmp` snapshotted, so any local LLVM parked in a
+    /// register across the setjmp call reverts to its setjmp-time value when
+    /// the exception fires — the try body's mutations vanish in the catch.
+    /// `returns_twice` on the setjmp call is not sufficient at -O2 on aarch64.
+    ///
+    /// This used to be handled by stamping `optnone` on the whole function,
+    /// which is correct (at -O0 every value is frame-resident) but cost ~5x on
+    /// the surrounding code even when nothing ever throws (#6385). We now apply
+    /// C's `volatile` rule precisely instead: only the allocas the try body
+    /// actually stores into get volatile accesses, and everything else in the
+    /// function stays optimizable. See [`crate::volatile_setjmp`].
     pub has_try: bool,
     /// When true, emit `alwaysinline` attribute. Forces LLVM to inline this
     /// function at every call site, exposing integer operations to the
@@ -199,6 +209,24 @@ impl LlFunction {
 
     pub fn add_pre_return_void_call(&mut self, func_name: impl Into<String>) {
         self.pre_return_void_calls.push(func_name.into());
+    }
+
+    /// Open a setjmp-protected region (#6385). Every `store` emitted into any
+    /// block of this function until the matching [`exit_try_region`] is
+    /// recorded as "modified between the setjmp and a possible longjmp", and
+    /// the alloca behind it is given volatile accesses by `to_ir`.
+    ///
+    /// Call this around the lowering of a `try` body and of a `catch` body
+    /// that a `finally` re-protects — i.e. exactly the code that a `longjmp`
+    /// can cut short. Regions nest; the depth counter handles that.
+    ///
+    /// [`exit_try_region`]: LlFunction::exit_try_region
+    pub fn enter_try_region(&self) {
+        self.reg_counter.enter_try_region();
+    }
+
+    pub fn exit_try_region(&self) {
+        self.reg_counter.exit_try_region();
     }
 
     /// Allocate a fresh stack slot in the function entry block. Returns
@@ -468,7 +496,7 @@ impl LlFunction {
         // regardless of which lowering path emitted it. Textual rewrite
         // on the full IR catches implicit returns, Stmt::Return, and any
         // hand-emitted `ret`.
-        if self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty() {
+        let ir = if self.shadow_frame_slot.is_some() || !self.pre_return_void_calls.is_empty() {
             let mut out = String::with_capacity(ir.len() + 512);
             let mut seq: u32 = 0;
             for line in ir.lines() {
@@ -493,7 +521,25 @@ impl LlFunction {
                 out.push_str(line);
                 out.push('\n');
             }
-            return out;
+            out
+        } else {
+            ir
+        };
+
+        // setjmp volatile promotion (#6385).
+        //
+        // Runs LAST so it sees every instruction, including the ones the
+        // return-site rewrite above just spliced in. Any alloca this function
+        // stores into between a `setjmp` and its `longjmp` (recorded by
+        // `LlBlock::emit` while a try region was open) gets `volatile` loads
+        // and stores, which is what stops mem2reg/SROA from promoting it into
+        // a register that `longjmp` would revert. This replaces the old
+        // `optnone`-the-whole-function hammer.
+        if self.has_try {
+            let try_stores = self.reg_counter.try_region_stores();
+            if !try_stores.is_empty() {
+                return crate::volatile_setjmp::apply_setjmp_volatile(&ir, &try_stores);
+            }
         }
 
         ir

@@ -436,11 +436,27 @@ impl LlModule {
         // `_setjmp` (2-arg ABI), Linux `setjmp` — all need `returns_twice`.
         if self.declared_names.contains("setjmp") || self.declared_names.contains("_setjmp") {
             ir.push_str("\nattributes #0 = { returns_twice }\n");
-            // Functions containing a `try` are marked `#1`. `optnone` skips
-            // mem2reg/SROA so allocas aren't promoted across the setjmp call
-            // (else try-body mutations are invisible to catch after longjmp);
-            // `noinline` keeps the constraint from being lost via inlining.
-            ir.push_str("attributes #1 = { noinline optnone }\n");
+            // Functions containing a `try` are marked `#1`.
+            //
+            // This group used to carry `optnone` as well, to stop mem2reg/SROA
+            // from promoting allocas across the setjmp call (a promoted local
+            // lives in a callee-saved register, which `longjmp` restores to its
+            // setjmp-time value — so try-body mutations were invisible to the
+            // catch). That worked, but it deoptimized the ENTIRE function: just
+            // having a `try` cost ~5x on the surrounding loop even when nothing
+            // ever threw (#6385).
+            //
+            // The promotion is now blocked surgically instead, by emitting
+            // `volatile` loads/stores for exactly the allocas the try body
+            // writes (see `crate::volatile_setjmp`) — LLVM refuses to promote
+            // an alloca with any volatile access. Everything else optimizes.
+            //
+            // `noinline` stays. LLVM's `isInlineViable` already refuses to
+            // inline a function that contains a `returns_twice` call, so this
+            // is belt-and-braces rather than load-bearing — but it keeps the
+            // setjmp frame's identity from depending on an internal inliner
+            // policy, at zero cost.
+            ir.push_str("attributes #1 = { noinline }\n");
         }
         // Verified runtime-helper groups (#6082) — emitted only when a
         // declaration actually references them (mirrors the setjmp gating
