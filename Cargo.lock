@@ -2685,7 +2685,7 @@ dependencies = [
  "gobject-sys 0.20.10",
  "libc",
  "system-deps",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5472,7 +5472,7 @@ dependencies = [
  "perry-dispatch",
  "perry-hir",
  "perry-types",
- "wasm-encoder 0.252.0",
+ "wasm-encoder 0.253.0",
 ]
 
 [[package]]
@@ -9524,12 +9524,12 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.252.0"
+version = "0.253.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8185ae345fa5687c054626ff9a50e7089797a343d9904d1dc9820eb4c4d3196f"
+checksum = "59972d6cd272259de647b7c1f1912e45e289c75ffd4be04e10695507cd7e1b59"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.252.0",
+ "wasmparser 0.253.0",
 ]
 
 [[package]]
@@ -9604,9 +9604,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.252.0"
+version = "0.253.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3eb099dcadcde5be9eef55e3a337128efd4e44b4c93122487e4d2e4e1c6627c"
+checksum = "19db11f87d2486580e1e8b6f494c54df7e0566b87d0b599db843c24019667339"
 dependencies = [
  "bitflags 2.12.1",
  "indexmap",
