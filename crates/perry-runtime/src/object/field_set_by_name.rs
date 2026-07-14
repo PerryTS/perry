@@ -282,6 +282,28 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
     }
+    // A Buffer is an ordinary object in Node (a Uint8Array), so `buf.foo = v`
+    // stores an own property — and an own key SHADOWS the same-named prototype
+    // method. Perry keeps buffers outside the object model (raw BufferHeader,
+    // no GcHeader), so this write used to be dropped entirely. mysql2's
+    // `MockBuffer` packet sizer depends on it: it replaces the write methods of
+    // a zero-length Buffer with a no-op, serializes once to measure, then
+    // allocates for real. Store into the GC-traced buffer own-prop table (the
+    // read side and the method-call dispatch both consult it).
+    if !key.is_null() && crate::buffer::is_registered_buffer(obj as usize) {
+        unsafe {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)) {
+                // Numeric keys are element writes (`buf[0] = 1`) — leave those
+                // to the index path; only NAMED props become expandos.
+                if name.parse::<u32>().is_err() {
+                    crate::buffer::buffer_set_own_prop(obj as usize, name, value);
+                    return;
+                }
+            }
+        }
+    }
     // #5437: a live Web Stream handle arrives here as its raw id in the
     // stream band (the `stream.prop = v` codegen path). React's
     // `renderToReadableStream` attaches its shell-ready promise as an
