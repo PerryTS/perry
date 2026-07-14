@@ -278,6 +278,12 @@ pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
     unsafe {
         let dst = crate::buffer::buffer_data_mut(buf);
         if !dst.is_null() && !chunk.is_empty() {
+            // GC_STORE_AUDIT(POINTER_FREE): raw stdin bytes into a freshly
+            // allocated Buffer's data area. The payload is bytes, never
+            // JSValues, so the destination slots hold no GC references and no
+            // write barrier is required. `buffer_alloc` returns before any
+            // safepoint, so `dst` cannot have been moved between the
+            // allocation and this copy.
             std::ptr::copy_nonoverlapping(chunk.as_ptr(), dst, chunk.len());
         }
     }
