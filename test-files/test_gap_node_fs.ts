@@ -3,9 +3,20 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
-const tmpDir = '/tmp/perry_fs_test_' + Date.now();
-fs.mkdirSync(tmpDir, { recursive: true });
+// `'/tmp/perry_fs_test_' + Date.now()` is not a unique path: Date.now() has
+// millisecond resolution, so two executions that start in the same millisecond
+// pick the SAME directory — and this test ends by tearing its directory down
+// with a recursive rmSync. One run then stats a file another run is deleting,
+// which surfaced on Linux CI as
+//   EACCES: Permission denied, stat '/tmp/perry_fs_test_<ms>/test.txt'
+// and red-lit unrelated PRs at random (it failed one #6409 run and passed the
+// next, on the same commit).
+//
+// mkdtempSync is the primitive for this: the kernel picks the suffix and
+// creates the directory atomically, so no two runs can ever collide.
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perry_fs_test_'));
 
 const testFile = path.join(tmpDir, 'test.txt');
 const testContent = 'hello perry fs';
