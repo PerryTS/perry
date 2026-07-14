@@ -407,7 +407,7 @@ rsa = { version = "0.9", optional = true, default-features = false, features = [
 # the der/spki/const-oid already in the lock).
 x509-cert = { version = "0.2", optional = true, default-features = false, features = ["pem"] }
 spki = { version = "0.7", optional = true, default-features = false, features = ["pem", "alloc"] }
-aes = { version = "0.8", optional = true }
+aes = { version = "0.9", optional = true }
 cbc = { version = "0.1", optional = true }
 ecb = { version = "0.1", optional = true }
 ctr = { version = "0.9", optional = true }
