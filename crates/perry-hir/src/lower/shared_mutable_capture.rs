@@ -873,9 +873,24 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // Capture sites snapshot the WHOLE handle (the array). Leave the bare
         // `LocalGet(id)` capture args alone; still rewrite non-capture children.
         Expr::RegisterClassCaptures { .. } => return,
-        Expr::New { args, .. } => {
+        Expr::New {
+            class_name, args, ..
+        } => {
+            // An OBJECT LITERAL also lowers to `New` — against a synthetic
+            // `__AnonShape_*` whose ctor args are the PROPERTY VALUES, not the
+            // auto-appended capture handles a real class construction carries.
+            // Skipping a bare `LocalGet(boxed)` there stored the one-element array
+            // BOX in the field instead of the value it holds, so `{routing: o}`
+            // produced `routing === [o]`: every other read of `o` is rewritten to
+            // `o[0]` and works, while the object's field holds the cell — the guard
+            // `o.locales.length > 1` passes one line before the literal that then
+            // hands the callee a `routing` whose `.locales` is `undefined`.
+            //
+            // A synthetic shape has no captures, so every one of its args is a value
+            // and must be rewritten.
+            let is_anon_shape = class_name.starts_with("__AnonShape_");
             for a in args.iter_mut() {
-                if matches!(a, Expr::LocalGet(id) if index_uses.contains(id)) {
+                if !is_anon_shape && matches!(a, Expr::LocalGet(id) if index_uses.contains(id)) {
                     continue; // auto-appended capture argument — keep the array handle
                 }
                 rewrite_expr(a, shared, index_uses);

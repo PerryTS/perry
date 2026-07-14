@@ -259,6 +259,33 @@ pub(crate) fn view_backing_data_ptr(addr: usize) -> Option<*mut u8> {
     })
 }
 
+/// A typed array's backing `ArrayBuffer` is reachable only through
+/// `TYPED_ARRAY_VIEW_META`, as a raw address the collector cannot see. Without
+/// this scanner the buffer is swept (or left stale after evacuation) while the
+/// typed array still points at it, and `js_typed_array_backing_buffer` then
+/// hands `js_typed_array_view` a dead pointer. That path does not fail loudly:
+/// it falls back to `js_typed_array_new`, which reinterprets the dead buffer's
+/// *byte* length as an element count — so `subarray(0, 11)` on an
+/// `Int32Array(17)` returned a 68-element array (17 × 4 bytes) over a fresh
+/// store, and the `set` that followed threw "offset is out of bounds".
+///
+/// Root the backing and let the visitor rewrite it, the way every other
+/// object-keyed side table already does.
+pub(crate) fn scan_typed_array_view_meta_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    if !any_view_meta() {
+        return;
+    }
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        for meta in r.borrow_mut().values_mut() {
+            let mut backing = meta.backing as *mut crate::buffer::BufferHeader;
+            visitor.visit_raw_mut_ptr_slot(&mut backing);
+            meta.backing = backing as usize;
+        }
+    });
+}
+
 /// Drop any recorded view metadata for `addr` (called from
 /// `unregister_typed_array` when the typed array is collected).
 pub(crate) fn clear_view_meta(addr: usize) {

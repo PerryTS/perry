@@ -861,6 +861,9 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
             Ok(s) => s,
             Err(_) => return,
         };
+        if !env_name_is_settable(name) {
+            return;
+        }
 
         // Coerce value to string. js_jsvalue_to_string handles
         // numbers/booleans/null/undefined and returns a *mut StringHeader.
@@ -883,6 +886,19 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
             Err(_) => return,
         };
         std::env::set_var(name, v_str);
+        // Keep the cached `process.env` object in step so enumeration
+        // (`Object.keys(process.env)`, `for…in`, spread) sees the new key —
+        // reads go through `js_getenv`, but enumeration walks this object.
+        let cached = CACHED_ENV.with(|c| c.get());
+        if cached != 0.0 {
+            let obj = crate::value::js_nanbox_get_pointer(cached) as *mut crate::ObjectHeader;
+            if !obj.is_null() {
+                let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let val = js_string_from_bytes(v_str.as_ptr(), v_str.len() as u32);
+                let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
+                crate::object::js_object_set_field_by_name(obj, key, val_f64);
+            }
+        }
     }
 }
 
@@ -980,11 +996,50 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
 /// it straight to subsequent PropertyGet dispatch.
 #[no_mangle]
 pub extern "C" fn js_process_env() -> f64 {
-    use std::cell::Cell;
-    ipc::process_ipc_ensure_initialized();
-    thread_local! {
-        static CACHED_ENV: Cell<f64> = const { Cell::new(0.0) };
+    js_process_env_impl()
+}
+
+thread_local! {
+    static CACHED_ENV: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Is `value` the live `process.env` object? Writes to it must reach the real
+/// environment (`js_setenv`), not just the cached field bag: `process.env.X`
+/// READS lower to `js_getenv`, so a field-only store is invisible.
+/// `Object.assign(process.env, parsed)` is how `@next/env` loads `.env` files —
+/// under Perry the keys landed in the object and every read still returned
+/// `undefined`, so a Next.js standalone server saw NONE of its `.env` config
+/// (myairank: `process.env.DATABASE_URL` undefined ⇒ mysql2 connected with an
+/// empty user/database and the MySQL handshake timed out).
+pub fn is_process_env_object(value: f64) -> bool {
+    let cached = CACHED_ENV.with(|c| c.get());
+    cached != 0.0 && cached.to_bits() == value.to_bits()
+}
+
+/// True when `addr` is the heap address of the cached `process.env` object.
+///
+/// The pointer form of [`is_process_env_object`], for call sites that have
+/// already unboxed the target (`Object.assign`'s write funnel).
+pub fn is_process_env_ptr(addr: usize) -> bool {
+    let cached = CACHED_ENV.with(|c| c.get());
+    if cached == 0.0 {
+        return false;
     }
+    crate::value::js_nanbox_get_pointer(cached) as usize == addr
+}
+
+/// `std::env::set_var` PANICS — and, being called from an `extern "C"` frame,
+/// aborts the process — when the name is empty, contains `=`, or contains a NUL
+/// byte. `Object.assign(process.env, parsed)` feeds it arbitrary object keys, so
+/// a single malformed key in a `.env` file would take the whole server down.
+/// Node accepts such an assignment silently, so skip these names rather than
+/// crash.
+fn env_name_is_settable(name: &str) -> bool {
+    !name.is_empty() && !name.contains('=') && !name.contains('\0')
+}
+
+fn js_process_env_impl() -> f64 {
+    ipc::process_ipc_ensure_initialized();
     let cached = CACHED_ENV.with(|c| c.get());
     if cached != 0.0 {
         return cached;

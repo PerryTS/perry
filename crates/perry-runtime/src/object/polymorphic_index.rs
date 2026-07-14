@@ -100,6 +100,27 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
         let Some(index) = numeric_key_i32_index(idx) else {
+            // A NON-numeric computed key on a Buffer (`buf[k]` where `k` is a
+            // method/expando name — mysql2's `MockBuffer` probes
+            // `typeof mock[k] === "function"` over `Packet.prototype`'s names).
+            // Node's Buffer is an ordinary Uint8Array, so this reads the own
+            // property, else the prototype method. Perry returned `undefined`,
+            // so the MockBuffer no-op swap never happened and the packet-sizing
+            // pass wrote into a zero-length Buffer (RangeError
+            // [ERR_OUT_OF_RANGE] at the MySQL handshake).
+            if let Some(name) = buffer_key_name(idx) {
+                if let Some(v) = crate::buffer::buffer_get_own_prop(raw as usize, &name) {
+                    return v;
+                }
+                if crate::object::buffer_dispatch::is_buffer_method_name(&name) {
+                    let bytes = name.as_bytes();
+                    return crate::object::js_class_method_bind(
+                        crate::value::js_nanbox_pointer(raw as i64),
+                        bytes.as_ptr(),
+                        bytes.len(),
+                    );
+                }
+            }
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         };
         let byte_val =
@@ -249,6 +270,15 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
                 index,
                 value as i32,
             );
+            return;
+        }
+        // NON-numeric computed key: an expando / method override
+        // (`mock[k] = noop` — mysql2's MockBuffer neutralizes the write methods
+        // of a zero-length Buffer to MEASURE a packet before allocating it).
+        // Node's Buffer is an ordinary object, so the own key shadows the
+        // prototype method; Perry used to drop the write entirely.
+        if let Some(name) = buffer_key_name(idx) {
+            crate::buffer::buffer_set_own_prop(raw as usize, &name, value);
         }
         return;
     }
@@ -308,5 +338,25 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     // offsets.
     if let Some(index) = numeric_key_u32_index(idx) {
         crate::array::js_array_set_f64_extend(raw as *mut crate::array::ArrayHeader, index, value);
+    }
+}
+
+/// A NON-numeric computed key as a Rust string (`buf["writeInt8"]`), or `None`
+/// when the key isn't a string value. Used by the Buffer own-prop / method-value
+/// arms above.
+fn buffer_key_name(idx: f64) -> Option<String> {
+    let jv = crate::value::JSValue::from_bits(idx.to_bits());
+    if !jv.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(idx) as *const crate::StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len);
+        Some(String::from_utf8_lossy(bytes).into_owned())
     }
 }

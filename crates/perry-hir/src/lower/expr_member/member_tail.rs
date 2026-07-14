@@ -738,7 +738,29 @@ pub(crate) fn lower_member_tail(
             // would return NaN-boxed pointer bits as a denormal f64.
             if let Expr::LocalGet(id) = &*object {
                 if let Some((_, _, ty)) = ctx.locals.iter().find(|(_, lid, _)| lid == id) {
-                    if matches!(ty, Type::Named(n) if n == "Uint8Array" || n == "Buffer") {
+                    // …but ONLY for a numeric key. A Buffer is an ordinary
+                    // object in Node (a Uint8Array), so a STRING key reads a
+                    // property, not a byte: `buf["writeInt8"]` is the method,
+                    // `buf[k] = v` (k non-numeric) an expando. Folding those to
+                    // the byte path returned `undefined` (an out-of-range byte
+                    // read), which broke the ubiquitous feature-probe idiom
+                    // `typeof obj[k] === "function"` — mysql2's `MockBuffer`
+                    // uses it to neutralize the write methods of a zero-length
+                    // Buffer while sizing a packet, so every outgoing MySQL
+                    // packet was measured against a live (empty) buffer and the
+                    // handshake died with RangeError [ERR_OUT_OF_RANGE].
+                    let key_is_string = matches!(index.as_ref(), Expr::String(_))
+                        || matches!(
+                            index.as_ref(),
+                            Expr::LocalGet(kid) if ctx
+                                .locals
+                                .iter()
+                                .find(|(_, lid, _)| lid == kid)
+                                .is_some_and(|(_, _, kty)| matches!(kty, Type::String))
+                        );
+                    if !key_is_string
+                        && matches!(ty, Type::Named(n) if n == "Uint8Array" || n == "Buffer")
+                    {
                         return Ok(Expr::Uint8ArrayGet {
                             array: object,
                             index,

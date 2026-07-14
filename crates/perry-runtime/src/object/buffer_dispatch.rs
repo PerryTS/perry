@@ -360,6 +360,23 @@ pub unsafe fn dispatch_buffer_method(
     } else {
         &[]
     };
+    // An OWN property shadows the prototype method of the same name (Node's
+    // Buffer is an ordinary Uint8Array). mysql2's `MockBuffer` overwrites the
+    // write methods of a zero-length Buffer with a no-op to MEASURE a packet
+    // before allocating it; dispatching the native method regardless would
+    // write into the empty buffer and throw RangeError [ERR_OUT_OF_RANGE].
+    if let Some(own) = crate::buffer::buffer_get_own_prop(addr, method_name) {
+        let jv = JSValue::from_bits(own.to_bits());
+        if jv.is_pointer() {
+            let ptr = jv.as_pointer::<u8>() as usize;
+            if crate::closure::is_closure_ptr(ptr) {
+                let prev_this = crate::object::js_implicit_this_set(buf_f64);
+                let r = crate::closure::js_native_call_value(own, args_ptr, args_len);
+                crate::object::js_implicit_this_set(prev_this);
+                return r;
+            }
+        }
+    }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {
             args[i] as i32

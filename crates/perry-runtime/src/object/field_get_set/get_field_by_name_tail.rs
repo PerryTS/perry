@@ -255,6 +255,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     let b = obj as *const crate::buffer::BufferHeader;
                     return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
                 }
+                // An own property on the Buffer shadows the same-named prototype
+                // method; both reads live in `buffer_own_prop`.
+                if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(
+                    obj, key_bytes, key_ptr, key_len,
+                ) {
+                    return v;
+                }
                 // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.
                 // Perry has no resizable ArrayBuffers, so `resizable` is always
                 // false and `maxByteLength` equals `byteLength`. These live only
