@@ -1,6 +1,51 @@
 use super::*;
 
 thread_local! {
+    /// Set by test-only helpers that wipe page metadata for isolation
+    /// (`old_arena_page_index_clear_for_tests`): real objects become
+    /// unclassifiable in that synthetic state, so the differential verifier
+    /// must stand down for the rest of the thread's test.
+    pub(crate) static CLASSIFIER_VERIFY_SUPPRESSED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// #6179 membership classifier: is `addr` a plausible live GC object start?
+/// UNION of the two backends — exact membership in the malloc registry OR a
+/// plausible arena header on an arena-classified page — deliberately NOT the
+/// exclusive generation branch of `current_heap_header_for_user_ptr`: malloc
+/// allocations can sit inside address ranges the page metadata attributes to
+/// an arena generation, and an exclusive branch then never consults the
+/// (exact) malloc registry, leaving live malloc roots unmarked.
+#[inline]
+pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
+    if addr < GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let header = unsafe { header_from_user_ptr(addr as *const u8) };
+    if super::gc_malloc_header_is_tracked(header) {
+        return true;
+    }
+    !matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Unknown
+    ) && unsafe { super::barrier::plausible_arena_user_ptr_header(header).is_some() }
+}
+
+/// #6179: differential-verification mode for the page-metadata classifier.
+pub(super) fn classifier_verify_enabled() -> bool {
+    if CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get()) {
+        return false;
+    }
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_GC_VERIFY_CLASSIFIER").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
+thread_local! {
     pub(super) static MARK_SEEDS: std::cell::UnsafeCell<Vec<*mut GcHeader>> =
         const { std::cell::UnsafeCell::new(Vec::new()) };
 }
@@ -35,6 +80,19 @@ pub(crate) struct ValidPointerSet {
     /// building the pointer set so evacuation policy Stage 1 doesn't
     /// need a second full arena walk on low-pressure cycles.
     pub(super) tenured_nursery_bytes: usize,
+    /// True only for sets produced by the production census walk
+    /// (`ValidPointerSetBuilder::finish`). The #6179 differential verifier
+    /// runs only on census-built sets: tests fabricate sets with synthetic
+    /// addresses, and classifying those dereferences headers that don't
+    /// exist (panics inside no-unwind scanner contexts → poisoned globals).
+    pub(super) built_by_census: bool,
+    /// #6179: budgeted (precise, non-moving, no-conservative-scan) cycles
+    /// skip the O(heap) exact census entirely; membership routes through the
+    /// page-metadata classifier (differentially verified as a superset of
+    /// the census across the whole suite). Classifier-mode cycles must NEVER
+    /// run a conservative stack scan: conservative words are traced, and a
+    /// heuristic false positive would trace garbage.
+    pub(super) classifier_mode: bool,
 }
 
 impl ValidPointerSet {
@@ -46,6 +104,8 @@ impl ValidPointerSet {
             range_min: usize::MAX,
             range_max: 0,
             tenured_nursery_bytes: 0,
+            built_by_census: false,
+            classifier_mode: false,
         }
     }
 
@@ -53,6 +113,9 @@ impl ValidPointerSet {
     /// order — `ValidPointerSetBuilder` does so via `ArenaObjectCursor`
     /// in address order.
     pub(super) fn push_arena(&mut self, ptr: usize) {
+        if self.classifier_mode {
+            return; // #6179: no exact census in classifier mode
+        }
         if let Some(previous) = self
             .current_arena_run
             .last()
@@ -71,6 +134,9 @@ impl ValidPointerSet {
     }
 
     pub(super) fn push_malloc(&mut self, ptr: usize) {
+        if self.classifier_mode {
+            return; // #6179: no exact census in classifier mode
+        }
         self.lookup_set.insert(ptr);
         self.record_pointer_range(ptr);
     }
@@ -109,17 +175,59 @@ impl ValidPointerSet {
     /// and we skip the binary search.
     #[inline(always)]
     pub(crate) fn maybe_contains(&self, ptr: usize) -> bool {
+        // #6179 classifier mode: no census, so no address range — the
+        // prefilter must pass everything through to `contains()` (call sites
+        // check maybe_contains SEPARATELY before contains and would
+        // otherwise reject every root).
+        if self.classifier_mode {
+            return true;
+        }
         ptr >= self.range_min && ptr <= self.range_max
     }
     #[inline]
     pub(crate) fn contains(&self, ptr: &usize) -> bool {
+        if self.classifier_mode {
+            // No census was built: classify live. FORWARDED rejects are
+            // correct here (budgeted cycles are non-moving; a forwarded
+            // header can only be pre-existing stale state).
+            return classifier_valid_object_start(*ptr);
+        }
         if !self.maybe_contains(*ptr) {
+            // Range-rejected candidates skip the differential check: the
+            // classifier legitimately accepts objects born after the census
+            // (allocate-black keeps them safe), which can lie outside the
+            // censused address range.
             return false;
         }
         // Exact lookup. The B-tree insert path is bounded during
         // `BuildValidPointerSet`, so a tiny GC step cannot trigger a
         // heap-sized hash-table rebuild.
-        self.lookup_set.contains(ptr)
+        let exact = self.lookup_set.contains(ptr);
+        // #6179 differential verification (PERRY_GC_VERIFY_CLASSIFIER=1):
+        // before the exact set can be replaced by page-metadata
+        // classification on precise cycles, the classifier must be proven a
+        // SUPERSET of the census on every query — a censused object the
+        // classifier rejects would be un-markable, i.e. swept live. The
+        // other direction (classifier accepts, census lacks) is expected:
+        // objects allocated after the census walk; over-approximation is
+        // safe (bounded floating garbage under allocate-black).
+        if exact && self.built_by_census && classifier_verify_enabled() {
+            let heur = classifier_valid_object_start(*ptr);
+            // Censused-then-MOVED is a legitimate divergence: the plausible-
+            // header check rejects FORWARDED headers by design (the object
+            // lives at its new address; the copying machinery owns the
+            // redirect).
+            let forwarded = !heur
+                && unsafe {
+                    let header = header_from_user_ptr(*ptr as *const u8);
+                    (*header).gc_flags & GC_FLAG_FORWARDED != 0
+                };
+            assert!(
+                heur || forwarded,
+                "classifier rejected censused object {ptr:#x} — page metadata / header heuristic disagrees with the exact valid-pointer set"
+            );
+        }
+        exact
     }
 
     /// Issue #73: interior-pointer lookup. Given a scanned word, find
@@ -204,6 +312,16 @@ pub(super) struct ValidPointerSetBuilderSnapshot {
 }
 
 impl ValidPointerSetBuilder {
+    /// #6179: budgeted-cycle flavor — the census walk still runs (it feeds
+    /// tenured_nursery_bytes for evacuation policy) but nothing is inserted
+    /// into the exact set; membership resolves via the classifier. Saves the
+    /// O(heap) BTreeSet held across the whole sliced cycle.
+    pub(super) fn new_classifier() -> Self {
+        let mut b = Self::new();
+        b.set.classifier_mode = true;
+        b
+    }
+
     pub(super) fn new() -> Self {
         Self {
             set: ValidPointerSet::new(),
@@ -276,6 +394,7 @@ impl ValidPointerSetBuilder {
     }
 
     pub(super) fn finish(mut self) -> ValidPointerSet {
+        self.set.built_by_census = true;
         if self.phase != ValidPointerSetBuildPhase::Done {
             while !self.step(usize::MAX) {}
         }
@@ -509,11 +628,18 @@ pub(super) fn try_mark_young_user_ptr_as_seed(
     if ptr_val == 0 || !valid_ptrs.contains(&ptr_val) {
         return false;
     }
-    if !matches!(
-        crate::arena::classify_heap_generation(ptr_val),
-        crate::arena::HeapGeneration::Nursery
-    ) {
-        return false;
+    match crate::arena::classify_heap_generation(ptr_val) {
+        crate::arena::HeapGeneration::Nursery => {}
+        // Non-arena member of the valid-pointer set = malloc-GC object.
+        // Minors sweep the malloc registry, and malloc objects are NOT
+        // black-leafed in minor traces (they can hold nursery children),
+        // so an RS-reachable malloc child must be seeded and traced
+        // exactly like a nursery one — otherwise the malloc sweep frees
+        // it while its only referrer is a clean old parent.
+        crate::arena::HeapGeneration::Unknown => {}
+        crate::arena::HeapGeneration::Old | crate::arena::HeapGeneration::Longlived => {
+            return false;
+        }
     }
     unsafe {
         let header = header_from_user_ptr(ptr_val as *const u8);
@@ -579,6 +705,27 @@ pub(super) fn trace_one_worklist_header(
 ) {
     unsafe {
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+        // #6228: a FORWARDED header (array growth installs PERMANENT
+        // forwarding stubs — types.rs set_forwarding_address — so stale
+        // pre-growth pointers keep resolving for reads) must propagate
+        // liveness to its target instead of tracing as zero-children. The
+        // deforestation pass manufactures exactly such a stale pointer as
+        // the ONLY reference (direct-call `var b = build(n)`), and without
+        // this hop the live post-growth array was swept: length 0 / NaN
+        // reads past 32 MiB. Mirrors the (previously dead-code) trace_array
+        // path, plus MARKING the target — worklist membership alone does
+        // not protect it from the sweep.
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            let new_user = forwarding_address(header) as usize;
+            if new_user >= 0x1000 && valid_ptrs.contains(&new_user) {
+                let new_header = header_from_user_ptr(new_user as *const u8);
+                if (*new_header).gc_flags & GC_FLAG_MARKED == 0 {
+                    (*new_header).gc_flags |= GC_FLAG_MARKED;
+                    worklist.push(new_header);
+                }
+            }
+            return;
+        }
         // C3b/C4 generational skip: in minor mode, an object
         // is treated as a black leaf when it lives in OLD_ARENA
         // (Phase B physical region) OR carries GC_FLAG_TENURED

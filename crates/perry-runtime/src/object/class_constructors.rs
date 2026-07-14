@@ -30,17 +30,25 @@ use super::ObjectHeader;
 /// Top-level class DECLARATIONS keep the INT32 class-ref `new` path and do not
 /// consult this table, so registering every class's constructor is
 /// behavior-neutral for them.
-pub static CLASS_CONSTRUCTORS: RwLock<Option<HashMap<u32, (usize, u32)>>> = RwLock::new(None);
+pub static CLASS_CONSTRUCTORS: RwLock<Option<HashMap<u32, (usize, u32, u32)>>> = RwLock::new(None);
 
 /// #1787: register a class's standalone constructor in `CLASS_CONSTRUCTORS`,
 /// keyed by the (template) class_id, so `new <classObjectValue>()` can replay
 /// the constructor / field initializers on a dynamically-allocated instance.
 /// Emitted by codegen at module init alongside the vtable registration.
+/// `sig_caps` (#5957): how many of the ctor's TRAILING params are synthesized
+/// `__perry_cap_*` capture params IN THE SIGNATURE. The construct dispatchers
+/// used to derive the user/cap split from the decl-site SNAPSHOT length —
+/// wrong for dynamic-parent classes whose ctors compile CAPLESS signatures
+/// (parent fetched via the per-cid registry) while a snapshot IS registered
+/// (extends-expr refs join the capture union): the subtraction ate user args
+/// (`new WrappedLogged("alpha")` bound the mixin ctor's `seed` to undefined).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_class_constructor(
     class_id: i64,
     func_ptr: i64,
     param_count: i64,
+    sig_caps: i64,
 ) {
     if class_id == 0 || func_ptr == 0 {
         return;
@@ -49,14 +57,15 @@ pub unsafe extern "C" fn js_register_class_constructor(
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
-    guard
-        .as_mut()
-        .unwrap()
-        .insert(class_id as u32, (func_ptr as usize, param_count as u32));
+    guard.as_mut().unwrap().insert(
+        class_id as u32,
+        (func_ptr as usize, param_count as u32, sig_caps as u32),
+    );
 }
 
-/// Look up a class's registered constructor `(fn_ptr, total_param_count)`.
-fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32)> {
+/// Look up a class's registered constructor
+/// `(fn_ptr, total_param_count, sig_cap_count)`.
+fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32, u32)> {
     CLASS_CONSTRUCTORS
         .read()
         .ok()?
@@ -383,71 +392,100 @@ pub unsafe extern "C" fn js_super_construct_apply(
     let mut cur = crate::object::get_parent_class_id(child_cid).unwrap_or(0);
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
-        if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
+        if let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(cur) {
             if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
                 eprintln!(
-                    "super_apply resolved ancestor cid={} total={}",
-                    cur, total_params
+                    "super_apply resolved ancestor cid={} total={} sig_caps={}",
+                    cur, total_params, sig_caps
                 );
             }
             let caps = class_capture_values(cur).unwrap_or_default();
-            let user_params = (total_params as usize).saturating_sub(caps.len());
+            // #5957: split user/cap slots from the SIGNATURE cap count, NOT the
+            // decl-site snapshot length. A dynamic-parent ctor compiles a
+            // CAPLESS signature (sig_caps == 0) yet may have a registered
+            // snapshot (extends-expr refs joined the capture union) — the old
+            // `total - caps.len()` ate user args (`new WrappedLogged("alpha")`
+            // bound the mixin ctor's `seed` to undefined).
+            let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
             let n = if arr.is_null() {
                 0
             } else {
                 crate::array::js_array_length(arr)
             } as usize;
-            // Flatten every SPREAD-expanded arg into a contiguous f64 buffer and
-            // let `call_vtable_method` pack the trailing param. When the parent
-            // ctor uses `arguments` (a zero-declared-param pass-through ctor:
-            // `super(...[3,4,5])` → parent reads `arguments.length`), the
-            // synthesized `arguments` slot must hold ALL args (packed from index
-            // 0); a user rest param (`constructor(a, ...rest)`) holds only the
-            // args from the rest position onward. The old truncation to
-            // `user_params` (and `has_synth=false`/`has_rest=false`) dropped the
-            // extra spread args and left `arguments.length == 0`. `caps` (the
-            // decl-site capture snapshot for a function-nested class) are
-            // appended AFTER the user args, mirroring the fixed-arity super path.
-            // `call_vtable_method`'s synth/rest packing bundles the trailing
-            // param from the flat arg buffer — but it packs from index 0 for
-            // synthesized `arguments` and would swallow any trailing capture
-            // params. Function-nested capturing ctors never combine caps with a
-            // synth/rest trailing param in practice, so only take the flat-
-            // forward path when there are no caps; otherwise keep the original
-            // fixed-arity truncation (caps appended after user args).
-            let (mut has_synth, mut has_rest_flag) = lookup_class_constructor_flags(cur);
-            if !caps.is_empty() {
-                has_synth = false;
-                has_rest_flag = false;
-            }
-            let mut final_args: Vec<f64> = Vec::with_capacity(user_params.max(n) + caps.len());
-            if has_synth || has_rest_flag {
-                // Forward all n spread args flat; call_vtable_method packs the
-                // trailing synthesized-`arguments` / rest slot (from index 0 for
-                // `arguments`, from the rest position for a user rest param).
-                for i in 0..n {
-                    final_args.push(crate::array::js_array_get_f64(arr, i as u32));
+            let (has_synth, has_rest_flag) = lookup_class_constructor_flags(cur);
+            let (final_args, call_synth, call_rest) = if sig_caps == 0 {
+                // No signature cap params: #6018's synth/rest handling applies
+                // cleanly — forward all spread args flat and let
+                // `call_vtable_method` pack the trailing synthesized-`arguments`
+                // (from index 0) or user-rest (from the rest position) slot.
+                let mut fa: Vec<f64> = Vec::with_capacity(user_params.max(n));
+                if has_synth || has_rest_flag {
+                    for i in 0..n {
+                        fa.push(crate::array::js_array_get_f64(arr, i as u32));
+                    }
+                    (fa, has_synth, has_rest_flag)
+                } else {
+                    for i in 0..user_params {
+                        fa.push(if i < n {
+                            crate::array::js_array_get_f64(arr, i as u32)
+                        } else {
+                            undef
+                        });
+                    }
+                    (fa, false, false)
                 }
             } else {
-                for i in 0..user_params {
-                    if i < n {
-                        final_args.push(crate::array::js_array_get_f64(arr, i as u32));
-                    } else {
-                        final_args.push(undef);
+                // #5957: the signature HAS trailing `__perry_cap_*` params.
+                // Pack the user args ourselves — rest-aware (a `constructor(
+                // ...parts)` that ALSO captures combines a rest param with
+                // trailing caps, which `call_vtable_method`'s own rest packing
+                // would swallow) — then append exactly `sig_caps` snapshot
+                // values. Call with synth/rest OFF since we packed the trailing
+                // slot manually.
+                let mut fa: Vec<f64> = Vec::with_capacity(total_params as usize);
+                let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+                    .map(|ri| ri as usize)
+                    .filter(|ri| *ri < user_params);
+                if let Some(ri) = rest_idx {
+                    for i in 0..ri {
+                        fa.push(if i < n {
+                            crate::array::js_array_get_f64(arr, i as u32)
+                        } else {
+                            undef
+                        });
+                    }
+                    let mut rest_arr = crate::array::js_array_alloc(0);
+                    let mut i = ri;
+                    while i < n {
+                        rest_arr = crate::array::js_array_push_f64(
+                            rest_arr,
+                            crate::array::js_array_get_f64(arr, i as u32),
+                        );
+                        i += 1;
+                    }
+                    fa.push(crate::value::js_nanbox_pointer(rest_arr as i64));
+                } else {
+                    for i in 0..user_params {
+                        fa.push(if i < n {
+                            crate::array::js_array_get_f64(arr, i as u32)
+                        } else {
+                            undef
+                        });
                     }
                 }
-                for bits in &caps {
-                    final_args.push(f64::from_bits(*bits));
+                for slot in 0..sig_caps as usize {
+                    fa.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
                 }
-            }
+                (fa, false, false)
+            };
             let _ = call_vtable_method(
                 ctor_ptr,
                 this_raw,
                 final_args.as_ptr(),
                 final_args.len(),
                 total_params,
-                has_synth,
-                has_rest_flag,
+                call_synth,
+                call_rest,
             );
             return undef;
         }
@@ -546,7 +584,12 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     };
     let parent_cid = match crate::object::get_parent_class_id(child_class_id) {
         Some(p) if p != 0 => p,
-        _ => return undef,
+        // #6316: `class Bus extends EventEmitter` has NO registered parent —
+        // the native base is not a perry class, so nothing was ever wired into
+        // CLASS_REGISTRY. Before this, `super.emit(…)` fell off here and
+        // silently returned `undefined`. The base method the subclass override
+        // displaced is the correct target.
+        _ => return call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef),
     };
     // Static-context super call (`super.m()` inside a `static` method): the
     // receiver is the class constructor (a ClassRef), so resolve the PARENT's
@@ -622,7 +665,52 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         super::IMPLICIT_THIS.with(|c| c.set(prev_this));
         return result;
     }
-    undef
+    // #6316: the parent chain is real (an intermediate user class) but bottoms
+    // out in a NATIVE base whose surface perry stamps onto the instance —
+    // `class Logged extends Bus`, `class Bus extends EventEmitter`. Neither the
+    // vtable nor the prototype registry knows `emit`; the displaced base method
+    // does. Runs LAST so a genuine user-class parent method always wins.
+    call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef)
+}
+
+/// Invoke the native base method a subclass override displaced (#6316), with
+/// `this` bound to the receiver. Falls back to `undef` when the receiver carries
+/// no such method — an ordinary `super.m()` miss stays `undefined`.
+///
+/// # Safety
+/// `args_ptr` must point to `args_len` valid `f64`s (or be null when
+/// `args_len == 0`).
+unsafe fn call_displaced_native_base_method(
+    this_value: f64,
+    name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+    undef: f64,
+) -> f64 {
+    let Some(method_value) = crate::node_stream::displaced_native_base_method(this_value, name)
+    else {
+        // #6325: the `Map`/`Set` bases serve their surface by redirecting the
+        // OPERATION onto a hidden backing collection, not by stamping method
+        // closures onto the instance — so an override displaces nothing and
+        // there is no closure here to call. `super.get(k)` / `super.set(k, v)` /
+        // … dispatch on the backing instead. Returns `undef` for a receiver with
+        // no backing, keeping the ordinary `super.m()`-miss contract.
+        let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        return crate::object::map_set_subclass::super_collection_method(this_value, name, args)
+            .unwrap_or(undef);
+    };
+    // The stashed closure already captures the receiver in slot 0, but bind
+    // IMPLICIT_THIS too: the shared emitter/stream stubs read their receiver
+    // through `this_value(closure)`, which falls back to IMPLICIT_THIS when the
+    // capture is undefined (the prototype-installed form).
+    let prev_this = super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits()));
+    let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
+    super::IMPLICIT_THIS.with(|c| c.set(prev_this));
+    result
 }
 
 /// Keepalive anchor (generated-code-only callee).
@@ -723,29 +811,55 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
     let mut cur = parent_cid;
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
-        if let Some((ctor_ptr, total_params)) = lookup_class_constructor(cur) {
+        if let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(cur) {
+            // #5957: signature-truth user/cap split + rest-aware packing (see
+            // `js_super_construct_apply`). This flat dispatcher is the one the
+            // dynamic-parent super leg reaches (`js_fetch_or_value_super` →
+            // ClassRef fallback), so the capless-sig-with-snapshot mixin case
+            // resolves here: sig_caps == 0 ⇒ user_params == total_params ⇒ the
+            // forwarded user args survive.
             let caps = class_capture_values(cur).unwrap_or_default();
-            let user_params = (total_params as usize).saturating_sub(caps.len());
+            let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
             if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
                 eprintln!(
-                    "flat_super cid={} total={} caps={} args_len={} rest={:?}",
+                    "flat_super cid={} total={} sig_caps={} snapshot={} args_len={} rest={:?}",
                     cur,
                     total_params,
+                    sig_caps,
                     caps.len(),
                     args_len,
                     crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
                 );
             }
-            let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-            for i in 0..user_params {
+            let get = |i: usize| -> f64 {
                 if !args_ptr.is_null() && i < args_len {
-                    final_args.push(*args_ptr.add(i));
+                    unsafe { *args_ptr.add(i) }
                 } else {
-                    final_args.push(undef);
+                    undef
+                }
+            };
+            let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
+            let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+                .map(|ri| ri as usize)
+                .filter(|ri| *ri < user_params);
+            if let Some(ri) = rest_idx {
+                for i in 0..ri {
+                    final_args.push(get(i));
+                }
+                let mut rest_arr = crate::array::js_array_alloc(0);
+                let mut i = ri;
+                while i < args_len {
+                    rest_arr = crate::array::js_array_push_f64(rest_arr, get(i));
+                    i += 1;
+                }
+                final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
+            } else {
+                for i in 0..user_params {
+                    final_args.push(get(i));
                 }
             }
-            for bits in &caps {
-                final_args.push(f64::from_bits(*bits));
+            for slot in 0..sig_caps as usize {
+                final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
             }
             let _ = call_vtable_method(
                 ctor_ptr,
@@ -836,17 +950,48 @@ pub(crate) unsafe fn replay_class_object_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) {
-    let Some((ctor_ptr, total_params)) = lookup_class_constructor(class_cid) else {
+    // Spec: a derived class with no own `constructor` gets the implicit
+    // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
+    // must run with the same argument list. `lookup_class_constructor` holds
+    // OWN ctors only, so walk the parent chain (static edges and the
+    // dynamically-registered `class X extends <runtime value>` edges both
+    // live in CLASS_REGISTRY). Bailing out here instead constructed a
+    // FIELD-LESS instance silently — mysql2's promise mixin
+    // (`module.exports = class extends Pool { promise() {…} }`) produced a
+    // Pool whose ctor never ran, so `pool.config` was undefined and Next.js
+    // requests died far from the fault (myairank wall 7).
+    let mut ctor_cid = class_cid;
+    let mut depth = 0usize;
+    let found = loop {
+        if let Some(found) = lookup_class_constructor(ctor_cid) {
+            break Some(found);
+        }
+        match super::class_registry::get_parent_class_id(ctor_cid) {
+            Some(p) if p != 0 && p != ctor_cid && depth < 32 => {
+                ctor_cid = p;
+                depth += 1;
+            }
+            _ => break None,
+        }
+    };
+    let Some((ctor_ptr, total_params, sig_caps)) = found else {
         return;
     };
 
     // Read the snapshotted captures (an own array, in capture-param order).
-    // Absent → no captures.
-    let caps_val = crate::object::js_object_get_own_field_or_undef(
-        classobj_value,
-        b"__perry_ctor_caps".as_ptr(),
-        17,
-    );
+    // Absent → no captures. The `__perry_ctor_caps` snapshot on this class
+    // object belongs to ITS OWN ctor — when the walk above resolved an
+    // ANCESTOR's ctor, that snapshot doesn't apply; use the ancestor's
+    // decl-site snapshot (CLASS_CAPTURE_VALUES) via the fallback below.
+    let caps_val = if ctor_cid == class_cid {
+        crate::object::js_object_get_own_field_or_undef(
+            classobj_value,
+            b"__perry_ctor_caps".as_ptr(),
+            17,
+        )
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
     let caps_jv = crate::value::JSValue::from_bits(caps_val.to_bits());
     let (caps_arr, n_caps): (*const crate::array::ArrayHeader, u32) = if caps_jv.is_pointer() {
         let arr = caps_jv.as_pointer::<crate::array::ArrayHeader>();
@@ -867,12 +1012,16 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // (p-queue's `new PQueue({...})` left `i.default` undefined and
     // `new e.queueClass` threw "undefined is not a constructor").
     let snapshot_caps: Vec<u64> = if n_caps == 0 {
-        class_capture_values(class_cid).unwrap_or_default()
+        // Keyed by the ctor's OWNING class (`ctor_cid` — differs from
+        // `class_cid` when the parent walk resolved an ancestor's ctor).
+        class_capture_values(ctor_cid).unwrap_or_default()
     } else {
         Vec::new()
     };
-    let effective_caps = (n_caps as usize).max(snapshot_caps.len());
-    let user_params = (total_params as usize).saturating_sub(effective_caps);
+    // #5957: user/cap split from the SIGNATURE cap count (not the per-eval /
+    // snapshot length — a dynamic-parent ctor is capless while a snapshot
+    // exists, and the old `max(per-eval, snapshot)` subtraction ate user args).
+    let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
     // #wall3: a `constructor(...args)` (rest param) called via the dynamic
@@ -913,11 +1062,18 @@ pub(crate) unsafe fn replay_class_object_constructor(
             }
         }
     }
-    for j in 0..n_caps {
-        final_args.push(crate::array::js_array_get_f64(caps_arr, j));
-    }
-    for bits in &snapshot_caps {
-        final_args.push(f64::from_bits(*bits));
+    // Exactly `sig_caps` trailing cap slots: per-evaluation snapshot first
+    // (class EXPRESSIONS carry `__perry_ctor_caps`), decl-site snapshot second
+    // (class DECLARATIONS reached as heap values), undefined last.
+    for slot in 0..sig_caps as usize {
+        let v = if (slot as u32) < n_caps {
+            crate::array::js_array_get_f64(caps_arr, slot as u32)
+        } else if let Some(bits) = snapshot_caps.get(slot) {
+            f64::from_bits(*bits)
+        } else {
+            undef
+        };
+        final_args.push(v);
     }
     let _ = call_vtable_method(
         ctor_ptr,
@@ -942,15 +1098,42 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) {
-    let Some((ctor_ptr, total_params)) = lookup_class_constructor(class_cid) else {
+    // Spec: a derived class with no own `constructor` gets the implicit
+    // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
+    // runs with the same argument list. `lookup_class_constructor` holds OWN
+    // ctors only, so walk the parent chain (static edges and the
+    // dynamically-registered `class X extends <runtime value>` edges both
+    // live in CLASS_REGISTRY). Bailing out here instead constructed a
+    // FIELD-LESS instance silently — mysql2's promise mixin
+    // (`module.exports = class extends Pool { promise() {…} }`) produced a
+    // Pool whose ctor never ran, and the first `.config` read blew up far
+    // from the fault.
+    let mut ctor_cid = class_cid;
+    let mut depth = 0usize;
+    let found = loop {
+        if let Some(found) = lookup_class_constructor(ctor_cid) {
+            break Some(found);
+        }
+        match super::class_registry::get_parent_class_id(ctor_cid) {
+            Some(p) if p != 0 && p != ctor_cid && depth < 32 => {
+                ctor_cid = p;
+                depth += 1;
+            }
+            _ => break None,
+        }
+    };
+    let Some((ctor_ptr, total_params, sig_caps)) = found else {
         return;
     };
 
     // A function-nested class declaration may carry a decl-site capture
     // snapshot (see CLASS_CAPTURE_VALUES). The ctor's trailing
     // `__perry_cap_<id>` params are filled from it; user args fill the rest.
-    let caps = class_capture_values(class_cid).unwrap_or_default();
-    let user_params = (total_params as usize).saturating_sub(caps.len());
+    // #5957: the split is the SIGNATURE cap count, not the snapshot length.
+    // Keyed by the ctor's OWNING class (`ctor_cid`), which differs from
+    // `class_cid` when the walk above resolved an ancestor's ctor.
+    let caps = class_capture_values(ctor_cid).unwrap_or_default();
+    let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
@@ -993,8 +1176,8 @@ pub(crate) unsafe fn replay_registered_class_constructor(
             }
         }
     }
-    for bits in &caps {
-        final_args.push(f64::from_bits(*bits));
+    for slot in 0..sig_caps as usize {
+        final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
     }
     let _ = call_vtable_method(
         ctor_ptr,

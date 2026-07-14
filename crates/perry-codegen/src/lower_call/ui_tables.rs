@@ -342,11 +342,25 @@ pub fn perry_plugin_instance_method_lookup(method: &str) -> Option<&'static UiSi
 /// lazy-declares the runtime function, emits the call, and boxes the
 /// return value per `sig.ret`.
 ///
-/// Args length mismatch (caller passed wrong number of args) → falls
-/// back to lowering all args for side effects + returning the
-/// zero-sentinel. The catch-all is intentional: TS users may write
-/// `Text()` (no arg) or `Text(s, extra)` and we don't want to bail
-/// the entire compilation.
+/// Arity handling (issue #6087). A row's `args` is the *runtime ABI*, which
+/// is wider than the TypeScript surface whenever the `.d.ts` marks a trailing
+/// param optional (`shareText(text, title?)`, `Image(url, alt?)`,
+/// `stop(handle, fadeOutMs?)`). Three shapes are accepted:
+///
+/// * exactly `sig.args.len()` args — the common case;
+/// * one *extra* trailing arg on a `Widget`-returning constructor — absorbed
+///   as an inline style object (issue #185, see `apply_inline_style`);
+/// * *fewer* args, where every omitted trailing param is a `Str`/`F64` — the
+///   TS-optional case. Those are padded with the empty value (`""` / `0`) and
+///   the call is emitted for real.
+///
+/// Anything else is a hard compile error. This branch used to lower the args
+/// for their side effects and return the `0.0` sentinel — i.e. **silently drop
+/// the call**. That silence is what turned the `perry/system` name-collision
+/// bug (#6087) into a silent miscompile instead of a diagnostic, and it also
+/// meant a legitimate-but-under-supplied `Image(url)` compiled to no widget at
+/// all. A dropped call must never be the answer to an arity we don't
+/// understand.
 pub fn lower_perry_ui_table_call(
     ctx: &mut FnCtx<'_>,
     sig: &UiSig,
@@ -422,6 +436,33 @@ pub fn lower_perry_ui_table_call(
         args
     };
 
+    // Issue #6087: pad TS-optional trailing params so the call is actually
+    // emitted. The dispatch row always spells the full runtime ABI, but the
+    // `.d.ts` lets the caller omit a trailing `title?` / `alt?` / `fadeMs?`.
+    // Pre-fix those calls hit the arity mismatch below and were dropped
+    // wholesale — `shareText("hi")` and `Image(url)` compiled to nothing.
+    // Only value-shaped kinds have a meaningful empty value; a missing
+    // `Widget` handle or `Closure` can't be synthesized, so those fall
+    // through to the hard error.
+    let padded_args: Vec<Expr>;
+    let args: &[Expr] = if args.len() < sig.args.len()
+        && sig.args[args.len()..]
+            .iter()
+            .all(|k| matches!(k, UiArgKind::Str | UiArgKind::F64))
+    {
+        let mut padded: Vec<Expr> = args.to_vec();
+        for kind in &sig.args[args.len()..] {
+            padded.push(match kind {
+                UiArgKind::Str => Expr::String(String::new()),
+                _ => Expr::Integer(0),
+            });
+        }
+        padded_args = padded;
+        &padded_args[..]
+    } else {
+        args
+    };
+
     let inline_style_arg: Option<&Expr> =
         if args.len() == sig.args.len() + 1 && matches!(sig.ret, UiReturnKind::Widget) {
             Some(&args[sig.args.len()])
@@ -431,12 +472,20 @@ pub fn lower_perry_ui_table_call(
     let declared_arg_count = sig.args.len();
 
     if args.len() != declared_arg_count && inline_style_arg.is_none() {
-        // Mismatched arity (and not a trailing-style absorption case)
-        // — fall back to side-effect lowering only.
-        for a in args {
-            let _ = lower_expr(ctx, a)?;
-        }
-        return Ok(double_literal(0.0));
+        // Issue #6087: a `perry/*` builtin called with an arity the runtime
+        // ABI cannot accept. Everything legitimate has been absorbed above
+        // (arg adapters, inline style, optional trailing params), so this is
+        // a genuine mismatch — fail the compile instead of quietly emitting
+        // no call at all, which is what let #6087 hide for so long.
+        anyhow::bail!(
+            "perry/* builtin `{}` takes {} argument(s), but it was called with {}.\n  \
+             note: it lowers to the native runtime symbol `{}`, whose ABI is fixed — \
+             the call cannot be emitted with this arity.",
+            sig.method,
+            declared_arg_count,
+            args.len(),
+            sig.runtime,
+        );
     }
 
     // Lower each arg according to its declared kind. Build two parallel

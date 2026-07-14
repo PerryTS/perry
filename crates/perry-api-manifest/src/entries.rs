@@ -127,6 +127,10 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/i18n",
     "worker_threads",
     "perry/thread",
+    // `perry/gc` — explicit GC control (collect / minor / idleHint).
+    // Served entirely by perry-runtime; a no-op-style Perry-native
+    // surface like `perry/thread` (doesn't resolve under Node/Bun).
+    "perry/gc",
     "perry/updater",
     "perry/container",
     "perry/container-compose",
@@ -217,6 +221,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perry/widget",
     "perry/i18n",
     "perry/thread",
+    "perry/gc",
     "perry/media",
     "perry/audio",
     "perry/tui",

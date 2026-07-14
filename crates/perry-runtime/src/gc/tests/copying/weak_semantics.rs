@@ -108,3 +108,130 @@ fn test_copying_minor_weakmap_dead_key_entry_clears() {
          key slot repaired to the moved address)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FinalizationRegistry on AUTOMATIC cycles + weak unregister tokens
+// (2026-07-09 GC audit, wave 2 batch A).
+// ---------------------------------------------------------------------------
+
+extern "C" fn finreg_test_callback(
+    _closure: *const crate::closure::ClosureHeader,
+    _held: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Allocate a FinalizationRegistry with a real (callable) cleanup closure and
+/// root it in shadow slot 0. Returns nothing — read the registry back through
+/// the slot so post-move addresses stay correct.
+fn make_rooted_finreg() {
+    let cb = crate::closure::js_closure_alloc(finreg_test_callback as *const u8, 0);
+    let cb_val = f64::from_bits(ptr_bits(cb as usize));
+    let reg = crate::weakref::js_finreg_new(cb_val);
+    js_shadow_slot_set(0, object_bits(reg));
+}
+
+/// An AUTOMATIC collection (non-Manual trigger — `gc_collect_minor` captures
+/// `GcTriggerKind::Direct`) must ENQUEUE the cleanup job for a collected
+/// target, and a second automatic cycle must not enqueue it again
+/// (enqueue-once via the record's pending-flag reset). Before the fix,
+/// `enqueue_callbacks` was gated on `GcTriggerKind::Manual`, so ordinary
+/// servers never ran any FinalizationRegistry cleanup callback.
+#[test]
+fn test_finreg_job_enqueued_after_automatic_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    make_rooted_finreg();
+
+    {
+        // Target reachable only from this scope — dead at the first minor.
+        let target = crate::object::js_object_alloc(0, 0);
+        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+        let _ = crate::weakref::js_finreg_register(
+            reg_v,
+            f64::from_bits(object_bits(target)),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+    assert_eq!(crate::weakref::pending_finalization_jobs_count(), 0);
+
+    let _ = gc_collect_minor();
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        1,
+        "automatic copied-minor must enqueue the cleanup job for the dead target"
+    );
+
+    let _ = gc_collect_minor();
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        1,
+        "a second automatic cycle must NOT re-enqueue the same record"
+    );
+}
+
+/// The microtask-pump drain converts recorded jobs into nextTick callback
+/// invocations exactly once: it removes the record from the registry, queues
+/// the tick job, and a second drain is a no-op.
+#[test]
+fn test_pump_drain_delivers_automatic_finreg_jobs_once() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    make_rooted_finreg();
+
+    {
+        let target = crate::object::js_object_alloc(0, 0);
+        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+        let _ = crate::weakref::js_finreg_register(
+            reg_v,
+            f64::from_bits(object_bits(target)),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+    let _ = gc_collect_minor();
+    assert_eq!(crate::weakref::pending_finalization_jobs_count(), 1);
+
+    let delivered = crate::weakref::drain_pending_finalization_jobs();
+    assert_eq!(delivered, 1, "drain must deliver the recorded job");
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        0,
+        "delivery consumes the pending-jobs vec"
+    );
+    assert_eq!(
+        crate::weakref::drain_pending_finalization_jobs(),
+        0,
+        "a second drain must be a no-op (no double-delivery)"
+    );
+}
+
+/// The unregister token slot is WEAK (spec [[UnregisterToken]]): the canonical
+/// `registry.register(obj, held, obj)` must not pin `obj` immortal. Before the
+/// fix, record field 1 (the token) was traced strongly, so the target survived
+/// every collection and no cleanup job was ever recorded.
+#[test]
+fn test_finreg_unregister_token_held_weakly() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    make_rooted_finreg();
+
+    {
+        let target = crate::object::js_object_alloc(0, 0);
+        let target_v = f64::from_bits(object_bits(target));
+        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+        // register(obj, held, obj): the target doubles as its own token.
+        let _ = crate::weakref::js_finreg_register(
+            reg_v,
+            target_v,
+            f64::from_bits(crate::value::TAG_TRUE),
+            target_v,
+        );
+    }
+
+    let _ = gc_collect_minor();
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        1,
+        "register(obj, held, obj): the token edge must not keep the target \
+         alive — the target must die and its cleanup job must be recorded"
+    );
+}

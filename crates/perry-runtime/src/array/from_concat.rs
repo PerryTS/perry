@@ -260,6 +260,19 @@ pub(crate) fn append_concat_arg(result: *mut ArrayHeader, value: f64) -> *mut Ar
     // Is the spreadable flag explicitly set?
     let spreadable = read_concat_spreadable(value);
 
+    // `class X extends Array` — the instance is object-backed, so the dense
+    // `ArrayHeader` spread below would misread it. `js_array_is_array` reports
+    // true for it, so intercept before that branch and spread a dense snapshot
+    // of its elements (honoring an explicit `@@isConcatSpreadable === false`).
+    if crate::array::is_array_subclass_instance(value) {
+        if spreadable == Some(false) {
+            return js_array_push_f64(result, value);
+        }
+        let snap = crate::array::array_subclass_dense_snapshot(value);
+        let snap_ptr = (snap.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
+        return append_spread_array(result, snap_ptr);
+    }
+
     // Arrays (and set/map/typed-array/buffer that concat treats array-like via
     // js_array_concat) spread by default, unless @@isConcatSpreadable === false.
     let is_array = js_array_is_array(value).to_bits() == 0x7FFC_0000_0000_0004;

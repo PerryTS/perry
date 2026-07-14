@@ -80,6 +80,13 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
         fired = true;
         i += 1;
     }
+
+    // `cp_build_readable` installs node:stream's async iterator on stdout/stderr,
+    // and that iterator registers its `data`/`end`/`error` listeners in node:stream's
+    // registry rather than the one above. Forward there too, so a `for await` over a
+    // child's output sees the chunks the reactor delivers.
+    crate::node_stream::emit_to_stream_listeners(target, event.as_bytes(), args);
+
     fired
 }
 

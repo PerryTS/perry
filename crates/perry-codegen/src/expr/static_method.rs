@@ -262,19 +262,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // which `runSync` then read `._tag` off and threw
                     // `Cannot read properties of undefined`.
                     //
-                    // SCOPE: only fire when the class_name was registered as a
-                    // namespace via the *named-import-of-namespace-reexport*
-                    // branch (`import { Effect } from "effect"` where effect's
-                    // index.ts has `export * as Effect from "./Effect.js"`).
-                    // Plain `import * as X from "./X.js"` (used in effect's
-                    // INTERNAL modules) deliberately preserves the pre-fix
-                    // direct-call (silently-wrong-but-doesn't-throw) path —
-                    // switching them all over surfaces init-order bugs that
-                    // were hiding behind the silent shape. Those need a
-                    // separate audit.
-                    if ctx.namespace_reexport_named_imports.contains(class_name)
-                        && ctx.imported_vars.contains(method_name)
-                    {
+                    // Both wildcard imports and namespaces reached through a
+                    // re-export use the same getter ABI.
+                    if ctx.imported_vars.contains(method_name) {
                         let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                         for a in args {
                             lowered.push(lower_expr(ctx, a)?);

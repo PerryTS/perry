@@ -17,6 +17,12 @@ The format is designed for skeptics. Every implementation, every
 flag, every methodology decision is in this page — no tables hidden
 behind blog posts, no cherry-picked subsets.
 
+> **Historical v0.5.908 evidence:** The detailed native-language tables below
+> are retained for methodology and historical comparison. The current public
+> Node/Bun baseline is generated from
+> [`results/public-node-bun-v1.json`](results/public-node-bun-v1.json); the
+> versioned artifact is authoritative when these historical tables differ.
+>
 > **Hardware:** Apple M1 Max (10 cores: 8P + 2E), 64 GB RAM, macOS
 > 26.4. Numbers refreshed 2026-05-14 at v0.5.908 — full sweep across
 > JSON polyglot, compute polyglot (default + `--fast-math` columns),
@@ -112,6 +118,31 @@ The headline question this page tries to answer honestly is
 competitive?" Native reference points exist to answer the
 follow-up question: "and how does that compare to giving up
 TypeScript entirely?"
+
+## Public Node/Bun baseline
+
+The README runtime-peer table is rendered from the versioned
+[`results/public-node-bun-v1.json`](results/public-node-bun-v1.json) artifact.
+It reconciles the suite, compute-polyglot, JSON-polyglot, app-pattern, and
+honest-bench runners at one Perry commit. The artifact retains every timing
+sample, correctness status, host details, runtime versions, resolved
+executables, command templates, and warmup/sample policies.
+
+The canonical refresh command is:
+
+```bash
+# PATH must resolve Node v22.23.1 and Bun 1.3.14.
+./benchmarks/run_public_baseline.sh
+```
+
+The runner requires a clean tree, AC power on macOS, and aggregate CPU usage
+at or below 25% for 60 consecutive seconds before every suite. It refuses
+to assemble evidence if any required sample or correctness check is missing. `public_baseline.py check` verifies
+the artifact age, source and harness fingerprints, and generated Markdown:
+
+```bash
+python3 benchmarks/public_baseline.py check --max-age-days 45
+```
 
 ---
 

@@ -49,7 +49,9 @@ mod stmt;
 mod unimpl_hints;
 pub(crate) use stmt::*;
 mod for_head;
-pub(crate) use for_head::{for_head_binding_stmts, predefine_for_head};
+pub(crate) use for_head::{
+    for_head_binding_stmts, guard_for_in_body, map_set_delete_safe_for_of, predefine_for_head,
+};
 mod stmt_loops;
 pub(crate) use stmt_loops::{
     insert_iterator_close_on_abrupt, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,
@@ -66,6 +68,7 @@ mod const_fold_fn;
 mod eval_super_scan;
 mod fn_ctor_env;
 mod global_eval_hoist;
+mod shared_mutable_capture;
 pub(crate) mod type_widening;
 pub(crate) use closure_analysis::*;
 mod decorators;
@@ -82,7 +85,7 @@ pub(crate) use widget_decl::*;
 // so spelling them out keeps the public-and-internal API stable.
 mod lowering_context;
 pub(crate) use lowering_context::{
-    LoweringContext, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
+    LoweringContext, MixinFn, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
 };
 
 mod locals;

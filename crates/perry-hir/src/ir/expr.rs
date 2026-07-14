@@ -283,6 +283,13 @@ pub enum Expr {
     /// `op` are the wire codes defined by `PrivKind` / 0=get,1=set.
     PrivateGuard {
         class_name: String,
+        /// The declaring class's unique HIR id. Codegen uses this directly as
+        /// the brand's `declaring_class_id` rather than resolving `class_name`
+        /// through the `class_ids` map, whose name keys collapse duplicate
+        /// (minified) class names last-writer-wins and would otherwise bind the
+        /// brand to the wrong same-named class. 0 means "unresolved" (guard
+        /// degrades to a no-op).
+        class_id: u32,
         field_name: String,
         kind: u8,
         op: u8,

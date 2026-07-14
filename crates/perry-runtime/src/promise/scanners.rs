@@ -111,8 +111,8 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     });
 
     super::combinators::scan_promise_all_states_mut(visitor);
-    super::then::scan_promise_settle_listeners_mut(visitor);
-    super::then::scan_promise_overflow_reactions_mut(visitor);
+    super::reactions::scan_promise_settle_listeners_mut(visitor);
+    super::reactions::scan_promise_overflow_reactions_mut(visitor);
 
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         for context in stack.borrow_mut().iter_mut() {
@@ -140,9 +140,10 @@ const PROMISE_SCAN_ASYNC_STEP_GUARD: u8 = 6;
 const PROMISE_SCAN_CONTEXTS: u8 = 7;
 const PROMISE_SCAN_ALL_STATES: u8 = 8;
 const PROMISE_SCAN_SETTLE_LISTENERS: u8 = 9;
-const PROMISE_SCAN_PREV_CONTEXTS: u8 = 10;
-const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 11;
-const PROMISE_SCAN_DONE: u8 = 12;
+const PROMISE_SCAN_OVERFLOW_REACTIONS: u8 = 10;
+const PROMISE_SCAN_PREV_CONTEXTS: u8 = 11;
+const PROMISE_SCAN_SCHEDULED_RESOLVES: u8 = 12;
+const PROMISE_SCAN_DONE: u8 = 13;
 
 #[derive(Default)]
 pub(crate) struct PromiseRootScanState {
@@ -151,6 +152,7 @@ pub(crate) struct PromiseRootScanState {
     slot: usize,
     context_entry: usize,
     context_store: usize,
+    moved_context_keys: Vec<(usize, usize)>,
 }
 
 impl PromiseRootScanState {
@@ -202,6 +204,9 @@ pub(crate) fn scan_promise_roots_mut_step(
             PROMISE_SCAN_ALL_STATES => scan_promise_all_states_step(visitor, state, remaining),
             PROMISE_SCAN_SETTLE_LISTENERS => {
                 scan_promise_settle_listeners_step(visitor, state, remaining)
+            }
+            PROMISE_SCAN_OVERFLOW_REACTIONS => {
+                scan_promise_overflow_reactions_step(visitor, state, remaining)
             }
             PROMISE_SCAN_PREV_CONTEXTS => scan_prev_contexts_step(visitor, state, remaining),
             PROMISE_SCAN_SCHEDULED_RESOLVES => {
@@ -513,12 +518,15 @@ fn scan_promise_contexts_step(
                     return false;
                 }
                 if visitor.visit_metadata_usize_slot(&mut new_key) {
-                    contexts.rekey(key, new_key);
+                    // Rekey only after every context has been scanned. A
+                    // collision may swap an unvisited key into this slot;
+                    // mutating the vector now would skip that context when
+                    // the cursor advances.
+                    state.moved_context_keys.push((key, new_key));
                 }
                 state.slot = 1;
             }
 
-            let key = new_key;
             let Some(context) = contexts.get_mut(&key) else {
                 state.index += 1;
                 state.finish_context_item();
@@ -536,6 +544,9 @@ fn scan_promise_contexts_step(
             state.index += 1;
             state.finish_context_item();
         }
+        for (old_key, new_key) in state.moved_context_keys.drain(..) {
+            contexts.rekey(old_key, new_key);
+        }
         true
     })
 }
@@ -552,14 +563,22 @@ fn scan_promise_all_states_step(
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (key, promise_state) = &mut states[state.index];
-                match state.slot {
-                    0 => visitor.visit_metadata_usize_slot(key),
-                    1 => visitor.visit_raw_mut_ptr_slot(&mut promise_state.result_promise),
-                    2 => visitor.visit_raw_mut_ptr_slot(&mut promise_state.results_arr),
-                    3 => visitor.visit_raw_mut_ptr_slot(&mut promise_state.state_arr),
+                let slot = state.slot;
+                let Some(entry) = states.entry_at_mut(state.index) else {
+                    break;
+                };
+                let rekeyed = match slot {
+                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
+                    1 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.result_promise),
+                    2 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.results_arr),
+                    3 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.state_arr),
                     _ => false,
                 };
+                // Evacuation rewrote the key in place: the position is still
+                // valid, the key → position index is not.
+                if slot == 0 && rekeyed {
+                    states.note_key_rewritten();
+                }
                 state.slot += 1;
             }
             state.index += 1;
@@ -574,24 +593,86 @@ fn scan_promise_settle_listeners_step(
     state: &mut PromiseRootScanState,
     remaining: &mut usize,
 ) -> bool {
-    super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| {
+    super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| {
         let mut listeners = listeners.borrow_mut();
         while state.index < listeners.len() {
             while state.slot < 3 {
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (key, listener) = &mut listeners[state.index];
-                match state.slot {
-                    0 => visitor.visit_metadata_usize_slot(key),
-                    1 => visitor.visit_raw_const_ptr_slot(&mut listener.on_fulfilled),
-                    2 => visitor.visit_raw_const_ptr_slot(&mut listener.on_rejected),
+                let slot = state.slot;
+                let Some(entry) = listeners.entry_at_mut(state.index) else {
+                    break;
+                };
+                let rekeyed = match slot {
+                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
+                    1 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled),
+                    2 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected),
                     _ => false,
                 };
+                if slot == 0 && rekeyed {
+                    listeners.note_key_rewritten();
+                }
                 state.slot += 1;
             }
+            let Some(entry) = listeners.entry_at_mut(state.index) else {
+                break;
+            };
             if !crate::async_context::scan_snapshot_roots_mut_step(
-                &mut listeners[state.index].1.context,
+                &mut entry.value.context,
+                visitor,
+                &mut state.context_entry,
+                &mut state.context_store,
+                remaining,
+            ) {
+                return false;
+            }
+            state.index += 1;
+            state.finish_context_item();
+        }
+        true
+    })
+}
+
+// Step twin of `scan_promise_overflow_reactions_mut` (reactions.rs). The 2nd+
+// `.then()`/`.catch()`/`.finally()` on a still-pending promise parks its
+// reaction ONLY in PROMISE_OVERFLOW_REACTIONS — cycle-based collections run
+// exclusively the step scanner, so a missing phase here meant those reaction
+// closures and their chained `next` promises were swept while the promise
+// was pending, and never rewritten on a moving cycle.
+fn scan_promise_overflow_reactions_step(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    state: &mut PromiseRootScanState,
+    remaining: &mut usize,
+) -> bool {
+    super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        let mut reactions = reactions.borrow_mut();
+        while state.index < reactions.len() {
+            while state.slot < 4 {
+                if !consume_root_work(remaining) {
+                    return false;
+                }
+                let slot = state.slot;
+                let Some(entry) = reactions.entry_at_mut(state.index) else {
+                    break;
+                };
+                let rekeyed = match slot {
+                    0 => visitor.visit_metadata_usize_slot(&mut entry.key),
+                    1 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_fulfilled),
+                    2 => visitor.visit_raw_const_ptr_slot(&mut entry.value.on_rejected),
+                    3 => visitor.visit_raw_mut_ptr_slot(&mut entry.value.next),
+                    _ => false,
+                };
+                if slot == 0 && rekeyed {
+                    reactions.note_key_rewritten();
+                }
+                state.slot += 1;
+            }
+            let Some(entry) = reactions.entry_at_mut(state.index) else {
+                break;
+            };
+            if !crate::async_context::scan_snapshot_roots_mut_step(
+                &mut entry.value.context,
                 visitor,
                 &mut state.context_entry,
                 &mut state.context_store,
@@ -865,7 +946,61 @@ pub(crate) fn test_clear_promise_scanner_roots() {
         })
     });
     super::combinators::SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
-    super::then::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
+    super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
+    super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| reactions.borrow_mut().clear());
+    super::combinators::PROMISE_ALL_STATES.with(|states| states.borrow_mut().clear());
+}
+
+/// Test support for the GC death-cleanup tests (gc/tests): park one entry
+/// keyed by `promise` in each of the three leak-audited side tables —
+/// settle listeners, overflow reactions, Promise.all states.
+#[cfg(test)]
+pub(crate) fn test_park_promise_side_table_entries(promise: *mut Promise) {
+    let key = promise as usize;
+    super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| {
+        listeners.borrow_mut().push(
+            key,
+            super::reactions::PromiseSettleListener {
+                on_fulfilled: std::ptr::null(),
+                on_rejected: std::ptr::null(),
+                context: capture_context(),
+            },
+        );
+    });
+    super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| {
+        reactions.borrow_mut().push(
+            key,
+            super::reactions::OverflowReaction {
+                on_fulfilled: std::ptr::null(),
+                on_rejected: std::ptr::null(),
+                next: std::ptr::null_mut(),
+                context: capture_context(),
+            },
+        );
+    });
+    super::combinators::PROMISE_ALL_STATES.with(|states| {
+        states.borrow_mut().push(
+            key,
+            super::combinators::PromiseAllState {
+                result_promise: std::ptr::null_mut(),
+                results_arr: std::ptr::null_mut(),
+                state_arr: std::ptr::null_mut(),
+                index: 0,
+            },
+        );
+    });
+}
+
+/// Test support: per-table entry counts keyed by `key` (a promise address) —
+/// (settle listeners, overflow reactions, Promise.all states).
+#[cfg(test)]
+pub(crate) fn test_promise_side_table_counts_for(key: usize) -> (usize, usize, usize) {
+    let listeners =
+        super::reactions::PROMISE_SETTLE_LISTENERS.with(|l| l.borrow_mut().count_for_key(key));
+    let reactions =
+        super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|r| r.borrow_mut().count_for_key(key));
+    let states = super::combinators::PROMISE_ALL_STATES.with(|s| s.borrow_mut().count_for_key(key));
+    (listeners, reactions, states)
 }
 
 #[cfg(test)]

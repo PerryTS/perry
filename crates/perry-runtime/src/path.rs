@@ -22,15 +22,25 @@ fn is_string_header_ptr(ptr: *const StringHeader) -> bool {
     if ptr == crate::string::js_get_empty_string() {
         return true;
     }
+    let gc_header =
+        (ptr as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    // A string outside the managed arenas (generation `Unknown`) is still a
+    // real string when the GC malloc registry tracks its header — e.g. a
+    // string grown through the append realloc path (`gc_malloc_realloc` →
+    // `gc_malloc(_, GC_TYPE_STRING)`) or a Symbol description. Rejecting those
+    // made every `path.*` builtin throw `The "path" argument must be of type
+    // string.` on a perfectly valid argument. The registry lookup is
+    // dereference-free, so forged pointers are still rejected before the
+    // header reads below (mirrors the empty-string singleton special case
+    // above and `current_heap_header_for_user_ptr`'s Unknown→malloc rule).
     if matches!(
         crate::arena::classify_heap_generation(ptr as usize),
         crate::arena::HeapGeneration::Unknown
-    ) {
+    ) && !crate::gc::gc_malloc_header_is_tracked(gc_header)
+    {
         return false;
     }
     unsafe {
-        let gc_header =
-            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*gc_header).obj_type != crate::gc::GC_TYPE_STRING {
             return false;
         }
@@ -447,51 +457,24 @@ pub(crate) fn resolve_win32_str(path_str: &str) -> String {
     win32_resolve_inner(path_str)
 }
 
-/// Get directory name from path. Per Node spec, the root's dirname is the
-/// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
-/// returns `None` there, which we treat as "stay at root".
+/// Get directory name from path — Node's `path.posix.dirname`, which is purely
+/// lexical. The previous implementation delegated to Rust's `Path::parent()`,
+/// whose OS path semantics normalize components away and disagree with Node
+/// (`dirname("a/./b")` → `"a"` instead of `"a/."`, `dirname("a//b")` → `"a"`
+/// instead of `"a/"`, `dirname("/.")` → `"."` instead of `"/"`). The root
+/// (`"/"` → `"/"`, `"///"` → `"/"`) and the two-leading-slash case
+/// (`"//foo"` → `"//"`) both fall out of the algorithm.
 #[no_mangle]
 pub extern "C" fn js_path_dirname(path_ptr: *const StringHeader) -> *mut StringHeader {
     let path_str = string_from_header_or_throw(path_ptr);
-
-    if path_str.is_empty() {
-        return string_to_js(".");
-    }
-
-    // POSIX root: dirname("/") = "/", dirname("///") = "/"
-    if path_str.chars().all(|c| c == '/') {
-        return string_to_js("/");
-    }
-    // Node preserves exactly two leading slashes for the dirname of
-    // `//foo` on POSIX.
-    if path_str.starts_with("//") && !path_str.starts_with("///") && !path_str[2..].contains('/') {
-        return string_to_js("//");
-    }
-
-    let path = Path::new(&path_str);
-    match path.parent() {
-        Some(parent) => {
-            let s = parent.to_string_lossy();
-            if s.is_empty() {
-                string_to_js(".")
-            } else {
-                string_to_js(&s)
-            }
-        }
-        None => string_to_js("."),
-    }
+    string_to_js(&posix_dirname_inner(&path_str))
 }
 
 /// Get base name (file name) from path
 #[no_mangle]
 pub extern "C" fn js_path_basename(path_ptr: *const StringHeader) -> *mut StringHeader {
     let path_str = string_from_header_or_throw(path_ptr);
-
-    let path = Path::new(&path_str);
-    match path.file_name() {
-        Some(name) => string_to_js(&name.to_string_lossy()),
-        None => string_to_js(""),
-    }
+    string_to_js(posix_basename_inner(&path_str))
 }
 
 /// Get file extension from path (including the dot)
@@ -562,12 +545,134 @@ fn normalize_str(input: &str) -> String {
     };
     result.push_str(&out.join("/"));
     if result.is_empty() {
-        return ".".to_string();
+        // Node keeps the trailing separator even when everything normalized away:
+        // `normalize("./") === "./"` (only a bare `normalize("") === "."`).
+        return if trailing_slash {
+            "./".to_string()
+        } else {
+            ".".to_string()
+        };
     }
     if trailing_slash && !result.ends_with('/') {
         result.push('/');
     }
     result
+}
+
+/// Node's `path.posix.basename` is a purely LEXICAL string operation: the last
+/// non-empty `/`-delimited segment, with `.` and `..` treated as ordinary segment
+/// names (`basename(".") === "."`, `basename("a/..") === ".."`).
+///
+/// Rust's `Path::file_name()` applies OS path semantics instead and cannot be used
+/// here: it returns `None` for `.`, `..`, and any path whose last component is
+/// `..` (so those yielded `""`), and it silently DROPS a `.` component —
+/// `Path::new("a/.").file_name()` is `Some("a")`, which returned the PARENT.
+/// Mirrors [`win32_basename_inner`], which was already lexical (and correct).
+fn posix_basename_inner(input: &str) -> &str {
+    input.split('/').rfind(|s| !s.is_empty()).unwrap_or("")
+}
+
+/// Node's `path.posix.basename(path, ext)` — ported from `lib/path.js`, QUIRKS
+/// INCLUDED. The ext branch is deliberately not "lexical basename minus the
+/// suffix": Node scans backwards matching `ext` byte-by-byte and, when the match
+/// is abandoned or the component start is reached, falls back to indices that can
+/// span trailing separators. The observable consequence is
+/// `basename("/x/", ".x") === "x/"` — trailing slash and all. A simplified
+/// "strip the suffix" version disagrees with Node here.
+fn posix_basename_ext_inner(path: &str, ext: &str) -> String {
+    let bytes = path.as_bytes();
+    let ext_b = ext.as_bytes();
+    if ext_b.is_empty() || ext_b.len() > bytes.len() {
+        return posix_basename_inner(path).to_string();
+    }
+    if ext == path {
+        return String::new();
+    }
+
+    let mut start: usize = 0;
+    let mut end: isize = -1;
+    let mut matched_slash = true;
+    let mut ext_idx: isize = ext_b.len() as isize - 1;
+    let mut first_non_slash_end: isize = -1;
+
+    for i in (0..bytes.len()).rev() {
+        let code = bytes[i];
+        if code == b'/' {
+            // Only a separator that is NOT part of a trailing run ends the scan.
+            if !matched_slash {
+                start = i + 1;
+                break;
+            }
+        } else {
+            if first_non_slash_end == -1 {
+                matched_slash = false;
+                first_non_slash_end = (i + 1) as isize;
+            }
+            if ext_idx >= 0 {
+                if code == ext_b[ext_idx as usize] {
+                    ext_idx -= 1;
+                    if ext_idx == -1 {
+                        end = i as isize;
+                    }
+                } else {
+                    // Suffix didn't match — the result is the whole component.
+                    ext_idx = -1;
+                    end = first_non_slash_end;
+                }
+            }
+        }
+    }
+
+    if start as isize == end {
+        end = first_non_slash_end;
+    } else if end == -1 {
+        end = bytes.len() as isize;
+    }
+    let end = end.max(0) as usize;
+    // Byte indices land on char boundaries for well-formed input, but never risk a
+    // panic on an odd UTF-8 split: fall back to the plain lexical basename.
+    if start > end || !path.is_char_boundary(start) || !path.is_char_boundary(end) {
+        return posix_basename_inner(path).to_string();
+    }
+    path[start..end].to_string()
+}
+
+/// Node's `path.posix.dirname`, ported from `lib/path.js`. Also purely lexical —
+/// `dirname("a/./b") === "a/."` and `dirname("a//b") === "a/"`, neither of which
+/// Rust's `Path::parent()` produces (it normalizes the `.` and the empty segment
+/// away, giving `"a"` for both).
+fn posix_dirname_inner(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let bytes = path.as_bytes();
+    let has_root = bytes[0] == b'/';
+    let mut end: Option<usize> = None;
+    let mut matched_slash = true;
+    // Scan back to index 1 (never 0 — a leading `/` is the root, not a separator).
+    for i in (1..bytes.len()).rev() {
+        if bytes[i] == b'/' {
+            if !matched_slash {
+                end = Some(i);
+                break;
+            }
+        } else {
+            matched_slash = false;
+        }
+    }
+    match end {
+        None => {
+            if has_root {
+                "/".to_string()
+            } else {
+                ".".to_string()
+            }
+        }
+        // Node preserves exactly two leading slashes: `dirname("//foo") === "//"`.
+        Some(1) if has_root => "//".to_string(),
+        // `end` is the byte index of an ASCII `/`, so this is a char boundary.
+        Some(end) => path[..end].to_string(),
+    }
 }
 
 #[no_mangle]
@@ -656,19 +761,7 @@ pub extern "C" fn js_path_basename_ext(
     if !ext_str.is_empty() && ext_str == path_str {
         return string_to_js("");
     }
-    let path = Path::new(&path_str);
-    let base = match path.file_name() {
-        Some(name) => name.to_string_lossy().to_string(),
-        None => return string_to_js(""),
-    };
-    if !ext_str.is_empty()
-        && base.ends_with(&ext_str)
-        && (base.len() > ext_str.len() || !path_str.contains('/'))
-    {
-        string_to_js(&base[..base.len() - ext_str.len()])
-    } else {
-        string_to_js(&base)
-    }
+    string_to_js(&posix_basename_ext_inner(&path_str, &ext_str))
 }
 
 /// Returns a `{ root, dir, base, ext, name }` object describing the path.
@@ -1818,5 +1911,63 @@ mod win32_normalize_tests {
             win32_to_namespaced_path("\\\\?\\C:\\already"),
             "\\\\?\\C:\\already"
         );
+    }
+}
+
+#[cfg(test)]
+mod malloc_backed_string_arg_tests {
+    use super::*;
+
+    /// Build a REAL string whose backing allocation is malloc-tracked (not
+    /// arena) — the shape produced by the string-append realloc path
+    /// (`gc_malloc_realloc` → `gc_malloc(_, GC_TYPE_STRING)`) and by Symbol
+    /// descriptions. Its user address classifies as `HeapGeneration::Unknown`.
+    fn malloc_backed_string(bytes: &[u8]) -> *mut StringHeader {
+        let payload = std::mem::size_of::<StringHeader>() + bytes.len();
+        let user = crate::gc::gc_malloc(payload, crate::gc::GC_TYPE_STRING) as *mut StringHeader;
+        assert!(!user.is_null());
+        unsafe {
+            crate::string::init_string_header(
+                user,
+                bytes.len() as u32,
+                bytes.len() as u32,
+                bytes.len() as u32,
+                0,
+                0,
+            );
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                (user as *mut u8).add(std::mem::size_of::<StringHeader>()),
+                bytes.len(),
+            );
+        }
+        user
+    }
+
+    /// A malloc-backed (generation-Unknown) string is a valid `path` argument.
+    /// `is_string_header_ptr` used to reject every generation-Unknown pointer,
+    /// so `path.dirname()` (and every other `path.*` builtin) threw
+    /// `TypeError: The "path" argument must be of type string.` whenever a
+    /// program passed a string that had grown through the append realloc path.
+    #[test]
+    fn path_builtins_accept_malloc_backed_strings() {
+        let path = malloc_backed_string(b"/a/b/c.txt");
+        assert!(is_string_header_ptr(path));
+
+        let dir = js_path_dirname(path);
+        let dir_str = unsafe { string_from_header(dir) }.expect("dirname returns a string");
+        assert_eq!(dir_str, "/a/b");
+
+        let base = js_path_basename(path);
+        let base_str = unsafe { string_from_header(base) }.expect("basename returns a string");
+        assert_eq!(base_str, "c.txt");
+    }
+
+    /// Forged pointers (not in the malloc registry, not in an arena) must
+    /// still be rejected without dereferencing the candidate header.
+    #[test]
+    fn forged_unknown_pointer_is_still_rejected() {
+        let bogus = 0x0000_7777_0000_1000usize as *const StringHeader;
+        assert!(!is_string_header_ptr(bogus));
     }
 }

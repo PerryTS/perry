@@ -28,6 +28,7 @@ fn test_copying_minor_promotes_survivor_on_fourth_survival() {
 
 #[test]
 fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
+    let _defrag = OldDefragTestEnable::new();
     struct ResetGcTestState {
         pinned_header: *mut GcHeader,
     }
@@ -628,4 +629,216 @@ fn test_copying_minor_falls_back_for_transitive_pinned_young_child() {
         );
         (*child_header).gc_flags &= !GC_FLAG_PINNED;
     }
+}
+
+// Regression (2026-07 GC audit, old→malloc hole): minors sweep the malloc
+// registry, old parents are black leaves, and the barrier used to remember
+// only old→NURSERY children — a malloc-GC child (RegExp, hook-mode Promise,
+// Symbol, large-capture closure) whose sole referrer was a clean old parent
+// was freed while live on the next MallocCount/ArenaBytes minor.
+#[test]
+fn test_copying_minor_old_to_malloc_child_survives_sweep() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    activate_malloc_registry_for_tests();
+
+    let malloc_child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(malloc_child);
+    }
+    let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+    unsafe {
+        *elements = ptr_bits(malloc_child as usize);
+    }
+    js_write_barrier_slot(
+        ptr_bits(old_arr as usize),
+        elements as u64,
+        ptr_bits(malloc_child as usize),
+    );
+    assert!(
+        remembered_set_size() > 0,
+        "old→malloc store must dirty the remembered page"
+    );
+
+    trigger_guard.make_malloc_sweep_due();
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::ArenaBytes,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+
+    assert!(
+        malloc_user_ptr_tracked(malloc_child),
+        "malloc child referenced only by a clean old parent must survive \
+         the minor malloc sweep via the remembered old→malloc edge"
+    );
+}
+
+// Same hole, scenario B: the nursery GRANDCHILD behind an unmarked malloc
+// parent needs no malloc sweep to die — the malloc parent was never marked
+// in a minor, so its nursery child was unmarked and the nursery reset freed
+// it on the very next minor.
+#[test]
+fn test_copying_minor_old_to_malloc_nursery_grandchild_survives() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    activate_malloc_registry_for_tests();
+
+    let grandchild = young_leaf();
+    let malloc_child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>() + 8,
+        GC_TYPE_CLOSURE,
+    );
+    let capture_slot =
+        unsafe { init_test_closure_with_one_capture(malloc_child, ptr_bits(grandchild)) };
+    let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
+    unsafe {
+        *elements = ptr_bits(malloc_child as usize);
+    }
+    js_write_barrier_slot(
+        ptr_bits(old_arr as usize),
+        elements as u64,
+        ptr_bits(malloc_child as usize),
+    );
+
+    trigger_guard.make_malloc_sweep_due();
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot {
+        kind: GcTriggerKind::ArenaBytes,
+        steps_before: Some(GcStepSnapshot::current()),
+    });
+
+    assert!(
+        malloc_user_ptr_tracked(malloc_child),
+        "malloc parent must survive the minor via the remembered edge"
+    );
+    let grandchild_after = unsafe { (*capture_slot & POINTER_MASK) as usize };
+    assert!(
+        crate::arena::pointer_in_nursery(grandchild_after)
+            || crate::arena::pointer_in_old_gen(grandchild_after),
+        "nursery grandchild behind a malloc parent must be evacuated/kept, \
+         not left dangling in reset from-space"
+    );
+}
+
+// #6186 (2026-07-09 GC audit): Date cells are movable. The flag only gates
+// old-page defrag, but any move (incl. copied-minor evacuation) runs the
+// ExoticExpandoOwner hook — so a Date's `d.foo = …` expando properties must
+// migrate with the cell, and the cell's `ts` must survive, exactly like the
+// movable Promise precedent.
+#[test]
+fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
+    // Date cells are movable (#6186). The flag only gates old-page defrag, but
+    // any move (incl. copied-minor evacuation, via `gc_type_after_payload_move`)
+    // runs the ExoticExpandoOwner hook — so a Date's `d.foo = ...` expandos must
+    // migrate with the cell and its `ts` must survive, per the movable-Promise
+    // precedent.
+    assert!(
+        crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_DATE_CELL),
+        "GC_TYPE_DATE_CELL must be movable after #6186"
+    );
+
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let ts = 1_234_567_890.5_f64;
+    let date_addr = (crate::date::alloc_date_cell(ts).to_bits() & POINTER_MASK) as usize;
+    assert!(crate::arena::pointer_in_nursery(date_addr));
+
+    let expando_val = f64::from_bits(crate::value::JSValue::int32(42).bits());
+    crate::object::exotic_expando::test_seed_exotic_expando_entry(
+        date_addr,
+        "tag",
+        expando_val.to_bits(),
+    );
+    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr));
+    js_shadow_slot_set(0, ptr_bits(date_addr));
+
+    let _ = gc_collect_minor();
+
+    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_addr, 0, "rooted Date must survive the copied minor");
+    assert_ne!(
+        new_addr, date_addr,
+        "the Date cell must have been evacuated (moved)"
+    );
+
+    // ts preserved through the move; still a Date at the new address.
+    let moved_ts = unsafe { (*(new_addr as *const crate::date::DateCell)).ts };
+    assert_eq!(moved_ts, ts, "Date ts must survive evacuation");
+    assert!(crate::date::is_date_cell_addr(new_addr));
+
+    // Expando migrated to the new address (ExoticExpandoOwner move hook fired)
+    // and does not linger at the stale old address.
+    assert!(
+        crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr),
+        "expando must migrate to the evacuated Date's new address"
+    );
+    assert!(
+        !crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr),
+        "expando must not remain at the stale old address"
+    );
+}
+
+// #6181: the promotion-handoff census switched from the unfiltered
+// `arena_walk_objects_with_block_index` (visits every object in every region,
+// discards out-of-range ones in the callback) to the block-filtered walk that
+// skips non-active blocks in O(n_blocks). Both walkers must assign the same
+// global block indices, so the filtered census must equal the old in-callback
+// range check byte-for-byte — including ignoring Eden garbage and old-gen
+// objects that sit outside the active survivor range.
+#[test]
+fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let child = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(child));
+
+    // Age the rooted object to the promotion boundary: after 3 copied minors
+    // its survival age is 3, so next_age (4) >= GC_COPY_PROMOTION_SURVIVALS
+    // and the census must count it.
+    for _ in 0..3 {
+        let _ = gc_collect_minor();
+    }
+    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert!(crate::arena::pointer_in_nursery(survivor));
+    let survivor_total = unsafe { (*header_from_user_ptr(survivor as *const u8)).size as usize };
+
+    // Populate regions OUTSIDE the active survivor range: Eden garbage and an
+    // old-gen object. The census must ignore all of them.
+    for _ in 0..64 {
+        let _ = young_leaf();
+    }
+    let _old = unsafe { alloc_old_test_symbol() };
+
+    // Reference value: the pre-#6181 implementation — the unfiltered walk
+    // with the active-range check inside the callback.
+    let active_range = crate::arena::active_survivor_block_index_range();
+    let mut expected = 0usize;
+    crate::arena::arena_walk_objects_with_block_index(|header_ptr, block_idx| {
+        if !active_range.contains(&block_idx) {
+            return;
+        }
+        let header = header_ptr as *mut GcHeader;
+        unsafe {
+            let flags = (*header).gc_flags;
+            if flags & GC_FLAG_FORWARDED != 0 {
+                return;
+            }
+            let prior_age = copied_survival_age((*header)._reserved, flags);
+            let next_age = prior_age.saturating_add(1);
+            if flags & GC_FLAG_TENURED != 0 || next_age >= GC_COPY_PROMOTION_SURVIVALS {
+                expected = expected.saturating_add((*header).size as usize);
+            }
+        }
+    });
+
+    let actual = copied_minor_promotable_active_survivor_bytes();
+    assert_eq!(
+        actual, expected,
+        "filtered census must match the unfiltered-walk reference"
+    );
+    assert!(
+        actual >= survivor_total,
+        "census must count the aged survivor ({survivor_total} bytes), got {actual} — \
+         the equivalence assert above must not be vacuously 0 == 0"
+    );
 }

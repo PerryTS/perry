@@ -75,14 +75,25 @@ fn to_length(target_length: f64) -> usize {
 /// just wrong output.
 fn decode_wtf8_units(bytes: &[u8]) -> Vec<u16> {
     let mut units = Vec::with_capacity(bytes.len());
+    let len = bytes.len();
     let mut i = 0;
-    while i < bytes.len() {
+    while i < len {
         let b0 = bytes[i];
         if b0 < 0x80 {
             units.push(b0 as u16);
             i += 1;
         } else if b0 < 0xE0 {
             // 2-byte sequence: U+0080..U+07FF, always one code unit.
+            // #6085: a multi-byte lead truncated at the end of the buffer
+            // has no continuation byte; emit the lead as a lone byte instead
+            // of reading `bytes[i + 1]` one past the slice. Strings are
+            // normally well-formed WTF-8 so this is a defensive bound, but an
+            // unchecked read here is a real out-of-slice access.
+            if i + 1 >= len {
+                units.push(b0 as u16);
+                i += 1;
+                continue;
+            }
             let b1 = bytes[i + 1];
             let cp = ((b0 as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F);
             units.push(cp as u16);
@@ -90,6 +101,11 @@ fn decode_wtf8_units(bytes: &[u8]) -> Vec<u16> {
         } else if b0 < 0xF0 {
             // 3-byte sequence: U+0800..U+FFFF, including a WTF-8 lone
             // surrogate (U+D800..U+DFFF) — always one code unit either way.
+            if i + 2 >= len {
+                units.push(b0 as u16);
+                i += 1;
+                continue;
+            }
             let b1 = bytes[i + 1];
             let b2 = bytes[i + 2];
             let cp = ((b0 as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F);
@@ -97,6 +113,11 @@ fn decode_wtf8_units(bytes: &[u8]) -> Vec<u16> {
             i += 3;
         } else {
             // 4-byte sequence: an astral code point, encoded as a surrogate pair.
+            if i + 3 >= len {
+                units.push(b0 as u16);
+                i += 1;
+                continue;
+            }
             let b1 = bytes[i + 1];
             let b2 = bytes[i + 2];
             let b3 = bytes[i + 3];
@@ -345,5 +366,48 @@ mod pad_length_tests {
         assert_eq!(to_length(MAX_STRING_LENGTH as f64), MAX_STRING_LENGTH);
         assert!(to_length((MAX_STRING_LENGTH + 1) as f64) > MAX_STRING_LENGTH);
         assert!(to_length(4_294_967_296.0) > MAX_STRING_LENGTH); // 2^32
+    }
+}
+
+#[cfg(test)]
+mod decode_wtf8_tests {
+    use super::decode_wtf8_units;
+
+    #[test]
+    fn decodes_well_formed_sequences() {
+        // ASCII
+        assert_eq!(decode_wtf8_units(b"AB"), vec![0x41, 0x42]);
+        // 2-byte: U+00E9 (é) = 0xC3 0xA9
+        assert_eq!(decode_wtf8_units(&[0xC3, 0xA9]), vec![0x00E9]);
+        // 3-byte: U+20AC (€) = 0xE2 0x82 0xAC
+        assert_eq!(decode_wtf8_units(&[0xE2, 0x82, 0xAC]), vec![0x20AC]);
+        // 3-byte WTF-8 lone surrogate: U+D800 = 0xED 0xA0 0x80
+        assert_eq!(decode_wtf8_units(&[0xED, 0xA0, 0x80]), vec![0xD800]);
+        // 4-byte astral: U+1F600 (😀) = 0xF0 0x9F 0x98 0x80 -> surrogate pair
+        assert_eq!(
+            decode_wtf8_units(&[0xF0, 0x9F, 0x98, 0x80]),
+            vec![0xD83D, 0xDE00]
+        );
+    }
+
+    /// #6085: a multi-byte lead byte truncated at the end of the slice must not
+    /// read past the buffer. Each case ends mid-sequence; the decoder must
+    /// return without an out-of-bounds read (emitting the lead as a lone byte).
+    #[test]
+    fn truncated_trailing_lead_does_not_over_read() {
+        // 2-byte lead with no continuation byte.
+        assert_eq!(decode_wtf8_units(&[0xC3]), vec![0x00C3]);
+        // 3-byte lead missing 1 and 2 continuation bytes.
+        assert_eq!(decode_wtf8_units(&[0xE2]), vec![0x00E2]);
+        assert_eq!(decode_wtf8_units(&[0xE2, 0x82]), vec![0x00E2, 0x0082]);
+        // 4-byte lead with no continuation byte.
+        assert_eq!(decode_wtf8_units(&[0xF0]), vec![0x00F0]);
+        // Valid prefix followed by a truncated lead: prefix decodes, tail is safe.
+        assert_eq!(decode_wtf8_units(&[0x41, 0xF0]), vec![0x0041, 0x00F0]);
+        // Longer malformed tails must also complete without an out-of-slice
+        // read (exact re-interpreted units are unspecified — only safety
+        // matters), so just assert the call returns a bounded result.
+        assert!(decode_wtf8_units(&[0xF0, 0x9F, 0x98]).len() <= 3);
+        assert!(decode_wtf8_units(&[0xE2, 0x82]).len() <= 2);
     }
 }

@@ -51,6 +51,7 @@ pub(crate) mod map_set_subclass;
 mod namespace_create;
 mod native_call_method;
 mod native_module;
+pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
 mod native_module_crypto_key_object;
@@ -156,6 +157,7 @@ pub(crate) use descriptor_state::{
     descriptors_in_use, disable_class_field_inline_guard, get_accessor_descriptor,
     get_property_attrs, json_object_getter_value, mark_all_keys, note_descriptor_target,
     object_has_descriptors, object_proto_descriptors_in_use, object_proto_may_intercept_key,
+    plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
     set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, PropertyAttrs,
     ACCESSORS_IN_USE, ACCESSOR_DESCRIPTORS, GLOBAL_DESCRIPTORS_IN_USE, PROPERTY_ATTRS_IN_USE,
@@ -716,21 +718,35 @@ const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 /// but a grep across crates/perry-codegen confirms no codegen path ever
 /// resolved against it, so the export was dead.
 thread_local! {
-    static TRANSITION_CACHE_GLOBAL: std::cell::UnsafeCell<[TransitionEntry; TRANSITION_CACHE_SIZE]> =
-        const { std::cell::UnsafeCell::new([TransitionEntry {
-            prev_keys: 0,
-            key_ptr: 0,
-            next_keys: 0,
-            slot_idx: 0,
-            target_len: 0,
-        }; TRANSITION_CACHE_SIZE]) };
+    // arm64_32 fix: HEAP-allocate the 320KB cache (Box) instead of storing it
+    // inline in TLS. Oversized `#[thread_local]` storage overflows the ILP32
+    // TLS layout and its writes corrupt adjacent thread-locals (confirmed on a
+    // real Series 7: shrinking OR boxing removes the corruption). `vec!` builds
+    // directly on the heap (no 320KB stack temporary).
+    static TRANSITION_CACHE_GLOBAL: std::cell::UnsafeCell<Box<[TransitionEntry]>> =
+        std::cell::UnsafeCell::new(
+            vec![
+                TransitionEntry {
+                    prev_keys: 0,
+                    key_ptr: 0,
+                    next_keys: 0,
+                    slot_idx: 0,
+                    target_len: 0,
+                };
+                TRANSITION_CACHE_SIZE
+            ]
+            .into_boxed_slice(),
+        );
 }
 
 #[inline]
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
 ) -> R {
-    TRANSITION_CACHE_GLOBAL.with(|c| f(c.get()))
+    TRANSITION_CACHE_GLOBAL.with(|c| unsafe {
+        let boxed = &mut *c.get();
+        f(boxed.as_mut_ptr() as *mut [TransitionEntry; TRANSITION_CACHE_SIZE])
+    })
 }
 
 /// FNV-1a content hash for a property-name string.

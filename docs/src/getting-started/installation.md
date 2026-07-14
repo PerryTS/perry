@@ -5,8 +5,10 @@
 Perry compiles TypeScript to native binaries by linking with your system's C toolchain, so every install path needs a linker:
 
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `gcc` or `clang` — see your distro below
+- **Linux**: `gcc` or `clang` for linking, plus **clang ≥ 15** for codegen — see your distro below
 - **Windows**: LLVM (`winget install LLVM.LLVM`) + `perry setup windows` (lightweight, ~1.5 GB, no Visual Studio needed), or MSVC Build Tools with the "Desktop development with C++" workload — see the [Windows platform guide](../platforms/windows.md) for both options
+
+> **clang ≥ 15 on Linux.** Perry's LLVM backend emits opaque-pointer IR (`ptr`) and compiles it with `clang -c`. clang 14 and older reject it with `error: expected type`. Ubuntu 22.04's default `clang` is 14 — install a newer one (`sudo apt install clang-15`) and point Perry at it if it isn't the default: `export PERRY_LLVM_CLANG=/usr/bin/clang-15`. Ubuntu 24.04, Debian 13, Fedora 39+ and Arch all ship a new enough clang.
 
 Linux C toolchain by distribution:
 
@@ -62,6 +64,21 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 | Linux x64 (musl / Alpine) | `@perryts/perry-linux-x64-musl` |
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
+
+#### Linux glibc requirement
+
+The Linux **glibc** binaries are built on Ubuntu 24.04, so they require **glibc ≥ 2.39**. Older distributions — Ubuntu 22.04 (glibc 2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) — cannot load them; the dynamic loader fails with `GLIBC_2.39 not found` before Perry starts.
+
+On those hosts Perry uses the **fully-static musl build** instead, which has no libc dependency and runs on any Linux:
+
+- **`install.sh`** detects the glibc version and downloads `perry-linux-<arch>-musl.tar.gz` automatically.
+- **npm** — the launcher routes to `@perryts/perry-linux-x64-musl` (or `-arm64-musl`) and prints a one-time notice. npm does not install that package on a glibc machine by itself (its `libc` selector says `musl`), so install it once:
+
+  ```bash
+  npm install --force @perryts/perry-linux-x64-musl
+  ```
+
+The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. Tracking issue: [#6298](https://github.com/PerryTS/perry/issues/6298).
 
 ### Homebrew (macOS)
 
@@ -174,3 +191,29 @@ Run `perry doctor` to verify the toolchain. See the [Windows platform guide](../
 
 - [Write your first program](hello-world.md)
 - [Build a native app](first-app.md)
+
+### Authenticated self-update and release migration
+
+`perry update` only installs a release when the matching
+`<archive>.update.json` is present and validates against a public-key keyring
+compiled into the CLI. The manifest is Ed25519-signed over a domain-separated
+payload that binds the key id, version, platform, artifact name, HTTPS URL,
+SHA-256 digest, and size. Old releases that only publish `*.sha256` sidecars
+are therefore intentionally **not** eligible for automatic installation;
+download them manually from the release page.
+
+Release maintainers must configure these GitHub settings before enabling a
+release: repository variable `PERRY_CLI_UPDATE_PUBLIC_KEYS` (a JSON array of
+`{"key_id":"...","public_key":"<base64-32-byte-Ed25519-key>"}`),
+repository variable `PERRY_CLI_UPDATE_KEY_ID`, and protected secret
+`PERRY_CLI_UPDATE_SIGNING_KEY` (the matching base64 32-byte seed). The workflow
+fails rather than publishing an unsigned manifest when the secret/key id is
+missing. Keep the old public key in the compiled keyring during rotation, sign
+new manifests with the new `key_id`, and remove the old key only after the
+minimum supported CLI has shipped with the replacement.
+
+The updater stages under the install directory with owner-only permissions,
+verifies before extraction, rejects links/path traversal, and restores the old
+binary and libraries after an interrupted transaction. It never recommends
+running the updater with elevated privileges; use the package manager or a
+manual install when the installation directory is not writable.

@@ -51,9 +51,6 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
     if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return 0;
     }
-    if GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed) {
-        return 0;
-    }
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
@@ -80,12 +77,27 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         if object_flags
             & (crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND)
+                | crate::gc::OBJ_FLAG_NO_EXTEND
+                // #6084 item 6: an own descriptor on THIS object (accessor or
+                // non-writable) must route through the full setter semantics.
+                | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS)
             != 0
         {
             return 0;
         }
         if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR || (*obj).class_id != 0 {
+            return 0;
+        }
+
+        // #6084 item 6: this used to be a `GLOBAL_DESCRIPTORS_IN_USE` check at
+        // the top of the function — one `Object.freeze` anywhere in the process
+        // (even on an unrelated object) permanently disabled this fast path for
+        // every object. Vet the receiver's own flag (above) and its prototype
+        // chain (here) instead. `class_id` is 0 at this point, so the only
+        // inherited interceptor is `Object.prototype` (or a recorded
+        // `setPrototypeOf` target).
+        let key_f64 = f64::from_bits(JSValue::string_ptr(key as *mut _).bits());
+        if super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
             return 0;
         }
 
@@ -431,6 +443,23 @@ pub extern "C" fn js_object_set_field_by_name(
                     {
                         return;
                     }
+                    // Writing `.caller` / `.arguments` on a class constructor
+                    // hits the poison-pill %ThrowTypeError% accessor (which has
+                    // no [[Set]]) on `Function.prototype`, so a strict-mode
+                    // assignment throws. Mirrors the read side in
+                    // get_field_by_name and the ordinary-closure setter path.
+                    // A `defineProperty`-installed own data prop was handled by
+                    // `has_own_data` above; prototype-refs (`C.prototype`) are
+                    // plain objects with no such restriction.
+                    if !has_own_data
+                        && matches!(name.as_str(), "caller" | "arguments")
+                        && super::class_prototype_ref_id(f64::from_bits(bits)).is_none()
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                     class_dynamic_prop_root_store(class_id, name, value);
                 }
             }
@@ -560,7 +589,12 @@ pub extern "C" fn js_object_set_field_by_name(
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                crate::array::js_array_set_length(obj as *mut crate::array::ArrayHeader, value);
+                // Assignment (`arr.length = v`) is a strict `Set` with
+                // `Throw = true`: throw on a frozen array's non-writable length.
+                crate::array::js_array_set_length_strict(
+                    obj as *mut crate::array::ArrayHeader,
+                    value,
+                );
                 return;
             }
         }
@@ -597,11 +631,13 @@ pub extern "C" fn js_object_set_field_by_name(
             };
             let arr = obj as *mut crate::array::ArrayHeader;
             if name == "length" {
-                crate::array::js_array_set_length(arr, value);
+                // Strict `Set(arr, "length", v, true)` — throw on frozen.
+                crate::array::js_array_set_length_strict(arr, value);
                 return;
             }
             if let Some(index) = super::canonical_array_index(name) {
-                crate::array::js_array_set_f64_extend(arr, index, value);
+                // Strict `Set(arr, i, v, true)` — throw on frozen/non-extensible.
+                crate::array::js_array_set_f64_extend_strict(arr, index, value);
                 return;
             }
             // Own-accessor short-circuit — an Array can carry a named accessor
@@ -886,10 +922,24 @@ pub extern "C" fn js_object_set_field_by_name(
         }
 
         // FAST PATH: shape-transition cache with interned string pointer identity.
+        //
+        // #6084 item 6: the descriptor gate here used to be the process-global
+        // `GLOBAL_DESCRIPTORS_IN_USE` latch, so ONE `Object.freeze` anywhere
+        // (even on an object never written to again) permanently forced every
+        // dynamic write in the process down the O(own-key-count) slow walk
+        // below. It is now vetted per receiver: an own descriptor is visible in
+        // this object's `OBJ_FLAG_HAS_DESCRIPTORS`, and only prototype-level
+        // interceptors need a chain walk.
+        let has_own_descriptors = obj_flags & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0;
         if !key.is_null()
             && !is_frozen
             && !is_sealed_or_no_extend
-            && !GLOBAL_DESCRIPTORS_IN_USE.load(Ordering::Relaxed)
+            && !has_own_descriptors
+            && !super::plain_data_write_may_intercept(
+                obj as usize,
+                (*obj).class_id,
+                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+            )
         {
             if let Some((next_keys, slot_idx)) =
                 transition_cache_lookup(prev_keys_usize, interned_key)

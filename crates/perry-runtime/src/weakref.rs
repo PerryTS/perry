@@ -2,7 +2,12 @@
 //!
 //! Weak target slots are skipped by the GC's strong-edge scanners. A pre-sweep
 //! weak pass clears collected WeakRef targets and records pending
-//! FinalizationRegistry cleanup jobs, which are queued after explicit `gc()`.
+//! FinalizationRegistry cleanup jobs after EVERY collection cycle (automatic
+//! or explicit `gc()` — 2026-07-09 GC audit: delivery used to be gated on the
+//! manual trigger, so ordinary servers never ran any cleanup callback). The
+//! recorded jobs are rooted (`scan_pending_finalization_jobs_roots_mut`) and
+//! delivered as nextTick jobs: immediately after an explicit `gc()`, or at the
+//! next microtask-pump drain for automatic cycles.
 
 use crate::array::{
     js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, js_array_set_f64,
@@ -53,23 +58,42 @@ struct PendingFinalizationJob {
 thread_local! {
     static PENDING_FINALIZATION_JOBS: RefCell<Vec<PendingFinalizationJob>> =
         const { RefCell::new(Vec::new()) };
-    /// One-way latch: set the first time this thread allocates a weak
-    /// TARGET holder (WeakRef, WeakMap/WeakSet entry, FinalizationRegistry
-    /// record). The copied-minor fast path consults it to decide whether
-    /// `process_weak_targets_after_mark` (a full arena walk) needs to run —
-    /// programs that never touch weak containers keep the fast path
-    /// walk-free. Never cleared: a dead weak holder costs one redundant
-    /// walk per cycle, which is the price of not tracking deallocation.
-    static WEAK_TARGET_HOLDERS_ALLOCATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Registry of every live weak-target HOLDER object on this thread — a
+    /// WeakRef (`CLASS_ID_WEAKREF`), a FinalizationRegistry
+    /// (`CLASS_ID_FINALIZATION_REGISTRY`), or a WeakMap/WeakSet entry
+    /// (`CLASS_ID_WEAK_ENTRY`) — keyed by the holder's `ObjectHeader` USER
+    /// address (the same address the copied-minor pointer classifier and the
+    /// arena walk observe). Replaces the old one-way `bool` latch (#6182):
+    ///
+    /// * `weak_target_holders_allocated()` = "registry non-empty", so a
+    ///   program whose only WeakMap died stops paying the copied-minor weak
+    ///   cost once its entries are pruned (the bool latched forever).
+    /// * `process_weak_targets_from_registry` iterates ONLY these holders
+    ///   instead of walking every object in the arena, and classifies weak
+    ///   targets with the copy's O(1) page-metadata classifier instead of a
+    ///   full-heap `build_valid_pointer_set()` BTreeSet.
+    ///
+    /// Currency + pruning: `scan_weak_holders_roots_mut` rewrites stored
+    /// addresses through evacuation without rooting them; the copied-minor
+    /// pass follows forwarding and drops dead holders; the full/fallback
+    /// cycles drop dead holders via `prune_dead_weak_holders`.
+    static WEAK_HOLDERS: RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
-/// See `WEAK_TARGET_HOLDERS_ALLOCATED`.
+/// True while at least one live weak-target holder is registered on this
+/// thread. Gates the copied-minor weak-processing pass (see `WEAK_HOLDERS`).
 pub(crate) fn weak_target_holders_allocated() -> bool {
-    WEAK_TARGET_HOLDERS_ALLOCATED.with(|latch| latch.get())
+    WEAK_HOLDERS.with(|holders| !holders.borrow().is_empty())
 }
 
-fn note_weak_target_holder_allocated() {
-    WEAK_TARGET_HOLDERS_ALLOCATED.with(|latch| latch.set(true));
+/// Register a freshly-allocated weak-target holder by its `ObjectHeader` user
+/// address (called at the WeakRef / FinalizationRegistry / WeakMap-WeakSet
+/// entry alloc sites, after the holder's `class_id` is stamped).
+fn weak_holder_register(holder: *const ObjectHeader) {
+    WEAK_HOLDERS.with(|holders| {
+        holders.borrow_mut().insert(holder as usize);
+    });
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -324,10 +348,19 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
     match (*obj).class_id {
-        // Field 0 is the weak target for all three: WeakRef's referent, a
-        // finalization record's target, and a WeakMap/WeakSet entry's key.
-        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD | CLASS_ID_WEAK_ENTRY => {
+        // Field 0 is the weak target for both: WeakRef's referent and a
+        // WeakMap/WeakSet entry's key.
+        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY => {
             (*obj).field_count > 0 && slot == object_field_slot(obj, 0)
+        }
+        // A finalization record's target (field 0) AND its unregister token
+        // (field 1) are both weak. The spec's [[UnregisterToken]] is an
+        // ephemeron-style weak slot; tracing it strongly made the canonical
+        // `registry.register(obj, held, obj)` pin the target immortal
+        // (2026-07-09 GC audit).
+        CLASS_ID_FINALIZATION_RECORD => {
+            ((*obj).field_count > 0 && slot == object_field_slot(obj, 0))
+                || ((*obj).field_count > 1 && slot == object_field_slot(obj, 1))
         }
         _ => false,
     }
@@ -353,7 +386,7 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     unsafe {
         (*obj).class_id = CLASS_ID_WEAKREF;
     }
-    note_weak_target_holder_allocated();
+    weak_holder_register(obj);
     obj
 }
 
@@ -402,6 +435,15 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     unsafe {
         (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
     }
+    // #6182: the FinalizationRegistry itself is the registered holder (not its
+    // per-`register()` records). The copied-minor weak pass dispatches on
+    // `CLASS_ID_FINALIZATION_REGISTRY` and walks the registry's entries array
+    // to reach records — the record has no back-reference to its registry or
+    // cleanup callback, so a record-keyed dispatch could not enqueue the
+    // cleanup job (the #6192 automatic-cycle behavior). A registry that is
+    // created but never `.register()`ed processes an empty entries array (a
+    // cheap no-op) and is pruned when it dies.
+    weak_holder_register(obj);
     obj
 }
 
@@ -436,13 +478,15 @@ fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader
     unsafe {
         (*record).class_id = CLASS_ID_FINALIZATION_RECORD;
     }
-    note_weak_target_holder_allocated();
     record
 }
 
 /// Register a (target, held value, optional token) triple. Returns undefined.
-/// The record's target slot is weak; token and held are traced strongly so
-/// `unregister(token)` and eventual cleanup delivery remain deterministic.
+/// The record's target AND token slots are weak (spec: [[UnregisterToken]] is
+/// held weakly); only the held value is traced strongly so cleanup delivery
+/// remains deterministic. A collected token simply makes a later
+/// `unregister(token)` miss, which is spec-correct — the caller can no longer
+/// produce that token value anyway.
 #[no_mangle]
 pub extern "C" fn js_finreg_register(registry: f64, target: f64, held: f64, token: f64) -> f64 {
     if !is_valid_weak_target(target) {
@@ -556,8 +600,25 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     }
 }
 
-pub(crate) fn clear_pending_finalization_jobs() {
-    PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow_mut().clear());
+/// Number of recorded-but-undelivered FinalizationRegistry cleanup jobs on
+/// this thread. Non-zero between a collection's weak pass and the next
+/// delivery point (explicit-`gc()` tail or microtask-pump drain).
+pub(crate) fn pending_finalization_jobs_count() -> usize {
+    PENDING_FINALIZATION_JOBS.with(|jobs| jobs.borrow().len())
+}
+
+/// Microtask-pump drain: convert jobs recorded by AUTOMATIC collection cycles
+/// into nextTick callback invocations. Returns the number of jobs delivered so
+/// the pump can count them as work. The jobs vec is `mem::take`n by the
+/// delivery, so a manual `gc()` that already delivered leaves nothing here
+/// (no double-delivery), and re-entrant pump drains are safe.
+pub(crate) fn drain_pending_finalization_jobs() -> i32 {
+    let pending = pending_finalization_jobs_count();
+    if pending == 0 {
+        return 0;
+    }
+    queue_pending_finalization_callbacks_after_gc();
+    pending as i32
 }
 
 pub(crate) fn scan_pending_finalization_jobs_roots_mut(
@@ -573,40 +634,377 @@ pub(crate) fn scan_pending_finalization_jobs_roots_mut(
     });
 }
 
+// =============================================================================
+// Weak-target liveness abstraction (#6182)
+// =============================================================================
+//
+// The per-holder tombstone helpers (`process_weakref_after_mark` et al.) are
+// shared between two passes that decide "was this weak target collected?"
+// differently:
+//
+// * The FULL / fallback cycle (`process_weak_targets_after_mark`, driven from
+//   cycle.rs `WeakProcessing`) probes the `ValidPointerSet` it already built
+//   for its main trace. UNCHANGED behavior — see `weak_target_should_clear`.
+// * The copied-minor fast path (`process_weak_targets_from_registry`) probes
+//   the copy's O(1) page-metadata classifier (`CopyingPointerSet`), avoiding
+//   both the full-heap BTreeSet build and the whole-arena walk. See
+//   `weak_target_should_clear_copied`.
+//
+// The helpers are parameterized over `&dyn WeakLiveness` so neither pass's
+// liveness logic can drift from the other's tombstone/enqueue/token semantics.
+
+trait WeakLiveness {
+    /// True when the weak target denoted by `target_bits` was collected and
+    /// its slot must be tombstoned to `undefined`.
+    fn target_should_clear(&self, target_bits: u64) -> bool;
+    /// Resolve `bits` to a LIVE `GC_TYPE_ARRAY` header (a FinalizationRegistry
+    /// entries array), or `None` if dead/not-an-array.
+    ///
+    /// # Safety
+    /// `bits` must be a value word read from a live holder's field.
+    unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader>;
+    /// Resolve `bits` to a LIVE `GC_TYPE_OBJECT` of `class_id` (a
+    /// FinalizationRegistry record), or `None`.
+    ///
+    /// # Safety
+    /// `bits` must be a value word read from a live holder's field.
+    unsafe fn as_live_object_with_class(
+        &self,
+        bits: u64,
+        class_id: u32,
+    ) -> Option<*mut ObjectHeader>;
+}
+
+/// Full / fallback-cycle liveness: the existing `ValidPointerSet`-based
+/// predicates, behavior-identical to pre-#6182 code.
+struct FullCycleLiveness<'a> {
+    valid_ptrs: &'a crate::gc::ValidPointerSet,
+    minor_only: bool,
+}
+
+impl WeakLiveness for FullCycleLiveness<'_> {
+    fn target_should_clear(&self, target_bits: u64) -> bool {
+        weak_target_should_clear(target_bits, self.valid_ptrs, self.minor_only)
+    }
+    unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader> {
+        object_value_to_array(bits, self.valid_ptrs)
+    }
+    unsafe fn as_live_object_with_class(
+        &self,
+        bits: u64,
+        class_id: u32,
+    ) -> Option<*mut ObjectHeader> {
+        object_value_with_class(bits, self.valid_ptrs, class_id)
+    }
+}
+
+/// Copied-minor liveness: probe the copy's page-metadata classifier. Callers
+/// pass value words that have ALREADY been made current — weak target slots by
+/// `repair_weak_slots`, holder strong fields (entries array, records) by the
+/// collector's evacuation rewrite — so this does not itself follow forwarding.
+struct CopiedMinorLiveness<'a> {
+    ptrs: &'a crate::gc::CopyingPointerSet,
+}
+
+impl WeakLiveness for CopiedMinorLiveness<'_> {
+    fn target_should_clear(&self, target_bits: u64) -> bool {
+        weak_target_should_clear_copied(target_bits, self.ptrs)
+    }
+    unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader> {
+        classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_ARRAY)
+            .map(|ptr| ptr as *mut ArrayHeader)
+    }
+    unsafe fn as_live_object_with_class(
+        &self,
+        bits: u64,
+        class_id: u32,
+    ) -> Option<*mut ObjectHeader> {
+        let ptr = classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_OBJECT)?;
+        let obj = ptr as *mut ObjectHeader;
+        ((*obj).class_id == class_id).then_some(obj)
+    }
+}
+
+/// Copied-minor twin of `weak_target_should_clear`. A weak target is collected
+/// iff it is a REAL, NURSERY heap object the classifier can attribute and that
+/// object is not live (MARKED|PINNED). Two correctness rules, both replicating
+/// the `weak_target_should_clear(.., minor_only = true)` semantics:
+///
+/// * A classifier miss (`None`) means "not a collectible heap object" — a
+///   handle-band id (Proxy / node:http / fetch / Web-Stream) or any non-heap
+///   pointer — so KEEP it. The old `ValidPointerSet` predicate treated "not in
+///   valid_ptrs" as dead, which FALSE-tombstoned live handle-band weak keys
+///   ≥0x1000 on the first GC (2026-07-09 audit §8); this path fixes it.
+/// * A copied minor IS a MINOR, so it does NOT mark the old generation (old
+///   objects are black leaves, not re-traced). An old-gen / longlived / malloc
+///   target is therefore live-but-unmarked here — its mark bit proves nothing —
+///   so it must be conservatively KEPT (a full GC tombstones it properly once it
+///   traces old-gen). This mirrors the original `minor_only && !pointer_in_nursery`
+///   guard: without it a WeakMap key that survived enough minors to be PROMOTED
+///   to old-gen would be silently dropped from the map on the next copied minor.
+///   Only nursery/survivor targets — which this minor DID trace — may be judged
+///   dead by their mark bit.
+fn weak_target_should_clear_copied(target_bits: u64, ptrs: &crate::gc::CopyingPointerSet) -> bool {
+    if target_bits == TAG_UNDEFINED {
+        return false;
+    }
+    let target = f64::from_bits(target_bits);
+    if crate::value::is_js_handle(target) {
+        return false;
+    }
+    let Some(ptr) = heap_ptr_from_tagged_bits(target_bits) else {
+        return false;
+    };
+    match ptrs.classify(ptr) {
+        // Band-id handle / non-heap pointer → not collectible → keep.
+        None => false,
+        Some(cp) => {
+            // Old / longlived / malloc target in a minor: unmarked ≠ dead → keep.
+            if !crate::arena::pointer_in_nursery(ptr) {
+                return false;
+            }
+            // Nursery/survivor target this minor traced: dead iff not MARKED|PINNED.
+            unsafe { !header_is_live(cp.header) }
+        }
+    }
+}
+
+/// Resolve `bits` to a heap object of `obj_type` using the copied-minor
+/// classifier, without following forwarding (the caller's fields are already
+/// current). Returns the user address, or `None` if not a valid heap object of
+/// that type.
+///
+/// This intentionally does NOT gate on the mark bit: it resolves a STRONG child
+/// of a holder whose liveness `resolve_live_holder_copied` already established
+/// (a FinalizationRegistry's entries array and records). Requiring MARKED would
+/// wrongly drop an entries array or record that was PROMOTED to old-gen (a minor
+/// doesn't mark old-gen), delaying finalization — the original
+/// `object_value_to_array` / `object_value_with_class` resolvers only checked
+/// validity + `obj_type`, never MARKED.
+unsafe fn classify_gc_type_child(
+    bits: u64,
+    ptrs: &crate::gc::CopyingPointerSet,
+    obj_type: u8,
+) -> Option<usize> {
+    let ptr = heap_ptr_from_tagged_bits(bits)?;
+    let cp = ptrs.classify(ptr)?;
+    (unsafe { (*cp.header).obj_type } == obj_type).then_some(ptr)
+}
+
+/// What the copied-minor pass should do with a registered holder address.
+enum HolderDisposition {
+    /// Live holder scanned this cycle (its weak slots are repaired): rekey the
+    /// registry to this current address and process it.
+    Process(usize),
+    /// Cannot be proven dead in a minor (an unmarked OLD/longlived holder — a
+    /// minor doesn't mark old-gen) AND its weak slots may be stale/unrepaired:
+    /// leave it registered untouched and let a full GC resolve it. Mirrors the
+    /// original arena walk, which only ever processed MARKED objects.
+    Keep,
+    /// Provably dead (unmarked nursery holder) or unclassifiable (stale /
+    /// recycled address): remove it from the registry.
+    Drop,
+}
+
+/// Decide the disposition of a registered holder in a copied minor. Copied-minor
+/// only: it reads pre-flip from-space headers, so the FORWARDED bit and the
+/// forwarding address are still valid.
+///
+/// A copied minor is a MINOR — it authoritatively traces only the nursery and
+/// does NOT mark or scan the old generation. So:
+/// * a live young holder is EVACUATED (FORWARDED); its to-space copy carries
+///   MARKED and had its weak slots repaired this cycle → `Process`;
+/// * an unmarked NURSERY holder is genuinely dead (an eligible copied minor has
+///   no pinned young survivors) → `Drop`;
+/// * an unmarked OLD/longlived holder is live-but-unmarked and its weak slots
+///   were neither repaired nor remembered, so it can be neither proven dead nor
+///   safely processed here → `Keep` (a full GC handles it).
+unsafe fn resolve_weak_holder_copied(
+    ptrs: &crate::gc::CopyingPointerSet,
+    addr: usize,
+) -> HolderDisposition {
+    let Some(cp) = ptrs.classify(addr) else {
+        return HolderDisposition::Drop;
+    };
+    let (cur_addr, cur_header) = if (*cp.header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        let fwd = crate::gc::forwarding_address(cp.header) as usize;
+        match ptrs.classify(fwd) {
+            Some(cp2) => (fwd, cp2.header),
+            None => return HolderDisposition::Drop,
+        }
+    } else {
+        (addr, cp.header)
+    };
+    if header_is_live(cur_header) {
+        // MARKED|PINNED ⇒ scanned this cycle ⇒ weak slots repaired ⇒ processable.
+        return HolderDisposition::Process(cur_addr);
+    }
+    if crate::arena::pointer_in_nursery(cur_addr) {
+        HolderDisposition::Drop
+    } else {
+        HolderDisposition::Keep
+    }
+}
+
+/// Full / fallback-cycle weak processing. Walks EVERY live object in the arena
+/// to find the three weak-holder class_ids and tombstones dead weak targets
+/// using the `ValidPointerSet` the caller built for its main trace. UNCHANGED
+/// by #6182 (the registry optimization is copied-minor-only).
 pub(crate) fn process_weak_targets_after_mark(
     valid_ptrs: &crate::gc::ValidPointerSet,
     minor_only: bool,
     enqueue_callbacks: bool,
 ) {
+    // #6180 pause floor: the whole-heap walk below exists only to FIND weak
+    // holders (WeakRef / FinalizationRegistry / WeakMap-entry objects). The
+    // #6182 registry tracks every live holder — if none exist (the common
+    // case), the entire O(heap) pass is a no-op. This is the single largest
+    // atomic-finalize cost for weakref-free programs.
+    if !weak_target_holders_allocated() {
+        return;
+    }
+    let liveness = FullCycleLiveness {
+        valid_ptrs,
+        minor_only,
+    };
     crate::arena::arena_walk_objects(|header_ptr| unsafe {
         let header = header_ptr as *mut crate::gc::GcHeader;
         if (*header).obj_type != crate::gc::GC_TYPE_OBJECT || !header_is_live(header) {
             return;
         }
         let obj = header_ptr.add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
-        match (*obj).class_id {
-            CLASS_ID_WEAKREF => process_weakref_after_mark(obj, valid_ptrs, minor_only),
-            CLASS_ID_FINALIZATION_REGISTRY => {
-                process_finreg_after_mark(obj, valid_ptrs, minor_only, enqueue_callbacks);
+        dispatch_weak_holder(obj, &liveness, enqueue_callbacks);
+    });
+}
+
+/// Copied-minor weak processing (#6182). Iterates ONLY the registered holders
+/// — following each through evacuation and dropping dead ones — instead of
+/// walking the whole arena, and tombstones dead weak targets with the O(1)
+/// page-metadata classifier instead of a full-heap valid-pointer BTreeSet.
+///
+/// Runs at the copied-minor completion point AFTER `repair_weak_slots` and
+/// BEFORE the from-space flip, so weak target slots and holder strong fields
+/// are already current and dead holders' from-space headers are still intact.
+pub(crate) fn process_weak_targets_from_registry(
+    ptrs: &crate::gc::CopyingPointerSet,
+    enqueue_callbacks: bool,
+) {
+    let liveness = CopiedMinorLiveness { ptrs };
+    // Snapshot addresses so the registry can be mutated (rekey moved holders,
+    // drop dead ones) while iterating. Holders don't allocate GC objects in
+    // the helpers below, so no re-entrant `WEAK_HOLDERS` borrow occurs.
+    let snapshot: Vec<usize> =
+        WEAK_HOLDERS.with(|holders| holders.borrow().iter().copied().collect());
+    for addr in snapshot {
+        match unsafe { resolve_weak_holder_copied(ptrs, addr) } {
+            HolderDisposition::Drop => {
+                WEAK_HOLDERS.with(|holders| {
+                    holders.borrow_mut().remove(&addr);
+                });
             }
-            // Each WeakMap/WeakSet entry is its own GcHeader-backed object, so
-            // the arena walk reaches it directly — exactly like a WeakRef. This
-            // mirrors the `CLASS_ID_WEAKREF` arm (which is correct under
-            // evacuation): the weak key slot's address is repaired by the
-            // copy/rewrite pass before this pass reads it.
-            CLASS_ID_WEAK_ENTRY => process_weak_entry_after_mark(obj, valid_ptrs, minor_only),
-            _ => {}
+            // Live old holder: keep tracking it, but do not process it this
+            // minor (a full GC will). Not dropping keeps a promoted holder from
+            // being forgotten by the registry.
+            HolderDisposition::Keep => {}
+            HolderDisposition::Process(current) => {
+                if current != addr {
+                    WEAK_HOLDERS.with(|holders| {
+                        let mut holders = holders.borrow_mut();
+                        holders.remove(&addr);
+                        holders.insert(current);
+                    });
+                }
+                unsafe {
+                    dispatch_weak_holder(
+                        current as *mut ObjectHeader,
+                        &liveness,
+                        enqueue_callbacks,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Dispatch a single live weak holder (WeakRef / FinalizationRegistry /
+/// WeakMap-WeakSet entry) to its tombstone helper. Shared by both passes; the
+/// liveness strategy is the only thing that differs.
+#[inline]
+unsafe fn dispatch_weak_holder(
+    obj: *mut ObjectHeader,
+    liveness: &dyn WeakLiveness,
+    enqueue_callbacks: bool,
+) {
+    match (*obj).class_id {
+        CLASS_ID_WEAKREF => process_weakref_after_mark(obj, liveness),
+        CLASS_ID_FINALIZATION_REGISTRY => {
+            process_finreg_after_mark(obj, liveness, enqueue_callbacks)
+        }
+        // Each WeakMap/WeakSet entry is its own GcHeader-backed object; the
+        // weak key slot's address is repaired by the copy/rewrite pass before
+        // this pass reads it.
+        CLASS_ID_WEAK_ENTRY => process_weak_entry_after_mark(obj, liveness),
+        _ => {}
+    }
+}
+
+/// Mutable-root scanner keeping the `WEAK_HOLDERS` addresses current across
+/// evacuation (#6182). Metadata-only: `visit_metadata_usize_slot` rewrites a
+/// forwarded address in rewrite/verify phases and emits NOTHING during mark, so
+/// registering this scanner never keeps a dead holder alive. Copied-minor
+/// currency is handled independently by `process_weak_targets_from_registry`
+/// (the GC test harness clears the scanner registry); this covers full-cycle
+/// evacuation, where the registered scanners ARE the rewrite mechanism.
+pub(crate) fn scan_weak_holders_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if !visitor.is_metadata_rewrite_phase() {
+        return;
+    }
+    WEAK_HOLDERS.with(|holders| {
+        let mut holders = holders.borrow_mut();
+        if holders.is_empty() {
+            return;
+        }
+        // Rebuild only when an address actually moved — a `HashSet` can't
+        // rewrite keys in place. Mirrors `scan_descriptor_roots_mut`.
+        let needs_rebuild = holders
+            .iter()
+            .any(|&addr| rewritten_holder_addr(visitor, addr) != addr);
+        if needs_rebuild {
+            let old = std::mem::take(&mut *holders);
+            let mut rebuilt = crate::fast_hash::new_ptr_hash_set();
+            for addr in old {
+                rebuilt.insert(rewritten_holder_addr(visitor, addr));
+            }
+            *holders = rebuilt;
         }
     });
 }
 
-unsafe fn process_weakref_after_mark(
-    obj: *mut ObjectHeader,
-    valid_ptrs: &crate::gc::ValidPointerSet,
-    minor_only: bool,
-) {
+#[inline]
+fn rewritten_holder_addr(visitor: &mut crate::gc::RuntimeRootVisitor<'_>, addr: usize) -> usize {
+    let mut a = addr;
+    visitor.visit_metadata_usize_slot(&mut a);
+    a
+}
+
+/// Drop dead weak holders from the registry (#6182). Used by the full /
+/// fallback (non-copying) cycles via `dead_owner::prune_dead_owner_side_tables_post_trace`;
+/// the copied-minor path prunes inline in `process_weak_targets_from_registry`.
+/// Keeping the registry pruned lets `weak_target_holders_allocated()` return to
+/// zero once a transient WeakMap and its entries die.
+pub(crate) fn prune_dead_weak_holders(is_dead: &dyn Fn(usize) -> bool) {
+    WEAK_HOLDERS.with(|holders| {
+        let mut holders = holders.borrow_mut();
+        if holders.is_empty() {
+            return;
+        }
+        holders.retain(|&addr| !is_dead(addr));
+    });
+}
+
+unsafe fn process_weakref_after_mark(obj: *mut ObjectHeader, liveness: &dyn WeakLiveness) {
     let target_bits = object_field_bits(obj, WEAKREF_TARGET_FIELD);
-    if weak_target_should_clear(target_bits, valid_ptrs, minor_only) {
+    if liveness.target_should_clear(target_bits) {
         write_object_field_bits_raw(obj, WEAKREF_TARGET_FIELD, TAG_UNDEFINED);
     }
 }
@@ -616,13 +1014,9 @@ unsafe fn process_weakref_after_mark(
 /// collectible (next cycle) and the lookups skip the slot. The entry object
 /// itself is reclaimed when `delete`/`set` next compacts the entries array (or
 /// when the whole collection dies). Mirrors `process_weakref_after_mark`.
-unsafe fn process_weak_entry_after_mark(
-    entry: *mut ObjectHeader,
-    valid_ptrs: &crate::gc::ValidPointerSet,
-    minor_only: bool,
-) {
+unsafe fn process_weak_entry_after_mark(entry: *mut ObjectHeader, liveness: &dyn WeakLiveness) {
     let key_bits = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
-    if weak_target_should_clear(key_bits, valid_ptrs, minor_only) {
+    if liveness.target_should_clear(key_bits) {
         write_object_field_bits_raw(entry, WEAK_ENTRY_KEY_FIELD, TAG_UNDEFINED);
         write_object_field_bits_raw(entry, WEAK_ENTRY_VALUE_FIELD, TAG_UNDEFINED);
     }
@@ -630,32 +1024,28 @@ unsafe fn process_weak_entry_after_mark(
 
 unsafe fn process_finreg_after_mark(
     registry: *mut ObjectHeader,
-    valid_ptrs: &crate::gc::ValidPointerSet,
-    minor_only: bool,
+    liveness: &dyn WeakLiveness,
     enqueue_callbacks: bool,
 ) {
     let callback = f64::from_bits(object_field_bits(registry, FINREG_CALLBACK_FIELD));
     let entries_bits = object_field_bits(registry, FINREG_ENTRIES_FIELD);
-    let Some(entries) = object_value_to_array(entries_bits, valid_ptrs) else {
+    let Some(entries) = liveness.as_live_array(entries_bits) else {
         return;
     };
     let len = js_array_length(entries) as usize;
     let registry_value = f64::from_bits(JSValue::pointer(registry as *const u8).bits());
     for i in 0..len {
         let record_value = js_array_get_f64(entries, i as u32);
-        let Some(record) = object_value_with_class(
-            record_value.to_bits(),
-            valid_ptrs,
-            CLASS_ID_FINALIZATION_RECORD,
-        ) else {
+        let Some(record) = liveness
+            .as_live_object_with_class(record_value.to_bits(), CLASS_ID_FINALIZATION_RECORD)
+        else {
             continue;
         };
         process_finreg_record_after_mark(
             registry_value,
             record,
             callback,
-            valid_ptrs,
-            minor_only,
+            liveness,
             enqueue_callbacks,
         );
     }
@@ -665,16 +1055,23 @@ unsafe fn process_finreg_record_after_mark(
     registry: f64,
     record: *mut ObjectHeader,
     callback: f64,
-    valid_ptrs: &crate::gc::ValidPointerSet,
-    minor_only: bool,
+    liveness: &dyn WeakLiveness,
     enqueue_callbacks: bool,
 ) {
     let pending_bits = object_field_bits(record, FINREG_RECORD_PENDING_FIELD);
     let target_bits = object_field_bits(record, FINREG_RECORD_TARGET_FIELD);
-    let collected = weak_target_should_clear(target_bits, valid_ptrs, minor_only);
+    let collected = liveness.target_should_clear(target_bits);
     if collected {
         write_object_field_bits_raw(record, FINREG_RECORD_TARGET_FIELD, TAG_UNDEFINED);
         write_object_field_bits_raw(record, FINREG_RECORD_PENDING_FIELD, TAG_TRUE);
+    }
+    // The unregister token is a weak slot too (see `is_weak_target_trace_slot`):
+    // tombstone it when its referent died so `unregister(deadToken)` misses and
+    // the record can't resurrect the token graph. Independent of the target —
+    // spec: clearing [[UnregisterToken]] does not cancel the registration.
+    let token_bits = object_field_bits(record, FINREG_RECORD_TOKEN_FIELD);
+    if liveness.target_should_clear(token_bits) {
+        write_object_field_bits_raw(record, FINREG_RECORD_TOKEN_FIELD, TAG_UNDEFINED);
     }
 
     if enqueue_callbacks && (pending_bits == TAG_TRUE || collected) {
@@ -800,7 +1197,7 @@ fn weak_entry_new(key: f64, value: f64) -> *mut ObjectHeader {
     unsafe {
         (*entry).class_id = CLASS_ID_WEAK_ENTRY;
     }
-    note_weak_target_holder_allocated();
+    weak_holder_register(entry);
     entry
 }
 
@@ -826,6 +1223,17 @@ unsafe fn weak_entry_at(entries: *mut ArrayHeader, i: usize) -> *mut ObjectHeade
 // CLASS_ID_BLOB (0x26). Issue #1757/#1758.
 pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
 pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
+
+/// Sentinel name of the internal slot-0 field that backs a `WeakMap`/`WeakSet`
+/// with its `[k, v]`-pair entry array (`js_weakmap_new` / `js_weakset_new`).
+/// `WeakMap`/`WeakSet` are `GC_TYPE_OBJECT`s, so this is an own enumerable
+/// string key — it must NEVER surface through any enumeration surface
+/// (`Object.keys` / `Object.assign` / spread / `JSON.stringify` / `for…in` /
+/// `hasOwnProperty`). Hidden via `is_internal_runtime_key_bytes`, exactly like
+/// the `class … extends Map/Set` backing key. Internal reads go through
+/// `entries_array` by direct name lookup, so hiding it from enumeration is
+/// safe. Refs #6120.
+pub(crate) const WEAK_ENTRIES_KEY: &[u8] = b"__perry_wk_entries";
 
 /// Dynamic-dispatch entry point for WeakMap/WeakSet method calls (issue
 /// #1757/#1758). `js_native_call_method` calls this for any heap object;
@@ -912,7 +1320,13 @@ pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
 }
 
 unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
+    // #6136: `js_string_from_bytes` allocates and can fire a moving minor GC,
+    // which relocates the (movable, GcHeader-backed) WeakMap/WeakSet `reg`.
+    // Root it across the allocation and re-derive before dereferencing.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reg_handle = scope.root_raw_mut_ptr(reg);
     let entries_key = crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18);
+    let reg = reg_handle.get_raw_mut_ptr::<ObjectHeader>();
     let entries_val = js_object_get_field_by_name(reg, entries_key);
     (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader
 }
@@ -1057,11 +1471,24 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
     if !is_valid_weak_target(key) {
         throw_invalid_weakmap_key();
     }
-    let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
-    if map_ptr.is_null() {
+    if js_nanbox_get_pointer(map) == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    // #6136: a WeakMap is a movable, GcHeader-backed ObjectHeader (unlike
+    // Map/Set, whose plain-alloc headers never move). `weak_entry_new` and
+    // `js_array_push_f64` below can fire a moving minor GC that evacuates the
+    // WeakMap; a raw `map_ptr` captured before those allocations would dangle,
+    // and the new entry would be written into the stale (dead) copy — silently
+    // dropping the mapping (the intermittent "wm.get(node) → undefined"
+    // symptom). Root map/key/value and re-derive the pointer after every
+    // allocating call. Mirrors the #6206 `js_map_set` fix, extended to also
+    // root the movable collection object itself.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_nanbox_f64(map);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
     unsafe {
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         let entries_ptr = entries_array(map_ptr);
         if entries_ptr.is_null() {
             return f64::from_bits(TAG_UNDEFINED);
@@ -1069,7 +1496,8 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
         let len = js_array_length(entries_ptr) as usize;
         // Update the existing entry if the key matches; remember the first
         // tombstone (an entry whose key the GC collected) so a new key can
-        // reuse the freed slot instead of growing the array unboundedly.
+        // reuse the freed slot instead of growing the array unboundedly. This
+        // scan performs no allocation, so `entries_ptr` stays valid throughout.
         let mut first_tomb: i64 = -1;
         for i in 0..len {
             let entry = weak_entry_at(entries_ptr, i);
@@ -1083,28 +1511,42 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
                 }
                 continue;
             }
-            if stored_key == key.to_bits() {
-                write_object_field_bits_raw(entry, WEAK_ENTRY_VALUE_FIELD, value.to_bits());
-                return map;
+            if stored_key == key_handle.get_nanbox_f64().to_bits() {
+                write_object_field_bits_raw(
+                    entry,
+                    WEAK_ENTRY_VALUE_FIELD,
+                    value_handle.get_nanbox_f64().to_bits(),
+                );
+                return map_handle.get_nanbox_f64();
             }
         }
-        // Not present — build a fresh entry. This allocation may move objects,
-        // but `map`/`key`/`value` and the pointers below are live on the
-        // conservatively-scanned stack, so they stay pinned across it (same
-        // contract the rest of this module relies on).
-        let entry = weak_entry_new(key, value);
-        let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
+        // Not present — build a fresh entry. This allocation may move the
+        // WeakMap and its entries array, so re-derive both from the rooted
+        // handle afterwards. (`js_array_push_f64` internally roots the pushed
+        // value across its own grow, so the entry pointer is safe there.)
+        let entry = weak_entry_new(key_handle.get_nanbox_f64(), value_handle.get_nanbox_f64());
+        // `entries_array` allocates (js_string_from_bytes) and can move the
+        // freshly-created `entry` — `weak_holder_register` only records its
+        // address, it does not root it. Root the entry across that call and
+        // re-read its current pointer before boxing `entry_val`, otherwise a
+        // stale address would be stored into the array.
+        let entry_handle = scope.root_raw_mut_ptr(entry);
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         let entries_ptr = entries_array(map_ptr);
+        let entry = entry_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
         if first_tomb >= 0 {
             js_array_set_f64(entries_ptr, first_tomb as u32, entry_val);
         } else {
             // js_array_push_f64 may reallocate; rebind the entries field to the
-            // (possibly new) header so the append isn't lost.
+            // (possibly new) header so the append isn't lost. Re-derive map_ptr
+            // once more — the push can move the WeakMap object too.
             let grown = js_array_push_f64(entries_ptr, entry_val);
+            let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
             js_object_set_field(map_ptr, 0, JSValue::array_ptr(grown));
         }
     }
-    map
+    map_handle.get_nanbox_f64()
 }
 
 #[no_mangle]
@@ -1167,21 +1609,33 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
-    let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
-    if map_ptr.is_null() {
+    if js_nanbox_get_pointer(map) == 0 {
         return f64::from_bits(TAG_FALSE);
     }
+    // #6136: root the movable WeakMap, the search key, and the source entries
+    // array across the js_array_alloc / js_array_push_f64 allocations below —
+    // each can fire a moving minor GC. Without this, the rebuilt array is
+    // written into a stale map copy and the loop reads relocated entries from a
+    // dangling source pointer (dropping or corrupting entries intermittently).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map_handle = scope.root_nanbox_f64(map);
+    let key_handle = scope.root_nanbox_f64(key);
     unsafe {
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         let entries_ptr = entries_array(map_ptr);
         if entries_ptr.is_null() {
             return f64::from_bits(TAG_FALSE);
         }
         let len = js_array_length(entries_ptr) as usize;
+        let entries_handle = scope.root_raw_mut_ptr(entries_ptr);
         let mut found = false;
         // Rebuild without the deleted key AND without tombstones (entries whose
         // key the GC already collected), reclaiming the entry objects.
         let mut new_arr = js_array_alloc(0);
         for i in 0..len {
+            // Re-derive the source array each iteration: the previous push may
+            // have moved it.
+            let entries_ptr = entries_handle.get_raw_mut_ptr::<ArrayHeader>();
             let entry = weak_entry_at(entries_ptr, i);
             if entry.is_null() {
                 continue;
@@ -1190,13 +1644,14 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
             if stored_key == TAG_UNDEFINED {
                 continue; // drop tombstone
             }
-            if stored_key == key.to_bits() {
+            if stored_key == key_handle.get_nanbox_f64().to_bits() {
                 found = true;
                 continue;
             }
             let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
             new_arr = js_array_push_f64(new_arr, entry_val);
         }
+        let map_ptr = js_nanbox_get_pointer(map_handle.get_nanbox_f64()) as *mut ObjectHeader;
         js_object_set_field(map_ptr, 0, JSValue::array_ptr(new_arr));
         if found {
             f64::from_bits(TAG_TRUE)

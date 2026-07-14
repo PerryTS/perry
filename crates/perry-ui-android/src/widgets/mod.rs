@@ -50,6 +50,56 @@ extern "C" {
 /// the native thread can be accessed from UI-thread callbacks.
 static WIDGETS: Mutex<Vec<GlobalRef>> = Mutex::new(Vec::new());
 
+/// Perry JS ABI is NaN-boxed doubles. Widget handles from register_widget
+/// are returned to TS as POINTER-tagged NaNs (0x7FFD_…_payload) with the
+/// plain 1-based id in the lower 48 bits — same encoding as heap pointers,
+/// but the payload is a small integer index, not a heap address.
+///
+/// `declare function` style FFIs must take `handle: f64` (System V float
+/// regs) and decode here. An `i64` parameter leaves the real handle in an
+/// xmm register while C reads garbage from rdi.
+pub fn decode_js_handle_f64(v: f64) -> i64 {
+    let bits = v.to_bits();
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+    const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let tag = bits & TAG_MASK;
+    if tag == POINTER_TAG {
+        return (bits & POINTER_MASK) as i64;
+    }
+    if tag == INT32_TAG {
+        return (bits as u32) as i32 as i64;
+    }
+    if v.is_finite() && v >= 1.0 && v < 1_000_000.0 && (v - v.trunc()).abs() < 1e-9 {
+        return v as i64;
+    }
+    0
+}
+
+fn coerce_handle_i64(handle: i64) -> i64 {
+    if handle > 0 && handle < 1_000_000 {
+        return handle;
+    }
+    let bits = handle as u64;
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+    const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let tag = bits & TAG_MASK;
+    if tag == POINTER_TAG {
+        return (bits & POINTER_MASK) as i64;
+    }
+    if tag == INT32_TAG {
+        return (bits as u32) as i32 as i64;
+    }
+    let as_f = f64::from_bits(bits);
+    if as_f.is_finite() && as_f >= 1.0 && as_f < 1_000_000.0 && (as_f - as_f.trunc()).abs() < 1e-9 {
+        return as_f as i64;
+    }
+    handle
+}
+
 /// Store an Android View and return its handle (1-based i64).
 pub fn register_widget(view: GlobalRef) -> i64 {
     let mut widgets = WIDGETS.lock().unwrap();
@@ -59,6 +109,10 @@ pub fn register_widget(view: GlobalRef) -> i64 {
 
 /// Retrieve the JNI GlobalRef for a given widget handle.
 pub fn get_widget(handle: i64) -> Option<GlobalRef> {
+    let handle = coerce_handle_i64(handle);
+    if handle <= 0 {
+        return None;
+    }
     let widgets = WIDGETS.lock().unwrap();
     let idx = (handle - 1) as usize;
     widgets.get(idx).cloned()
@@ -404,13 +458,41 @@ pub fn set_corner_radius(handle: i64, radius: f64) {
 
 /// Set background color using GradientDrawable for compatibility with corner radius.
 /// If the view already has a GradientDrawable, updates its color (preserving corner radius).
+///
+/// Material / AppCompat buttons also need backgroundTint cleared or the tint
+/// paints over (or instead of) the drawable we set — which left daisy-perry
+/// looking like default gray Material chips forever.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    unsafe {
+        __android_log_print(
+            3,
+            b"PerryStyle\0".as_ptr(),
+            b"set_bg decoded_handle=%lld r=%.3f g=%.3f b=%.3f a=%.3f\0".as_ptr(),
+            handle,
+            r,
+            g,
+            b,
+            a,
+        );
+    }
     if let Some(view_ref) = get_widget(handle) {
         let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
+        let _ = env.push_local_frame(24);
         let color = argb_color(a, r, g, b);
 
-        // Try to reuse existing GradientDrawable (preserving corner radius)
+        // Clear backgroundTint so MaterialButton doesn't paint over our drawable.
+        // Signature: setBackgroundTintList(ColorStateList?) — pass null.
+        let _ = env.call_method(
+            view_ref.as_obj(),
+            "setBackgroundTintList",
+            "(Landroid/content/res/ColorStateList;)V",
+            &[JValue::Object(&JObject::null())],
+        );
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+
+        // Prefer GradientDrawable so corner radius can share the same bg.
         let mut reused = false;
         if let Ok(bg) = env.call_method(
             view_ref.as_obj(),
@@ -431,11 +513,12 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             }
         }
         if !reused {
-            // Create GradientDrawable so a later set_corner_radius can reuse it
             let gd = env
                 .new_object("android/graphics/drawable/GradientDrawable", "()V", &[])
                 .expect("GradientDrawable");
             let _ = env.call_method(&gd, "setColor", "(I)V", &[JValue::Int(color)]);
+            // solid shape rect
+            let _ = env.call_method(&gd, "setShape", "(I)V", &[JValue::Int(0)]);
             let _ = env.call_method(
                 view_ref.as_obj(),
                 "setBackground",
@@ -443,8 +526,48 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
                 &[JValue::Object(&gd)],
             );
         }
+
+        // MaterialButton: the real paint path is backgroundTintList.
+        // Set it to our solid color so the button actually shows DaisyUI fills.
+        if let Ok(csl) = env.call_static_method(
+            "android/content/res/ColorStateList",
+            "valueOf",
+            "(I)Landroid/content/res/ColorStateList;",
+            &[JValue::Int(color)],
+        ) {
+            if let Ok(csl_obj) = csl.l() {
+                let _ = env.call_method(
+                    view_ref.as_obj(),
+                    "setBackgroundTintList",
+                    "(Landroid/content/res/ColorStateList;)V",
+                    &[JValue::Object(&csl_obj)],
+                );
+            }
+        }
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+
+        unsafe {
+            __android_log_print(
+                3,
+                b"PerryStyle\0".as_ptr(),
+                b"set_bg applied handle=%lld color=0x%08x\0".as_ptr(),
+                handle,
+                color as u32,
+            );
+        }
         unsafe {
             env.pop_local_frame(&JObject::null());
+        }
+    } else {
+        unsafe {
+            __android_log_print(
+                6,
+                b"PerryStyle\0".as_ptr(),
+                b"set_bg MISSING handle=%lld\0".as_ptr(),
+                handle,
+            );
         }
     }
 }

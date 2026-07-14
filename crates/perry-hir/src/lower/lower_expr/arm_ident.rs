@@ -15,6 +15,26 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     let expr_ident = ast::Expr::Ident(ident.clone());
     let expr = &expr_ident;
     let name = ident.sym.to_string();
+    // A named import from a node-core module that is not a value export of that
+    // module was deferred (neither bound nor rejected) at import lowering — see
+    // `LoweringContext::deferred_unknown_native_imports`. Type annotations are
+    // erased before expression lowering, so reaching this arm means the local is
+    // genuinely used as a VALUE (`import { nope } from "crypto"; nope()`), not a
+    // TS type in a mixed import (`import { createCipheriv, BinaryLike }`). Raise
+    // the original diagnostic now, at the real point of use. A same-named local
+    // that shadows the specifier resolves normally and is untouched.
+    if ctx.lookup_local(&name).is_none() {
+        if let Some((imported, raw_source, span)) =
+            ctx.deferred_unknown_native_imports.get(&name).cloned()
+        {
+            crate::lower_bail!(
+                span,
+                "The requested module '{}' does not provide an export named '{}'",
+                raw_source,
+                imported
+            );
+        }
+    }
     let with_envs = ctx.active_with_envs_for_ident(&name);
     if !with_envs.is_empty() {
         let saved_with_envs = std::mem::take(&mut ctx.with_env_stack);

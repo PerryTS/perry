@@ -339,7 +339,7 @@ pub fn substitute_locals_in_stmts(
                 }
                 substitute_locals_in_stmts(body, param_map, next_local_id);
             }
-            Stmt::PreallocateBoxes(ids) => {
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 // Issue #569: remap each id in the prealloc list. Inlining
                 // can rename body locals so the slot+box allocation must
                 // refer to the new ids. If a callee with a PreallocateBoxes

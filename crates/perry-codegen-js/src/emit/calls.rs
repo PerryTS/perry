@@ -43,6 +43,13 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
+            "hapticPlay" | "haptic_play" => {
+                self.output.push_str("perry_system_haptic_play(");
+                if let Some(a) = args.first() {
+                    self.emit_expr(a);
+                }
+                self.output.push(')');
+            }
             "audioStart" | "audio_start" => {
                 self.output.push_str("perry_system_audio_start()");
             }

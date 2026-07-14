@@ -61,6 +61,9 @@ fn emit_class_expression_value_binding(
         ctx.mark_local_immutable(id);
     }
     ctx.register_let_class_alias(bind_name.to_string(), bind_name.to_string());
+    // The binding's local holds ITS OWN class — `new <bind_name>()` must keep
+    // the static construct path (see `inferred_class_bindings`).
+    ctx.inferred_class_bindings.insert(bind_name.to_string());
     module.init.push(Stmt::Let {
         id,
         name: bind_name.to_string(),
@@ -688,9 +691,21 @@ pub(crate) fn lower_stmt(
                                         let class_id = ctx.fresh_class();
                                         ctx.register_class(bind_name.clone(), class_id);
                                         ctx.register_class(inner_name.clone(), class_id);
+                                        // The bind-name local holds ITS OWN
+                                        // class (see inferred_class_bindings).
+                                        ctx.inferred_class_bindings.insert(bind_name.clone());
                                         ctx.class_expr_aliases
                                             .insert(inner_name.clone(), bind_name.clone());
                                     }
+                                    // The inner (const) binding visible inside the
+                                    // body is the class expression's own source ident
+                                    // (`var cls = class C {...}` -> `C`); feed it so the
+                                    // const-assignment guard uses the user-visible name,
+                                    // not the `bind_name` registration key.
+                                    ctx.pending_class_inner_name = class_expr
+                                        .ident
+                                        .as_ref()
+                                        .map(|i| i.sym.to_string());
                                     // Lower the class with the binding name so
                                     // `new BindName(...)` works unchanged.
                                     let mut lowered_class =
@@ -796,8 +811,7 @@ pub(crate) fn lower_stmt(
                                 if let ast::Callee::Expr(callee_expr) = &call.callee {
                                     if let ast::Expr::Ident(fn_ident) = callee_expr.as_ref() {
                                         let fn_name = fn_ident.sym.to_string();
-                                        if let Some((_param_name, mixin_class_box)) =
-                                            ctx.mixin_funcs.get(&fn_name).cloned()
+                                        if let Some(mixin) = ctx.mixin_funcs.get(&fn_name).cloned()
                                         {
                                             if call.args.len() == 1 {
                                                 if let ast::Expr::Ident(base_ident) =
@@ -810,7 +824,7 @@ pub(crate) fn lower_stmt(
                                                         let bind_name = ident.id.sym.to_string();
                                                         if ctx.lookup_class(&bind_name).is_none() {
                                                             let mut new_class =
-                                                                (*mixin_class_box).clone();
+                                                                (*mixin.class_ast).clone();
                                                             let base_id = ast::Ident::new(
                                                                 base_class_name.clone().into(),
                                                                 base_ident.span,
@@ -825,10 +839,45 @@ pub(crate) fn lower_stmt(
                                                                 &bind_name,
                                                                 false,
                                                             )?;
+                                                            // Issue #5952: the synthesized class is
+                                                            // registered under the BINDING name so
+                                                            // `new M()` / `instanceof M` resolve
+                                                            // statically, but its user-visible
+                                                            // `.name` is the class EXPRESSION's own
+                                                            // name — the empty string for the
+                                                            // canonical anonymous
+                                                            // `return class extends B {…}` (a
+                                                            // directly-returned class expression
+                                                            // gets no NamedEvaluation from the call
+                                                            // site's `const M =`). Record the
+                                                            // override so codegen registers the
+                                                            // spec name rather than the
+                                                            // registration key.
+                                                            ctx.class_display_names.insert(
+                                                                lowered_class.id,
+                                                                mixin
+                                                                    .class_expr_name
+                                                                    .clone()
+                                                                    .unwrap_or_default(),
+                                                            );
                                                             push_class_dedup(module, lowered_class);
                                                             ctx.class_expr_aliases.insert(
                                                                 bind_name.clone(),
                                                                 bind_name.clone(),
+                                                            );
+                                                            // Issue #5952: bind the VALUE too. The
+                                                            // sibling `const X = class {…}` arm
+                                                            // above ends with this call; this arm
+                                                            // used to `continue` straight from the
+                                                            // class synthesis, so `M` was never
+                                                            // bound — `typeof M` / `M.name` /
+                                                            // `String(M)` read an unassigned local
+                                                            // (undefined) even though `new M()` and
+                                                            // `instanceof M` worked (both key off
+                                                            // the class NAME, not the binding).
+                                                            emit_class_expression_value_binding(
+                                                                ctx, module, &bind_name, mutable,
+                                                                is_var,
                                                             );
                                                             continue;
                                                         }
@@ -1234,6 +1283,15 @@ pub(crate) fn lower_stmt(
                     module.init.extend(stmts);
                     return Ok(());
                 }
+                // #6071: a compound member/index assignment at statement level —
+                // spill the base + computed key into Let temps so each is
+                // evaluated once (the expression path lowers them twice).
+                if let Some(stmts) =
+                    crate::lower::expr_assign::hoist_compound_member_assign(ctx, assign)?
+                {
+                    module.init.extend(stmts);
+                    return Ok(());
+                }
             }
             let expr = lower_expr(ctx, &expr_stmt.expr)?;
             module.init.push(Stmt::Expr(expr));
@@ -1620,6 +1678,13 @@ pub(crate) fn lower_stmt(
             let discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
             let mut cases = Vec::new();
             let switch_scope_mark = ctx.push_block_scope();
+            // Case statement-lists share the switch's block scope without
+            // being a `BlockStmt`, so they don't pass through
+            // `lower_block_stmt` — re-bind their pre-registered
+            // forward-captured lets here (all cases up front: one scope).
+            for case in &switch_stmt.cases {
+                rebind_nested_forward_scope_lets(ctx, &case.cons);
+            }
 
             for case in &switch_stmt.cases {
                 let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;

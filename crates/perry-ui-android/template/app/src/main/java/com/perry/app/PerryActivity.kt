@@ -1,11 +1,14 @@
 package com.perry.app
 
 import android.app.Activity
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * Minimal Activity that hosts a Perry-compiled native UI.
@@ -33,13 +36,41 @@ class PerryActivity : Activity() {
         // Switch from splash theme to normal theme before inflating layout
         setTheme(android.R.style.Theme_Material_Light_NoActionBar)
 
-        // Go edge-to-edge (content under status/nav bars, matching iOS behavior)
-        window.setFlags(
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        )
+        // Keep content below the status / nav bars. Two layout regimes are in
+        // play and the host padding has to follow whichever one is live:
+        //   * API < 35 — the decor view fits system windows (explicitly on
+        //     30-34, by default below that), so the content view is already
+        //     inset and any padding we add here is just blank space.
+        //   * API >= 35 — we target SDK 35, so Android 15 forces edge-to-edge
+        //     and setDecorFitsSystemWindows() is a no-op. Nothing insets the
+        //     content; without padding the UI draws under the system bars.
+        // So pad from the insets we are actually handed rather than branching
+        // on SDK_INT: the decor consumes them in the first regime (leaving us
+        // to pad by zero) and passes them through in the second. This also
+        // covers the nav bar, display cutouts and landscape, which a top-only
+        // status_bar_height pad does not. getSafeAreaInsets() is no help here
+        // — it still returns zeros on Android.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            @Suppress("DEPRECATION")
+            window.setDecorFitsSystemWindows(true)
+        }
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        window.statusBarColor = android.graphics.Color.WHITE
+        window.navigationBarColor = android.graphics.Color.WHITE
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
 
         rootLayout = FrameLayout(this)
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, windowInsets ->
+            val bars = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
         setContentView(rootLayout)
 
         // Store device locale in SharedPreferences so preferencesGet("AppleLanguages") works
@@ -195,6 +226,39 @@ class PerryActivity : Activity() {
     override fun onLowMemory() {
         super.onLowMemory()
         PerryBridge.forwardMapsLifecycle("lowMemory")
+        // #6184: a system low-memory notice is the last warning before the
+        // low-memory killer targets us → force a full collect + trigger clamp.
+        forwardMemoryPressure(2)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // #6184 (2026-07-09 GC audit): map Android trim levels onto the GC
+        // memory-pressure API. RUNNING_CRITICAL (imminent kill while running)
+        // and COMPLETE / MODERATE (background, high reclaim priority) are the
+        // severe levels → full collect + trigger clamp (2). Every lighter
+        // trim (RUNNING_LOW / RUNNING_MODERATE / BACKGROUND / UI_HIDDEN) is
+        // advisory → minor collect (1). The constants aren't monotonic by
+        // severity, so match the severe set explicitly rather than by range.
+        val pressure = when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+            ComponentCallbacks2.TRIM_MEMORY_COMPLETE,
+            ComponentCallbacks2.TRIM_MEMORY_MODERATE -> 2
+            else -> 1
+        }
+        forwardMemoryPressure(pressure)
+    }
+
+    /// Forward an OS memory-pressure signal to the native GC. Guarded against
+    /// UnsatisfiedLinkError because a warning can arrive before the native
+    /// library finishes loading (permission gate / cold start).
+    private fun forwardMemoryPressure(level: Int) {
+        try {
+            PerryBridge.nativeMemoryPressure(level)
+        } catch (_: UnsatisfiedLinkError) {
+            // Native library not loaded yet — the arena isn't live, nothing
+            // to collect.
+        }
     }
 
     override fun onDestroy() {

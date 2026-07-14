@@ -173,7 +173,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
             }
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 
@@ -303,8 +303,11 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 fill_defaults_in_expr(v, cx);
             }
         }
-        Expr::InstanceOf { expr, .. } => {
+        Expr::InstanceOf { expr, ty_expr, .. } => {
             fill_defaults_in_expr(expr, cx);
+            if let Some(t) = ty_expr {
+                fill_defaults_in_expr(t, cx);
+            }
         }
         Expr::Closure { body, .. } => {
             fill_defaults_in_stmts(body, cx);

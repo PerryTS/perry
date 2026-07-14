@@ -765,20 +765,27 @@ pub extern "C" fn js_atomics_wait_async(
     };
 
     let deadline = timeout_to_deadline(timeout);
-    let promise = crate::promise::js_promise_new();
+    // Cross-thread variant: referenced only by a raw usize in the pending
+    // results queue until drained — must not live in the copying nursery
+    // (the from-space flip ignores pins that no scanner reaches).
+    let promise = crate::promise::js_promise_new_cross_thread();
     // Pin the promise + keep the event loop alive until the async result lands.
     unsafe {
         crate::thread::pin_promise(promise);
     }
     crate::thread::thread_job_begin();
     let promise_usize = promise as usize;
+    // #6185: the promise belongs to the agent calling `waitAsync`. The futex
+    // waiter below owns no heap (it never runs JS), so it cannot infer the
+    // right agent from itself — capture it here, on the calling thread.
+    let owner_agent = crate::agent::current_agent();
     std::thread::spawn(move || {
         let outcome = crate::atomics_futex::block(handle, deadline);
         let result = match outcome {
             crate::atomics_futex::WaitOutcome::Ok => "ok",
             _ => "timed-out",
         };
-        crate::thread::queue_promise_string_result(promise_usize, result);
+        crate::thread::queue_promise_string_result(owner_agent, promise_usize, result);
     });
     wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
 }

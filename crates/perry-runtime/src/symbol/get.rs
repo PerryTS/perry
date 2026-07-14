@@ -257,6 +257,26 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
         return crate::proxy::js_proxy_get(obj_f64, sym_f64);
     }
+    // A `Date` is a `DateCell` (NaN-boxed pointer, NOT an `ObjectHeader`). A
+    // symbol-keyed read (`d[Symbol.toPrimitive]`, `d[Symbol.iterator]`) must
+    // NOT reach the pointer-deref paths below — they reinterpret the cell as an
+    // `ObjectHeader` (`js_object_get_class_id`, prototype walk) and read
+    // garbage. Resolve OWN symbol props from the side table first (a user may
+    // `d[sym] = x`), then inherit from `Date.prototype` (which carries the
+    // installed `[Symbol.toPrimitive]`). This is the DateCell analogue of the
+    // ordinary object's own-then-prototype symbol walk.
+    if crate::date::is_date_value(obj_f64) {
+        if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+            return v;
+        }
+        let proto = crate::object::builtin_prototype_value("Date");
+        if (proto.to_bits() >> 48) == 0x7FFD {
+            if let Some(v) = own_symbol_property(proto, sym_f64) {
+                return v;
+            }
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
@@ -272,6 +292,34 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         }
         if let Some(vb) = class_static_symbol_lookup(class_id, sym_f64) {
             return f64::from_bits(vb);
+        }
+        // #6173: a `static [S]() {}` (and, through a prototype ref, an
+        // instance `[S]() {}`) registers in CLASS_SYMBOL_METHODS, which this
+        // resolver never consulted — so reading `D[S]` as a VALUE returned
+        // undefined even though the direct call `D[S]()` dispatched fine via
+        // `js_native_call_method_value`'s independent lookup. Materialize a
+        // bound-method closure carrying the resolved target. Runs after the
+        // accessor branch (getter priority) and the static symbol-FIELD
+        // lookup (a `static [S] = v` initializer runs after method
+        // installation and shadows the method, matching class-init order).
+        // USER symbols only: well-known symbol methods (`[Symbol.iterator]`,
+        // `[Symbol.toPrimitive]`, …) are lowered to synthetic `@@name`
+        // members with dedicated consumers (GetIterator, `js_to_primitive`,
+        // the using-block desugar) and established name-based resolution —
+        // keep them on those paths rather than changing their behavior here.
+        if sym_key != 0 && !crate::symbol::is_well_known_symbol(sym_key) {
+            let is_proto_ref = crate::object::class_prototype_ref_id(obj_f64).is_some();
+            if let Some((func_ptr, param_count, has_rest)) =
+                crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, !is_proto_ref)
+            {
+                return crate::object::build_symbol_bound_method_closure(
+                    obj_f64,
+                    func_ptr,
+                    param_count,
+                    has_rest,
+                    !is_proto_ref,
+                );
+            }
         }
         // #1758: a class ref whose own static symbols miss may inherit the
         // symbol from a class-expression parent (`class Sub extends make(...) {}`
@@ -477,6 +525,36 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                                 obj_f64,
                                 method_name.as_ptr(),
                                 method_name.len(),
+                            );
+                        }
+                    }
+                    // #6173: a USER symbol-keyed instance method (`[S]() {}`)
+                    // lives in CLASS_SYMBOL_METHODS — the table the direct
+                    // call path resolves through — not in the accessor /
+                    // well-known tables checked above, so a bare `obj[S]`
+                    // read returned undefined while `obj[S]()` worked.
+                    // Materialize the resolved target as a bound method. Own
+                    // symbol props (checked earlier) still shadow it, and the
+                    // accessor branch above keeps getter priority. This also
+                    // fixes instance-side `S in obj`, whose presence check
+                    // (`js_object_has_property`) delegates to this resolver.
+                    // USER symbols only: a well-known computed method (e.g.
+                    // `[Symbol.toPrimitive]() {}`) is lowered to a synthetic
+                    // `@@name` vtable member and keeps resolving through the
+                    // name-based #1838 tail below, preserving the existing
+                    // behavior for every well-known symbol.
+                    if !crate::symbol::is_well_known_symbol(sym_key) {
+                        if let Some((func_ptr, param_count, has_rest)) =
+                            crate::object::lookup_class_symbol_method_in_chain(
+                                class_id, sym_key, false,
+                            )
+                        {
+                            return crate::object::build_symbol_bound_method_closure(
+                                obj_f64,
+                                func_ptr,
+                                param_count,
+                                has_rest,
+                                false,
                             );
                         }
                     }

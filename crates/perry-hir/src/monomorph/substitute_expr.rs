@@ -1127,5 +1127,6 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
                 .collect(),
         },
         Stmt::PreallocateBoxes(ids) => Stmt::PreallocateBoxes(ids.clone()),
+        Stmt::PreallocateTdzBoxes(ids) => Stmt::PreallocateTdzBoxes(ids.clone()),
     }
 }

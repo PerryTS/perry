@@ -926,6 +926,31 @@ fn throw_reference_error_message(message: &'static [u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Temporal Dead Zone ReferenceError. Thrown when a lexical `let`/`const`/
+/// `class` binding is read, `typeof`-d, or compound-assigned before its
+/// declaration has been evaluated — i.e. while its box still holds the
+/// `TAG_TDZ` sentinel. `name` is the NaN-boxed binding name (or `undefined`
+/// when codegen could not thread a name through, e.g. a captured box read).
+/// Message matches V8/Node byte-for-byte: `Cannot access x before
+/// initialization`.
+#[no_mangle]
+pub extern "C" fn js_throw_reference_error_tdz(name: f64) -> f64 {
+    let name = value_to_lossy_string(name);
+    let msg = if name.is_empty() {
+        "Cannot access uninitialized variable before initialization".to_string()
+    } else {
+        format!("Cannot access {} before initialization", name)
+    };
+    let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = js_referenceerror_new(msg_str);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code-
+/// and runtime-only callee).
+#[used]
+static KEEP_JS_THROW_REFERENCE_ERROR_TDZ: extern "C" fn(f64) -> f64 = js_throw_reference_error_tdz;
+
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
     throw_reference_error_message(b"identifier is not defined")

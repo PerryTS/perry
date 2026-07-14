@@ -10,11 +10,77 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, nanbox_string_inline,
-    unbox_str_handle, unbox_to_i64, FnCtx,
+    emit_root_nanbox_store_on_block, emit_write_barrier, lower_expr, nanbox_pointer_inline,
+    nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::types::{DOUBLE, I32, I64, PTR};
+
+/// Write the (possibly reallocated) array head produced by a growing mutator
+/// (`unshift`, …) back to whichever storage backs a single-local receiver:
+/// boxed cell, closure capture, plain local slot, or module global.
+///
+/// This is the same routing `Expr::ArrayPush` performs (see
+/// `expr/array_push.rs`). Growth installs a forwarding stub at the old header,
+/// but a boxed async/closure local is read through its box cell and never
+/// observes that forwarding, so without this write-back a growing `unshift`
+/// inside an async fn left the variable reading `undefined` (#6229).
+pub(crate) fn emit_grow_mutator_writeback(
+    ctx: &mut FnCtx<'_>,
+    array_id: u32,
+    new_box: &str,
+) -> Result<()> {
+    if ctx.boxed_vars.contains(&array_id) {
+        // Boxed var: the slot / capture holds the BOX pointer; update the box
+        // content so every closure sharing the box sees the new head.
+        if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
+            let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {
+                anyhow::anyhow!("unshift boxed capture but no current_closure_ptr")
+            })?;
+            let idx_str = capture_idx.to_string();
+            let blk = ctx.block();
+            let box_ptr = blk.call(
+                I64,
+                "js_closure_get_capture_bits",
+                &[(I64, &closure_ptr), (I32, &idx_str)],
+            );
+            let new_bits = blk.bitcast_double_to_i64(new_box);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+            emit_write_barrier(ctx, &box_ptr, &new_bits);
+            return Ok(());
+        } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
+            let blk = ctx.block();
+            let box_ptr = blk.load(I64, &slot);
+            let new_bits = blk.bitcast_double_to_i64(new_box);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+            emit_write_barrier(ctx, &box_ptr, &new_bits);
+            return Ok(());
+        }
+        // Boxed but no box location in THIS context (module global reached
+        // directly from a nested fn) — fall through to the global store.
+    }
+    if let Some(&capture_idx) = ctx.closure_captures.get(&array_id) {
+        let closure_ptr = ctx
+            .current_closure_ptr
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("unshift capture but no current_closure_ptr"))?;
+        let idx_str = capture_idx.to_string();
+        let new_bits = ctx.block().bitcast_double_to_i64(new_box);
+        ctx.block().call_void(
+            "js_closure_set_capture_bits",
+            &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
+        );
+        emit_write_barrier(ctx, &closure_ptr, &new_bits);
+    } else if let Some(slot) = ctx.locals.get(&array_id).cloned() {
+        ctx.block().store(DOUBLE, new_box, &slot);
+    } else if let Some(global_name) = ctx.module_globals.get(&array_id).cloned() {
+        let g_ref = format!("@{}", global_name);
+        emit_root_nanbox_store_on_block(ctx.block(), new_box, &g_ref);
+    }
+    // Non-local receiver (property chain): rely on in-place mutation /
+    // forwarding, matching the prior behavior.
+    Ok(())
+}
 
 /// Lower `arr.method(args…)` for an array-typed receiver. Currently
 /// supported: `pop`, `join`. `push` is handled separately by the HIR
@@ -795,40 +861,48 @@ pub(crate) fn lower_array_method(
             // items at the front in source order via the variadic helper.
             // The (possibly reallocated) array forwards from its old pointer,
             // so in-place mutation stays visible to the receiver slot.
-            if args.is_empty() {
+            // Materialize the args (if any) into an alloca buffer, then call
+            // the variadic helper (preserves source order).
+            let (buf_ptr, count_str) = if args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let mut item_vals: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    item_vals.push(lower_expr(ctx, a)?);
+                }
+                let n = item_vals.len();
                 let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, &recv_box);
-                let new_handle = blk.call(
-                    I64,
-                    "js_array_unshift_variadic",
-                    &[(I64, &recv_handle), (PTR, "null"), (I32, "0")],
-                );
-                let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-                return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
-            }
-            // Lower every argument, then materialize them into an alloca buffer
-            // and call the variadic helper (preserves source order).
-            let mut item_vals: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                item_vals.push(lower_expr(ctx, a)?);
-            }
-            let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
-            let n = item_vals.len();
-            let buf_reg = blk.next_reg();
-            blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-            for (i, val) in item_vals.iter().enumerate() {
-                let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                blk.store(DOUBLE, val, &slot);
-            }
-            let count_str = format!("{}", n);
-            let new_handle = blk.call(
+                let buf_reg = blk.next_reg();
+                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                for (i, val) in item_vals.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    blk.store(DOUBLE, val, &slot);
+                }
+                (buf_reg, format!("{}", n))
+            };
+            let recv_handle = {
+                let blk = ctx.block();
+                unbox_to_i64(blk, &recv_box)
+            };
+            let new_handle = ctx.block().call(
                 I64,
                 "js_array_unshift_variadic",
-                &[(I64, &recv_handle), (PTR, &buf_reg), (I32, &count_str)],
+                &[(I64, &recv_handle), (PTR, &buf_ptr), (I32, &count_str)],
             );
-            let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-            Ok(blk.sitofp(I32, &len_i32, DOUBLE))
+            // #6229: write the (possibly reallocated) header back to the
+            // receiver's storage. Growth installs a forwarding stub on the old
+            // header, but a boxed async/closure local is read through its box
+            // cell and never observes that forwarding, so a growing `unshift`
+            // inside an async fn left the variable reading `undefined`. Route
+            // through the same storage resolution `ArrayPush` uses.
+            if let Expr::LocalGet(array_id) = object {
+                let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+                emit_grow_mutator_writeback(ctx, *array_id, &new_box)?;
+            }
+            let len_i32 = ctx
+                .block()
+                .call(I32, "js_array_length", &[(I64, &new_handle)]);
+            Ok(ctx.block().sitofp(I32, &len_i32, DOUBLE))
         }
         // Issue #655 (chained-receiver path): without this arm, a
         // chained `obj.field.splice(...)` resolved through `is_array_expr`

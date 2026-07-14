@@ -56,22 +56,14 @@ pub(super) fn hidden_key(bytes: &[u8]) -> *mut crate::string::StringHeader {
 }
 
 pub(super) fn string_value_eq(value: f64, expected: &[u8]) -> bool {
+    // SSO-aware byte compare (heap strings AND inline short strings) with no
+    // heap materialization. The previous implementation routed SSO values
+    // through `js_get_string_pointer_unified`, which allocates a heap copy of
+    // the inline bytes per call — a fresh allocation for every SSO key
+    // compared, on every object `JSON.stringify` probes for the stream flag
+    // keys (#6009).
     let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_any_string() {
-        return false;
-    }
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
-        return false;
-    }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        if len != expected.len() {
-            return false;
-        }
-        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        std::slice::from_raw_parts(data, len) == expected
-    }
+    unsafe { crate::string::js_string_key_matches_bytes(jsval, expected) }
 }
 
 pub(super) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {

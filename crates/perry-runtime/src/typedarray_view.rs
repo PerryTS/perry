@@ -21,7 +21,7 @@ use crate::typedarray::{
 /// arguments (#4103): `undefined` / `NaN` → 0, otherwise `ToIntegerOrInfinity`
 /// truncated toward zero, with a `RangeError` for a negative or
 /// out-of-`[[0, 2^53-1]]` result.
-fn typed_array_view_to_index(value: f64) -> i64 {
+pub(crate) fn typed_array_view_to_index(value: f64) -> i64 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return 0;
@@ -73,9 +73,11 @@ pub extern "C" fn js_typed_array_view(
         return js_typed_array_new(kind as i32, source);
     }
     let bpe = elem_size_for_kind(kind) as i64;
-    let src = addr as *const crate::buffer::BufferHeader;
-    let total_len = unsafe { (*src).length as i64 };
 
+    // ES ordering (InitializeTypedArrayFromArrayBuffer): ToIndex(byteOffset)
+    // and ToIndex(length) run BEFORE the IsDetachedBuffer check — either can
+    // execute user code (`valueOf`) that detaches the buffer — so all buffer
+    // reads and bounds checks happen after, against post-coercion state.
     let offset = typed_array_view_to_index(offset_value);
     if bpe > 1 && offset % bpe != 0 {
         throw_range_error(
@@ -87,32 +89,44 @@ pub extern "C" fn js_typed_array_view(
             .as_bytes(),
         );
     }
+    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
+    let requested = if length_jv.is_undefined() {
+        None
+    } else {
+        Some(typed_array_view_to_index(length_value))
+    };
+    if crate::buffer::is_detached_buffer(addr) {
+        crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
+    }
+    let src = addr as *const crate::buffer::BufferHeader;
+    let total_len = unsafe { (*src).length as i64 };
     if offset > total_len {
         throw_range_error(
             format!("Start offset {offset} is outside the bounds of the buffer").as_bytes(),
         );
     }
 
-    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
-    let elem_count = if length_jv.is_undefined() {
-        let remaining = total_len - offset;
-        if bpe > 1 && remaining % bpe != 0 {
-            throw_range_error(
-                format!(
-                    "byte length of {} should be a multiple of {}",
-                    name_for_kind(kind),
-                    bpe
-                )
-                .as_bytes(),
-            );
+    let elem_count = match requested {
+        None => {
+            let remaining = total_len - offset;
+            if bpe > 1 && remaining % bpe != 0 {
+                throw_range_error(
+                    format!(
+                        "byte length of {} should be a multiple of {}",
+                        name_for_kind(kind),
+                        bpe
+                    )
+                    .as_bytes(),
+                );
+            }
+            remaining / bpe
         }
-        remaining / bpe
-    } else {
-        let requested = typed_array_view_to_index(length_value);
-        if offset + requested * bpe > total_len {
-            throw_range_error(format!("Invalid typed array length: {requested}").as_bytes());
+        Some(requested) => {
+            if offset + requested * bpe > total_len {
+                throw_range_error(format!("Invalid typed array length: {requested}").as_bytes());
+            }
+            requested
         }
-        requested
     };
 
     let count = elem_count.max(0) as u32;
@@ -182,6 +196,25 @@ static VIEW_META_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 pub(crate) fn any_view_meta() -> bool {
     VIEW_META_COUNT.load(Ordering::Relaxed) != 0
+}
+
+/// DetachArrayBuffer support (ES2024 `ArrayBuffer.prototype.transfer`): zero
+/// the length of every typed array aliasing `backing` so views over a
+/// detached buffer report length 0 and every indexed read is out-of-bounds
+/// (`undefined`), matching Node.
+pub(crate) fn zero_views_of_detached_backing(backing: usize) {
+    if !any_view_meta() {
+        return;
+    }
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        for (&ta, meta) in r.borrow().iter() {
+            if meta.backing == backing {
+                unsafe {
+                    (*(ta as *mut TypedArrayHeader)).length = 0;
+                }
+            }
+        }
+    });
 }
 
 /// Record `ta` as aliasing `backing` at `byte_offset`. After this call

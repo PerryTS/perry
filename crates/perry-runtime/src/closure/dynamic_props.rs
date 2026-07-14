@@ -147,6 +147,67 @@ fn forwarded_heap_owner(owner: usize) -> Option<usize> {
     }
 }
 
+/// Dead-payload sweep arm (2026-07-09 GC audit wave 2): remove every side
+/// table entry owned by the DEAD closure at `ptr`, exactly like
+/// `object::clear_overflow_for_ptr` does for object overflow fields. Called
+/// from `gc_type_clear_dead_payload_side_tables` when the sweep reclaims a
+/// `GC_TYPE_CLOSURE` header — previously an explicit no-op, so one entry per
+/// closure INSTANCE that ever got `fn.prop = …` / `setPrototypeOf(fn, …)`
+/// (memoization wrappers, effect `Context.Tag`) leaked forever and a new
+/// closure at the recycled address inherited the dead one's props.
+pub(crate) fn clear_closure_side_tables_for_dead_ptr(ptr: usize) {
+    if ptr == 0 {
+        return;
+    }
+    if let Ok(mut props) = get_closure_props().lock() {
+        props.remove(&ptr);
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        prototypes.remove(&ptr);
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        deleted.remove(&ptr);
+    }
+}
+
+/// Cheap sweep gate: true when any of the three closure side tables has
+/// entries, so the per-dead-object `clear_dead_payload` dispatch can be
+/// skipped entirely on the (overwhelmingly common) runs that never attach
+/// props to closures. Mirrors `object::overflow_fields_is_empty`.
+pub(crate) fn closure_dynamic_side_tables_nonempty() -> bool {
+    get_closure_props().lock().is_ok_and(|m| !m.is_empty())
+        || get_closure_prototypes().lock().is_ok_and(|m| !m.is_empty())
+        || get_closure_deleted_keys()
+            .lock()
+            .is_ok_and(|m| !m.is_empty())
+}
+
+/// Death pruning for tenured/uncollected-by-sweep closures (2026-07-09 GC
+/// audit wave 2): the sweep's dead-payload arm above only fires for headers
+/// the ordinary sweep reclaims; closures dying in the ACTIVE nursery block,
+/// in bulk block resets, or in copied-minor from-space never reach it. This
+/// registry-style pass walks the three tables with one of the GC's deadness
+/// predicates (`gc::dead_owner`, narrowed to `GC_TYPE_CLOSURE`). The tables
+/// are process-global: foreign threads' closure addresses don't attribute
+/// and are skipped (documented residual).
+pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usize) -> bool) {
+    let mut verdicts: HashMap<usize, bool> = HashMap::new();
+    let mut is_dead = |owner: usize| -> bool {
+        *verdicts
+            .entry(owner)
+            .or_insert_with(|| is_dead_closure(owner))
+    };
+    if let Ok(mut props) = get_closure_props().lock() {
+        props.retain(|owner, _| !is_dead(*owner));
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        prototypes.retain(|owner, _| !is_dead(*owner));
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        deleted.retain(|owner, _| !is_dead(*owner));
+    }
+}
+
 pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
@@ -205,10 +266,27 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
     if owner == 0 {
         return;
     }
+    // Take the entry OUT and run the visit with the lock RELEASED: a
+    // copying-minor rewrite visitor can move the prototype closure, and
+    // move fixup re-enters `closure_dynamic_props_owner_moved`, which
+    // takes this same lock — visiting under it self-deadlocks the
+    // collector (the geisterhand+reviver GC test wedged CI's cargo-test
+    // at the 3h job timeout). Same remove → visit → merge-back pattern
+    // as `visit_closure_dynamic_prop_values_mut` above and the roots
+    // scanner below.
+    let Some(mut proto_bits) = get_closure_prototypes()
+        .lock()
+        .ok()
+        .and_then(|mut prototypes| prototypes.remove(&owner))
+    else {
+        return;
+    };
+    visit(&mut proto_bits as *mut u64);
+    // The visit can forward the owner itself (self-referential
+    // prototype); re-key like the roots scanner does.
+    let new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
     if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        if let Some(proto_bits) = prototypes.get_mut(&owner) {
-            visit(proto_bits as *mut u64);
-        }
+        prototypes.insert(new_owner, proto_bits);
     }
 }
 
@@ -391,6 +469,10 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                 return val;
             }
         }
+    }
+    // Function length is an own intrinsic property.
+    if prop == "length" && !closure_is_key_deleted(ptr, "length") {
+        return crate::closure::closure_length(ptr as *const ClosureHeader).unwrap_or(0) as f64;
     }
     // #36 / #321: own prop miss — walk the closure's static prototype chain
     // (`Object.setPrototypeOf(closure, protoObj)`). Reads a string-keyed field
@@ -697,15 +779,18 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
         return val;
     }
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if ptr < 0x10000 {
+    // #6320: the old `< 0x10000` floor is an order of magnitude below
+    // `HANDLE_BAND_MAX`, so a registry handle NaN-boxed under POINTER_TAG — most
+    // sharply a revocable-Proxy id at `0xF0000 + id` — passed it and the
+    // CLOSURE_MAGIC probe below dereferenced unmapped low memory. Detaching a
+    // proxy-valued method (`const g = obj.m` where `obj.m = new Proxy(fn, {})`)
+    // reaches exactly here. `is_closure_ptr` subsumes the band, heap-range,
+    // alignment and magic checks; a non-closure value has no `this` slot to
+    // unbind, so it flows through untouched.
+    if !is_closure_ptr(ptr) {
         return val;
     }
-    // Check CLOSURE_MAGIC
     unsafe {
-        let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
-        if type_tag != CLOSURE_MAGIC {
-            return val;
-        }
         let header = ptr as *const ClosureHeader;
         let raw_count = (*header).capture_count;
         // Only unbind if the closure has the CAPTURES_THIS_FLAG
@@ -760,6 +845,11 @@ mod tests_1802 {
     /// removed, the adapter sees every stored value's bits.
     #[test]
     fn dyn_prop_values_are_visited_in_mark_phase() {
+        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, wiping this test's parked entry mid-assertion. Serialize
+        // against those guards, THEN against this module's own tests.
+        let _global = crate::gc::global_side_table_test_lock();
         let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         // A unique synthetic closure address (just an integer key — the
         // scanner doesn't deref it during value visitation; the
@@ -794,6 +884,11 @@ mod tests_1802 {
 
     #[test]
     fn dyn_prop_scanner_visits_values_without_holding_props_lock() {
+        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, wiping this test's parked entry mid-assertion. Serialize
+        // against those guards, THEN against this module's own tests.
+        let _global = crate::gc::global_side_table_test_lock();
         let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         let owner: usize = 0xC10C_AB1E_0000_1803;
         let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCD;
@@ -828,6 +923,11 @@ mod tests_1802 {
 
     #[test]
     fn dyn_prop_get_ignores_non_closure_receivers() {
+        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
+        // (`test_clear_closure_side_tables`) clears it from parallel test
+        // threads, wiping this test's parked entry mid-assertion. Serialize
+        // against those guards, THEN against this module's own tests.
+        let _global = crate::gc::global_side_table_test_lock();
         let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         let obj = crate::object::js_object_alloc(0, 0) as usize;
 

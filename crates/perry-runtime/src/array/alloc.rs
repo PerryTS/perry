@@ -54,6 +54,35 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     ptr
 }
 
+/// Allocate a fresh array whose initialized prefix is known to contain only
+/// heap pointers. Runtime producers such as `String.prototype.split` use this
+/// instead of starting as a raw-f64 array and immediately invalidating that
+/// representation on their first string store.
+///
+/// The caller must grow `length` only after writing each pointer slot. That
+/// keeps the all-pointer layout precise if allocation triggers a collection
+/// while the result is being materialized.
+pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        // Arena slots can be reused after a raw-f64 array. The all-pointer
+        // layout owns the same header, so clear numeric representation flags
+        // before publishing it as pointer-only.
+        clear_array_numeric_layout(ptr);
+        crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
+    }
+
+    ptr
+}
+
 /// Create a new empty array (convenience alias for `js_array_alloc(0)`).
 /// Used by perry-ui audio code.
 #[no_mangle]
@@ -108,7 +137,17 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
 pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
     if let Some(number) = value_bits_to_number(value.to_bits()) {
         let length = array_length_from_number_or_throw(number);
-        return js_array_alloc_with_length(length);
+        let arr = js_array_alloc_with_length(length);
+        if length > 0 {
+            // #6011: user-facing `new Array(n)` — every slot is TAG_HOLE, so
+            // the raw-f64-or-holes invariant holds by construction and the
+            // packed-f64 range-loop guard can skip its verify walk. This is
+            // the ONLY `js_array_alloc_with_length` caller that may mark:
+            // internal callers (shape keys arrays, sort scratch, …)
+            // direct-write slots without the layout-noting store helpers.
+            unsafe { mark_array_raw_f64_holes_fresh(arr) };
+        }
+        return arr;
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();

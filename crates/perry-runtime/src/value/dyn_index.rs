@@ -68,20 +68,18 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         }
     }
     if jsval.is_string() || jsval.is_short_string() {
+        // Spec: string INDEXING `s[i]` returns `undefined` for a non-canonical
+        // or out-of-bounds index — unlike `s.charAt(i)`, which returns "".
+        // Route through the canonical-index helper (`js_string_index_get`,
+        // #3987) so an OOB read here is `undefined`. Calling `js_string_char_at`
+        // directly (charAt semantics) returned "" for OOB, which every
+        // generator/async LOCAL string read hit: the CPS box pass erases the
+        // local's static type, so `line[i]` reaches this dyn path instead of the
+        // `is_string_expr` static path — the `yaml` lexer's `parseDocument`
+        // `switch (line[n])` then never observed `undefined` at line-ends and
+        // its `*lex` state machine spun forever (#6067).
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
-        if s_ptr.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        let idx_i32 = if index.is_nan() || index.is_infinite() {
-            0
-        } else {
-            index as i32
-        };
-        let result = crate::string::js_string_char_at(s_ptr, idx_i32);
-        if result.is_null() {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        return f64::from_bits(JSValue::string_ptr(result).bits());
+        return crate::string::js_string_index_get(s_ptr, index);
     }
     // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key]` where `C` is a
     // runtime class-ref value (e.g. a function parameter). Member-expression
@@ -107,20 +105,47 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             key_ptr,
         );
     }
+    // A non-NaN-boxed f64 reaching here is a plain `number` (its `[idx]` is
+    // `undefined` per JS). The old code kept a "raw I64 pointer passed as
+    // DOUBLE" heuristic — `bits < 2^48 && (bits & 3) == 0 && bits >= 0x10000` —
+    // that treated such a number's bits as a heap pointer, a relic of the
+    // now-removed module-var raw-I64 representation (module vars are uniform
+    // NaN-boxed doubles today, so a real object always takes the `is_pointer()`
+    // branch above). The heuristic only ever MISfired on numbers whose f64 bits
+    // land in that band — e.g. a subnormal `~1.7e-314` (bits `0x8_0000_0000`).
+    // On the macOS host the resulting address was below the heap range so
+    // `is_valid_obj_ptr` rejected it and this returned `undefined`; on Linux
+    // (`HEAP_MIN = 0x1000`, needed for Android/Scudo low allocations) the same
+    // address is *in range*, so it was dereferenced as an `ObjectHeader` →
+    // garbage/crash. Drop the heuristic: a non-pointer receiver is a number and
+    // its indexed read is `undefined` on every platform (#63/#321 denormal-safe).
     let raw_ptr = if jsval.is_pointer() {
         (bits & POINTER_MASK) as usize
-    } else if !value.is_nan()
-        && bits != 0
-        && bits < 0x0001_0000_0000_0000
-        && (bits & 0x3) == 0
-        && bits >= 0x10000
-    {
-        bits as usize
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    if raw_ptr < 0x10000 {
-        return f64::from_bits(TAG_UNDEFINED);
+    if crate::value::addr_class::is_small_handle(raw_ptr) {
+        // #5989: registry HANDLES (fetch/native ids) live below HANDLE_BAND_MAX
+        // (0x100000). The old guard only excluded the first 64KB, so a handle
+        // in [0x10000, 0x100000) indexed as `h[key]` fell through to the raw
+        // ObjectHeader walk below and dereferenced the id as a pointer —
+        // react-server-dom's flight wake path indexes a handle-valued object
+        // and segfaulted at the handle address. Route through the by-name read,
+        // which triages small handles (HANDLE_PROPERTY_DISPATCH, recorded
+        // prototypes) without ever dereferencing the id.
+        let idx_top16 = index.to_bits() >> 48;
+        let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+            js_get_string_pointer_unified(index) as *const crate::StringHeader
+        } else {
+            crate::builtins::js_string_coerce(index) as *const crate::StringHeader
+        };
+        if key_ptr.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return crate::object::js_object_get_field_by_name_f64(
+            raw_ptr as *const crate::object::ObjectHeader,
+            key_ptr,
+        );
     }
     // TypedArrays carry element-typed storage, not boxed ArrayHeader slots.
     // Probe the registry before any GC-header or raw ArrayHeader fallback so

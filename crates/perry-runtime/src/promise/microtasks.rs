@@ -55,6 +55,30 @@ pub extern "C" fn js_promise_run_microtasks() -> i32 {
     run_microtasks(MicrotaskDrainMode::AllowTimers)
 }
 
+/// The compiled entry's event-loop pump (#6077). Identical to
+/// `js_promise_run_microtasks`, plus the unhandled-rejection checkpoint —
+/// Node's `processPromiseRejections` — which runs after the microtask/nextTick
+/// drain and BEFORE the timer queues get a turn.
+///
+/// Only `codegen::entry`'s event loop emits this call, and that is deliberate:
+/// it is the one pump whose caller has a fully unwound JS stack, so "this
+/// rejection still has no handler" really means "no handler was attached this
+/// turn". The runtime's other AllowTimers pumps — the busy-wait loops behind
+/// `for await` over a stream, `fs.cp`, `perry_poll` — drain microtasks with a
+/// suspended JS frame on the stack, where a `.catch` two lines further down the
+/// same synchronous stretch has simply not run yet.
+#[no_mangle]
+pub extern "C" fn js_promise_run_microtasks_event_loop() -> i32 {
+    run_microtasks(MicrotaskDrainMode::EventLoop)
+}
+
+// The entry event loop is generated code, so nothing in the Rust runtime
+// references this symbol — anchor it like the other codegen-only hooks so the
+// auto-optimize internalize+dead-strip pass can't drop it (#4876).
+#[used]
+static KEEP_PROMISE_RUN_MICROTASKS_EVENT_LOOP: extern "C" fn() -> i32 =
+    js_promise_run_microtasks_event_loop;
+
 /// Drain entry for the codegen `await` busy-wait loop: like
 /// `js_promise_run_microtasks`, but drains microtasks/nextTicks even when
 /// reentrant. Timers are driven separately by `js_await_loop_tick_timers`,
@@ -83,6 +107,10 @@ pub extern "C" fn js_promise_run_promise_jobs() -> i32 {
 #[derive(Copy, Clone)]
 enum MicrotaskDrainMode {
     AllowTimers,
+    /// `AllowTimers` + the unhandled-rejection checkpoint between the microtask
+    /// drain and the timer queues (#6077). Reserved for the compiled entry's
+    /// event loop — see `js_promise_run_microtasks_event_loop`.
+    EventLoop,
     MicrotasksOnly,
     /// Promise/queueMicrotask jobs only — no nextTick drain, no timers.
     PromiseJobsOnly,
@@ -108,6 +136,13 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     let mut ran = 0;
 
     ran += crate::async_hooks::drain_gc_destroy_queue();
+
+    // FinalizationRegistry cleanup jobs recorded by AUTOMATIC collection
+    // cycles (the explicit-`gc()` path delivers its own immediately). This
+    // converts each job into a nextTick callback invocation, which the tick
+    // drain later in this same pump runs — matching the spec's "cleanup
+    // callbacks run as their own jobs" timing.
+    ran += crate::weakref::drain_pending_finalization_jobs();
 
     // Native async tokens settle only through the main-thread handoff path.
     ran += super::native_async::js_native_async_process_pending();
@@ -753,12 +788,25 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         }
     }
 
+    // #6077: the microtask checkpoint is over — the queue drained to empty.
+    // This is where Node decides whether a rejection went unhandled
+    // (`processTicksAndRejections` → `processPromiseRejections`), BEFORE the
+    // macrotask queues run: a `setTimeout(0)` scheduled ahead of the rejection
+    // still fires after the `unhandledRejection` handler, and a `.catch`
+    // attached from a timer callback is too late to suppress the report.
+    // Only the codegen event-loop pump qualifies (see the doc comment on
+    // `js_promise_run_microtasks_event_loop`); a nested drain is not a
+    // checkpoint boundary.
+    if matches!(mode, MicrotaskDrainMode::EventLoop) && !reentrant {
+        super::rejection::process_rejections();
+    }
+
     // Timers run after already-queued promise/queueMicrotask jobs, matching
     // Node's turn ordering (`Promise.resolve().then(...)` before
     // `setTimeout(..., 0)`). Timer callbacks may enqueue more microtasks;
     // those drain on the next pump iteration before newly due timers.
     let fire_timers = match mode {
-        MicrotaskDrainMode::AllowTimers => !reentrant,
+        MicrotaskDrainMode::AllowTimers | MicrotaskDrainMode::EventLoop => !reentrant,
         // #5437 (CodeRabbit): the codegen `await` loop calls this drain and then
         // `js_await_loop_tick_timers` (the guard-suspending timer path) on the
         // very same iteration — the two are always emitted as a pair and this is
@@ -779,6 +827,19 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     crate::exception::js_try_end();
 
     let _ = crate::gc::gc_runtime_safepoint();
+
+    // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
+    // the OUTERMOST microtask-pump boundary the JS stack has fully unwound, so
+    // there are no live register temporaries and the copying (moving) minor runs
+    // with precise, rewritable roots — no forced conservative scan. Run it when
+    // nursery pressure is due so programs that yield to the event loop get
+    // compacting, O(survivors) young collection instead of the non-moving
+    // alloc-point fallback. Gated (default off); additive.
+    if crate::gc::gc_moving_safepoint_enabled()
+        && MICROTASK_RUN_DEPTH.with(|depth| depth.get()) == 1
+    {
+        crate::gc::gc_safepoint_moving_minor();
+    }
 
     MICROTASK_RUN_DEPTH.with(|depth| {
         depth.set(depth.get().saturating_sub(1));

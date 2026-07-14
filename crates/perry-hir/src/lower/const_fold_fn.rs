@@ -320,7 +320,18 @@ pub(crate) fn try_const_fold_function_construct_kind(
     // their non-codegen interpreter fallback. Only the trivial empty-body no-op
     // is refused; real literal bodies (`return 42`, the `return this` globalThis
     // polyfill) still fold, preserving spec behavior by default.
-    if body_src.trim().is_empty() && crate::eval_classifier::eval_csp_probe_unavailable() {
+    //
+    // The probe passes AT LEAST ONE string argument (`new Function("")`). A
+    // ZERO-argument `new Function()` is not a codegen request at all — it
+    // constructs the empty function `anonymous() {}` — so it must NEVER throw,
+    // even under the default CSP mode (#5835 Intl-ctor test regressed here:
+    // `new Function()` used purely as a constructable-with-settable-prototype
+    // scaffold for `Reflect.construct` began throwing). Gate the refusal on
+    // there actually being an argument.
+    if !consts.is_empty()
+        && body_src.trim().is_empty()
+        && crate::eval_classifier::eval_csp_probe_unavailable()
+    {
         return synth_throwing_iife(
             ctx,
             "throw new TypeError(\"Function: runtime dynamic code generation is \

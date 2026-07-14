@@ -635,7 +635,20 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 encoding_to_emit = im.encoding.clone();
                 should_emit_end = false;
             }
-            "end" if !im.paused && !im.end_emitted => {
+            // Node fires `'end'` at every registered listener; the one-shot
+            // `!im.end_emitted` guard fired only the FIRST `req.on('end', …)`
+            // and silently dropped every later one (stored but never invoked).
+            // A single request stream routinely carries multiple `'end'`
+            // listeners — e.g. Next.js `getCloneableBody` (body-streams.js)
+            // attaches its body-drain `endPromise` resolver as a *second*
+            // `'end'` listener, so on routes that clone the request body that
+            // promise never resolved and the request hung. Fire the
+            // just-registered callback on every non-paused registration; the
+            // buffered request body is already complete when the handler runs,
+            // so each late listener observes `'end'` exactly once. `end_emitted`
+            // still latches so the bulk `resume()`/reaper emit paths (which gate
+            // on it) never double-fire an already-invoked listener.
+            "end" if !im.paused => {
                 im.end_emitted = true;
                 im.complete = true;
                 body_to_emit = None;

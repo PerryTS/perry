@@ -35,6 +35,9 @@ pub(crate) unsafe fn call_replacer(
     let prev_this = crate::object::js_implicit_this_set(holder_f64);
     let result = crate::js_closure_call2(replacer, key_f64, value_f64);
     crate::object::js_implicit_this_set(prev_this);
+    // The user callback may have installed/removed `Object.prototype.toJSON`
+    // (#6009 fast-probe cache).
+    super::invalidate_object_proto_tojson_state();
     result
 }
 
@@ -69,6 +72,23 @@ unsafe fn root_holder(value_f64: f64) -> f64 {
 /// fires when the object actually has a closure-typed `toJSON` field. Returns
 /// the (possibly substituted) value.
 #[inline]
+/// #5989: a real GC heap object pointer is in the low canonical VA range
+/// (top 16 bits 0 or 1) and 8-byte aligned. A value whose extracted
+/// "pointer" fails this is a corrupted / mis-encoded pointer, never a
+/// dereferenceable `GcHeader` — feeding it to `gc_obj_type` SIGBUSes.
+#[inline]
+fn ptr_derefable(ptr: usize) -> bool {
+    // Top-16-bits check: a real heap pointer sits in the low canonical VA
+    // range (bits 48-63 are 0 or 1). On 32-bit targets (arm64_32/watchOS)
+    // `usize` has no bits above 31, so this is vacuously true — and emitting
+    // `ptr >> 48` there is a compile-time overflow. Gate it by pointer width.
+    #[cfg(target_pointer_width = "64")]
+    let high_bits_ok = (ptr >> 48) <= 1;
+    #[cfg(not(target_pointer_width = "64"))]
+    let high_bits_ok = true;
+    high_bits_ok && ptr >= 0x10000 && (ptr & 0x7) == 0
+}
+
 unsafe fn apply_to_json(value: f64) -> f64 {
     let bits = value.to_bits();
     // A BigInt is a primitive, not a POINTER_TAG value — `extract_pointer`
@@ -86,6 +106,13 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream
         // handle) is never a dereferenceable heap pointer.
         if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return value;
+        }
+        // #5989: a mis-aligned or out-of-range pointer is a corrupted value, not
+        // a real GC object; `gc_obj_type` below would deref its `GcHeader` and
+        // SIGBUS. Guard by magnitude + 8-byte alignment (mirrors
+        // `is_object_pointer`'s pre-load sanity) — skip the toJSON probe.
+        if !ptr_derefable(ptr as usize) {
             return value;
         }
         // An array can carry an own `toJSON` expando too (test262
@@ -198,6 +225,14 @@ unsafe fn dispatch_pointer_with_replacer(
         buf.push_str("null");
         return;
     }
+    // #5989: a mis-aligned / out-of-range pointer is a corrupted value, not a
+    // GC object — `gc_obj_type` (and the buffer/typed-array registry probes)
+    // would deref its header and SIGBUS. Emit "null" (unserializable), matching
+    // the handle-band fallback above, rather than crash the render.
+    if !ptr_derefable(ptr as usize) {
+        buf.push_str("null");
+        return;
+    }
     // #3857 follow-up: a boxed primitive wrapper returned by a replacer function
     // (`new Boolean(true)`, `new Number(n)`, `new String(s)`) must serialize as
     // its underlying primitive, not as `{}`. Must run before the GC-type dispatch
@@ -234,7 +269,31 @@ unsafe fn dispatch_pointer_with_replacer(
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => {
-            stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
+            // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
+            // stub at the OLD location (`js_array_grow`, issue #233) — its first
+            // 8 bytes now hold the forwarding pointer to the grown array, so
+            // reading them as length/capacity yields a bogus multi-GB "length".
+            // A stale pre-grow pointer reaches here from the object graph (e.g.
+            // React's RSC flight stores a `[key, value]` pair, then `pair[i] = …`
+            // grows it while the payload still holds the pre-grow reference).
+            // Follow the forwarding chain — as `clean_arr_ptr` does for every hot
+            // accessor and as the plain-JSON path (`json/stringify.rs`) already
+            // does — so the CURRENT grown array is serialized instead of the
+            // defunct stub. Without this, the raw read produced a garbage length
+            // that only the 10M cap below (emit "null") kept from SIGBUS-ing,
+            // silently dropping the real data.
+            let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+            if ptr.is_null() {
+                buf.push_str("null");
+                return;
+            }
+            let len = (*(ptr as *const crate::ArrayHeader)).length;
+            if len > 10_000_000 {
+                // Defensive backstop for a genuinely mis-classified pointer.
+                buf.push_str("null");
+            } else {
+                stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
+            }
         }
         crate::gc::GC_TYPE_OBJECT => {
             if is_object_pointer(ptr) {
@@ -307,8 +366,14 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
 
-    // Use keys_len as the iteration count since field_count may include pre-allocated slots.
-    let actual_fields = std::cmp::min(num_fields, keys_len);
+    // #5989 (mirrors the plain-stringify #307 fix): iterate up to keys_len, not
+    // min(num_fields, keys_len). Objects with ≥9 fields cap field_count at the
+    // inline alloc limit and store the overflow values in OVERFLOW_FIELDS, so
+    // num_fields can be smaller than keys_len — the min() silently DROPPED
+    // every overflow property from replacer serialization (react-server-dom's
+    // flight props objects routinely exceed 8 keys).
+    let alloc_limit = std::cmp::max(num_fields, 8);
+    let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
     // A function replacer only sees own ENUMERABLE keys (EnumerableOwnProperty
@@ -349,8 +414,14 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         };
 
         // Get the field value (invoking an own getter, as spec [[Get]] does),
-        // resolve toJSON, then apply the replacer.
-        let mut field_val = *fields_ptr.add(f as usize);
+        // resolve toJSON, then apply the replacer. Overflow slots (f >=
+        // alloc_limit) route through js_object_get_field's OVERFLOW_FIELDS
+        // lookup.
+        let mut field_val = if f < alloc_limit {
+            *fields_ptr.add(f as usize)
+        } else {
+            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+        };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
                 crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
@@ -454,6 +525,18 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
             }
         }
         let elem = *elements.add(i as usize);
+        // #5989: a sparse-array HOLE slot must surface to toJSON / the replacer
+        // as `undefined` (spec: Get() on a missing index yields undefined),
+        // never as the raw TAG_HOLE sentinel — the sentinel is an unrecognized
+        // quiet-NaN bit pattern, so user code saw a number-NaN and e.g.
+        // react-server-dom's flight encoder serialized "$NaN" where node emits
+        // "$undefined" (Next.js sparse flightRouterState tuples:
+        // `seg[4] = flags` on a length-2 array).
+        let elem = if elem.to_bits() == crate::value::TAG_HOLE {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            elem
+        };
 
         // Index key as a string for toJSON / replacer.
         let idx_str = i.to_string();
@@ -533,8 +616,11 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     });
     // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
     // entry so a throw during a prior stringify can't leak it across calls.
+    // Arbitrary user code ran since the last stringify, so the cached
+    // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+        super::invalidate_object_proto_tojson_state();
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
@@ -756,7 +842,10 @@ pub(crate) unsafe fn stringify_object_pretty(
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-    let actual_fields = std::cmp::min(num_fields, keys_len);
+    // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
+    // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
+    let alloc_limit = std::cmp::max(num_fields, 8);
+    let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     let filter_non_enum = crate::object::descriptors_in_use();
 
@@ -771,7 +860,11 @@ pub(crate) unsafe fn stringify_object_pretty(
         {
             continue;
         }
-        let mut field_val = *fields_ptr.add(f as usize);
+        let mut field_val = if f < alloc_limit {
+            *fields_ptr.add(f as usize)
+        } else {
+            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+        };
         // Own accessor properties: serialize the getter's return value.
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
@@ -854,7 +947,8 @@ pub(crate) unsafe fn stringify_array_pretty(
         }
         let elem = *elements.add(i as usize);
         let elem_bits = elem.to_bits();
-        if elem_bits == TAG_UNDEFINED {
+        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
+        if elem_bits == TAG_UNDEFINED || elem_bits == crate::value::TAG_HOLE {
             buf.push_str("null");
         } else {
             stringify_value_pretty(elem, TYPE_UNKNOWN, buf, indent, inner_indent_count);
@@ -901,7 +995,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-    let actual_fields = std::cmp::min(num_fields, keys_len);
+    // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
+    // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
+    let alloc_limit = std::cmp::max(num_fields, 8);
+    let actual_fields = keys_len;
 
     // Build a map of key_name -> field_value for the object. An own accessor
     // (`get key()`) holds no value in its raw slot, so resolve it through the
@@ -910,7 +1007,11 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     let filter_non_enum = crate::object::descriptors_in_use();
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
-        let mut field_val = *fields_ptr.add(f as usize);
+        let mut field_val = if f < alloc_limit {
+            *fields_ptr.add(f as usize)
+        } else {
+            f64::from_bits(crate::object::js_object_get_field(obj, f).bits())
+        };
         if filter_non_enum && f < keys_len {
             if let Some(gv) =
                 crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
@@ -1053,6 +1154,14 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     depth: usize,
     use_pretty: bool,
 ) {
+    // #5989: follow GC_FLAG_FORWARDED array-growth stubs (`js_array_grow`, issue
+    // #233) so a stale pre-grow pointer serializes the current grown array —
+    // mirrors the resolution in `dispatch_pointer_with_replacer`'s array arm.
+    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
+    if ptr.is_null() {
+        buf.push_str("null");
+        return;
+    }
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
@@ -1085,7 +1194,11 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
         }
         let elem = *elements.add(i as usize);
         let elem_bits = elem.to_bits();
-        if elem_bits == TAG_UNDEFINED || is_closure_value(elem_bits) {
+        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
+        if elem_bits == TAG_UNDEFINED
+            || elem_bits == crate::value::TAG_HOLE
+            || is_closure_value(elem_bits)
+        {
             buf.push_str("null");
         } else {
             stringify_value_with_array_replacer(
@@ -1370,8 +1483,11 @@ pub unsafe extern "C" fn js_json_stringify_full(
     });
     // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
     // entry so a throw during a prior stringify can't leak it across calls.
+    // Arbitrary user code ran since the last stringify, so the cached
+    // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+        super::invalidate_object_proto_tojson_state();
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())

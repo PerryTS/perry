@@ -129,6 +129,19 @@ pub struct CompileArgs {
     /// non-macOS targets.
     #[arg(long, default_value = "system")]
     pub webview: String,
+    /// CPU baseline for the generated machine code (#6125). Accepts an LLVM
+    /// CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native`
+    /// (tune to this machine's full instruction set — the default for host
+    /// builds), or `generic`/`off` (the target architecture's portable
+    /// baseline — the default for cross builds). Pin this when the binary
+    /// will run on other machines: a build box with AVX-512 otherwise bakes
+    /// AVX-512 into a host-native build, which SIGILLs on older x86-64 CPUs.
+    /// Also settable via the `PERRY_TARGET_CPU` env var or perry.toml
+    /// `[build] march`; `[build] native_tuning = false` is shorthand for
+    /// `generic`. Applies to app code, and to the auto-optimized
+    /// runtime/stdlib rebuild via `-C target-cpu`.
+    #[arg(long)]
+    pub march: Option<String>,
 
     /// App bundle identifier (required for widget targets)
     #[arg(long)]

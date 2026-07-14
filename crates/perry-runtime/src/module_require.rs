@@ -329,7 +329,124 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
             }
         }
     }
+    // Node directory resolution: `require('<abs dir>')` loads the package's
+    // `main` (else `index.js`). Next's require-hook aliases `styled-jsx` to
+    // the RESOLVED PACKAGE DIRECTORY, so the eventual require arrives here
+    // with a directory path. Map it to the registered file module.
+    let dir = std::path::Path::new(&key);
+    if dir.is_dir() {
+        let mut candidates: Vec<String> = Vec::new();
+        if let Ok(manifest) = std::fs::read_to_string(dir.join("package.json")) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&manifest) {
+                if let Some(main) = parsed.get("main").and_then(|m| m.as_str()) {
+                    let main_path = dir.join(main);
+                    candidates.push(main_path.to_string_lossy().into_owned());
+                    if main_path.extension().is_none() {
+                        candidates.push(format!("{}.js", main_path.to_string_lossy()));
+                    }
+                }
+            }
+        }
+        candidates.push(dir.join("index.js").to_string_lossy().into_owned());
+        for cand in candidates {
+            let cand_key = canonicalize_module_path(&cand);
+            let resolved = {
+                let guard = MODULE_PATH_REGISTRY.read().unwrap();
+                guard.as_ref().and_then(|m| m.get(&cand_key).copied())
+            };
+            if let Some(bits) = resolved {
+                return f64::from_bits(bits);
+            }
+            // Deferred module: trigger its init, then re-check.
+            let cand_init = {
+                let guard = MODULE_PATH_INIT_REGISTRY.read().unwrap();
+                guard.as_ref().and_then(|m| m.get(&cand_key).copied())
+            };
+            if let Some(addr) = cand_init {
+                // SAFETY: same contract as the direct-path init above.
+                let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
+                init_fn();
+                let guard = MODULE_PATH_REGISTRY.read().unwrap();
+                if let Some(bits) = guard.as_ref().and_then(|m| m.get(&cand_key).copied()) {
+                    return f64::from_bits(bits);
+                }
+            }
+        }
+    }
     undefined()
+}
+
+/// Node-style `require.resolve` fallback for package-subpath specifiers that
+/// were never statically required (e.g. Next's require-hook probing
+/// `resolve('styled-jsx/package.json')`, unguarded before Next 16.2). Walks
+/// `node_modules` directories upward from `from_dir`, trying the exact file,
+/// then `.js`, `.json`, and `/index.js` — returning the absolute path string
+/// or `undefined` for the caller's MODULE_NOT_FOUND path.
+#[no_mangle]
+pub extern "C" fn js_require_resolve_node_modules(from_dir: f64, specifier: f64) -> f64 {
+    let from = value_to_string(from_dir, "from");
+    let spec = value_to_string(specifier, "specifier");
+    if spec.is_empty() || spec.starts_with('.') {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    // Absolute specifier: `require.resolve('<abs>')` returns the resolved FILE
+    // (a directory resolves through package.json `main`, then `index.js`) —
+    // Next's require-hook re-resolves its alias map values, which are package
+    // DIRECTORIES by construction.
+    if spec.starts_with('/') {
+        let base = std::path::PathBuf::from(&spec);
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if base.is_file() {
+            candidates.push(base.clone());
+        } else if base.is_dir() {
+            if let Ok(manifest) = std::fs::read_to_string(base.join("package.json")) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&manifest) {
+                    if let Some(main) = parsed.get("main").and_then(|m| m.as_str()) {
+                        let main_path = base.join(main);
+                        candidates.push(main_path.clone());
+                        if main_path.extension().is_none() {
+                            candidates.push(std::path::PathBuf::from(format!(
+                                "{}.js",
+                                main_path.to_string_lossy()
+                            )));
+                        }
+                    }
+                }
+            }
+            candidates.push(base.join("index.js"));
+        } else {
+            candidates.push(std::path::PathBuf::from(format!("{spec}.js")));
+            candidates.push(std::path::PathBuf::from(format!("{spec}.json")));
+        }
+        for cand in candidates {
+            if cand.is_file() {
+                let text = cand.to_string_lossy();
+                let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+                return crate::value::js_nanbox_string(ptr as i64);
+            }
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let mut dir = std::path::Path::new(&from);
+    loop {
+        let base = dir.join("node_modules").join(&spec);
+        for cand in [
+            base.clone(),
+            base.with_extension("js"),
+            base.with_extension("json"),
+            base.join("index.js"),
+        ] {
+            if cand.is_file() {
+                let text = cand.to_string_lossy();
+                let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+                return crate::value::js_nanbox_string(ptr as i64);
+            }
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return f64::from_bits(TAG_UNDEFINED),
+        }
+    }
 }
 
 /// Next.js wall 53: runtime `require(absolutePath)` of a `.json` file.

@@ -81,7 +81,7 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
                     && finally.as_ref().is_none_or(|f| f.iter().all(check_stmt))
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref()),
-            Stmt::PreallocateBoxes(_) => true,
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
         }
     }
     body.iter().all(check_stmt)
@@ -331,7 +331,7 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
                         .is_none_or(|f| f.iter().all(|s| check_stmt(s, extern_names)))
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref(), extern_names),
-            Stmt::PreallocateBoxes(_) => true,
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => true,
         }
     }
     body.iter().all(|s| check_stmt(s, extern_names))
@@ -468,7 +468,7 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
                         .is_some_and(|f| f.iter().any(|s| check_stmt(s, set)))
             }
             Stmt::Labeled { body, .. } => check_stmt(body.as_ref(), set),
-            Stmt::PreallocateBoxes(_) => false,
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => false,
         }
     }
     stmts.iter().any(|s| check_stmt(s, set))

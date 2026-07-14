@@ -39,7 +39,9 @@ echo "==> Running gap suite (test-files/test_gap_*.ts) via run_parity_tests.sh -
 # run_parity_tests.sh exits 1 when AGGREGATE parity < 80%. We gate on "no NEW
 # untriaged failures" instead (below), so don't let its aggregate exit abort us.
 set +e
-./run_parity_tests.sh --filter test_gap_
+# Forward extra args (notably --shard N/M) so CI can fan the gap suite out
+# across parallel runners; with no args this is the full serial gap suite.
+./run_parity_tests.sh --filter test_gap_ "$@"
 set -e
 
 REPORT="test-parity/reports/latest.json"
@@ -52,8 +54,25 @@ fi
 # Every failure in this report is a gap test (we filtered on test_gap_), so the
 # whole failure set is the gap failure set. Drop empty entries (run_parity_tests.sh
 # emits compile: [""] when there are zero compile failures).
-jq -r '(.failures.parity // []) + (.failures.compile // []) | .[] | select(. != "")' \
+jq -r '(.failures.parity // []) + (.failures.compile // []) + (.failures.crash // []) | .[] | select(. != "")' \
   "$REPORT" | sort -u > "$WORK/all_fails.txt"
+
+# Crashes (SIGSEGV/SIGABRT/timeout) are hard defects, never cosmetic gaps.
+# Surface them ALWAYS — including when they are triaged in known_failures.json
+# — so a segfault can never again be filed away as a routine "output mismatch"
+# (that is precisely how the #6271 zlib SIGSEGV stayed invisible while it
+# red-flagged the required conformance gate on ~13 open PRs).
+jq -r '(.failures.crash // []) | .[] | select(. != "")' "$REPORT" | sort -u > "$WORK/crashes.txt"
+if [[ -s "$WORK/crashes.txt" ]]; then
+  echo "" >&2
+  echo "*** CRASHES — Perry died from a signal or timed out (NOT an output nit): ***" >&2
+  sed 's/^/  - /' "$WORK/crashes.txt" >&2
+  echo "" >&2
+  echo "A crash is a hard defect. Even if it is triaged in known_failures.json," >&2
+  echo "it is reported here every run. Reproduce on LINUX — several crash classes" >&2
+  echo "(e.g. handle-band derefs, #6271) are masked on macOS by its 2 TB heap floor." >&2
+  echo "" >&2
+fi
 
 if [[ -f "$KNOWN" ]]; then
   # known_failures.json is keyed by test name; skip the audit-metadata _schema key.

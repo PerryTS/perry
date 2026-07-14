@@ -836,6 +836,9 @@ pub(crate) fn old_page_clear_dirty(page: usize) {
 
 #[cfg(test)]
 pub(crate) fn old_arena_page_index_clear_for_tests() {
+    // Wiping page metadata makes real old-arena objects unclassifiable —
+    // stand the #6179 differential verifier down for this thread's test.
+    crate::gc::CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.set(true));
     OLD_GEN_PAGE_OBJECTS.with(|index| index.borrow_mut().clear());
 }
 

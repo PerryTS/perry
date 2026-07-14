@@ -142,6 +142,63 @@ fn throw_cannot_convert_to_primitive() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Spec-faithful `OrdinaryToPrimitive(O, hint)` (ES2024 §7.1.1.1) for the
+/// `Date.prototype[@@toPrimitive]` thunk. Unlike the coercion helpers above
+/// (which special-case a *missing* `toString` as the inherited
+/// `Object.prototype.toString` → `"[object Object]"` for `String()`/`+`), this
+/// implements the abstract operation directly: it `Get`s each of the ordered
+/// method names off the receiver (firing accessor getters + walking the
+/// prototype chain via `js_reflect_get`), and — only when the resolved value
+/// `IsCallable` — invokes it with `this = value` and returns the first
+/// *primitive* result. A non-callable slot (including `null`/`undefined`) is
+/// SKIPPED, not treated as the default. If no method yields a primitive, it
+/// throws `TypeError`.
+///
+/// `try_string_first`: `true` for hint "string"/"default" (order `toString`
+/// then `valueOf`), `false` for hint "number" (order `valueOf` then
+/// `toString`). `value` MUST already be an Object (the thunk brand-checks
+/// `Type(O) is Object` first).
+pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
+    value: f64,
+    try_string_first: bool,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let order: [&[u8]; 2] = if try_string_first {
+        [b"toString", b"valueOf"]
+    } else {
+        [b"valueOf", b"toString"]
+    };
+    for name in order {
+        let recv = value_handle.get_nanbox_f64();
+        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
+        // `Get(O, name)` — fires accessor getters and walks the prototype chain,
+        // exactly like the spec's abstract `Get` (so `{ get valueOf() {…} }` is
+        // observed and a getter throw propagates).
+        let method = crate::proxy::js_reflect_get(recv, key, recv);
+        if !crate::collection_iter::is_callable(method) {
+            // Non-callable (or absent) — skip to the next name.
+            continue;
+        }
+        let method_handle = scope.root_nanbox_f64(method);
+        let recv = value_handle.get_nanbox_f64();
+        let prev_this = crate::object::js_implicit_this_set(recv);
+        let result = crate::closure::js_native_call_value(
+            method_handle.get_nanbox_f64(),
+            std::ptr::null(),
+            0,
+        );
+        crate::object::js_implicit_this_set(prev_this);
+        if is_primitive_value(result) {
+            return result;
+        }
+        // A callable that returned an Object: continue to the next name (spec
+        // step 5.a.iii only returns when the result is NOT an Object).
+    }
+    throw_cannot_convert_to_primitive()
+}
+
 /// Outcome of resolving a function/closure's custom `toString`/`valueOf` for
 /// the string-hint `ToPrimitive`. Distinct from a bare `Option` so the
 /// "no custom method at all" case (fall back to the function's own source
@@ -275,6 +332,151 @@ fn is_primitive_value(value: f64) -> bool {
         || jsval.is_bigint()
         || ((value.to_bits() & 0xFFFF_0000_0000_0000) == POINTER_TAG
             && crate::symbol::is_registered_symbol((value.to_bits() & POINTER_MASK) as usize))
+}
+
+/// Result of consulting an exotic instance's OWN `toString` (#6370).
+pub(crate) enum ExoticOwnToString {
+    /// No own `toString` — the caller runs the built-in prototype conversion
+    /// (`RegExp.prototype.toString` → `/source/flags`,
+    /// `Date.prototype.toString` → the full local date string).
+    UseBuiltin,
+    /// An own override produced a primitive; ToString *that* instead.
+    Primitive(f64),
+}
+
+/// `OrdinaryToPrimitive(O, "string")` step 1 for an exotic instance whose own
+/// properties live in the `exotic_expando` side table.
+///
+/// A `RegExpHeader` / `DateCell` is NOT an `ObjectHeader`, so the generic
+/// `ordinary_to_primitive_string` (which resolves `toString` with
+/// `js_object_get_field_by_name`) cannot see their own properties — the regex
+/// and date arms of [`js_jsvalue_to_string`] therefore jumped straight to the
+/// built-in conversion and an own `toString` was silently ignored. That made
+/// the SAME regex stringify two different ways depending on how you asked:
+/// `re.toString()` honoured the override (the method fold, #6358) while
+/// `String(re)` / `` `${re}` `` / `[re].join("")` printed `/source/flags`.
+/// Ordinary `[[Get]]` consults own properties before the prototype chain, so
+/// the override must win on EVERY ToString site (#6370).
+///
+/// Hot-path note: `js_jsvalue_to_string` runs on every string concat, so this
+/// is only ever reached behind the existing `is_date_cell_addr` /
+/// `is_regex_pointer` gates, and `exotic_get_own_property` itself early-outs
+/// before any map lookup while no expando/descriptor has been installed on the
+/// thread. A value that is not a Date/RegExp pays nothing.
+pub(crate) unsafe fn exotic_own_to_string(
+    addr: usize,
+    kind: crate::object::exotic_expando::ExoticKind,
+    receiver: f64,
+) -> ExoticOwnToString {
+    // Bound the recursion exactly as `ordinary_to_primitive_string` does. An
+    // override whose body string-coerces `this`
+    // (`re.toString = function () { return "" + this; }`) re-enters this
+    // helper through `js_jsvalue_to_string` and would recurse until the Rust
+    // stack overflows and SIGSEGVs the process. Node raises
+    // `RangeError: Maximum call stack size exceeded`; Perry's convention in
+    // this file is to cap the depth and fall back to the built-in conversion.
+    let depth = TO_PRIMITIVE_DEPTH.with(|c| c.get());
+    if depth >= 200 {
+        return ExoticOwnToString::UseBuiltin;
+    }
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth + 1));
+    let outcome = exotic_own_to_string_inner(addr, kind, receiver);
+    TO_PRIMITIVE_DEPTH.with(|c| c.set(depth));
+    match outcome {
+        ExoticOwnOutcome::UseBuiltin => ExoticOwnToString::UseBuiltin,
+        ExoticOwnOutcome::Primitive(primitive) => ExoticOwnToString::Primitive(primitive),
+        // Thrown out here, AFTER the depth counter is restored.
+        ExoticOwnOutcome::NoPrimitive => throw_cannot_convert_to_primitive(),
+    }
+}
+
+/// Non-throwing core of [`exotic_own_to_string`], so the depth counter can be
+/// restored before the `TypeError` leaves the helper.
+enum ExoticOwnOutcome {
+    UseBuiltin,
+    Primitive(f64),
+    NoPrimitive,
+}
+
+unsafe fn exotic_own_to_string_inner(
+    addr: usize,
+    kind: crate::object::exotic_expando::ExoticKind,
+    receiver: f64,
+) -> ExoticOwnOutcome {
+    // Accessor-aware: the override may be installed as
+    // `Object.defineProperty(re, "toString", { get() {…} })`, which a
+    // data-only expando read cannot see. `exotic_get_own_property` checks
+    // accessor descriptors first (invoking the getter with `receiver` as the
+    // receiver) and falls back to the expando data lookup.
+    let Some(own) =
+        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "toString", receiver)
+    else {
+        return ExoticOwnOutcome::UseBuiltin;
+    };
+    if let Some(primitive) = call_own_method_for_primitive(own, receiver) {
+        return ExoticOwnOutcome::Primitive(primitive);
+    }
+    // An own `toString` that is NOT callable (`re.toString = 5`) or that
+    // returns an object still SHADOWS the built-in — it is never a licence to
+    // fall back to `RegExp.prototype.toString`. OrdinaryToPrimitive continues
+    // with `valueOf`, and only an OWN `valueOf` can yield a primitive here:
+    // the inherited `Object.prototype.valueOf` returns `this`, an object. When
+    // neither yields, ToPrimitive throws — Node agrees
+    // (`re.toString = 5; String(re)` → "TypeError: Cannot convert object to
+    // primitive value").
+    if let Some(own_value_of) =
+        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "valueOf", receiver)
+    {
+        if let Some(primitive) = call_own_method_for_primitive(own_value_of, receiver) {
+            return ExoticOwnOutcome::Primitive(primitive);
+        }
+    }
+    ExoticOwnOutcome::NoPrimitive
+}
+
+/// Invoke `method` with `this = receiver` when it is a callable closure.
+/// `None` means "not callable" — the value is an own property that shadows the
+/// builtin but cannot be called (`re.toString = 5`).
+pub(crate) unsafe fn call_own_method(method: f64, receiver: f64) -> Option<f64> {
+    let bits = method.to_bits();
+    if (bits & TAG_MASK) != POINTER_TAG
+        || !crate::closure::is_closure_ptr((bits & POINTER_MASK) as usize)
+    {
+        return None;
+    }
+    // Rebind `this` to the receiver — an assigned closure may have baked a
+    // different value into its reserved `this` slot (an inherited or bound
+    // method), exactly as the method-dispatch tower does (#1982).
+    let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(ret)
+}
+
+/// [`call_own_method`], but the result counts only when it is a primitive —
+/// a non-callable value or an object result makes OrdinaryToPrimitive move on
+/// to the next method name.
+unsafe fn call_own_method_for_primitive(method: f64, receiver: f64) -> Option<f64> {
+    call_own_method(method, receiver).filter(|ret| is_primitive_value(*ret))
+}
+
+/// `OrdinaryToPrimitive(O, "default"|"number")` step 1 for an exotic instance:
+/// the `valueOf` step, restricted to the receiver's OWN property.
+///
+/// The "default" hint (`"" + re`) tries `valueOf` BEFORE `toString`, unlike the
+/// "string" hint. `RegExp.prototype` has no `valueOf`, so only an OWN one can
+/// yield a primitive here — the inherited `Object.prototype.valueOf` returns
+/// `this`, an object, and OrdinaryToPrimitive then moves on to `toString`.
+/// `None` therefore means "caller continues with the toString step".
+pub(crate) unsafe fn exotic_own_value_of_primitive(
+    addr: usize,
+    kind: crate::object::exotic_expando::ExoticKind,
+    receiver: f64,
+) -> Option<f64> {
+    let own =
+        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "valueOf", receiver)?;
+    call_own_method_for_primitive(own, receiver)
 }
 
 /// `ToPrimitive(O, "number"|"default")`: consult a user
@@ -755,7 +957,13 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             }
             return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
         }
-        if !ptr.is_null() && (ptr as usize) >= 0x10000 {
+        // Only a *real heap pointer* (above the whole synthetic handle band)
+        // may enter the object-deref block below. The prior `>= 0x10000` floor
+        // let fetch/Blob/socket/stream handle ids (0x40000+) through, so
+        // `String(new Blob())` reached the ToPrimitive/GC-header derefs and
+        // segfaulted (#6240/#6241). Proxies (a handle-band id) are already
+        // resolved above; any other handle falls through to "[object Object]".
+        if !ptr.is_null() && crate::value::addr_class::is_above_handle_band(ptr as usize) {
             // A Proxy is a small registered id, not a heap object — the GC-header
             // probes / ToPrimitive dispatch below would deref the fake pointer
             // and segfault (e.g. `String(proxy)`). Default `ToString` has no
@@ -837,6 +1045,21 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // before GC-header object dispatch (the 8-byte cell is smaller
             // than an ObjectHeader), after non-GC native buffer handles.
             if crate::date::is_date_cell_addr(ptr as usize) {
+                // #6370: an own `toString` (data or accessor) shadows
+                // `Date.prototype.toString` on every coercion site, exactly as
+                // it already does for the explicit `date.toString()` call.
+                match unsafe {
+                    exotic_own_to_string(
+                        ptr as usize,
+                        crate::object::exotic_expando::ExoticKind::Date,
+                        value,
+                    )
+                } {
+                    ExoticOwnToString::Primitive(primitive) => {
+                        return js_jsvalue_to_string(primitive)
+                    }
+                    ExoticOwnToString::UseBuiltin => {}
+                }
                 return crate::date::js_date_to_string(value);
             }
             // Temporal (#4686): `String(temporal)`, `` `${temporal}` ``, and
@@ -852,6 +1075,24 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // A RegExp stringifies to `/source/flags` (RegExp.prototype.toString),
             // not "[object Object]" — covers `String(re)` and `` `${re}` ``.
             if crate::regex::is_regex_pointer(ptr) {
+                // …unless an own `toString` shadows the prototype method
+                // (#6370). This is the SAME lookup the `re.toString()` method
+                // fold performs (#6358); doing it here too is what makes the
+                // two agree, and it reaches every implicit ToString —
+                // `String(re)`, `` `${re}` ``, `[re].join("")`,
+                // `"".concat(re)`, `[re].toString()`.
+                match unsafe {
+                    exotic_own_to_string(
+                        ptr as usize,
+                        crate::object::exotic_expando::ExoticKind::RegExp,
+                        value,
+                    )
+                } {
+                    ExoticOwnToString::Primitive(primitive) => {
+                        return js_jsvalue_to_string(primitive)
+                    }
+                    ExoticOwnToString::UseBuiltin => {}
+                }
                 return crate::regex::js_regexp_to_string(ptr as *const crate::regex::RegExpHeader);
             }
             unsafe {
@@ -1017,14 +1258,17 @@ unsafe fn radix_arg_to_number(radix_value: f64) -> f64 {
         } else {
             trimmed.parse::<f64>().unwrap_or(f64::NAN)
         }
+    } else if jsval.is_number() {
+        radix_value
     } else {
-        // Plain f64 number (or some other heap pointer that does not coerce
-        // to a finite radix — treat as NaN so it triggers RangeError).
-        if jsval.is_number() {
-            radix_value
-        } else {
-            f64::NAN
-        }
+        // An object radix runs ToNumber → OrdinaryToPrimitive(number), i.e. its
+        // `valueOf`/`toString`. An abrupt completion there must propagate rather
+        // than be swallowed into a `RangeError` (test262 Number/prototype/
+        // toString/numeric-literal-tostring-radix-poisoned:
+        // `0..toString({valueOf(){throw}})` must throw the poison, not a
+        // RangeError). `js_number_coerce` performs that coercion (and yields NaN
+        // for a non-coercible object, still landing on the RangeError path).
+        crate::builtins::js_number_coerce(radix_value)
     }
 }
 
@@ -1079,6 +1323,50 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
                 if result_jsval.is_short_string() {
                     return crate::string::js_string_materialize_to_heap(result);
                 }
+            }
+        }
+    }
+    // An OWN `toString` shadows the built-in conversion. Codegen's "universal
+    // `.toString()`" fold (lower_call/property_get/number_string.rs) rewrites
+    // EVERY `x.toString()` into a direct call to this function whenever the
+    // receiver isn't a user class that declares `toString` — bypassing the
+    // runtime method-dispatch arms entirely. So the own-property check that
+    // `dispatch_primitive` applies to `re.exec` / `re.test` has to be repeated
+    // at this fold target, or an assigned `re.toString` is silently ignored and
+    // the regex renders as its `/source/flags` literal instead:
+    //
+    //     __re.toString = Object.prototype.toString;
+    //     __re.toString()   // must be "[object RegExp]", was "/(?:)/"
+    //
+    // (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897.) Expandos on a RegExp
+    // live in the `exotic_expando` side table — a `RegExpHeader` is not an
+    // `ObjectHeader` — and the `is_regex_pointer` gate keeps every other
+    // receiver on the existing fast path.
+    //
+    // Accessor-aware: the override may be installed via
+    // `Object.defineProperty(re, "toString", { get() {…} })`, which a data-only
+    // `value_lookup` cannot see (it would silently fall back to the
+    // `/source/flags` literal). `exotic_get_own_property` checks accessor
+    // descriptors first, invoking the getter with `value` as the receiver, then
+    // falls back to the same expando data lookup.
+    //
+    // A non-callable own `toString` (`re.toString = 5`) declines here and lands
+    // in `js_jsvalue_to_string` below, whose own-property arm (#6370) reports
+    // the same TypeError the coercion path does.
+    #[cfg(feature = "regex-engine")]
+    if jsval.is_pointer() {
+        let p = jsval.as_pointer::<u8>();
+        if crate::regex::is_regex_pointer(p) {
+            let own = unsafe {
+                crate::object::exotic_expando::exotic_get_own_property(
+                    p as usize,
+                    crate::object::exotic_expando::ExoticKind::RegExp,
+                    "toString",
+                    value,
+                )
+            };
+            if let Some(result) = own.and_then(|own| unsafe { call_own_method(own, value) }) {
+                return js_jsvalue_to_string(result);
             }
         }
     }

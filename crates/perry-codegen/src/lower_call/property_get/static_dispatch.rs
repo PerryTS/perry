@@ -222,19 +222,27 @@ pub(crate) fn try_lower_static_dispatch(
             let prev_this =
                 ctx.block()
                     .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &recv_box)]);
-            // Receiver-sensitive static `this` for plain class-ref receivers:
-            // `D.f()` resolving to a parent's body at compile time must run
-            // with `this === D` (the prologue's `js_static_this_resolve`
-            // consumes this one-shot arm). Dynamic-value receiver shapes
-            // (ClassExprFresh / factory Call / LocalGet) keep their prior
-            // implicit-this-only behavior to avoid disturbing effect's
-            // per-evaluation class-object statics.
-            let plain_class_receiver =
-                matches!(object, Expr::ClassRef(_) | Expr::ExternFuncRef { .. });
-            if plain_class_receiver {
-                ctx.block()
-                    .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
-            }
+            // Receiver-sensitive static `this`: arm the one-shot override with
+            // the ACTUAL receiver box so the callee prologue's
+            // `js_static_this_resolve` binds `this` to it (spec
+            // OrdinaryCallBindThis). This must cover the dynamic-value receiver
+            // shapes too (ClassExprFresh / factory `Call` / `LocalGet`), not
+            // just plain class-refs: the prologue consumes the armed override
+            // or falls back to the LEXICAL class-ref — it never reads implicit
+            // `this` — so the previous implicit-this-only treatment of these
+            // shapes silently bound `this` to the shared template. A class
+            // EXPRESSION's per-evaluation statics are OWN properties of the
+            // fresh heap class object (never written to the template's
+            // static-field globals), so `this.<field>` inside the static body
+            // read `undefined` (#1787 criterion 1: `make(a).viaThis()` /
+            // `const C = make(a); C.viaThis()`). For a local that holds a
+            // plain ClassRef value this arms exactly the prologue's default —
+            // no behavior change — and for fresh objects it restores the
+            // receiver, matching the runtime dispatch tower
+            // (`js_class_static_method_call`), which has armed its receiver
+            // since the static-private-brand work.
+            ctx.block()
+                .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);

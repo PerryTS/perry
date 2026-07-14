@@ -262,7 +262,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
         // closure-conversion pass that ran before this scan); they are
         // usually also visible via captures lists, but max them here so the
         // scan does not depend on that invariant.
-        Stmt::PreallocateBoxes(ids) => {
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
             for id in ids {
                 *max_id = (*max_id).max(*id);
             }

@@ -291,6 +291,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_require_object_coercible", DOUBLE, &[DOUBLE]);
     // Next.js wall 53: runtime `require(absolutePath.json)` disk fallback.
     module.declare_function("js_require_json_disk", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_require_resolve_node_modules", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_globalthis_seed_async_local_storage", VOID, &[]);
     // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
     module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
@@ -316,6 +318,13 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "js_typed_feedback_packed_f64_array_loop_guard",
         I32,
         &[I64, DOUBLE],
+    );
+    // #6011: range-preguarded packed-f64 loop — validates a whole
+    // [min_idx, max_idx_exclusive) index window (hole-tolerant) at loop entry.
+    module.declare_function(
+        "js_typed_feedback_packed_f64_range_loop_guard",
+        I32,
+        &[I64, DOUBLE, I32, I32],
     );
     module.declare_function(
         "js_typed_feedback_packed_u32_array_loop_guard",

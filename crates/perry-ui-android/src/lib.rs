@@ -198,6 +198,27 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeShutdown(
     app::signal_shutdown();
 }
 
+/// OS memory-pressure bridge (#6184). PerryActivity.onLowMemory() /
+/// onTrimMemory(level) forward here (see PerryBridge.nativeMemoryPressure):
+/// `onLowMemory` and the severe `onTrimMemory` levels map to `2` (full
+/// collect + trigger clamp), lighter trims to `1` (minor collect). Runs on
+/// the Activity's main thread, which owns the JS arena.
+#[no_mangle]
+pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMemoryPressure(
+    _env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    level: jni::sys::jint,
+) {
+    extern "C" {
+        // perry-runtime's OS-memory-pressure entry point: level 1 =
+        // collect-if-safe (minor), level 2+ = full collect + clamp trigger.
+        fn js_gc_memory_pressure(level: u32) -> u32;
+    }
+    unsafe {
+        js_gc_memory_pressure(level as u32);
+    }
+}
+
 #[cfg(not(test))]
 extern "C" {
     fn main() -> i32;

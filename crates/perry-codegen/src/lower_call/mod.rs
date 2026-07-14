@@ -34,6 +34,7 @@ use crate::expr::{variant_name, FnCtx};
 mod atomics;
 mod buffer_intrinsic;
 mod builtin;
+mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
 mod console_promise;
@@ -95,7 +96,10 @@ pub(super) use ui_tables::{
 pub(super) use native_module_dispatch::{lower_native_module_dispatch, native_module_lookup};
 // And the closure-analysis helpers — `native.rs` uses them via
 // `super::` for the perry/thread thread-safety check.
-pub(super) use closure_analysis::{collect_closure_introduced_ids, find_outer_writes_stmt};
+pub(super) use closure_analysis::{
+    collect_closure_introduced_ids, find_outer_writes_stmt, find_thread_hazard_in_body,
+    hazardous_module_global_ids, ThreadClosureHazard,
+};
 
 // Re-export pub(crate) so callers outside this module (e.g.
 // `crate::expr::use crate::lower_call::lower_native_method_call;`)
@@ -118,6 +122,12 @@ pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
     ctor_body_uses_this,
 };
+// #6325 / #6326: the class-chain walk to a native base whose surface perry
+// stamps onto the instance, plus its init emitter. Shared by the implicit
+// (no-own-ctor) `new` path in `new.rs` and the explicit-`super()` arm in
+// `expr/this_super_call.rs`, which are the two places a derived constructor can
+// reach the base.
+pub(crate) use new_helpers::{emit_native_instance_base_init, native_instance_base_in_chain};
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
 pub(crate) use options::extract_options_fields;

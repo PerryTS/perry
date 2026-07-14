@@ -38,6 +38,11 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_VERIFY_NATIVE_REGIONS",
     "PERRY_UNBOXED_OBJECT_FIELDS",
+    // #6125: the resolved CPU baseline (promoted from --march / perry.toml
+    // [build] by promote_cpu_baseline_env before this probe runs). Flipping
+    // it must invalidate the build-level no-op check, not just per-object
+    // cache entries.
+    "PERRY_TARGET_CPU",
     "PERRY_NO_AUTO_OPTIMIZE",
     "PERRY_DISABLE_WELL_KNOWN",
     "PERRY_FORCE_WELL_KNOWN",
@@ -514,15 +519,16 @@ fn default_output_path(args: &CompileArgs) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let stem = crate::commands::sanitize::sanitize_for_linker_argv(raw_stem);
-    if matches!(
+    // Same helper the compile pipeline links with (#5740) — the cache
+    // fingerprints the output file, so a divergence here means it stats a path
+    // the build never wrote (Android used to land on the bare stem `app` while
+    // the link produced `libapp.so`).
+    super::output_path::default_output_path(
+        args.output_type == "dylib",
+        args.output_type == "staticlib",
         args.target.as_deref(),
-        Some("windows") | Some("windows-winui")
-    ) || (args.target.is_none() && cfg!(target_os = "windows"))
-    {
-        PathBuf::from(format!("{stem}.exe"))
-    } else {
-        PathBuf::from(stem)
-    }
+        &stem,
+    )
 }
 
 fn current_env() -> Vec<EnvFingerprint> {

@@ -341,7 +341,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     );
     // #1787: register a class's standalone constructor so `new
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
-    module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64]);
+    module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64, I64]);
     // Constructor synth/rest flags: (class_id, has_synthetic_arguments,
     // has_rest) — consulted by the `super(...spread)` apply path so it packs a
     // pass-through parent ctor's `arguments` / rest slot correctly.

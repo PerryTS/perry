@@ -137,19 +137,27 @@ pub(super) fn lower_builtin_new(
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Uint8Array" if args.len() >= 2 => {
+            // Pass the raw NaN-boxed offset/length (undefined when absent),
+            // same as the non-Uint8Array view kinds below: the runtime runs
+            // ToIndex — which can execute user `valueOf` code — and applies
+            // the spec's post-coercion detached/bounds checks. The old
+            // `fptosi` cast silently turned object arguments into garbage
+            // without ever running their coercion.
             let source = lower_expr(ctx, &args[0])?;
-            let offset = lower_expr(ctx, &args[1])?;
-            let offset_i32 = ctx.block().fptosi(DOUBLE, &offset, I32);
-            let length_i32 = if args.len() >= 3 {
-                let length = lower_expr(ctx, &args[2])?;
-                ctx.block().fptosi(DOUBLE, &length, I32)
+            let offset_box = lower_expr(ctx, &args[1])?;
+            let length_box = if args.len() >= 3 {
+                lower_expr(ctx, &args[2])?
             } else {
-                "-1".to_string()
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let handle = ctx.block().call(
                 I64,
                 "js_uint8array_view",
-                &[(DOUBLE, &source), (I32, &offset_i32), (I32, &length_i32)],
+                &[
+                    (DOUBLE, &source),
+                    (DOUBLE, &offset_box),
+                    (DOUBLE, &length_box),
+                ],
             );
             Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
         }

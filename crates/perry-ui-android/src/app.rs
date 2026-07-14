@@ -162,6 +162,10 @@ extern "C" {
     fn js_interval_timer_tick() -> i32;
     fn js_promise_run_microtasks() -> i32;
     fn js_frame_pump_default() -> i32;
+    // perry-runtime's embedder GC stepper: spends up to `budget_us`
+    // advancing an ACTIVE budgeted collection in bounded work units; a
+    // cheap status probe when no cycle is active (out=null is allowed).
+    fn js_gc_step_us(budget_us: u64, out: *mut u8) -> u32;
 }
 
 /// Start the timer pump that drives setInterval/setTimeout/Promise callbacks.
@@ -228,6 +232,13 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         // the same 8ms pump drives one-shot frame callbacks.
         js_frame_pump_default();
         js_promise_run_microtasks();
+        // #6183 (2026-07-09 GC audit): spend a bounded idle budget on any
+        // active budgeted GC cycle at the pump boundary — the JS stack is
+        // fully unwound here, so this is a precise-root safepoint. A 2 ms
+        // slice per 8 ms tick drains collection debt incrementally instead of
+        // letting an alloc-point collection land unbounded on this (UI)
+        // thread mid-interaction.
+        js_gc_step_us(2_000, std::ptr::null_mut());
     }
     // perry/media (#351) — drive state polling on the UI thread so the
     // PLAYERS thread_local stays consistent with where create_player
@@ -348,6 +359,7 @@ pub fn add_keyboard_shortcut(_key_ptr: *const u8, _modifiers: f64, _callback: f6
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
 thread_local! {
@@ -395,7 +407,11 @@ pub fn on_terminate(callback: f64) {
 pub fn handle_activate() {
     ON_ACTIVATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
-            let ptr = callback.to_bits() as *const u8;
+            // Unbox NaN-boxed closure (same as callback.rs / iOS/macOS).
+            let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
             unsafe {
                 js_closure_call1(ptr, 0.0);
             }
@@ -407,7 +423,11 @@ pub fn handle_activate() {
 pub fn handle_terminate() {
     ON_TERMINATE_CALLBACK.with(|c| {
         if let Some(callback) = *c.borrow() {
-            let ptr = callback.to_bits() as *const u8;
+            // Unbox NaN-boxed closure — see invoke0 / callback.rs for details.
+            let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            if ptr.is_null() {
+                return;
+            }
             unsafe {
                 js_closure_call1(ptr, 0.0);
             }

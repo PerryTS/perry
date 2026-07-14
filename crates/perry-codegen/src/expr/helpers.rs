@@ -18,6 +18,14 @@ use crate::types::{DOUBLE, I32, I64};
 pub(crate) fn type_has_numeric_pointer_free_array_layout(ty: &HirType) -> bool {
     match ty {
         HirType::Array(elem) => matches!(elem.as_ref(), HirType::Number | HirType::Int32),
+        // #6011: `new Array<number>(n)` declarations carry the generic
+        // spelling; treat it exactly like `Array(Number)` so number-context
+        // element reads keep their coerced fallback (a raw arithmetic op on
+        // an uncoerced boxed `undefined` would propagate the NaN-box payload
+        // verbatim) and stores take the guarded numeric-layout path.
+        HirType::Generic { base, type_args } if base == "Array" && type_args.len() == 1 => {
+            matches!(type_args[0], HirType::Number | HirType::Int32)
+        }
         HirType::Tuple(elems) => elems
             .iter()
             .all(|elem| matches!(elem, HirType::Number | HirType::Int32)),
@@ -299,6 +307,23 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "TextDecoderStream"
             | "CompressionStream"
             | "DecompressionStream"
+            // The three core Web Streams constructors. Perry already implements
+            // them (`new ReadableStream(…)` and `x instanceof ReadableStream` are
+            // both lowered, and `ReadableStream` has a class id), but the NAMES
+            // were never registered as globalThis builtins — so a bare
+            // `ReadableStream` identifier did not resolve: `typeof
+            // ReadableStream === "undefined"` and `"ReadableStream" in globalThis`
+            // was false, while Node exposes all three as functions.
+            //
+            // Libraries feature-detect exactly this (`typeof ReadableStream !==
+            // "undefined" ? … : …`) to decide how to consume a `fetch()` body.
+            // Getting "undefined" sent a large esbuild-bundled CLI app down the
+            // wrong branch, which then threw "The first argument must be a
+            // Readable, a ReadableStream, or an async iterable" and aborted its
+            // background tar-stream downloads entirely.
+            | "ReadableStream"
+            | "WritableStream"
+            | "TransformStream"
             | "Navigator"
             | "URL"
             | "URLSearchParams"

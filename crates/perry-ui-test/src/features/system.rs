@@ -191,6 +191,20 @@ pub(crate) const ROWS: &[Feature] = &[
         web: S,
         web_name: None,
     },
+    // perry/system hapticPlay — real haptics on iOS/Android (macOS =
+    // Force Touch trackpad, web = navigator.vibrate); documented no-op
+    // on GTK4/Windows (no haptic engine).
+    Feature {
+        name: "perry_system_haptic_play",
+        category: SystemApi,
+        macos: S,
+        ios: S,
+        android: S,
+        gtk4: S,
+        windows: S,
+        web: S,
+        web_name: None,
+    },
     Feature {
         name: "perry_system_keychain_save",
         category: SystemApi,

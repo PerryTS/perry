@@ -234,6 +234,41 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     property_name_ptr: *const i8,
     property_name_len: usize,
 ) -> f64 {
+    // A revocable Proxy value reaching this generic dynamic getter must go
+    // through the Proxy's `get` trap. Proxy ids live at the TOP of the handle
+    // band ([PROXY_ID_BAND_START, HANDLE_BAND_MAX)), so without this branch the
+    // `is_handle_band` dispatch further down routes the read to the stdlib
+    // handle dispatcher and the trap never fires. The Promise resolution
+    // procedure's `Get(resolution, "then")` runs through here, so
+    // `Promise.resolve(proxy)` / `await proxy` on a thenable Proxy (React's RSC
+    // client-module reference, whose `.then` trap lazily marks the module as an
+    // async ESM export) silently skipped the trap — #5989: the Flight stream
+    // dropped the `,1` async flag on client references. Mirror the proxy branch
+    // in `js_object_get_field_by_name`. `js_proxy_is_proxy` confirms a
+    // *registered* proxy so a real heap object with a small address isn't
+    // misrouted.
+    if !property_name_ptr.is_null() {
+        let addr = js_nanbox_get_pointer(obj_value);
+        if addr != 0 && crate::value::addr_class::is_proxy_id_band(addr as usize) {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr as u64 & POINTER_MASK));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let name_slice = if property_name_len > 0 {
+                    std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len)
+                } else {
+                    std::ffi::CStr::from_ptr(property_name_ptr as *const std::ffi::c_char)
+                        .to_bytes()
+                };
+                let key = crate::string::js_string_from_bytes(
+                    name_slice.as_ptr(),
+                    name_slice.len() as u32,
+                );
+                let key_f64 = crate::value::js_nanbox_string(key as i64);
+                return crate::proxy::js_proxy_get(boxed, key_f64);
+            }
+        }
+    }
+
     // Check if this is a JS handle
     if is_js_handle(obj_value) {
         // Try to use the JS runtime function if it's been registered

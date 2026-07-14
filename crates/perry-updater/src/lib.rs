@@ -22,6 +22,7 @@
 //! security-critical and platform-touching pieces, keeping this crate
 //! small and audit-friendly.
 
+pub mod cli_manifest;
 mod core;
 mod desktop;
 

@@ -21,6 +21,7 @@ pub struct TypesArgs {
 // Canonical `.d.ts` sources, embedded at compile time from `types/perry/`.
 const PERRY_UI_DTS: &str = include_str!("../../../../types/perry/ui/index.d.ts");
 const PERRY_THREAD_DTS: &str = include_str!("../../../../types/perry/thread/index.d.ts");
+const PERRY_GC_DTS: &str = include_str!("../../../../types/perry/gc/index.d.ts");
 const PERRY_I18N_DTS: &str = include_str!("../../../../types/perry/i18n/index.d.ts");
 const PERRY_SYSTEM_DTS: &str = include_str!("../../../../types/perry/system/index.d.ts");
 const PERRY_MEDIA_DTS: &str = include_str!("../../../../types/perry/media/index.d.ts");
@@ -45,6 +46,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
     let modules: &[(&str, &str)] = &[
         ("ui", PERRY_UI_DTS),
         ("thread", PERRY_THREAD_DTS),
+        ("gc", PERRY_GC_DTS),
         ("i18n", PERRY_I18N_DTS),
         ("system", PERRY_SYSTEM_DTS),
         ("media", PERRY_MEDIA_DTS),

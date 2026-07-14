@@ -1,0 +1,2 @@
+sync end
+Uncaught (in promise) boom

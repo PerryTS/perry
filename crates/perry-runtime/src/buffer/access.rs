@@ -171,33 +171,66 @@ unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -
     bytes
 }
 
-/// Get a byte at the specified index
+/// Read the byte at `index`, resolving a registered view to its ultimate
+/// backing buffer. Returns `None` for a null receiver or an out-of-range
+/// index (`index < 0` or `index >= length`). Shared by the native i32
+/// accessor (`js_buffer_get`) and the JS-value accessor
+/// (`js_buffer_index_get_value`) so their read semantics never drift.
+#[inline]
+unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u8> {
+    if buf_ptr.is_null() || index < 0 || index as u32 >= (*buf_ptr).length {
+        return None;
+    }
+    // Issue #1205: if the receiver is a registered view, read from
+    // the ultimate backing buffer — otherwise the view's local
+    // snapshot can lag any direct-fast-path write made to the
+    // backing through codegen.
+    let buf_addr = buf_ptr as usize;
+    if let Some(info) = super::view::lookup(buf_addr) {
+        let back_off = info.offset + index as u32;
+        let backing_ptr = info.backing as *const BufferHeader;
+        if !backing_ptr.is_null() && back_off < (*backing_ptr).length {
+            let back_data = buffer_data(backing_ptr);
+            return Some(*back_data.add(back_off as usize));
+        }
+    }
+    let data = buffer_data(buf_ptr);
+    Some(*data.add(index as usize))
+}
+
+/// Get a byte at the specified index. Native i32 accessor: an out-of-range
+/// index yields the `0` sentinel because every caller here has proven the
+/// index in bounds or consumes the byte in a native integer context. A
+/// JS-value `buf[i]` read must instead yield `undefined` for out-of-range —
+/// use `js_buffer_index_get_value` for that (#6088).
 #[no_mangle]
 pub extern "C" fn js_buffer_get(buf_ptr: *const BufferHeader, index: i32) -> i32 {
-    if buf_ptr.is_null() || index < 0 {
-        return 0;
-    }
-    unsafe {
-        if index as u32 >= (*buf_ptr).length {
-            return 0;
-        }
-        // Issue #1205: if the receiver is a registered view, read from
-        // the ultimate backing buffer — otherwise the view's local
-        // snapshot can lag any direct-fast-path write made to the
-        // backing through codegen.
-        let buf_addr = buf_ptr as usize;
-        if let Some(info) = super::view::lookup(buf_addr) {
-            let back_off = info.offset + index as u32;
-            let backing_ptr = info.backing as *const BufferHeader;
-            if !backing_ptr.is_null() && back_off < (*backing_ptr).length {
-                let back_data = buffer_data(backing_ptr);
-                return *back_data.add(back_off as usize) as i32;
-            }
-        }
-        let data = buffer_data(buf_ptr);
-        *data.add(index as usize) as i32
+    unsafe { read_buffer_byte(buf_ptr, index).map_or(0, |byte| byte as i32) }
+}
+
+/// `buf[i]` / `uint8array[i]` read as a JS value. Perry's `Uint8Array` is
+/// Buffer-backed, so both share this accessor. An out-of-range canonical
+/// integer index reads `undefined` — the ECMAScript IntegerIndexedExotic
+/// `[[Get]]` semantics — NOT the `0` byte-sentinel of the native
+/// `js_buffer_get` (#6088). Negative and fractional keys never reach here
+/// (codegen routes them to the dynamic-key helper); an in-range read returns
+/// the byte as a plain (non-NaN) f64, which is its own NaN-boxed JS number.
+#[no_mangle]
+pub extern "C" fn js_buffer_index_get_value(buf_ptr: *const BufferHeader, index: i32) -> f64 {
+    match unsafe { read_buffer_byte(buf_ptr, index) } {
+        Some(byte) => byte as f64,
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
+
+// #6088: force-keep the JS-value buffer index getter under LTO /
+// auto-optimize. It has zero internal Rust callers — codegen emits the only
+// call (in `perry-codegen/src/expr/index_get.rs`), so a whole-program bitcode
+// link is otherwise free to internalize and dead-strip it. The `#[used]`
+// anchor pins it (mirrors `KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC`).
+#[used]
+static KEEP_JS_BUFFER_INDEX_GET_VALUE: extern "C" fn(*const BufferHeader, i32) -> f64 =
+    js_buffer_index_get_value;
 
 /// Set a byte at the specified index
 #[no_mangle]

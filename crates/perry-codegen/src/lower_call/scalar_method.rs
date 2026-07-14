@@ -625,7 +625,14 @@ fn emit_materialized_scalar_receiver_typed_shape_init(
     let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() else {
         return;
     };
-    let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
+    // Refs #5094: prefer the prefix-disambiguated chain so slot/word counts
+    // agree with the mask globals emitted in compile_module (same-named
+    // cross-module parents mis-resolve in the name-keyed walk).
+    let typed_layout = ctx
+        .class_init_chains
+        .get(class_name)
+        .map(|chain| crate::typed_shape::class_typed_layout_from_chain(chain))
+        .unwrap_or_else(|| crate::typed_shape::class_typed_layout(ctx.classes, class_name));
     let slot_count_str = typed_layout.slot_count.to_string();
     let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
     let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();

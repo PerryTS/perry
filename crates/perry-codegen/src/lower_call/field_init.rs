@@ -147,7 +147,15 @@ pub(crate) fn apply_field_initializers_recursive(
             if chain.len() > 1 {
                 chain[1..].to_vec()
             } else {
-                Vec::new()
+                // The leaf directly extends a NON-user parent (a built-in like
+                // `Error`, or an imported class) — such a parent is not in the
+                // user-class `chain`, so there is no root ancestor to skip. Its
+                // own field initializers must still run after the (built-in)
+                // super; without this a no-own-ctor `class A extends Error {
+                // v = 42 }` left `v` at the raw-0 slot, and a later
+                // `this.arr.includes(x)` on an unset field threw
+                // `Cannot read properties of undefined`.
+                chain
             }
         }
     };

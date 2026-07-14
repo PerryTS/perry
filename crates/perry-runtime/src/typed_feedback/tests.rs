@@ -1094,6 +1094,14 @@ fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
         "static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
         "js_typed_feedback_packed_u32_array_loop_guard",
     );
+    // #6011: hole-tolerant range guard (rustfmt wraps the fn-pointer type, so
+    // anchor on the static declaration prefix only).
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD: extern \"C\" fn(",
+        "js_typed_feedback_packed_f64_range_loop_guard",
+    );
 }
 
 #[test]
@@ -1753,13 +1761,21 @@ fn typed_feedback_object_set_fast_hits_learned_dynamic_key_transition() {
     let stored = crate::object::js_object_get_field_by_name_f64(second_obj, key);
     assert_eq!(stored.to_bits(), 12.0f64.to_bits());
 
+    // #6084 item 6: the dynamic-write fast path is vetted PER RECEIVER, not by
+    // the process-global `GLOBAL_DESCRIPTORS_IN_USE` latch. That latch flips on
+    // any descriptor install anywhere — including ones the runtime itself
+    // performs and ones earlier tests in this process performed — and it used to
+    // force this learned transition onto the fallback path (the old expectation
+    // here was `fallback_calls == 2` whenever `descriptors_in_use()`).
+    //
+    // `second_obj` is a fresh plain object: no own descriptor
+    // (`OBJ_FLAG_HAS_DESCRIPTORS` clear), no recorded `setPrototypeOf` target,
+    // and `Object.prototype` owns no `dyn_fast_key_34` — so nothing can
+    // intercept the write and it must hit the learned transition regardless of
+    // what descriptors exist elsewhere in the process.
     let site = &typed_feedback_snapshot().sites[0];
-    if crate::object::descriptors_in_use() {
-        assert_eq!(site.fallback_calls, 2);
-    } else {
-        assert_eq!(site.fallback_calls, 1);
-        assert!(site.guard_passes >= 1);
-    }
+    assert_eq!(site.fallback_calls, 1);
+    assert!(site.guard_passes >= 1);
 }
 
 #[test]
@@ -2191,5 +2207,124 @@ fn normalize_raw_object_addr_rejects_inline_nanboxed_receivers() {
         normalize_raw_object_addr(strv),
         str_addr as usize,
         "heap-string receiver must pass through unchanged",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #6136 / #6190 — the typed-array GcHeader invariant behind the plain-array
+// index guard.
+//
+// `plain_array_index_guard` decides whether an element read may take the inline
+// plain-`ArrayHeader` raw-slot fast path, and it decides that by back-reading a
+// `GcHeader` at `addr - GC_HEADER_SIZE` (see `gc_header_for_user_addr`). That is
+// only sound while EVERY array-like receiver carries a real GcHeader. Before
+// #6190, typed arrays under 16 KB were raw-`alloc`'d with no header, so the
+// guard read whatever heap bytes happened to precede the block; when they looked
+// like `GC_TYPE_ARRAY` it wrongly admitted a typed array to the plain-array fast
+// path, which then reinterpreted the element bytes as f64 (denormals ~1e-312)
+// and silently summed them as zero. These tests pin the invariant.
+// ---------------------------------------------------------------------------
+
+/// Every typed array — including a SMALL one, below the 16 KB threshold that
+/// used to select the deleted raw-`alloc` tier — must carry a real GcHeader
+/// tagged `GC_TYPE_TYPED_ARRAY`, sized to cover header + elements.
+#[test]
+fn typed_array_alloc_always_carries_a_real_typed_array_gc_header() {
+    // (kind, length): Uint32Array(8) is 16 B header + 32 B data = 48 B payload,
+    // the exact shape that took the off-GC-heap tier and caused #6136.
+    let cases = [
+        (crate::typedarray::KIND_UINT32, 8u32, 4usize),
+        (crate::typedarray::KIND_UINT8, 8, 1),
+        (crate::typedarray::KIND_FLOAT64, 4, 8),
+    ];
+    for (kind, length, elem_size) in cases {
+        let ta = crate::typedarray::typed_array_alloc(kind, length);
+        assert!(!ta.is_null(), "typed_array_alloc returned null");
+
+        let header = unsafe {
+            &*((ta as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+        };
+        assert_eq!(
+            header.obj_type,
+            crate::gc::GC_TYPE_TYPED_ARRAY,
+            "a typed array must be a GC-heap object tagged GC_TYPE_TYPED_ARRAY \
+             (kind={kind}, length={length}); an off-GC-heap tier makes the \
+             plain-array index guard sniff unrelated bytes at addr-8 (#6136)",
+        );
+        assert_ne!(
+            header.obj_type,
+            crate::gc::GC_TYPE_ARRAY,
+            "a typed array must never be tagged GC_TYPE_ARRAY — that is exactly \
+             what admits it to the inline plain-ArrayHeader raw-slot reader",
+        );
+
+        // The header's size must cover the elements, not just the header: a
+        // relocation that copied only the header would leave the elements zeroed.
+        let min_total = crate::gc::GC_HEADER_SIZE
+            + std::mem::size_of::<crate::typedarray::TypedArrayHeader>()
+            + (length as usize) * elem_size;
+        assert!(
+            header.size as usize >= min_total,
+            "GcHeader.size ({}) must cover header + {} elements (>= {min_total})",
+            header.size,
+            length,
+        );
+    }
+}
+
+/// The load-bearing assertion: the plain-array index guard must REJECT a typed
+/// array, so the read takes the boxed fallback (which dispatches typed arrays)
+/// rather than the inline plain-`ArrayHeader` raw-slot path.
+#[test]
+fn plain_array_index_get_guard_rejects_typed_array_receivers() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(6136, TypedFeedbackSiteKind::ArrayElement, "nd.buf[i]");
+
+    for (kind, length) in [
+        (crate::typedarray::KIND_UINT32, 8u32),
+        (crate::typedarray::KIND_FLOAT64, 4),
+    ] {
+        let ta = crate::typedarray::typed_array_alloc(kind, length);
+        let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+
+        // The internal contract check — independent of feedback-site state.
+        assert!(
+            !plain_array_index_guard(ta as *const ArrayHeader, 0, true),
+            "plain_array_index_guard must reject a typed array (kind={kind})",
+        );
+
+        // The guard as codegen actually calls it.
+        assert_eq!(
+            js_typed_feedback_plain_array_index_get_guard(6136, ta_box, 0, 1),
+            0,
+            "the emitted guard must reject a typed-array receiver (kind={kind}) \
+             — admitting it reads elements as f64 denormals and sums them as 0 (#6136)",
+        );
+    }
+}
+
+/// Positive control: the guard still ADMITS a genuine plain array, so the test
+/// above proves rejection of typed arrays rather than a guard that never passes.
+#[test]
+fn plain_array_index_get_guard_still_accepts_plain_arrays() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(6137, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+
+    let arr = crate::array::js_array_alloc(4);
+    for i in 0..4 {
+        crate::array::js_array_push_f64(arr, i as f64);
+    }
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert!(
+        plain_array_index_guard(arr as *const ArrayHeader, 0, true),
+        "plain_array_index_guard must accept a plain array",
+    );
+    assert_eq!(
+        js_typed_feedback_plain_array_index_get_guard(6137, arr_box, 0, 1),
+        1,
+        "the emitted guard must keep admitting plain arrays to the fast path",
     );
 }

@@ -133,6 +133,27 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 && !is_known_global_identifier_name(n)
                 && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
             {
+                // #6062: a forward-referenced lexical (`let`/`const`/`class`
+                // declared LATER in this or an enclosing same-function block) is
+                // not yet a live local, so it reaches this "unresolvable" arm —
+                // but per ECMA-262 `typeof` only skips GetValue for genuinely
+                // UNRESOLVABLE references (undeclared globals). A declared-but-
+                // uninitialized binding in its TDZ must throw ReferenceError,
+                // exactly like a plain read. Route it to the throwing get. (A
+                // `typeof` AFTER the declarator resolves via `lookup_local` and
+                // never reaches here.)
+                if ctx.forward_lexical_names.contains(n) {
+                    return Ok(Expr::TypeOf(Box::new(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_global_get_or_throw_unresolved".to_string(),
+                            param_types: vec![Type::Any],
+                            return_type: Type::Any,
+                        }),
+                        args: vec![Expr::String(n.to_string())],
+                        type_args: Vec::new(),
+                        byte_offset: id.span.lo.0,
+                    })));
+                }
                 // Not foldable to a compile-time "undefined": sloppy
                 // implicit globals are runtime globalThis properties
                 // (#3575), so `g = 5; typeof g` must observe the live

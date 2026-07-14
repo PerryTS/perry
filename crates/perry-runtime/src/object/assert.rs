@@ -858,9 +858,24 @@ pub extern "C" fn js_assert_not_strict_equal(actual: f64, expected: f64, message
     )
 }
 
+/// Audit #18: `node:assert` loose equality (`assert.equal` / `assert.notEqual`)
+/// must use the SAME abstract equality as the `==` operator — `js_loose_eq`,
+/// which performs full ToPrimitive coercion and BigInt==Number comparison. The
+/// previously-used `js_jsvalue_loose_equals` is a drifted variant lacking both,
+/// so `assert.equal(1n, 1)` wrongly threw (`1n == 1` is true) and
+/// `assert.equal(new Number(1), 1)` etc. disagreed with `==`. (`assert.deepEqual`
+/// leaf coercion is a separate, deeper path — not changed here.)
+fn assert_loose_eq(actual: f64, expected: f64) -> bool {
+    crate::builtins::js_loose_eq(
+        crate::value::JSValue::from_bits(actual.to_bits()),
+        crate::value::JSValue::from_bits(expected.to_bits()),
+    )
+    .as_bool()
+}
+
 #[no_mangle]
 pub extern "C" fn js_assert_equal(actual: f64, expected: f64, message: f64) -> f64 {
-    if crate::value::js_jsvalue_loose_equals(actual, expected) != 0 {
+    if assert_loose_eq(actual, expected) {
         return undefined_f64();
     }
     throw_assertion(
@@ -874,7 +889,7 @@ pub extern "C" fn js_assert_equal(actual: f64, expected: f64, message: f64) -> f
 
 #[no_mangle]
 pub extern "C" fn js_assert_not_equal(actual: f64, expected: f64, message: f64) -> f64 {
-    if crate::value::js_jsvalue_loose_equals(actual, expected) == 0 {
+    if !assert_loose_eq(actual, expected) {
         return undefined_f64();
     }
     throw_assertion(

@@ -62,6 +62,9 @@ pub enum UpdaterCommand {
     /// Use this in CI before uploading the manifest to catch
     /// version-mismatch / wrong-key / corrupted-binary issues early.
     Verify(VerifyArgs),
+
+    /// Sign the authenticated manifest consumed by `perry update`.
+    SignCliManifest(SignCliManifestArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -97,6 +100,28 @@ pub struct SignArgs {
 }
 
 #[derive(Debug, clap::Args)]
+pub struct SignCliManifestArgs {
+    /// Release archive to hash and describe.
+    #[arg(long)]
+    pub artifact: PathBuf,
+    /// Exact release artifact filename (for example `perry-linux-x86_64.tar.gz`).
+    #[arg(long)]
+    pub platform: String,
+    /// HTTPS URL from which the artifact will be downloaded.
+    #[arg(long)]
+    pub url: String,
+    /// Version bound into the signed manifest.
+    #[arg(long = "release-version")]
+    pub release_version: String,
+    /// Stable identifier for the trusted public key; used for key rotation.
+    #[arg(long)]
+    pub key_id: String,
+    /// Base64-encoded 32-byte secret-key seed from protected release CI.
+    #[arg(long)]
+    pub secret_key_b64: String,
+}
+
+#[derive(Debug, clap::Args)]
 pub struct VerifyArgs {
     /// Path to the binary to verify.
     #[arg(short, long)]
@@ -127,6 +152,7 @@ pub fn run(args: UpdaterArgs) -> Result<()> {
         UpdaterCommand::Keygen(a) => run_keygen(a),
         UpdaterCommand::Sign(a) => run_sign(a),
         UpdaterCommand::Verify(a) => run_verify(a),
+        UpdaterCommand::SignCliManifest(a) => run_sign_cli_manifest(a),
     }
 }
 
@@ -229,6 +255,55 @@ fn run_sign(args: SignArgs) -> Result<()> {
         "publicKey": base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()),
     });
     println!("{}", serde_json::to_string_pretty(&envelope)?);
+    Ok(())
+}
+
+fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
+    if args.release_version.is_empty() || args.key_id.is_empty() || args.platform.is_empty() {
+        bail!("version, key-id, and platform must be non-empty");
+    }
+    let parsed = url::Url::parse(&args.url).context("invalid artifact URL")?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || parsed.username() != ""
+        || parsed.password().is_some()
+    {
+        bail!("artifact URL must be an absolute HTTPS URL without credentials");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(args.secret_key_b64.trim())?;
+    let seed: [u8; SECRET_KEY_LENGTH] = bytes.try_into().map_err(|v: Vec<u8>| {
+        anyhow::anyhow!(
+            "secret key must decode to {} bytes (got {})",
+            SECRET_KEY_LENGTH,
+            v.len()
+        )
+    })?;
+    let signing = SigningKey::from_bytes(&seed);
+    let (digest, size) = sha256_file(&args.artifact)?;
+    let name = args
+        .artifact
+        .file_name()
+        .and_then(|v| v.to_str())
+        .context("artifact filename is not UTF-8")?
+        .to_string();
+    if name != args.platform {
+        bail!("artifact filename must equal --platform to prevent platform confusion");
+    }
+    let mut manifest = perry_updater::cli_manifest::CliUpdateManifest {
+        schema_version: 1,
+        key_id: args.key_id,
+        version: args.release_version,
+        platform: args.platform,
+        artifact: perry_updater::cli_manifest::CliUpdateArtifact {
+            name,
+            url: args.url,
+            sha256: hex::encode(digest),
+            size,
+        },
+        signature: String::new(),
+    };
+    perry_updater::cli_manifest::sign_cli_manifest(&mut manifest, &signing)?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
 }
 

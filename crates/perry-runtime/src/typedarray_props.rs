@@ -468,6 +468,16 @@ pub(crate) unsafe fn typed_array_set_own_property(
     typed_array_set_property_by_name(owner, name, value)
 }
 
+/// Ordinary `[[Set]]` (§10.4.5.5 step 2 falling to OrdinarySet) of a
+/// string-keyed property on a typed array. Returns the spec `[[Set]]`
+/// boolean: `true` when the write is accepted (or spec-silently-ignored, e.g.
+/// a canonical out-of-bounds index), `false` when it is REJECTED — a
+/// non-writable own data property, a setter-less accessor, or a new key on a
+/// non-extensible typed array. A `false` return is what makes
+/// `Reflect.set(ta, k, v)` report `false` and a strict `ta.k = v` throw a
+/// TypeError, matching a plain object's OrdinaryDefineOwnProperty rejection
+/// (previously every path returned `true`, silently swallowing the rejection —
+/// test262 TypedArrayConstructors/internals/Set key-is-not-numeric-index).
 pub(crate) unsafe fn typed_array_set_property_by_name(
     owner: usize,
     name: &str,
@@ -481,7 +491,18 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
             typed_array_owner_set(owner, index, value);
             true
         }
-        TypedArrayStringKeyKind::IntegerIndex => true,
+        TypedArrayStringKeyKind::IntegerIndex => {
+            // TypedArraySetElement (§10.4.5.16) coerces the value BEFORE the
+            // IsValidIntegerIndex bounds check: a canonical-but-invalid index
+            // (out of bounds, `-0`, `1.5`, `NaN`, …) still runs `ToNumber` /
+            // `ToBigInt` on the value for its observable side effects (a
+            // `valueOf`/`Symbol.toPrimitive` hook, or a throw), then silently
+            // drops the store. Skipping the coercion made `ta[100] = {valueOf}`
+            // never fire the hook (test262 Set/tonumber-value-throws,
+            // key-is-out-of-bounds-receiver-is-proto).
+            typed_array_coerce_element_for_side_effects(owner, value);
+            true
+        }
         TypedArrayStringKeyKind::Ordinary => {
             if let Some(acc) = crate::object::get_accessor_descriptor(owner, name) {
                 if acc.set != 0 {
@@ -490,16 +511,26 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
                         typed_array_value(owner as *const TypedArrayHeader),
                         value,
                     );
+                    return true;
                 }
-                return true;
+                // Accessor own property with no setter: OrdinarySet rejects.
+                return false;
             }
             if typed_array_has_ordinary_own_prop(owner, name) {
                 if let Some(attrs) = crate::object::get_property_attrs(owner, name) {
                     if !attrs.writable() {
-                        return true;
+                        // Existing non-writable own data property: reject.
+                        return false;
                     }
                 }
             } else {
+                // A brand-new own property on a non-extensible typed array
+                // cannot be created (OrdinaryDefineOwnProperty step: extensible
+                // is false → return false). An existing key can still be
+                // updated (handled by the writable branch above).
+                if typed_array_owner_no_extend(owner) {
+                    return false;
+                }
                 crate::object::set_property_attrs(
                     owner,
                     name.to_string(),
@@ -512,16 +543,44 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
     }
 }
 
+/// Run the per-content-type element coercion (`ToNumber` for numeric views,
+/// `ToBigInt` for BigInt views) purely for its observable side effects —
+/// invoking a value's `valueOf`/`Symbol.toPrimitive` and propagating any abrupt
+/// completion. Used on the canonical-invalid-index write path where the store
+/// itself is dropped but the coercion must still happen (TypedArraySetElement
+/// step 1 runs before the IsValidIntegerIndex check).
+unsafe fn typed_array_coerce_element_for_side_effects(owner: usize, value: f64) {
+    match typed_array_owner_kind(owner) {
+        Some(TypedArrayOwnerKind::TypedArray) => {
+            let kind = (*(owner as *const TypedArrayHeader)).kind;
+            // `coerce_for_kind` performs ToBigInt for BigInt views (throwing on
+            // a Number) and ToNumber otherwise; its result is discarded — only
+            // the side effect / throw matters.
+            let _ = crate::typedarray::bigint::coerce_for_kind(kind, value);
+        }
+        Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
+            let _ = crate::typedarray::species::to_number(value);
+        }
+        None => {}
+    }
+}
+
 pub(crate) unsafe fn typed_array_set_numeric_index(owner: usize, index: f64, value: f64) -> bool {
     if typed_array_owner_kind(owner).is_none() {
         return false;
     }
     if !index.is_finite() || index.fract() != 0.0 || index < 0.0 || index > u32::MAX as f64 {
+        // Canonical-invalid index: coerce the value for side effects, then drop.
+        typed_array_coerce_element_for_side_effects(owner, value);
         return true;
     }
     let index = index as u32;
     if index < typed_array_owner_length(owner) {
         typed_array_owner_set(owner, index, value);
+    } else {
+        // In-range integer but past [[ArrayLength]] (out of bounds): still
+        // coerce for side effects before dropping the store.
+        typed_array_coerce_element_for_side_effects(owner, value);
     }
     true
 }
@@ -581,6 +640,20 @@ pub(crate) unsafe fn typed_array_get_numeric_index(owner: usize, index: f64) -> 
 
 pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) -> f64 {
     let Some(owner) = typed_array_addr_from_value(f64::from_bits(owner_bits as u64)) else {
+        // #5989: a `u8.subarray(...)` / `u8.slice(...)` of a BufferHeader-backed
+        // Uint8Array returns another (uint8array-marked) BUFFER, which the
+        // typed-array registry gate above doesn't know — a statically-typed
+        // `r[i]` on such a value silently read `undefined` (react-server-dom's
+        // flight row parser walks exactly these chunk views). Route buffer
+        // receivers through the generic dynamic index path, which handles
+        // BufferHeader indexing (numeric, string, and symbol keys) correctly.
+        let addr = owner_bits & crate::value::POINTER_MASK as usize;
+        if addr != 0 && crate::buffer::is_registered_buffer(addr) {
+            return crate::value::js_dyn_index_get(
+                crate::value::js_nanbox_pointer(addr as i64),
+                key,
+            );
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     // A Symbol key is never an integer-indexed element — read it from the symbol
@@ -630,6 +703,17 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
 ) -> f64 {
     unsafe {
         let Some(owner) = typed_array_addr_from_value(f64::from_bits(ta as u64)) else {
+            // #5989: BufferHeader-backed receivers (subarray/slice results) —
+            // mirror the get-side fallback so statically-typed `r[i] = v`
+            // stores aren't silently dropped.
+            let addr = (ta as usize) & crate::value::POINTER_MASK as usize;
+            if addr != 0 && crate::buffer::is_registered_buffer(addr) {
+                return crate::value::js_dyn_index_set(
+                    crate::value::js_nanbox_pointer(addr as i64),
+                    key,
+                    value,
+                );
+            }
             return value;
         };
         // A Symbol key is never an integer-indexed element — store it in the
@@ -719,7 +803,12 @@ pub(crate) unsafe fn typed_array_has_property(
 /// object (spec methods + the reflectable accessors), the per-kind prototype
 /// object (`Float64Array.prototype` — `constructor` and any user patches),
 /// and finally `Object.prototype` (its universal methods + user expandos).
-unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -> bool {
+pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -> bool {
+    // Build the shared `%TypedArray%.prototype` intrinsic if it hasn't been yet,
+    // so the membership check doesn't depend on a registered typed array having
+    // been created first (#6164 — otherwise the result was creation-order
+    // dependent, and buffer-backed `Uint8Array` never populated it).
+    let _ = crate::object::ensure_typed_array_intrinsic();
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     // %TypedArray%.prototype intrinsic.
     let intrinsic = crate::object::typed_array_intrinsic_proto_ptr();
@@ -800,6 +889,47 @@ pub(crate) fn typed_array_canonical_index_validity(owner: usize, name: &str) -> 
         TypedArrayStringKeyKind::IntegerIndex => Some(false),
         TypedArrayStringKeyKind::Ordinary => None,
     }
+}
+
+/// The kind of own set-descriptor an ordinary (non-index) string key carries on
+/// a typed array, as seen by OrdinarySet. Typed arrays keep their expando own
+/// properties in the side tables (`TYPED_ARRAY_OWN_PROPS` +
+/// `PROPERTY_DESCRIPTORS`/`ACCESSOR_DESCRIPTORS`), which the generic
+/// `own_set_descriptor` walk skips because `object_has_descriptors` is gated off
+/// for typed arrays. This exposes that state to the receiver-threading `[[Set]]`
+/// so `Reflect.set(ta, k, v)` reports the right boolean.
+#[derive(Clone, Copy)]
+pub(crate) enum TypedArrayOwnSetDescriptor {
+    /// Data property present with the given writability.
+    Data { writable: bool },
+    /// Accessor property; `setter_bits` == 0 means setter-less (rejects).
+    Accessor { setter_bits: u64 },
+}
+
+/// Probe the own set-descriptor for an ordinary string key on a typed array.
+/// Returns `None` when the key names no own expando property (the caller then
+/// falls to CreateDataProperty on the receiver). Index/canonical-index keys are
+/// never ordinary properties, so they also return `None` here.
+pub(crate) fn typed_array_own_set_descriptor(
+    owner: usize,
+    name: &str,
+) -> Option<TypedArrayOwnSetDescriptor> {
+    if typed_array_canonical_index_validity(owner, name).is_some() {
+        // Index / canonical-index keys are never ordinary expando properties.
+        return None;
+    }
+    if let Some(acc) = crate::object::get_accessor_descriptor(owner, name) {
+        return Some(TypedArrayOwnSetDescriptor::Accessor {
+            setter_bits: acc.set,
+        });
+    }
+    if typed_array_has_ordinary_own_prop(owner, name) {
+        let writable = crate::object::get_property_attrs(owner, name)
+            .map(|attrs| attrs.writable())
+            .unwrap_or(true);
+        return Some(TypedArrayOwnSetDescriptor::Data { writable });
+    }
+    None
 }
 
 /// `OrdinaryToPrimitive(O, number)` own-expando probe for a typed array used

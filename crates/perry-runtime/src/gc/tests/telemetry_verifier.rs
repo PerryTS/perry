@@ -80,16 +80,21 @@ fn assert_budgeted_ordinary_trace(event: &serde_json::Value, expected_kind: &str
         Some(true)
     );
     let malloc_trim = &event["allocator_maintenance"]["malloc_trim"];
-    assert_eq!(malloc_trim["status"].as_str(), Some("skipped"));
-    assert_eq!(malloc_trim["reason"].as_str(), Some("ordinary_budgeted"));
+    // #6180 RSS floor: budgeted cycles now RUN allocator trim (previously
+    // skipped with reason ordinary_budgeted). The outcome is platform-
+    // dependent: executed on glibc, unsupported elsewhere — but never the
+    // old budgeted skip.
+    assert_ne!(malloc_trim["reason"].as_str(), Some("ordinary_budgeted"));
+    assert!(matches!(
+        malloc_trim["status"].as_str(),
+        Some("executed") | Some("unsupported")
+    ));
     assert_eq!(malloc_trim["progress_kind"].as_str(), Some(expected_kind));
     assert_eq!(malloc_trim["class"].as_str(), Some("ordinary_budgeted"));
     assert_eq!(
         malloc_trim["ordinary_pause_stats_include"].as_bool(),
         Some(false)
     );
-    assert_eq!(malloc_trim["elapsed_us"].as_u64(), Some(0));
-    assert_eq!(event["phase_us"]["malloc_trim"].as_u64(), Some(0));
     for (index, step) in event["pause_steps"]
         .as_array()
         .expect("ordinary trace should include pause steps")
@@ -289,7 +294,8 @@ fn emergency_full_trace_is_excluded_from_ordinary_pause_stats() {
         malloc_trim["ordinary_pause_stats_include"].as_bool(),
         Some(false)
     );
-    if cfg!(target_env = "gnu") {
+    if cfg!(any(target_env = "gnu", target_os = "macos")) {
+        // glibc malloc_trim / darwin malloc_zone_pressure_relief (#6180).
         assert_eq!(malloc_trim["status"].as_str(), Some("executed"));
         assert_eq!(
             malloc_trim["reason"].as_str(),
@@ -330,4 +336,39 @@ fn verifier_rejects_over_budget_ordinary_step() {
         verify_ordinary_pause_budget(&event).is_err(),
         "synthetic over-budget ordinary step should fail verifier"
     );
+}
+
+// #6187: the always-on pause ring must track last/max/window coherently.
+#[test]
+fn test_pause_ring_records_max_and_window() {
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        let baseline_count = stats.collection_count;
+        stats.record_collection(10, 100);
+        stats.record_collection(0, 900);
+        stats.record_collection(5, 300);
+        assert_eq!(stats.collection_count, baseline_count + 3);
+        assert_eq!(stats.last_pause_us, 300);
+        assert!(stats.max_pause_us >= 900);
+        assert!(stats.recent_len >= 3);
+    });
+    // Overflow the ring: cursor wraps, len saturates at the window size.
+    GC_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        for i in 0..(GC_RECENT_PAUSE_WINDOW as u64 + 5) {
+            stats.record_collection(0, i + 1);
+        }
+        assert_eq!(stats.recent_len as usize, GC_RECENT_PAUSE_WINDOW);
+        assert!((stats.recent_cursor as usize) < GC_RECENT_PAUSE_WINDOW);
+        assert_eq!(stats.last_pause_us, GC_RECENT_PAUSE_WINDOW as u64 + 5);
+    });
+    let mut max_us = 0u64;
+    let mut recent_max = 0u64;
+    let mut recent_avg = 0u64;
+    let mut count = 0u64;
+    js_gc_pause_stats(&mut max_us, &mut recent_max, &mut recent_avg, &mut count);
+    assert_eq!(count as usize, GC_RECENT_PAUSE_WINDOW);
+    assert!(max_us >= 900);
+    assert!(recent_max >= GC_RECENT_PAUSE_WINDOW as u64);
+    assert!(recent_avg > 0 && recent_avg <= recent_max);
 }

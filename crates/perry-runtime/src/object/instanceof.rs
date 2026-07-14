@@ -94,6 +94,52 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
 /// JS spec: `1 instanceof 2` throws, but Perry returns false defensively).
 /// Refs #420 / #618 followup.
 #[no_mangle]
+/// Map a builtin constructor VALUE (the `ClosureHeader`-backed function installed
+/// on `globalThis`) back to the class id that codegen passes to `js_instanceof`
+/// for the static `x instanceof <Identifier>` form.
+///
+/// Only the natively-backed builtins need this: their instances are handles
+/// (stream / fetch registries), not heap objects with a real prototype chain, so
+/// `js_instanceof` brand-checks them via the kind probes rather than a chain walk.
+/// Heap-backed builtins already resolve through the class-id / prototype paths.
+fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
+    let closure =
+        crate::value::js_nanbox_get_pointer(type_ref) as *const crate::closure::ClosureHeader;
+    if closure.is_null() {
+        return None;
+    }
+    if unsafe { (*closure).type_tag } != crate::closure::CLOSURE_MAGIC {
+        return None;
+    }
+    let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, len) = crate::string::str_bytes_from_jsvalue(name_value, &mut scratch)?;
+    if ptr.is_null() {
+        return None;
+    }
+    let name =
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len as usize) }).ok()?;
+    let class_id = match name {
+        "ReadableStream" => 0xFFFF_0060,
+        "WritableStream" => 0xFFFF_0061,
+        "TransformStream" => 0xFFFF_0062,
+        "Response" => 0xFFFF_0028,
+        "Request" => 0xFFFF_0029,
+        "Headers" => 0xFFFF_002A,
+        "Blob" => 0xFFFF_0026,
+        _ => return None,
+    };
+    // The name alone is forgeable (`function Response() {}` in user code).
+    // Require IDENTITY with the builtin constructor installed on
+    // `globalThis`: only the genuine builtin value brand-checks instances.
+    let global_ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    if crate::value::js_nanbox_get_pointer(global_ctor) as usize != closure as usize {
+        return None;
+    }
+    Some(class_id)
+}
+
+#[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
@@ -205,6 +251,29 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         if class_id != 0 {
             return js_instanceof(value, class_id);
         }
+    }
+    // A builtin constructor held in a VARIABLE — `const RS = ReadableStream; body
+    // instanceof RS` — arrives here as the ClosureHeader-backed function installed
+    // on `globalThis`, so none of the class-id paths above match and the prototype
+    // walk below returns false. Codegen only special-cases the *static identifier*
+    // form (`body instanceof ReadableStream`), where it hands the builtin class id
+    // straight to `js_instanceof`, which brand-checks these natively-backed values
+    // via the stream / fetch kind probes (their instances are handles, not heap
+    // objects with a real prototype chain).
+    //
+    // Minified bundles almost always alias constructors into locals, so the
+    // variable form is the common one in the wild: `x instanceof <alias>` for
+    // ReadableStream / Response / Headers silently returned `false` while Node
+    // returns `true`. That made a large esbuild-bundled CLI app mis-detect its
+    // `fetch()` body, throw "The first argument must be a Readable, a
+    // ReadableStream, or an async iterable", and abort its background
+    // tar-stream downloads entirely.
+    //
+    // Recover the builtin's name from the constructor closure (recorded by
+    // `set_bound_native_closure_name` when globalThis is populated) and reuse the
+    // static path's class id, so both spellings agree.
+    if let Some(class_id) = builtin_ctor_class_id_from_value(type_ref) {
+        return js_instanceof(value, class_id);
     }
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
         if module == "stream"
@@ -343,7 +412,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         let class_id = global_builtin_constructor_class_id(name);
         if class_id != 0 {
-            return js_instanceof(value, class_id);
+            let r = js_instanceof(value, class_id);
+            if r.to_bits() == crate::value::TAG_TRUE {
+                return r;
+            }
+            // #5989: an object that inherits a builtin's prototype via
+            // `Fn.prototype = Object.create(Builtin.prototype)` is `instanceof
+            // Builtin` per the spec even though it carries no builtin class id —
+            // react-server-dom's flight Chunk inherits `Promise.prototype` this
+            // way, so `chunk instanceof Promise` must be true. Walk the real
+            // [[Prototype]] chain against `Builtin.prototype` before answering
+            // false.
+            if ordinary_has_instance_prototype_walk(value, type_ref) {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+            return f64::from_bits(TAG_FALSE);
         }
     }
     if crate::node_submodules::is_diagnostics_channel_constructor_value(type_ref) {
@@ -418,6 +501,13 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "Event" => crate::event_target::CLASS_ID_EVENT,
         "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
         "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
+        // #6301: the `X → EventTarget` edge is what makes a user
+        // `class Bus extends EventTarget {}` instance resolve the inherited
+        // `addEventListener`/`removeEventListener`/`dispatchEvent` surface
+        // (see `event_target::class_chain_is_event_target`). Without an id
+        // here `js_register_class_parent_dynamic` left the subclass
+        // parentless and it inherited nothing.
+        "EventTarget" => crate::event_target::CLASS_ID_EVENT_TARGET,
         // TypedArray constructors used as runtime *values* (a dynamic
         // `x instanceof TA` where `TA` is a variable — e.g. test262's
         // `testWithTypedArrayConstructors`). Mirrors the per-kind synthetic
@@ -450,7 +540,22 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
     // inside a `new`-invoked body instead of recursing forever (#838 followup).
     let synthetic_cid = synthetic_class_id_for_function(type_ref);
     if synthetic_cid != 0 {
-        return js_instanceof(value, synthetic_cid);
+        let r = js_instanceof(value, synthetic_cid);
+        if r.to_bits() == crate::value::TAG_TRUE {
+            return r;
+        }
+        // #5989: the synthetic class-id chain is stamped at construction and does
+        // NOT reflect a prototype installed later via
+        // `Fn.prototype = Object.create(Base.prototype)` — the classic ES5
+        // inheritance idiom react-server-dom's flight Chunk uses to inherit
+        // `Promise.prototype` (so `chunk instanceof Promise` wrongly returned
+        // false). Fall back to the spec `OrdinaryHasInstance` prototype-chain
+        // walk: Perry already walks the real chain for method lookup and
+        // `getPrototypeOf`, so only this id-based shortcut missed it.
+        if ordinary_has_instance_prototype_walk(value, type_ref) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        return f64::from_bits(TAG_FALSE);
     }
     // #2909: nothing recognized the RHS as a constructor/class. Per the
     // ECMAScript `InstanceofOperator`, the right operand must be an object
@@ -471,6 +576,62 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
     throw_invalid_instanceof_rhs(type_ref)
+}
+
+/// Spec `OrdinaryHasInstance(C, O)` prototype-chain walk (ECMA-262 7.3.20 steps
+/// 4-7): `P = Get(C, "prototype")`; walk `O`'s `[[Prototype]]` chain and return
+/// `true` iff some link is identical to `P`. Used as a fallback for the
+/// synthetic class-id shortcut, which is stamped at construction and misses a
+/// prototype installed via `Fn.prototype = Object.create(Base.prototype)`.
+fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
+    extern "C" {
+        fn js_object_get_prototype_of(obj_value: f64) -> f64;
+    }
+    // P = type_ref.prototype (the constructor's `.prototype` data property).
+    let proto = unsafe {
+        crate::value::js_dynamic_object_get_property(
+            type_ref,
+            b"prototype".as_ptr() as *const i8,
+            9,
+        )
+    };
+    let target = proto_identity_addr(proto);
+    if target == 0 {
+        return false; // non-object `.prototype` can never be on the chain
+    }
+    // Walk `value`'s real [[Prototype]] chain looking for identity with P.
+    let mut cur = unsafe { js_object_get_prototype_of(value) };
+    let mut depth = 0usize;
+    while depth < 100_000 {
+        if crate::value::JSValue::from_bits(cur.to_bits()).is_null() {
+            return false;
+        }
+        let cur_addr = proto_identity_addr(cur);
+        if cur_addr == 0 {
+            return false;
+        }
+        if cur_addr == target {
+            return true;
+        }
+        cur = unsafe { js_object_get_prototype_of(cur) };
+        depth += 1;
+    }
+    false
+}
+
+/// Normalize a value to its heap-pointer address for prototype identity
+/// comparison — a NaN-boxed `POINTER_TAG` value or a raw heap pointer both
+/// resolve to their address; any non-pointer yields 0.
+fn proto_identity_addr(v: f64) -> usize {
+    let bits = v.to_bits();
+    let top16 = bits >> 48;
+    if top16 == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if top16 == 0 && bits >= 0x1000 {
+        bits as usize
+    } else {
+        0
+    }
 }
 
 #[cold]

@@ -6,7 +6,7 @@
 
 Perry is a native TypeScript compiler written in Rust. It takes your TypeScript and compiles it straight to native executables — no Node.js, no Electron, no browser engine. Just fast, small binaries that run anywhere.
 
-**Current Version:** 0.5.1164 | [Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
+[![Latest release](https://img.shields.io/github/v/release/PerryTS/perry?display_name=tag)](https://github.com/PerryTS/perry/releases/latest) | [Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
 
 **Community:** [Join the Perry Discord](https://discord.gg/chEmpGdTtZ)
 
@@ -92,7 +92,7 @@ Perry's development is backed by our sponsors. 🙏
 
 > **As of v0.5.585, fast-math is opt-in.** Perry's default mode emits no `reassoc + contract` per-instruction FMF flags, so f64 arithmetic is bit-exact with Node. `--fast-math` (CLI), `PERRY_FAST_MATH=1` (env), or `"perry": { "fastMath": true }` in `package.json` re-enables the flags. See [`docs/src/cli/fast-math.md`](docs/src/cli/fast-math.md) for the discussion of when it does and doesn't matter. The numbers below are Perry's default mode unless noted.
 
-Numbers below are from a 2026-05-14 sweep on macOS ARM64 (M1 Max, RUNS=11 medians, `taskpolicy -t 0 -l 0`) at Perry v0.5.908 on an otherwise-idle machine. All languages re-measured together this run. Source + methodology in [`benchmarks/polyglot/`](benchmarks/polyglot/).
+> **Historical native-language comparison.** The following polyglot table and commentary were measured on 2026-05-14 at Perry v0.5.908. They are retained for historical context and are not the current Node/Bun baseline. Current runtime-peer evidence appears in the generated section below.
 
 | Benchmark           | Perry |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun | What it tests |
 |---------------------|------:|------:|------:|------:|------:|------:|------:|------:|---------------|
@@ -109,25 +109,27 @@ We deliberately don't lead with the trivially-foldable accumulator microbenchmar
 
 ### vs Node.js and Bun
 
-Perry's broader benchmark suite covers workloads outside the polyglot set — closures, classes, JSON, prime sieve, etc. Numbers below from the 2026-05-14 v0.5.908 sweep via `benchmarks/suite/run_benchmarks.sh` (single-run-per-cell, not RUNS=11 medians — see [`benchmarks/polyglot/`](benchmarks/polyglot/) for the rigorous multi-run methodology).
+<!-- public-node-bun:start -->
+Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `36cf04e0147c`.
+Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks.
 
-| Benchmark | Perry (v0.5.908) | Node.js | Bun | What it tests |
-|-----------|-----------------:|--------:|----:|---------------|
-| factorial | 107ms | 591ms | 97ms | Modular accumulation (integer fast path) |
-| method_calls | 9ms | 11ms | 9ms | Class method dispatch (10M calls) |
-| closure | 50ms | 304ms | 51ms | Closure creation + invocation (10M calls) |
-| binary_trees | 2ms | 10ms | 7ms | Tree allocation + traversal (1M nodes, scalar replacement) |
-| string_concat | 0ms | 3ms | 1ms | 100K string appends |
-| prime_sieve | 3ms | 8ms | 7ms | Sieve of Eratosthenes |
-| mandelbrot | 28ms | 25ms | 29ms | Complex f64 iteration (800x800) |
-| matrix_multiply | 28ms | 34ms | 34ms | 256x256 matrix multiply |
-| json_roundtrip (lazy tape, gen-gc) | 83ms | 377ms | 249ms | 50× `JSON.parse` + `JSON.stringify` on a ~1MB, 10K-item blob |
+| Benchmark | Perry | Node.js | Bun | Result | What it tests |
+|---|---:|---:|---:|---|---|
+| factorial | 1555 ms | 99 ms | 99 ms | loss vs both | Modular accumulation |
+| method_calls | 82 ms | 11 ms | 8 ms | loss vs both | Class method dispatch |
+| closure | 49 ms | 51 ms | 51 ms | win vs both | Closure creation and invocation |
+| binary_trees | 6 ms | 7 ms | 8 ms | win vs both | Tree allocation and traversal |
+| string_concat | 3 ms | 5 ms | 1 ms | mixed | String append loop |
+| prime_sieve | 254 ms | 7 ms | 5 ms | loss vs both | Sieve of Eratosthenes |
+| mandelbrot | 23 ms | 26 ms | 30 ms | win vs both | Complex-number iteration |
+| matrix_multiply | 2311 ms | 35 ms | 35 ms | loss vs both | Matrix multiplication |
+| json_roundtrip | 425 ms | 408 ms | 239 ms | loss vs both | Parse and stringify ~1 MB JSON |
 
-`closure` and `factorial` are still slower than the older v0.5.173 baseline (10 → 50 ms, 31 → 107 ms). The v0.5.585 fast-math opt-in flip accounts for `factorial` (integer modulo plus an FP-tail reduction that the old default-on fast-math collapsed); `closure` regression is tracked as a follow-up. `method_calls` is back at baseline this sweep (9 ms) — yesterday's 25 ms reading was single-run noise from concurrent CPU load. The wins on `binary_trees` / `string_concat` / `prime_sieve` / `mandelbrot` / `matrix_multiply` against Node/Bun hold steady. Single-run cells are noisier than RUNS=11 medians; the lower-noise multi-run polyglot table above remains the canonical comparison.
+<!-- public-node-bun:end -->
 
 Perry compiles to native machine code via LLVM — no JIT warmup, no interpreter overhead. Key optimizations that apply in both modes: **scalar replacement** of non-escaping objects (escape analysis eliminates heap allocation entirely — object fields become registers), inline bump allocator for objects that do escape, i32 loop counters for bounded array access, integer-modulo fast path (`fptosi → srem → sitofp` instead of `fmod`), elimination of redundant `js_number_coerce` calls on numeric function returns, and i64 specialization for pure numeric recursive functions.
 
-Run benchmarks yourself: `cd benchmarks/suite && ./run_benchmarks.sh` (requires node, cargo; optional: bun, shermes).
+Run the complete public sweep with pinned Node and Bun: `./benchmarks/run_public_baseline.sh`.
 
 ## Binary Size
 
@@ -995,8 +997,10 @@ triggers on a published GitHub Release or manual `workflow_dispatch`. Matrix
 runners build:
 
 - `macos-14` / `macos-15` — arm64 + x86_64 Darwin binaries
-- `ubuntu-22.04` / `ubuntu-24.04-arm` — glibc x86_64 + aarch64
-- `ubuntu-22.04` / `ubuntu-24.04-arm` — musl x86_64 + aarch64
+- `ubuntu-24.04` / `ubuntu-24.04-arm` — glibc x86_64 + aarch64 (glibc 2.39 floor:
+  the npm launcher and `install.sh` route older-glibc hosts to the musl build — if
+  you move these runners, update `GLIBC_BUILD_FLOOR` in `npm/perry/bin/detect.cjs`)
+- `ubuntu-24.04` / `ubuntu-24.04-arm` — musl x86_64 + aarch64 (fully static)
 - `windows-latest` — x86_64 MSVC
 
 Artifacts are published to:

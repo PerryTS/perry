@@ -36,6 +36,16 @@ pub(crate) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 /// payload can never be mistaken for a hole.
 pub(crate) const TAG_HOLE: u64 = 0x7FFC_0000_0000_0010;
 
+/// TDZ (Temporal Dead Zone) sentinel. A lexical `let`/`const`/`class` binding
+/// created at scope entry but not yet initialized holds this value in its box
+/// cell. Reading it (via `js_box_get_bits`) throws a spec `ReferenceError`
+/// ("Cannot access ... before initialization"). Chosen in the same 0x7FFC
+/// singleton namespace, distinct from UNDEFINED/NULL/FALSE/TRUE/HOLE so no
+/// legitimate NaN-box payload can ever be mistaken for a TDZ hole. Unlike a
+/// hole, code never silently coerces it to `undefined` — the whole point is to
+/// throw on any observation before the declaration is evaluated.
+pub(crate) const TAG_TDZ: u64 = 0x7FFC_0000_0000_0011;
+
 /// Pointer tag: 0x7FFD_XXXX_XXXX_XXXX (48 bits for pointer) - objects/arrays
 pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;

@@ -15,7 +15,11 @@ use super::*;
 /// `PrivKind::GetSet`. Used to push a `PrivateScope` for the duration of the
 /// class body lowering so `obj.#name` accesses can brand-check on the correct
 /// declaring class and reject illegal read/write operations.
-pub fn build_private_scope(class: &ast::Class, class_name: &str) -> crate::lower::PrivateScope {
+pub fn build_private_scope(
+    class: &ast::Class,
+    class_name: &str,
+    class_id: u32,
+) -> crate::lower::PrivateScope {
     use crate::lower::{PrivKind, PrivMember, PrivateScope};
     let mut members: std::collections::HashMap<String, PrivMember> =
         std::collections::HashMap::new();
@@ -59,6 +63,7 @@ pub fn build_private_scope(class: &ast::Class, class_name: &str) -> crate::lower
     }
     PrivateScope {
         class_name: class_name.to_string(),
+        class_id,
         members,
     }
 }

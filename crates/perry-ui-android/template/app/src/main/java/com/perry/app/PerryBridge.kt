@@ -1530,6 +1530,13 @@ object PerryBridge {
     @JvmStatic
     external fun nativePumpTick()
 
+    // #6184 (2026-07-09 GC audit): OS memory-pressure → GC bridge.
+    // PerryActivity.onLowMemory() / onTrimMemory(level) forward here. Level
+    // 1 = minor (collect-if-safe), level 2 = critical (full collect + clamp
+    // the arena trigger).
+    @JvmStatic
+    external fun nativeMemoryPressure(level: Int)
+
     @JvmStatic
     external fun nativeInvokeCallback0(key: Long)
 

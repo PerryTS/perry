@@ -18,6 +18,7 @@ perry-transform.workspace = true
 perry-codegen.workspace = true
 perry-runtime.workspace = true
 perry-diagnostics.workspace = true
+perry-updater.workspace = true
 # Codegen backends for non-native targets — optional so a slim dev CLI
 # (--no-default-features --features dev-cli) drops them. full-cli (default)
 # re-enables all via all-codegen-backends, keeping the shipped CLI unchanged.
@@ -52,6 +53,8 @@ flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
 zip.workspace = true
+tempfile = "3"
+libc = "0.2"
 zstd.workspace = true
 jsonwebtoken.workspace = true
 semver = "1.0"
@@ -84,6 +87,9 @@ rand = { version = "0.9", optional = true }
 # here makes the year accessor available to `perry native init`'s
 # LICENSE template substitution.
 chrono = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 [features]
 # The default build is the full official CLI — every command and codegen

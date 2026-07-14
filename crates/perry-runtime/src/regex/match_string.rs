@@ -148,7 +148,7 @@ pub extern "C" fn js_string_match(
                         // Attach .index / .input as real own properties.
                         let match_char_offset = caps
                             .get(0)
-                            .map(|m| str_data[..m.start()].chars().count())
+                            .map(|m| super::utf16::byte_index_to_utf16_index(str_data, m.start()))
                             .unwrap_or(0);
                         set_exec_array_metadata(
                             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
@@ -241,7 +241,7 @@ pub extern "C" fn js_string_match(
                     // on another regex, instead of a most-recent-match thread-local.
                     let match_char_offset = caps
                         .get(0)
-                        .map(|m| str_data[..m.start()].chars().count())
+                        .map(|m| super::utf16::byte_index_to_utf16_index(str_data, m.start()))
                         .unwrap_or(0);
                     set_exec_array_metadata(
                         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),

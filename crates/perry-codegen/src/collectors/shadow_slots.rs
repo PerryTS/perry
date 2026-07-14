@@ -134,6 +134,7 @@ pub fn collect_declared_shadow_locals_in_stmt(
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::Throw(_)
-        | Stmt::PreallocateBoxes(_) => {}
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }

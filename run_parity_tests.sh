@@ -31,6 +31,12 @@ TEST_FILTER=""
 # without requiring test_parity_* names.
 TEST_SUITE="all"
 MODULE_FILTER=""
+# Optional round-robin sharding (N/M, 1-based). Splits the post-filter test
+# set evenly across M parallel runners so a big suite (the gap suite is the
+# motivating case — conformance-smoke fans out over 8 shards) can be run in
+# ~1/M the wall-time. Empty = run the whole set (default; unchanged behavior
+# for release parity, local runs, and node-suite-guard).
+SHARD_SPEC=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --filter) TEST_FILTER="$2"; shift 2 ;;
@@ -39,9 +45,29 @@ while [[ $# -gt 0 ]]; do
         --suite=*) TEST_SUITE="${1#--suite=}"; shift ;;
         --module) MODULE_FILTER="$2"; shift 2 ;;
         --module=*) MODULE_FILTER="${1#--module=}"; shift ;;
+        --shard) SHARD_SPEC="$2"; shift 2 ;;
+        --shard=*) SHARD_SPEC="${1#--shard=}"; shift ;;
         *) shift ;;
     esac
 done
+
+# Parse/validate the optional shard spec into 1-based index + total. Kept as a
+# hard input check: a malformed shard (e.g. "3/0" or "9/8") that silently ran
+# the whole set — or nothing — would make a required conformance gate lie.
+SHARD_INDEX=0
+SHARD_TOTAL=0
+if [[ -n "$SHARD_SPEC" ]]; then
+    if [[ ! "$SHARD_SPEC" =~ ^[0-9]+/[0-9]+$ ]]; then
+        echo -e "\033[0;31mInvalid --shard '$SHARD_SPEC' (want N/M, 1-based, e.g. 3/8)\033[0m" >&2
+        exit 1
+    fi
+    SHARD_INDEX="${SHARD_SPEC%/*}"
+    SHARD_TOTAL="${SHARD_SPEC#*/}"
+    if (( SHARD_INDEX < 1 || SHARD_TOTAL < 1 || SHARD_INDEX > SHARD_TOTAL )); then
+        echo -e "\033[0;31mInvalid --shard bounds '$SHARD_SPEC' (need 1 <= N <= M)\033[0m" >&2
+        exit 1
+    fi
+fi
 
 case "$TEST_SUITE" in
     all|parity|smoke|node-suite) ;;
@@ -70,6 +96,25 @@ else
 fi
 
 # Function to run with optional timeout
+# Describe an abnormal Perry exit, or print nothing when the exit is normal.
+# Bash reports a signal death as 128+signo; `timeout` reports 124.
+perry_abnormal_exit() {
+    local code=$1
+    case "$code" in
+        124) echo "TIMEOUT (killed after ${PERRY_RUN_TIMEOUT:-10}s)" ;;
+        132) echo "SIGILL (exit 132)" ;;
+        134) echo "SIGABRT (exit 134)" ;;
+        136) echo "SIGFPE (exit 136)" ;;
+        138) echo "SIGBUS (exit 138)" ;;
+        139) echo "SIGSEGV (exit 139)" ;;
+        *)
+            if [[ "$code" -gt 128 ]]; then
+                echo "signal $((code - 128)) (exit $code)"
+            fi
+            ;;
+    esac
+}
+
 run_with_timeout() {
     local seconds=$1
     shift
@@ -169,10 +214,17 @@ PARITY_FAIL=0
 COMPILE_FAIL=0
 NODE_FAIL=0
 SKIPPED=0
+# Perry died from a signal (SIGSEGV/SIGABRT/…) or hit the run timeout. Tracked
+# separately from PARITY_FAIL: a crash is a *hard* defect, not a formatting
+# nit, and reporting it as a plain "output mismatch" is how the #6271 zlib
+# SIGSEGV sat in main for days — the harness only diffed stdout, so a process
+# dying with exit 139 after printing half its output looked like a benign diff.
+CRASH_FAIL=0
 
 # Arrays for tracking
 declare -a PARITY_FAILURES=()
 declare -a COMPILE_FAILURES=()
+declare -a CRASH_FAILURES=()
 
 # Create output directories
 mkdir -p "$OUTPUT_DIR/node" "$OUTPUT_DIR/perry" "$REPORT_DIR"
@@ -545,6 +597,7 @@ if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
 fi
 
 # Run each test
+SHARD_COUNTER=0
 for test_file in "${TEST_FILES[@]}"; do
     # Skip directories (multi/ folder)
     [[ -d "$test_file" ]] && continue
@@ -561,6 +614,19 @@ for test_file in "${TEST_FILES[@]}"; do
     # contains it.
     if [[ -n "$TEST_FILTER" ]] && [[ "$test_name" != *"$TEST_FILTER"* ]] && [[ "$test_id" != *"$TEST_FILTER"* ]]; then
         continue
+    fi
+
+    # Round-robin sharding over the POST-filter set (opt-in via --shard N/M).
+    # Counting only tests that survive the filter keeps the split even for a
+    # narrow filter like `test_gap_`; the counter advances for every surviving
+    # test so shard i keeps exactly indices where (k % M) == i-1, and the M
+    # shards partition the set with no overlap and no gaps.
+    if (( SHARD_TOTAL > 0 )); then
+        this_idx=$SHARD_COUNTER
+        SHARD_COUNTER=$((SHARD_COUNTER + 1))
+        if (( this_idx % SHARD_TOTAL != SHARD_INDEX - 1 )); then
+            continue
+        fi
     fi
 
     safe_test_id="${test_id//\//__}"
@@ -693,6 +759,29 @@ for test_file in "${TEST_FILES[@]}"; do
     # Save Perry output
     echo "$perry_output" > "$perry_output_file"
 
+    # A signal death / timeout is a CRASH, not a parity mismatch. Check it
+    # before either comparison below: a crashed process usually printed a
+    # correct *prefix* of its output and then died, which diffs as a plain
+    # "output mismatch" and reads as a cosmetic gap. That is exactly how the
+    # #6271 zlib SIGSEGV hid behind a green-looking label. Node already exited
+    # 0 to reach this point (non-zero Node => node_fail + skip above), so an
+    # abnormal exit here is unambiguously Perry's.
+    #
+    # Exception: a test carrying its own expected-output file may legitimately
+    # assert a non-zero exit; only *signals*/timeouts are treated as crashes,
+    # never an ordinary non-zero exit like an uncaught throw (exit 1).
+    perry_crash=$(perry_abnormal_exit "$perry_exit")
+    if [[ -n "$perry_crash" ]]; then
+        echo -e "${RED}CRASH${NC} $test_id (${perry_crash})"
+        echo "       Perry died after printing $(printf '%s' "$perry_output" | grep -c '' || true) line(s); Node exited 0."
+        echo "       Last Perry line: $(printf '%s' "$perry_output" | tail -1)"
+        ((CRASH_FAIL++))
+        CRASH_FAILURES+=("$test_id")
+        record_result "$test_id" "crash"
+        [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
+        continue
+    fi
+
     # For tests that have a stored expected-output file (Perry-specific APIs
     # that don't map 1:1 to Node.js), compare Perry output against the file
     # instead of against Node.js.  This lets us verify Perry's behaviour
@@ -747,7 +836,7 @@ for test_file in "${TEST_FILES[@]}"; do
 done
 
 # Calculate parity percentage
-TOTAL_RUN=$((PARITY_PASS + PARITY_FAIL))
+TOTAL_RUN=$((PARITY_PASS + PARITY_FAIL + CRASH_FAIL))
 if [[ $TOTAL_RUN -gt 0 ]]; then
     PARITY_PCT=$(echo "scale=1; $PARITY_PASS * 100 / $TOTAL_RUN" | bc)
 else
@@ -762,10 +851,21 @@ echo "========================================"
 echo -e "${GREEN}Parity Pass:${NC}   $PARITY_PASS"
 echo -e "${RED}Parity Fail:${NC}   $PARITY_FAIL"
 echo -e "${RED}Compile Fail:${NC}  $COMPILE_FAIL"
+echo -e "${RED}Crashed:${NC}       $CRASH_FAIL"
 echo -e "${YELLOW}Skipped:${NC}       $SKIPPED"
 echo ""
 echo -e "${CYAN}Parity Rate:${NC}   ${PARITY_PCT}%"
 echo ""
+
+# List crashes first — these are hard defects (signal death / timeout), not
+# output nits, and must never be skimmed past as if they were.
+if [[ ${#CRASH_FAILURES[@]} -gt 0 ]]; then
+    echo -e "${RED}CRASHED (signal death / timeout — NOT an output nit):${NC}"
+    for crashed in "${CRASH_FAILURES[@]}"; do
+        echo "  - $crashed"
+    done
+    echo ""
+fi
 
 # List failures
 if [[ ${#PARITY_FAILURES[@]} -gt 0 ]]; then
@@ -794,6 +894,7 @@ cat > "$REPORT_FILE" << EOF
     "parity_pass": $PARITY_PASS,
     "parity_fail": $PARITY_FAIL,
     "compile_fail": $COMPILE_FAIL,
+    "crash_fail": $CRASH_FAIL,
     "node_fail": $NODE_FAIL,
     "skipped": $SKIPPED,
     "total_run": $TOTAL_RUN,
@@ -803,6 +904,8 @@ cat > "$REPORT_FILE" << EOF
     "parity": [$(printf '"%s",' "${PARITY_FAILURES[@]}" | sed 's/,$//')]
 ,
     "compile": [$(printf '"%s",' "${COMPILE_FAILURES[@]}" | sed 's/,$//')]
+,
+    "crash": [$(printf '"%s",' "${CRASH_FAILURES[@]}" | sed 's/,$//')]
 
   },
   "results": [${RESULTS_JSON}]

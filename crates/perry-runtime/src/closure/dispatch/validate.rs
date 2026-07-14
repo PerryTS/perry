@@ -16,6 +16,11 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
         if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
             return closure;
         }
+        // #5976: never probe `*(addr + 12)` on a small-handle id (see
+        // `get_valid_func_ptr` below and `value::addr_class` for the band map).
+        if crate::value::addr_class::is_handle_band(addr as usize) {
+            return closure;
+        }
         let type_tag = unsafe {
             std::ptr::read_volatile(
                 (closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32
@@ -65,6 +70,21 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
         return std::ptr::null();
     }
+    // #5976: reject the small-handle band BEFORE the `*(addr + 12)`
+    // CLOSURE_MAGIC probe. Revocable-proxy ids, Web-Fetch/zlib/net handles and
+    // the generic stdlib registry ids are all NaN-boxed `POINTER_TAG | <small
+    // id>` values, not heap pointers — a real closure is always a GC allocation
+    // above the band (`value::addr_class`). The 0x1000 floor above let every
+    // one of them through, so this probe dereferenced unmapped low memory:
+    // `new ProxyOfClass(...)` reaching the dynamic construct path passed the
+    // proxy value to `is_bound_function_closure_value` → `get_valid_func_ptr`,
+    // which faulted at `PROXY_ID_BAND_START + id + 12` before
+    // `js_new_function_construct` ever got to its Proxy branch. `is_closure_ptr`
+    // (closure/dynamic_props.rs) has carried this guard since #1843/#4800; the
+    // two validators here were the remaining hole.
+    if crate::value::addr_class::is_handle_band(addr as usize) {
+        return std::ptr::null();
+    }
     let type_tag = unsafe {
         std::ptr::read_volatile((closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32)
     };
@@ -111,4 +131,30 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
         return std::ptr::null();
     }
     func_ptr
+}
+
+/// Last resort for a callee that [`get_valid_func_ptr`] rejected: it may be a
+/// **Proxy of a function**, not a broken pointer. Route it through the Proxy
+/// `[[Call]]` (apply trap, else forwarded to the target); otherwise throw
+/// `TypeError: value is not a function` exactly as before.
+///
+/// #6320. The `js_closure_callN` entry points take a RAW `*const ClosureHeader`
+/// — codegen has already stripped the NaN-box tag (`js_closure_unbox_callee_
+/// checked`) — so a proxy callee arrives here as its bare registry id
+/// (`PROXY_ID_BAND_START + id`). The compiler emits a `ProxyApply` node only
+/// when it can statically prove the callee is a proxy; a proxy read out of a
+/// dynamically-typed slot (`const g = obj.m` / `arr[0]` / `map.get(k)`, or a
+/// method detached by `js_closure_unbind_this`) reaches this generic path with
+/// no static hint, and `get_valid_func_ptr` correctly refuses to dereference the
+/// id (#5976/#6321) — which turned the SIGSEGV into a spurious TypeError. Node
+/// calls the proxy. Re-boxing the id and asking the proxy registry costs nothing
+/// on the hot path: this runs only where the code used to throw unconditionally.
+pub fn dispatch_proxy_callee_or_throw(closure: *const ClosureHeader, args: &[f64]) -> f64 {
+    let boxed =
+        f64::from_bits(crate::value::POINTER_TAG | (closure as u64 & crate::value::POINTER_MASK));
+    if crate::proxy::js_proxy_is_proxy(boxed) == 1 {
+        let this_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+        return crate::proxy::call_proxy_value_with_this(boxed, this_arg, args);
+    }
+    throw_not_callable()
 }

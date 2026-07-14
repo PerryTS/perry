@@ -10,7 +10,7 @@ use super::*;
 pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[]);
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[]) },
@@ -34,7 +34,7 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
 pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[arg0]);
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0]) },
@@ -88,7 +88,7 @@ pub(crate) fn resolve_call2_direct(
 pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1]);
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0, arg1]) },
@@ -119,7 +119,7 @@ pub extern "C" fn js_closure_call3(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2]);
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe {
@@ -153,7 +153,7 @@ pub extern "C" fn js_closure_call4(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2, arg3]);
     }
     match resolve_strategy(func_ptr) {
         DispatchStrategy::BoundMethod => unsafe {
@@ -194,7 +194,7 @@ pub extern "C" fn js_closure_call5(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2, arg3, arg4]);
     }
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4]) };
@@ -238,7 +238,7 @@ pub extern "C" fn js_closure_call6(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2, arg3, arg4, arg5]);
     }
     if func_ptr == BOUND_METHOD_FUNC_PTR {
         return unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3, arg4, arg5]) };
@@ -321,7 +321,10 @@ pub extern "C" fn js_closure_call7(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[arg0, arg1, arg2, arg3, arg4, arg5, arg6],
+        );
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
@@ -351,7 +354,10 @@ pub extern "C" fn js_closure_call8(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7],
+        );
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
@@ -382,7 +388,10 @@ pub extern "C" fn js_closure_call9(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8],
+        );
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
@@ -426,7 +435,10 @@ pub extern "C" fn js_closure_call10(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9],
+        );
     }
     let args = [arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9];
     if let Some(result) = dispatch_registered_call(closure, func_ptr, &args) {
@@ -472,7 +484,12 @@ pub extern "C" fn js_closure_call11(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[
+                arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            ],
+        );
     }
     let args = [
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
@@ -524,7 +541,12 @@ pub extern "C" fn js_closure_call12(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[
+                arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
+            ],
+        );
     }
     let args = [
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
@@ -578,7 +600,12 @@ pub extern "C" fn js_closure_call13(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[
+                arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+            ],
+        );
     }
     let args = [
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
@@ -634,7 +661,13 @@ pub extern "C" fn js_closure_call14(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[
+                arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+                arg13,
+            ],
+        );
     }
     let args = [
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
@@ -693,7 +726,13 @@ pub extern "C" fn js_closure_call15(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[
+                arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+                arg13, arg14,
+            ],
+        );
     }
     let args = [
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,
@@ -756,7 +795,13 @@ pub extern "C" fn js_closure_call16(
 ) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
-        throw_not_callable();
+        return dispatch_proxy_callee_or_throw(
+            closure,
+            &[
+                arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
+                arg13, arg14, arg15,
+            ],
+        );
     }
     let args = [
         arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13,

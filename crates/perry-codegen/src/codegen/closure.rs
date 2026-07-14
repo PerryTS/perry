@@ -11,7 +11,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
@@ -568,6 +568,25 @@ pub(super) fn compile_closure(
     if typed_public_trampoline.is_some() {
         lf.linkage = "internal".to_string();
     }
+
+    // gh #6206 / #6081: closures/arrows compiled WITHOUT a shadow frame left
+    // their pointer-typed params/locals invisible to the exact-roots copying
+    // minor (production skips the conservative native-stack scan), so an
+    // evacuating GC fired mid-body swept values reachable only from the
+    // closure's own frame — the referrer then read freed-and-reused memory.
+    // Emit the same frame the top-level function path gets (function.rs).
+    let shadow_slot_map = if super::helpers::shadow_stack_enabled() {
+        let flat_const_ids: std::collections::HashSet<u32> =
+            cross_module.flat_const_arrays.keys().copied().collect();
+        let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
+        lf.enable_shadow_frame(m.len() as u32);
+        m
+    } else {
+        std::collections::HashMap::new()
+    };
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
+
     let _ = lf.create_block("entry");
 
     let mut closure_boxed_vars = module_boxed_vars.clone();
@@ -581,6 +600,12 @@ pub(super) fn compile_closure(
         for p in params {
             let arg_name = format!("%arg{}", p.id);
             let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
+            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                blk.call_void(
+                    "js_shadow_slot_bind",
+                    &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                );
+            }
             map.insert(p.id, slot);
         }
         map
@@ -705,6 +730,7 @@ pub(super) fn compile_closure(
         cross_module.flat_const_arrays.keys().copied().collect();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         body,
+        &[],
         &flat_const_ids,
         &clamp_fn_ids,
         &cross_module.clamp3_functions,
@@ -712,6 +738,7 @@ pub(super) fn compile_closure(
         module_globals,
         classes,
         &cross_module.compile_time_constants,
+        &cross_module.module_dispatch,
     );
 
     let mut ctx = FnCtx {
@@ -767,6 +794,7 @@ pub(super) fn compile_closure(
         func_returns_class: &cross_module.func_returns_class,
         boxed_vars: closure_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
+        tdz_boxes: std::collections::HashSet::new(),
         compiler_private_async_i32_control_locals: &cross_module
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
@@ -777,12 +805,12 @@ pub(super) fn compile_closure(
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
-        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
@@ -800,13 +828,14 @@ pub(super) fn compile_closure(
         pending_declares: Vec::new(),
         integer_locals: native_facts.integer_locals(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
-        shadow_slot_map: std::collections::HashMap::new(),
-        shadow_slot_clears_after_stmt: std::collections::HashMap::new(),
+        shadow_slot_map,
+        shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
+        class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
@@ -825,11 +854,17 @@ pub(super) fn compile_closure(
         pod_records: std::collections::HashMap::new(),
         pod_views: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
+        scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
+        scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
+        non_escaping_array_length_only_indices: native_facts
+            .non_escaping_array_length_only_indices()
+            .clone(),
+        fusible_uppercase_locals: native_facts.fusible_uppercase_locals().clone(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         non_escaping_object_literal_used_fields: native_facts
             .non_escaping_object_literal_used_fields()

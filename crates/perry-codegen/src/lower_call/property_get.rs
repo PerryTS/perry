@@ -38,7 +38,8 @@ mod static_dispatch;
 // original unqualified names.
 pub(crate) use helpers::{
     class_chain_has_field_named, is_array_only_method_name, is_date_receiver,
-    is_inherited_object_prototype_method, resolve_static_dispatch_cls, string_only_method_arity_ok,
+    is_inherited_object_prototype_method, receiver_class_defines_method,
+    resolve_static_dispatch_cls, string_only_method_arity_ok,
 };
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
@@ -203,6 +204,14 @@ pub fn try_lower_property_get_method_call(
         if is_string_only_method
             && string_only_method_arity_ok(property, args.len())
             && !receiver_is_object_literal
+            // A receiver whose statically-known class defines its OWN method of
+            // this name is calling THAT method, never the String builtin — even
+            // when the arity matches. Critical for the char-access methods
+            // (`charAt`/`charCodeAt`/`codePointAt`), whose arity gate above is a
+            // no-op (any arg count is spec-valid), so a user `charAt(n)` helper
+            // (e.g. the `yaml` package's `Lexer`) would otherwise be coerced to
+            // `String.prototype.charAt` on a `"[object Object]"` receiver.
+            && !receiver_class_defines_method(ctx, object, property)
             && !is_array_expr(ctx, object)
             && !is_buffer
             && !is_native_module_dynamic_index(object)

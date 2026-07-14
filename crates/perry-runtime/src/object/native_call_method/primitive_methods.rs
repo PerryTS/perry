@@ -177,6 +177,29 @@ pub(super) unsafe fn dispatch_primitive(
     }
 
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(object) {
+        // An own `valueOf`/`toString`/`toLocaleString` data property shadows the
+        // intrinsic wrapper method: `var s = new String(); s.valueOf =
+        // Number.prototype.valueOf; s.valueOf()` must run the *transferred*
+        // method (which brand-checks its receiver and throws a TypeError),
+        // not this boxed-primitive fast path that unwraps the [[StringData]]
+        // (test262 Number/prototype/valueOf/S15.7.4.4_A2_*, Boolean/prototype/
+        // valueOf/S15.6.4.3_A2_*). Fall through to the own-property dispatch in
+        // `common_methods::dispatch_common` when such a shadow exists.
+        if jsval.is_pointer() && matches!(method_name, "valueOf" | "toString" | "toLocaleString") {
+            let own = crate::object::js_object_get_own_field_or_undef(
+                object,
+                method_name.as_ptr(),
+                method_name.len(),
+            );
+            let own_jsv = JSValue::from_bits(own.to_bits());
+            if own_jsv.is_pointer()
+                && crate::closure::is_closure_ptr(
+                    (own.to_bits() & crate::value::POINTER_MASK) as usize,
+                )
+            {
+                return None;
+            }
+        }
         match method_name {
             "valueOf" => return Some(payload),
             "toString" | "toLocaleString" => {
@@ -189,7 +212,9 @@ pub(super) unsafe fn dispatch_primitive(
                         } else {
                             payload
                         };
-                        let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                        let s = if n.fract() == 0.0
+                            && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT
+                        {
                             (n as i64).to_string()
                         } else {
                             n.to_string()
@@ -445,11 +470,76 @@ pub(super) unsafe fn dispatch_primitive(
     // (#1731). The helper returns None for non-regex so generic dispatch resumes.
     #[cfg(feature = "regex-engine")]
     if matches!(method_name, "test" | "exec" | "toString") && jsval.is_pointer() {
-        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        let arg0 = refreshed_args().first().copied().unwrap_or(undef);
         let p = jsval.as_pointer::<u8>();
-        if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0) {
-            return Some(r);
+        // An OWN property SHADOWS the `RegExp.prototype` method — ordinary
+        // `[[Get]]` consults the receiver's own properties before walking the
+        // prototype chain. `__re.toString = Object.prototype.toString;
+        // __re.toString()` must therefore call the *assigned* function (giving
+        // `[object RegExp]`), not the builtin `RegExp.prototype.toString`
+        // (which returns the `/source/flags` literal). The same holds for
+        // `re.exec` / `re.test` overrides, which libraries use to instrument a
+        // regex. Expando writes on a RegExp land in the `exotic_expando` side
+        // table, because a `RegExpHeader` is not an `ObjectHeader`.
+        //
+        // The own value is invoked HERE rather than by declining the regex
+        // dispatch and letting the generic path pick it up: `toString` has a
+        // downstream catch-all arm that stringifies any pointer receiver via
+        // `js_jsvalue_to_string`, which maps a regex straight back to
+        // `/source/flags` — so a bare fall-through would still miss the
+        // override (test262 built-ins/RegExp/S15.10.4.1_A6_T1, #5897).
+        // `exotic_get_own_property` rather than `value_lookup`: the override
+        // may be an ACCESSOR (`Object.defineProperty(re, "test", { get() {…} })`),
+        // which `value_lookup` — a data-property-only side-table read — cannot
+        // see, so the builtin would run instead. It checks accessor descriptors
+        // first (invoking the getter with `object` as the receiver) and falls
+        // back to the same expando data lookup.
+        let own_override = if crate::regex::is_regex_pointer(p) {
+            crate::object::exotic_expando::exotic_get_own_property(
+                p as usize,
+                crate::object::exotic_expando::ExoticKind::RegExp,
+                method_name,
+                object,
+            )
+            .map(|v| v.to_bits())
+        } else {
+            None
+        };
+        match own_override {
+            Some(own_bits) => {
+                let raw = (own_bits & crate::value::POINTER_MASK) as usize;
+                if (own_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                    && crate::closure::is_closure_ptr(raw)
+                {
+                    // Bind `this` to the regex, exactly as the class-static and
+                    // prototype method-dispatch arms above do.
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        own_bits,
+                        object_handle.get_nanbox_f64(),
+                    );
+                    let prop_handle = root_scope.root_nanbox_f64(f64::from_bits(bound));
+                    let args = refreshed_args();
+                    let prev_this =
+                        IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+                    let result = crate::closure::js_native_call_value(
+                        prop_handle.get_nanbox_f64(),
+                        args.as_ptr(),
+                        args.len(),
+                    );
+                    IMPLICIT_THIS.with(|c| c.set(prev_this));
+                    return Some(result);
+                }
+                // Own key present but NOT callable (`re.exec = 5; re.exec()`).
+                // Fall through to generic dispatch, which raises the
+                // `is not a function` TypeError — never run the builtin.
+            }
+            None => {
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg0 = refreshed_args().first().copied().unwrap_or(undef);
+                if let Some(r) = crate::regex::dispatch_regex_receiver_method(p, method_name, arg0)
+                {
+                    return Some(r);
+                }
+            }
         }
     }
 
@@ -549,6 +639,31 @@ pub(super) unsafe fn dispatch_primitive(
     // through and silently dropped setter mutations — e.g. dayjs's
     // `this.$d[l]($)` made `.add()`/`.date(n)` no-ops (#5133).
     if crate::date::is_date_value(object) {
+        // An own callable expando shadows the intrinsic Date.prototype method:
+        // `Object.defineProperty(d, "toString", {value: Number.prototype.toString});
+        // d.toString()` must run the *transferred* method (which brand-checks its
+        // receiver and throws a TypeError), not Date.prototype.toString (test262
+        // Number/prototype/{toString,valueOf}/*_A*_T03 and Boolean/prototype/
+        // {toString,valueOf}/*_A2_T3 — transfer-to-Date). Date instances are
+        // DateCell exotics, so own props live in the exotic expando table, not
+        // the ordinary object keys_array read by js_object_get_own_field_or_undef.
+        let recv_bits = object.to_bits();
+        let recv_addr = (recv_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if let Some(v) = super::exotic_expando::exotic_get_own_property(
+            recv_addr,
+            super::exotic_expando::ExoticKind::Date,
+            method_name,
+            object,
+        ) {
+            if (v.to_bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                && crate::closure::is_closure_ptr((v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize)
+            {
+                let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
+                let result = crate::closure::js_native_call_value(v, args_ptr, args_len);
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return Some(result);
+            }
+        }
         let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
         let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
         if ctor_ptr != 0 {

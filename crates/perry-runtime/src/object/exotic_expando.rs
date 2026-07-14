@@ -51,6 +51,17 @@ pub(crate) enum ExoticKind {
     /// Temporal, a promise is movable, so its expando entry is rekeyed on GC
     /// move via `exotic_expando_owner_moved`.
     Promise,
+    /// A `Map` is a `MapHeader` cell, NOT an `ObjectHeader` — a plain expando
+    /// write (`memoized.cache.custom = x` on a lodash-memoize Map cache) must
+    /// land in the side table rather than being bit-cast through the
+    /// `ObjectHeader` field path, which overwrote collection-internal fields
+    /// (and enumeration then read those bytes back as a garbage `keys_array`
+    /// pointer → SIGSEGV). Collection DATA stays in the map natives; only
+    /// true expando keys land here. Movable — rekeyed on GC move like
+    /// Promise.
+    Map,
+    /// `Set` analogue of `Map` (a `SetHeader` cell).
+    Set,
 }
 
 /// Classify `addr` as a Date cell, RegExp header, or Error header. Returns
@@ -63,6 +74,8 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
         crate::gc::GC_TYPE_TEMPORAL => Some(ExoticKind::Temporal),
         crate::gc::GC_TYPE_PROMISE => Some(ExoticKind::Promise),
+        crate::gc::GC_TYPE_MAP => Some(ExoticKind::Map),
+        crate::gc::GC_TYPE_SET => Some(ExoticKind::Set),
         crate::gc::GC_TYPE_OBJECT if crate::regex::is_regex_pointer(addr as *const u8) => {
             Some(ExoticKind::RegExp)
         }
@@ -199,6 +212,43 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
     });
 }
 
+/// Death pruning (2026-07-09 GC audit wave 2): the root scanner
+/// (`scan_exotic_expando_roots_mut`) strongly roots EVERY owner's values,
+/// dead owners included, so a dead Date/RegExp/Promise/Map/Set's expando
+/// value graph was immortal until the exact address happened to be handed
+/// to a new cell of the same kind (`expando_clear_on_alloc`). Prune entries
+/// whose owner cell is provably dead instead. `is_dead_owner` is one of the
+/// GC's deadness predicates (`gc::dead_owner`). Note: non-movable Date /
+/// Temporal cells that die PINNED are skipped by the predicate's pinned
+/// check and remain covered by the clear-on-alloc path.
+pub(crate) fn prune_dead_exotic_expando_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    if !expando_in_use() {
+        return;
+    }
+    EXOTIC_EXPANDO.with(|m| {
+        let mut map = m.borrow_mut();
+        if !map.is_empty() {
+            map.retain(|owner, _| !is_dead_owner(*owner));
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_exotic_expando_entry(addr: usize, key: &str, value_bits: u64) {
+    EXPANDO_IN_USE.with(|c| c.set(true));
+    EXOTIC_EXPANDO.with(|m| {
+        m.borrow_mut()
+            .entry(addr)
+            .or_default()
+            .push((key.to_string(), value_bits));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
+    EXOTIC_EXPANDO.with(|m| m.borrow().contains_key(&addr))
+}
+
 /// Rekey a movable exotic cell's expando entry after the GC relocates it from
 /// `old_addr` to `new_addr`. Date / RegExp / Temporal cells are non-movable so
 /// this never fires for them, but a `Promise` (`GC_TYPE_PROMISE`) is movable —
@@ -278,6 +328,10 @@ pub(crate) unsafe fn exotic_set_property(
             // generic accessors in the side table, so there is no
             // prototype-accessor setter to consult; store the own expando.
             ExoticKind::Promise => "",
+            // Map/Set prototype members are methods + the `size` accessor,
+            // all served by their native dispatch paths — store the own
+            // expando directly.
+            ExoticKind::Map | ExoticKind::Set => "",
         };
         let proto = if proto_name.is_empty() {
             f64::from_bits(crate::value::TAG_UNDEFINED)

@@ -210,12 +210,14 @@ pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
         std::time::Duration::from_millis(0)
     };
 
-    let built = reqwest::Client::builder()
-        .pool_max_idle_per_host(pool_max_idle)
-        .pool_idle_timeout(idle_timeout)
-        .tcp_keepalive(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let built = crate::apply_node_proxy_policy(
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(pool_max_idle)
+            .pool_idle_timeout(idle_timeout)
+            .tcp_keepalive(std::time::Duration::from_secs(60)),
+    )
+    .build()
+    .unwrap_or_else(|_| crate::default_client());
 
     let mut cache = AGENT_CLIENTS.lock().unwrap();
     cache.entry(handle).or_insert(built).clone()

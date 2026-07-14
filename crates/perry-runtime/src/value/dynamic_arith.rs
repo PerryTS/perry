@@ -175,8 +175,44 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return crate::value::function_to_primitive_for_add(value);
     }
 
+    // A `RegExpHeader` is NOT an `ObjectHeader` either, and — unlike Buffer /
+    // TypedArray / Date above — it had no guard here at all: `"" + re` fell
+    // through to `ordinary_to_primitive_number_for_add`, which bit-casts `ptr`
+    // to an `ObjectHeader` and reads `valueOf`/`toString` out of garbage field
+    // slots. It came back `undefined`, so `"" + /c/gi` printed "undefined"
+    // instead of "/c/gi" (release builds; the read is UB, and a lower opt level
+    // happened to mask it). Route the regex through the same ToPrimitive steps
+    // the spec prescribes (#6370):
+    //
+    //   OrdinaryToPrimitive(re, "default") = valueOf, then toString.
+    //
+    // `RegExp.prototype` has no `valueOf`, so only an OWN `valueOf` can win the
+    // first step (`re.valueOf = () => "V"; re + ""` → "V"); otherwise the
+    // `toString` step runs, and `js_jsvalue_to_string` performs it — own
+    // override first (data or accessor), else the `/source/flags` literal.
+    // `Symbol.toPrimitive` was already consulted by `js_to_primitive` above.
+    if crate::regex::is_regex_pointer(ptr as *const u8) {
+        if let Some(primitive) = crate::value::to_string::exotic_own_value_of_primitive(
+            ptr,
+            crate::object::exotic_expando::ExoticKind::RegExp,
+            value,
+        ) {
+            return primitive;
+        }
+        let s = crate::value::js_jsvalue_to_string(value);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+
     if crate::date::is_date_cell_addr(ptr) {
-        let s = crate::date::js_date_to_string(value);
+        // `Date.prototype[@@toPrimitive]` maps the "default" hint to "string",
+        // so `"" + date` is OrdinaryToPrimitive(date, "string") — an own
+        // `toString` (data or accessor) shadows `Date.prototype.toString` here
+        // exactly as it does for `String(date)` (#6370). Route through
+        // `js_jsvalue_to_string`, whose date arm now performs that own-property
+        // lookup and otherwise still yields `js_date_to_string`. (An own
+        // `valueOf` correctly does NOT win: the string hint tries `toString`
+        // first and the built-in one already returns a primitive.)
+        let s = crate::value::js_jsvalue_to_string(value);
         return crate::value::js_nanbox_string(s as i64);
     }
 
@@ -524,12 +560,30 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
     // toward zero and reduce modulo 2^32. `as i64` is NOT equivalent — it
     // saturates for |v| >= 2^63, so `~(1e20)` came out as `~(-1)` == 0
     // instead of -1661992961 (CodeRabbit review on #5466).
-    let a_i32 = if a_num.is_nan() || !a_num.is_finite() {
-        0i32
+    (!dyn_to_int32(a_num)) as f64
+}
+
+/// ES ToInt32 (7.1.6): truncate toward zero, reduce modulo 2^32, reinterpret as
+/// signed. NaN / ±0 / ±Infinity map to 0. `v as i64 as i32` is WRONG — Rust's
+/// float→int cast SATURATES for |v| >= 2^63, so e.g. ToInt32(1e20) came out as
+/// -1 instead of 1661992960 (#6079).
+#[inline]
+fn dyn_to_int32(v: f64) -> i32 {
+    if !v.is_finite() {
+        0
     } else {
-        a_num.trunc().rem_euclid(4294967296.0) as u32 as i32
-    };
-    (!a_i32) as f64
+        (v.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+    }
+}
+
+/// ES ToUint32 (7.1.7): as ToInt32 but reinterpreted as unsigned.
+#[inline]
+fn dyn_to_uint32(v: f64) -> u32 {
+    if !v.is_finite() {
+        0
+    } else {
+        v.trunc().rem_euclid(4_294_967_296.0) as u32
+    }
 }
 
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
@@ -540,10 +594,9 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shr);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    // Rust `f64 as i32` saturates at i32::MAX for values >= 2^31, but JS wraps.
-    let ai = (a as i64) as i32;
-    let bi = ((b as i64) as i32) & 0x1f;
+    // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
+    let ai = dyn_to_int32(a);
+    let bi = dyn_to_uint32(b) & 0x1f;
     (ai >> bi) as f64
 }
 
@@ -555,9 +608,9 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_shl);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    let ai = (a as i64) as i32;
-    let bi = ((b as i64) as i32) & 0x1f;
+    // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
+    let ai = dyn_to_int32(a);
+    let bi = dyn_to_uint32(b) & 0x1f;
     (ai << bi) as f64
 }
 
@@ -571,8 +624,8 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_and);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    (((a as i64) as i32) & ((b as i64) as i32)) as f64
+    // JS ToInt32 both operands (#6079).
+    (dyn_to_int32(a) & dyn_to_int32(b)) as f64
 }
 
 /// Dynamic bitwise OR: BigInt | if either operand is BigInt, else i32 | for numbers.
@@ -583,8 +636,8 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_or);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    (((a as i64) as i32) | ((b as i64) as i32)) as f64
+    // JS ToInt32 both operands (#6079).
+    (dyn_to_int32(a) | dyn_to_int32(b)) as f64
 }
 
 /// Dynamic bitwise XOR: BigInt ^ if either operand is BigInt, else i32 ^ for numbers.
@@ -595,8 +648,8 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_xor);
     }
-    // JS ToInt32: f64 -> i64 -> i32 (wrapping), NOT f64 -> i32 (saturating).
-    (((a as i64) as i32) ^ ((b as i64) as i32)) as f64
+    // JS ToInt32 both operands (#6079).
+    (dyn_to_int32(a) ^ dyn_to_int32(b)) as f64
 }
 
 /// Dynamic exponentiation: `BigInt ** BigInt` when both operands are BigInt
@@ -628,9 +681,9 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
         let err = crate::error::js_typeerror_new(s);
         crate::exception::js_throw(js_nanbox_pointer(err as i64));
     }
-    // JS ToUint32 then logical shift, count masked to 5 bits.
-    let ai = (a as i64) as u32;
-    let bi = ((b as i64) as i32 as u32) & 0x1f;
+    // JS ToUint32(a) then logical shift; ToUint32(b) & 0x1F count (#6079).
+    let ai = dyn_to_uint32(a);
+    let bi = dyn_to_uint32(b) & 0x1f;
     (ai >> bi) as f64
 }
 

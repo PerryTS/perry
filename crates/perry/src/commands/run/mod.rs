@@ -203,6 +203,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         target: target.clone(),
         libc: args.libc.clone(),
         webview: "system".to_string(),
+        march: None,
         app_bundle_id: Some(bundle_id),
         output_type: "executable".to_string(),
         bundle_extensions: None,

@@ -425,7 +425,7 @@ impl<'a> FuncEmitCtx<'a> {
             // Issue #569: Wasm backend has no equivalent of LLVM's
             // alloca'd box slot — JS hoisting in the host runtime handles
             // forward refs natively. Emit nothing.
-            Stmt::PreallocateBoxes(_) => {}
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 

@@ -390,3 +390,237 @@ fn high_surrogate_distributes_over_group() {
     );
     assert!(!re.is_match("AB"), "does not match plain ASCII");
 }
+
+/// Unicode 17.0 scripts (`Beria_Erfe`, `Sidetic`, `Tai_Yo`, `Tolong_Siki`) are
+/// absent from `regex-syntax`'s bundled Unicode-16 UCD. Instead of throwing a
+/// `SyntaxError` or compiling to a never-matching class, Perry expands them to
+/// the explicit code-point ranges Unicode 17 assigns — so `built-ins/RegExp/`
+/// `property-escapes` Test262 cases that expect real matches pass. Covers every
+/// alias form (`Script`/`sc`/`Script_Extensions`/`scx`) and long + short names.
+#[test]
+fn unicode17_scripts_expand_to_codepoint_ranges() {
+    // Positive `\p{Script=...}` → explicit class of the script's ranges.
+    assert_eq!(
+        js_regex_to_rust(r"\p{Script=Beria_Erfe}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    // Short alias, `sc=` key, and `scx=` all resolve to the same body.
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Berf}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{scx=Beria_Erfe}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{Script_Extensions=Berf}"),
+        r"[\x{16EA0}-\x{16EB8}\x{16EBB}-\x{16ED3}]"
+    );
+    // The other three scripts.
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Sidetic}"),
+        r"[\x{10940}-\x{10959}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Tai_Yo}"),
+        r"[\x{1E6C0}-\x{1E6DE}\x{1E6E0}-\x{1E6F5}\x{1E6FE}-\x{1E6FF}]"
+    );
+    assert_eq!(
+        js_regex_to_rust(r"\p{sc=Tolong_Siki}"),
+        r"[\x{11DB0}-\x{11DDB}\x{11DE0}-\x{11DE9}]"
+    );
+    // Negated form → complemented class.
+    assert_eq!(
+        js_regex_to_rust(r"\P{sc=Sidetic}"),
+        r"[^\x{10940}-\x{10959}]"
+    );
+
+    // End-to-end: the compiled anchored regex matches the script's own code
+    // points and rejects an adjacent non-member (mirrors the Test262 shape).
+    let re = js_regexp_new(make_string(r"^\p{Script=Beria_Erfe}+$"), make_string("u"));
+    assert!(!re.is_null(), "Beria_Erfe pattern must construct");
+    assert!(
+        js_regexp_test(re, make_string("\u{16EA0}\u{16EB8}\u{16EBB}\u{16ED3}")) != 0,
+        "matches Beria_Erfe code points"
+    );
+    // U+16EB9/U+16EBA sit in the gap between the two ranges → not members.
+    assert!(
+        js_regexp_test(re, make_string("\u{16EB9}")) == 0,
+        "gap code point U+16EB9 is not Beria_Erfe"
+    );
+
+    // Negated: `\P{sc=Sidetic}` matches an ASCII letter, not a Sidetic point.
+    let rn = js_regexp_new(make_string(r"^\P{sc=Sidetic}$"), make_string("u"));
+    assert!(!rn.is_null(), "negated Sidetic pattern must construct");
+    assert!(
+        js_regexp_test(rn, make_string("A")) != 0,
+        "ASCII is non-Sidetic"
+    );
+    assert!(
+        js_regexp_test(rn, make_string("\u{10940}")) == 0,
+        "U+10940 is Sidetic, excluded by the negation"
+    );
+}
+
+/// 2026-07-09 GC audit (wave 2 batch A): `REGEX_CACHE`/`FANCY_CACHE` were
+/// unbounded — one entry per distinct `(pattern, flags)` ever compiled, up to
+/// 64 MiB each — so `new RegExp(userInput)` was an attacker-driven OOM. The
+/// caches are now capped (clear-on-overflow) and every `RegExpHeader` OWNS a
+/// leaked Arc reference to its compiled program(s), so a header created
+/// before an eviction keeps matching afterwards.
+#[test]
+fn regex_cache_capped_and_prior_headers_survive_eviction() {
+    // A header compiled before the flood.
+    let re = js_regexp_new(make_string(r"needle\d+"), make_string(""));
+    assert!(js_regexp_test(re, make_string("xx needle42 yy")) != 0);
+
+    // A fancy-fallback header too (lookbehind forces the fancy engine).
+    let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
+    assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
+
+    // Flood the cache with distinct patterns — far past the cap.
+    for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
+        let _ = get_or_compile_regex(&format!("cachefill{i}[a-z]+"), "");
+    }
+    let std_len = REGEX_CACHE.with(|c| c.borrow().len());
+    assert!(
+        std_len <= REGEX_CACHE_MAX_ENTRIES,
+        "REGEX_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {std_len}"
+    );
+
+    // Flood the fancy cache as well (each pattern rejected by the std engine).
+    for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
+        let _ = get_or_compile_regex(&format!("(?<=fill{i})x"), "");
+    }
+    let fancy_len = FANCY_CACHE.with(|c| c.borrow().len());
+    assert!(
+        fancy_len <= REGEX_CACHE_MAX_ENTRIES,
+        "FANCY_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {fancy_len}"
+    );
+
+    // The pre-flood headers still execute correctly: their compiled programs
+    // are owned by the headers (leaked Arc refs), not borrowed from the
+    // now-cleared caches.
+    assert!(
+        js_regexp_test(re, make_string("xx needle42 yy")) != 0,
+        "std-engine header must keep matching after cache eviction"
+    );
+    assert!(
+        js_regexp_test(re, make_string("no match here")) == 0,
+        "std-engine header must keep REJECTING correctly after cache eviction"
+    );
+    assert!(
+        js_regexp_test(fancy, make_string("pre77")) != 0,
+        "fancy-fallback header must keep matching after cache eviction \
+         (header-resident fancy_ptr, not the cleared FANCY_CACHE)"
+    );
+    assert!(
+        js_regexp_test(fancy, make_string("nope77")) == 0,
+        "fancy-fallback header must keep rejecting after cache eviction"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UTF-16 code-unit indices (#5897)
+//
+// Every JS-observable string index is counted in UTF-16 code units — the same
+// unit `str.length` (`StringHeader::utf16_len`) reports. The regex module used
+// to count `chars()` (Unicode scalars) instead, which is only equivalent for
+// BMP text: a non-BMP scalar is one `char` but TWO code units.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn byte_index_to_utf16_index_counts_surrogate_pairs_as_two() {
+    // U+1D306 TETRAGRAM FOR CENTRE ("𝌆") is 4 UTF-8 bytes / 1 char / 2 UTF-16 units.
+    let s = "𝌆a";
+    assert_eq!(byte_index_to_utf16_index(s, 0), 0);
+    // Past the astral scalar: 2 code units, NOT 1 (the old `chars().count()`).
+    assert_eq!(byte_index_to_utf16_index(s, 4), 2);
+    // Past the trailing ASCII 'a'.
+    assert_eq!(byte_index_to_utf16_index(s, 5), 3);
+    // Matches what `str.length` reports for the same string.
+    assert_eq!(
+        byte_index_to_utf16_index(s, s.len()),
+        s.encode_utf16().count()
+    );
+
+    // Pure-BMP text is unchanged (code points == code units).
+    let bmp = "héllo";
+    assert_eq!(
+        byte_index_to_utf16_index(bmp, bmp.len()),
+        bmp.encode_utf16().count()
+    );
+
+    // Out-of-range byte index clamps to the end rather than panicking.
+    assert_eq!(byte_index_to_utf16_index(s, 999), 3);
+}
+
+#[test]
+fn utf16_index_to_byte_inverts_byte_index_to_utf16_index() {
+    let s = "a𝌆b𝌆";
+    // Walk every code-unit boundary and confirm the round trip.
+    for (byte, ch) in s.char_indices() {
+        let u16_idx = byte_index_to_utf16_index(s, byte);
+        assert_eq!(
+            utf16_index_to_byte(s, u16_idx),
+            byte,
+            "round trip at {byte}"
+        );
+        let _ = ch;
+    }
+    assert_eq!(utf16_index_to_byte(s, 0), 0);
+    // Index 1 addresses the LOW surrogate of the first "𝌆" — no UTF-8 boundary
+    // of its own, so it resolves just past that scalar.
+    assert_eq!(utf16_index_to_byte(s, 2), 1 + 4);
+    // At/beyond the end clamps to the buffer length.
+    assert_eq!(utf16_index_to_byte(s, 99), s.len());
+}
+
+#[test]
+fn exec_last_index_advances_by_utf16_code_units() {
+    // test262 built-ins/RegExp/prototype/exec/u-lastindex-value:
+    //   var r = /./ug; r.exec('𝌆'); assert.sameValue(r.lastIndex, 2);
+    // A single astral match must leave `lastIndex` at 2 (the string's `.length`),
+    // not 1 (its scalar count).
+    let re = js_regexp_new(make_string("."), make_string("ug"));
+    let arr = js_regexp_exec(re, make_string("𝌆"));
+    assert!(!arr.is_null(), "/./ug must match the astral scalar");
+    assert_eq!(
+        regex_last_index_offset(re),
+        2,
+        "lastIndex must be in UTF-16 code units"
+    );
+
+    // A second exec finds nothing more and resets lastIndex — proving the
+    // UTF-16 lastIndex maps back to a valid byte offset (the end of input).
+    let arr2 = js_regexp_exec(re, make_string("𝌆"));
+    assert!(
+        arr2.is_null(),
+        "second exec must not re-match past the input"
+    );
+    assert_eq!(regex_last_index_offset(re), 0, "no-match resets lastIndex");
+}
+
+#[test]
+fn global_exec_walks_astral_string_by_code_units() {
+    // Two astral scalars: `.` with `u` matches each whole scalar, so lastIndex
+    // must land on 2 then 4 — the same indices `str.length` / `charAt` use.
+    let re = js_regexp_new(make_string("."), make_string("ug"));
+    let subject = "𝌆𝌆";
+    assert!(!js_regexp_exec(re, make_string(subject)).is_null());
+    assert_eq!(regex_last_index_offset(re), 2);
+    assert!(!js_regexp_exec(re, make_string(subject)).is_null());
+    assert_eq!(regex_last_index_offset(re), 4);
+    // Exhausted → null, lastIndex reset.
+    assert!(js_regexp_exec(re, make_string(subject)).is_null());
+    assert_eq!(regex_last_index_offset(re), 0);
+}
+
+#[test]
+fn search_returns_utf16_index() {
+    // `"𝌆x".search(/x/)` is 2 (the astral scalar occupies indices 0 and 1),
+    // matching `"𝌆x".indexOf("x")`.
+    let re = js_regexp_new(make_string("x"), make_string(""));
+    assert_eq!(js_string_search_regex(make_string("𝌆x"), re), 2);
+}

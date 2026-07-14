@@ -7,6 +7,7 @@ pub fn collect_non_escaping_news(
     boxed_vars: &HashSet<u32>,
     module_globals: &std::collections::HashMap<u32, String>,
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    module_dispatch: &super::ModuleDispatchFacts,
 ) -> std::collections::HashMap<u32, String> {
     // Pass 1: find candidates — Let bindings of New that aren't boxed/global.
     let mut candidates: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
@@ -48,8 +49,42 @@ pub fn collect_non_escaping_news(
             else if class_chain_extends_builtin_error(class, classes) {
                 escaped.insert(*id);
             }
+            // Issue #6343: the class chain reaches a base whose construction
+            // codegen cannot see — a NATIVE base that stamps its method
+            // surface onto the instance as own properties (`extends
+            // EventEmitter`, `extends Readable`, …), a dynamic `extends
+            // <expr>` parent, or a parent name that resolves to no visible
+            // class. Scalar replacement promotes only the DECLARED fields of
+            // the chain, so a runtime-installed own property has no slot in
+            // the promoted set: `class X extends EventEmitter { a = 1 }` read
+            // `x.a` correctly but `typeof x.emit` as `undefined`. The heap
+            // path runs the real subclass-init and looks the property up on
+            // the object. Same family as the #573 check above and the #5872
+            // dispatch-stability pass below — a chain of ordinary user classes
+            // is fully modeled and stays scalar-replaced.
+            else if class_chain_has_unmodeled_base(class, classes) {
+                escaped.insert(*id);
+            }
         }
     }
+
+    // Pass 4 (issue #5872): a method call only keeps its receiver scalar-
+    // replaced when `simple_scalar_method_summary` accepts it (see the
+    // `Expr::Call` arm of `check_escapes_in_expr`). The summary proves the
+    // method *body* is a numeric read of `this.<field>` — it does NOT prove
+    // that `obj.method` still RESOLVES to that class method. An own-property
+    // write (`(obj as any).getValue = () => 99`) or a prototype mutation
+    // (`C.prototype.getValue = fn`, possibly from another function or from the
+    // constructor) replaces the target, and the inlined field read then returns
+    // the wrong value. Escape those receivers so they take the ordinary
+    // heap-allocate + dispatch path.
+    super::mark_unstable_scalar_method_receivers(
+        stmts,
+        &candidates,
+        classes,
+        module_dispatch,
+        &mut escaped,
+    );
 
     candidates.retain(|id, _| !escaped.contains(id));
     candidates
@@ -166,7 +201,7 @@ fn collect_used_new_fields_in_stmts(
                 );
             }
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-            Stmt::PreallocateBoxes(_) => {}
+            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
         }
     }
 }
@@ -550,8 +585,11 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(property, non_escaping_news, used);
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
         }
-        Expr::InstanceOf { expr, .. } => {
+        Expr::InstanceOf { expr, ty_expr, .. } => {
             collect_used_new_fields_in_expr(expr, non_escaping_news, used);
+            if let Some(t) = ty_expr {
+                collect_used_new_fields_in_expr(t, non_escaping_news, used);
+            }
         }
         Expr::ProcessOn { event, handler } => {
             collect_used_new_fields_in_expr(event, non_escaping_news, used);

@@ -7,7 +7,7 @@
 
 use super::*;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -16,6 +16,84 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::OutputFormat;
+
+/// #5916: how many `export { X } from "src"` hops to follow when resolving an
+/// imported name back to the module that actually declares it. Barrel chains in
+/// the wild are a handful of levels deep at most; the cap is a belt-and-braces
+/// stop so a pathological (or cyclic) re-export graph can never spin forever.
+const MAX_REEXPORT_HOPS: usize = 16;
+
+/// Builds the complete codegen view of a foreign HIR class.
+///
+/// Callers choose only the import binding (when the route introduces one) and
+/// the already-resolved defining-module prefix.  All other metadata must
+/// describe the class definition itself, so keeping it here prevents import
+/// routes from drifting as `ImportedClass` gains fields.
+fn imported_class_from_hir(
+    class: &perry_hir::Class,
+    source_prefix: String,
+    local_alias: Option<String>,
+) -> perry_codegen::ImportedClass {
+    perry_codegen::ImportedClass {
+        name: class.name.clone(),
+        local_alias,
+        source_prefix,
+        constructor_param_count: class
+            .constructor
+            .as_ref()
+            .map(|ctor| ctor.params.len())
+            .unwrap_or(0),
+        has_own_constructor: class.constructor.is_some(),
+        constructor_has_rest: class
+            .constructor
+            .as_ref()
+            .map(|ctor| ctor.params.iter().any(|param| param.is_rest))
+            .unwrap_or(false),
+        has_instance_fields: !class.fields.is_empty(),
+        method_names: class
+            .methods
+            .iter()
+            .map(|method| method.name.clone())
+            .collect(),
+        method_param_counts: class
+            .methods
+            .iter()
+            .map(|method| method.params.len())
+            .collect(),
+        method_has_rest: class
+            .methods
+            .iter()
+            .map(|method| method.params.iter().any(|param| param.is_rest))
+            .collect(),
+        static_field_names: class
+            .static_fields
+            .iter()
+            .filter(|field| field.key_expr.is_none())
+            .map(|field| field.name.clone())
+            .collect(),
+        static_method_names: class
+            .static_methods
+            .iter()
+            .map(|method| method.name.clone())
+            .collect(),
+        getter_names: class.getters.iter().map(|(name, _)| name.clone()).collect(),
+        setter_names: class.setters.iter().map(|(name, _)| name.clone()).collect(),
+        parent_name: class.extends_name.clone(),
+        field_names: class
+            .fields
+            .iter()
+            .filter(|field| field.key_expr.is_none())
+            .map(|field| field.name.clone())
+            .collect(),
+        field_types: class
+            .fields
+            .iter()
+            .filter(|field| field.key_expr.is_none())
+            .map(|field| field.ty.clone())
+            .collect(),
+        source_class_id: Some(class.id),
+    }
+}
 
 /// Same as [`run`] but accepts an optional in-memory [`ParseCache`] that
 /// `perry dev` uses to reuse parsed ASTs across rebuilds in a single session.
@@ -59,6 +137,16 @@ pub fn run_with_parse_cache(
     if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
     }
+
+    // #6125: resolve the CPU-baseline knob (`--march` / env / perry.toml
+    // `[build] march` / `[build] native_tuning`) into the canonical
+    // PERRY_TARGET_CPU env var, exactly like `--debug-symbols` above.
+    // Codegen's clang invocation, the object/build cache keys, and the
+    // auto-optimize runtime rebuild all read that one var, so a build meant
+    // to run on other machines (publish workers, CI) can pin a portable
+    // baseline (e.g. x86-64-v2) instead of baking the build box's full ISA
+    // (AVX-512) into the shipped binary.
+    bootstrap::promote_cpu_baseline_env(&args);
 
     // `--trace <stages>` consolidates the scattered debug-dump knobs into one
     // flag. Parse it up-front (single-threaded, before codegen spawns rayon
@@ -1660,6 +1748,30 @@ pub fn run_with_parse_cache(
                 perry_hir::Export::Named { .. } => {}
             }
         }
+        // #6304: `flatten_exports` also has to resolve `export { run }` where
+        // `run` is an IMPORT binding (`import { run } from "./chunk.js"` — the
+        // shape esbuild/bun emit for a shared chunk under `--splitting`). That
+        // walk reads `Import::source`, which likewise holds the raw specifier,
+        // so normalize it to `Module::name` on the same terms as the export
+        // sources above. Unresolvable / native sources are left verbatim; the
+        // resolver's `lookup` then misses and it falls back to the local
+        // behaviour instead of naming a module that has no HIR.
+        for import in rewritten.imports.iter_mut() {
+            if import.is_native {
+                continue;
+            }
+            if let Some((resolved_path, _)) = resolve_import(
+                &import.source,
+                path,
+                &ctx.project_root,
+                &ctx.compile_packages,
+                &ctx.compile_package_dirs,
+            ) {
+                if let Some(name) = path_to_module_name.get(&resolved_path) {
+                    import.source = name.clone();
+                }
+            }
+        }
         module_name_to_module.insert(hir_module.name.clone(), rewritten);
     }
     // Set of native-module paths that are dynamic-import targets. We
@@ -1957,6 +2069,16 @@ pub fn run_with_parse_cache(
                     .iter()
                     .filter(|(p, _)| {
                         self::collect_modules::is_nextjs_runtime_module(p)
+                            // A `perry.compilePackages` module may be reachable
+                            // ONLY through a runtime-computed require (Next's
+                            // require-hook aliases `styled-jsx` to its resolved
+                            // package directory); without a path-init anchor the
+                            // linker dead-strips it and the runtime require dies
+                            // with MODULE_NOT_FOUND even though it was compiled.
+                            || ctx
+                                .compile_package_dirs
+                                .values()
+                                .any(|dir| p.starts_with(dir))
                     })
                     .map(|(p, m)| {
                         (p.to_string_lossy().into_owned(), sanitize_name(&m.name))
@@ -2116,14 +2238,6 @@ pub fn run_with_parse_cache(
                 std::collections::HashMap<(String, String), String> =
                 std::collections::HashMap::new();
             let mut namespace_imports: Vec<String> = Vec::new();
-            // Issue #321: subset of `namespace_imports` populated only by the
-            // named-import-of-namespace-reexport branch below (`import { Effect
-            // } from "effect"` where effect's index.ts has `export * as Effect
-            // from "./Effect.js"`). The codegen's StaticMethodCall arm consults
-            // this to decide whether it can route var-shape members through
-            // `js_closure_callN`; see the field doc in codegen.rs.
-            let mut namespace_reexport_named_imports: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
             let mut imported_classes: Vec<perry_codegen::ImportedClass> = Vec::new();
             let mut imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)> = Vec::new();
             let mut imported_async_set: std::collections::HashSet<String> =
@@ -2416,73 +2530,16 @@ pub fn run_with_parse_cache(
                                         &ctx.project_root,
                                         &origin_prefix,
                                     );
-                                    imported_classes.push(perry_codegen::ImportedClass {
-                                        name: class.name.clone(),
-                                        local_alias: None,
-                                        source_prefix: class_prefix,
-                                        constructor_param_count: class
-                                            .constructor
-                                            .as_ref()
-                                            .map(|c| c.params.len())
-                                            .unwrap_or(0),
-                                        has_own_constructor: class.constructor.is_some(),
-                                        constructor_has_rest: class
-                                            .constructor
-                                            .as_ref()
-                                            .map(|c| c.params.iter().any(|p| p.is_rest))
-                                            .unwrap_or(false),
-                                        has_instance_fields: !class.fields.is_empty(),
-                                        method_names: class
-                                            .methods
-                                            .iter()
-                                            .map(|m| m.name.clone())
-                                            .collect(),
-                                        method_param_counts: class
-                                            .methods
-                                            .iter()
-                                            .map(|m| m.params.len())
-                                            .collect(),
-                                        method_has_rest: class
-                                            .methods
-                                            .iter()
-                                            .map(|m| m.params.iter().any(|p| p.is_rest))
-                                            .collect(),
-                                        static_method_names: class
-                                            .static_methods
-                                            .iter()
-                                            .map(|m| m.name.clone())
-                                            .collect(),
-                                        static_field_names: class
-                                            .static_fields
-                                            .iter()
-                                            .filter(|f| f.key_expr.is_none())
-                                            .map(|f| f.name.clone())
-                                            .collect(),
-                                        getter_names: class
-                                            .getters
-                                            .iter()
-                                            .map(|(n, _)| n.clone())
-                                            .collect(),
-                                        setter_names: class
-                                            .setters
-                                            .iter()
-                                            .map(|(n, _)| n.clone())
-                                            .collect(),
-                                        parent_name: class.extends_name.clone(),
-                                        field_names: class
-                                            .fields
-                                            .iter()
-                                            .filter(|f| f.key_expr.is_none())
-                                            .map(|f| f.name.clone())
-                                            .collect(),
-                                        field_types: class
-                                            .fields
-                                            .iter()
-                                            .filter(|f| f.key_expr.is_none())
-                                            .map(|f| f.ty.clone())
-                                            .collect(),
-                                        source_class_id: Some(class.id),
-                                    });
+                                    let local_alias = if export_name == &class.name {
+                                        None
+                                    } else {
+                                        Some(export_name.clone())
+                                    };
+                                    imported_classes.push(imported_class_from_hir(
+                                        class,
+                                        class_prefix,
+                                        local_alias,
+                                    ));
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((export_name.clone(), members.clone()));
@@ -2559,6 +2616,75 @@ pub fn run_with_parse_cache(
                         }
                     }
 
+                    // Issue #5916: the `NamespaceReExport` we are about to scan
+                    // for may not sit in the module we import from — it can be
+                    // one or more `export { X } from "src"` hops upstream. A
+                    // barrel that does
+                    //     export { Token } from "./selfns"   // ReExport
+                    // where `selfns.ts` declares
+                    //     export * as Token from "./selfns"  // NamespaceReExport
+                    // exposes `Token` as a NAMESPACE, but the scan below only
+                    // looked at the barrel's own exports, saw a plain `ReExport`,
+                    // and fell through to the ordinary value path. `Token.estimate(…)`
+                    // then lowered to a `StaticMethodCall` referencing
+                    // `__perry_wrap_perry_fn_<barrel>__Token` — a closure wrapper
+                    // no module emits, so the link failed outright. (A ReExport of
+                    // an ordinary function/const across the same hop links fine;
+                    // it is specifically a NAMESPACE-valued binding that needs the
+                    // namespace routing.)
+                    //
+                    // Walk the re-export chain first so the scan runs against the
+                    // module that actually DECLARES the namespace, under the name
+                    // it declares it with. When no hop applies (the overwhelmingly
+                    // common case) this leaves the scan target exactly where it was,
+                    // so behaviour is unchanged.
+                    let mut ns_scan_hir = source_module;
+                    let mut ns_scan_path = resolved_path_str.clone();
+                    let mut ns_scan_name = exported_name.clone();
+                    for _ in 0..MAX_REEXPORT_HOPS {
+                        let Some(hir) = ns_scan_hir else { break };
+                        // Already the declaring module — nothing to follow.
+                        if hir.exports.iter().any(|e| {
+                            matches!(
+                                e,
+                                perry_hir::Export::NamespaceReExport { name, .. }
+                                    if *name == ns_scan_name
+                            )
+                        }) {
+                            break;
+                        }
+                        // Follow `export { <ns_scan_name> } from "<src>"`.
+                        let Some((hop_src, hop_imported)) =
+                            hir.exports.iter().find_map(|e| match e {
+                                perry_hir::Export::ReExport {
+                                    source,
+                                    imported,
+                                    exported,
+                                } if *exported == ns_scan_name => {
+                                    Some((source.clone(), imported.clone()))
+                                }
+                                _ => None,
+                            })
+                        else {
+                            break;
+                        };
+                        let Some((hop_path, _)) = resolve_import(
+                            &hop_src,
+                            std::path::Path::new(&ns_scan_path),
+                            &ctx.project_root,
+                            &ctx.compile_packages,
+                            &ctx.compile_package_dirs,
+                        ) else {
+                            break;
+                        };
+                        let Some(hop_hir) = ctx.native_modules.get(&hop_path) else {
+                            break;
+                        };
+                        ns_scan_path = hop_path.to_string_lossy().to_string();
+                        ns_scan_hir = Some(hop_hir);
+                        ns_scan_name = hop_imported;
+                    }
+
                     // Issue #310: when the source module re-exports the
                     // imported name as a namespace (`export * as Foo from
                     // "./Foo"`), the local binding behaves identically to
@@ -2569,17 +2695,17 @@ pub fn run_with_parse_cache(
                     // name, then route the local through `namespace_imports`
                     // + register the namespace target's full export surface.
                     let mut handled_as_namespace_reexport = false;
-                    if let Some(src_hir) = source_module {
+                    if let Some(src_hir) = ns_scan_hir {
                         for export in &src_hir.exports {
                             if let perry_hir::Export::NamespaceReExport {
                                 source: ns_src,
                                 name,
                             } = export
                             {
-                                if name != &exported_name {
+                                if name != &ns_scan_name {
                                     continue;
                                 }
-                                let importer = std::path::Path::new(&resolved_path_str);
+                                let importer = std::path::Path::new(&ns_scan_path);
                                 let Some((ns_target, _)) = resolve_import(
                                     ns_src,
                                     importer,
@@ -2595,13 +2721,6 @@ pub fn run_with_parse_cache(
                                     break;
                                 };
                                 namespace_imports.push(local_name.clone());
-                                // Issue #321: tag this local as a "named-import-
-                                // of-namespace-reexport" so codegen's
-                                // StaticMethodCall arm knows to route var-shape
-                                // members through `js_closure_callN`. See the
-                                // expr.rs StaticMethodCall comment for why this
-                                // is scoped narrowly.
-                                namespace_reexport_named_imports.insert(local_name.clone());
                                 for (export_name, origin_path) in target_exports {
                                     let origin_prefix =
                                         compute_module_prefix(origin_path, &ctx.project_root);
@@ -2681,7 +2800,9 @@ pub fn run_with_parse_cache(
                                     // else the export name itself.
                                     namespace_member_origin_names.insert(
                                         (local_name.clone(), export_name.clone()),
-                                        resolved_origin_name.unwrap_or_else(|| export_name.clone()),
+                                        resolved_origin_name
+                                            .clone()
+                                            .unwrap_or_else(|| export_name.clone()),
                                     );
 
                                     let key = (origin_path.clone(), export_name.clone());
@@ -2715,7 +2836,15 @@ pub fn run_with_parse_cache(
                                     // `Cannot read properties of undefined`
                                     // on `program._tag`. Mirrors the
                                     // `Namespace { local }` branch above.
-                                    if exported_var_names.contains(&key) {
+                                    let origin_key_under_origin_name = resolved_origin_name
+                                        .as_ref()
+                                        .map(|name| (origin_path.clone(), name.clone()));
+                                    if exported_var_names.contains(&key)
+                                        || origin_key_under_origin_name
+                                            .as_ref()
+                                            .map(|key| exported_var_names.contains(key))
+                                            .unwrap_or(false)
+                                    {
                                         imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
@@ -2725,73 +2854,16 @@ pub fn run_with_parse_cache(
                                             &ctx.project_root,
                                             &origin_prefix,
                                         );
-                                        imported_classes.push(perry_codegen::ImportedClass {
-                                            name: class.name.clone(),
-                                            local_alias: None,
-                                            source_prefix: class_prefix,
-                                            constructor_param_count: class
-                                                .constructor
-                                                .as_ref()
-                                                .map(|c| c.params.len())
-                                                .unwrap_or(0),
-                                            has_own_constructor: class.constructor.is_some(),
-                                            constructor_has_rest: class
-                                                .constructor
-                                                .as_ref()
-                                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                                .unwrap_or(false),
-                                            has_instance_fields: !class.fields.is_empty(),
-                                            method_names: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.name.clone())
-                                                .collect(),
-                                            method_param_counts: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.params.len())
-                                                .collect(),
-                                            method_has_rest: class
-                                                .methods
-                                                .iter()
-                                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                                .collect(),
-                                            static_method_names: class
-                                                .static_methods
-                                                .iter()
-                                                .map(|m| m.name.clone())
-                                                .collect(),
-                                            static_field_names: class
-                                                .static_fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.name.clone())
-                                                .collect(),
-                                            getter_names: class
-                                                .getters
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect(),
-                                            setter_names: class
-                                                .setters
-                                                .iter()
-                                                .map(|(n, _)| n.clone())
-                                                .collect(),
-                                            parent_name: class.extends_name.clone(),
-                                            field_names: class
-                                                .fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.name.clone())
-                                                .collect(),
-                                            field_types: class
-                                                .fields
-                                                .iter()
-                                                .filter(|f| f.key_expr.is_none())
-                                                .map(|f| f.ty.clone())
-                                                .collect(),
-                                            source_class_id: Some(class.id),
-                                        });
+                                        let local_alias = if export_name == &class.name {
+                                            None
+                                        } else {
+                                            Some(export_name.clone())
+                                        };
+                                        imported_classes.push(imported_class_from_hir(
+                                            class,
+                                            class_prefix,
+                                            local_alias,
+                                        ));
                                     }
                                     if let Some(members) = exported_enums.get(&key) {
                                         imported_enums.push((export_name.clone(), members.clone()));
@@ -3000,133 +3072,21 @@ pub fn run_with_parse_cache(
                         // letting consumer-side `Expr::ExternFuncRef { name:
                         // exported_name }` resolve to the class-id NaN-box.
                         if local_name != exported_name {
-                            imported_classes.push(perry_codegen::ImportedClass {
-                                name: class.name.clone(),
-                                local_alias: Some(exported_name.clone()),
-                                source_prefix: class_prefix.clone(),
-                                constructor_param_count: class
-                                    .constructor
-                                    .as_ref()
-                                    .map(|c| c.params.len())
-                                    .unwrap_or(0),
-                                has_own_constructor: class.constructor.is_some(),
-                                constructor_has_rest: class
-                                    .constructor
-                                    .as_ref()
-                                    .map(|c| c.params.iter().any(|p| p.is_rest))
-                                    .unwrap_or(false),
-                                has_instance_fields: !class.fields.is_empty(),
-                                method_names: class
-                                    .methods
-                                    .iter()
-                                    .map(|m| m.name.clone())
-                                    .collect(),
-                                method_param_counts: class
-                                    .methods
-                                    .iter()
-                                    .map(|m| m.params.len())
-                                    .collect(),
-                                method_has_rest: class
-                                    .methods
-                                    .iter()
-                                    .map(|m| m.params.iter().any(|p| p.is_rest))
-                                    .collect(),
-                                static_method_names: class
-                                    .static_methods
-                                    .iter()
-                                    .map(|m| m.name.clone())
-                                    .collect(),
-                                static_field_names: class
-                                    .static_fields
-                                    .iter()
-                                    .filter(|f| f.key_expr.is_none())
-                                    .map(|f| f.name.clone())
-                                    .collect(),
-                                getter_names: class
-                                    .getters
-                                    .iter()
-                                    .map(|(n, _)| n.clone())
-                                    .collect(),
-                                setter_names: class
-                                    .setters
-                                    .iter()
-                                    .map(|(n, _)| n.clone())
-                                    .collect(),
-                                parent_name: class.extends_name.clone(),
-                                field_names: class
-                                    .fields
-                                    .iter()
-                                    .filter(|f| f.key_expr.is_none())
-                                    .map(|f| f.name.clone())
-                                    .collect(),
-                                field_types: class
-                                    .fields
-                                    .iter()
-                                    .filter(|f| f.key_expr.is_none())
-                                    .map(|f| f.ty.clone())
-                                    .collect(),
-                                source_class_id: Some(class.id),
-                            });
+                            imported_classes.push(imported_class_from_hir(
+                                class,
+                                class_prefix.clone(),
+                                Some(exported_name.clone()),
+                            ));
                         }
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: if local_name != class.name {
+                        imported_classes.push(imported_class_from_hir(
+                            class,
+                            class_prefix,
+                            if local_name != class.name {
                                 Some(local_name.clone())
                             } else {
                                 None
                             },
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        ));
                     }
 
                     // Imported param counts
@@ -3231,61 +3191,7 @@ pub fn run_with_parse_cache(
                             continue;
                         }
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: None,
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
                     }
                 }
             }
@@ -3705,61 +3611,7 @@ pub fn run_with_parse_cache(
                             continue;
                         }
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: None,
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
                     }
                 }
             }
@@ -3911,61 +3763,7 @@ pub fn run_with_parse_cache(
                         } else {
                             None
                         };
-                        imported_classes.push(perry_codegen::ImportedClass {
-                            name: class.name.clone(),
-                            local_alias: alias,
-                            source_prefix: class_prefix,
-                            constructor_param_count: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.len())
-                                .unwrap_or(0),
-                            has_own_constructor: class.constructor.is_some(),
-                            constructor_has_rest: class
-                                .constructor
-                                .as_ref()
-                                .map(|c| c.params.iter().any(|p| p.is_rest))
-                                .unwrap_or(false),
-                            has_instance_fields: !class.fields.is_empty(),
-                            method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
-                            method_param_counts: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.len())
-                                .collect(),
-                            method_has_rest: class
-                                .methods
-                                .iter()
-                                .map(|m| m.params.iter().any(|p| p.is_rest))
-                                .collect(),
-                            static_method_names: class
-                                .static_methods
-                                .iter()
-                                .map(|m| m.name.clone())
-                                .collect(),
-                            static_field_names: class
-                                .static_fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            getter_names: class.getters.iter().map(|(n, _)| n.clone()).collect(),
-                            setter_names: class.setters.iter().map(|(n, _)| n.clone()).collect(),
-                            parent_name: class.extends_name.clone(),
-                            field_names: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.name.clone())
-                                .collect(),
-                            field_types: class
-                                .fields
-                                .iter()
-                                .filter(|f| f.key_expr.is_none())
-                                .map(|f| f.ty.clone())
-                                .collect(),
-                            source_class_id: Some(class.id),
-                        });
+                        imported_classes.push(imported_class_from_hir(class, class_prefix, alias));
                         visited_imports.insert(ref_name.clone());
                         // Process the entry we just pushed (by index, so a
                         // same-named distinct-module class isn't skipped). Refs #26.
@@ -4029,7 +3827,6 @@ pub fn run_with_parse_cache(
                 verify_native_regions,
                 disable_buffer_fast_path,
                 namespace_imports,
-                namespace_reexport_named_imports,
                 imported_classes,
                 imported_enums,
                 imported_async_funcs: imported_async_set,
@@ -4930,51 +4727,11 @@ pub fn run_with_parse_cache(
                 p
             }
         }
-        None => default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
+        // The default output path when no `-o` is given. Lives in
+        // `compile/output_path.rs` so the build cache fingerprints the same
+        // file this link is about to write (#5740).
+        None => output_path::default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
     };
-
-    // The default output path when no `-o` is given. Extracted to a free fn so
-    // the `-o`-provided extension-defaulting above stays readable.
-    fn default_output_path(
-        is_dylib: bool,
-        is_staticlib: bool,
-        target: Option<&str>,
-        stem: &str,
-    ) -> PathBuf {
-        if is_dylib {
-            #[cfg(target_os = "macos")]
-            {
-                PathBuf::from(format!("{}.dylib", stem))
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                PathBuf::from(format!("{}.so", stem))
-            }
-        } else if is_staticlib {
-            // #1088 — Windows hosts expect `.lib`; everywhere else uses
-            // the Unix `lib<stem>.a` convention so the archive is reachable
-            // from `-l<stem>` at the host's link step.
-            if matches!(target, Some("windows") | Some("windows-winui"))
-                || (target.is_none() && cfg!(target_os = "windows"))
-            {
-                PathBuf::from(format!("{}.lib", stem))
-            } else {
-                PathBuf::from(format!("lib{}.a", stem))
-            }
-        } else if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
-            // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
-            // napi_module_register — there is no standalone executable
-            // shipping shape. `lib` prefix matches the dlopen name used by
-            // the generated ArkTS shim (`import entry from 'libapp.so'`).
-            PathBuf::from(format!("lib{}.so", stem))
-        } else if matches!(target, Some("windows") | Some("windows-winui"))
-            || (target.is_none() && cfg!(target_os = "windows"))
-        {
-            PathBuf::from(format!("{}.exe", stem))
-        } else {
-            PathBuf::from(stem)
-        }
-    }
 
     if !failed_modules.is_empty() {
         // The loud failure summary + abort already ran earlier (right
@@ -5336,6 +5093,9 @@ pub fn run_with_parse_cache(
 
     // For dylib output, skip runtime/stdlib linking — symbols resolve from host at dlopen time
     if is_dylib {
+        // #6222: the link below runs the HOST toolchain. Reject a target it cannot
+        // honour rather than emitting a host-arch dylib from a cross-compiled object.
+        verify_dylib_target_linkable(target.as_deref())?;
         let is_dylib_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
             || (target.is_none() && cfg!(target_os = "windows"));
         let has_plugin_deactivate = ctx
@@ -5398,12 +5158,26 @@ pub fn run_with_parse_cache(
             c.arg("-shared");
             c
         } else {
-            // macOS — use flat_namespace so plugins can resolve symbols from the host
             let mut c = Command::new("cc");
-            c.arg("-dynamiclib")
-                .arg("-flat_namespace")
-                .arg("-undefined")
-                .arg("dynamic_lookup");
+            c.arg("-dynamiclib");
+            // #6222: propagate `--target`. Without this the driver defaults to the
+            // host, so `--target ios` cross-compiled the object correctly and then
+            // linked it into a *macOS* dylib. `verify_dylib_target_linkable` above
+            // has already rejected any target we cannot link on this host.
+            let apple_cross = target.as_deref().and_then(apple_dylib_cross_target);
+            if let Some((sdk, triple)) = apple_cross {
+                let sysroot = apple_sdk_sysroot(sdk)?;
+                c.arg("-target").arg(triple).arg("-isysroot").arg(&sysroot);
+            }
+            // A plugin does not link the runtime (symbols resolve from the host at
+            // `dlopen` time), so undefined symbols must be permitted either way.
+            // `-flat_namespace` is a macOS-only plugin convention and is DEPRECATED
+            // on the embedded Apple platforms — passing it there makes the linker
+            // warn on every build for no benefit.
+            if apple_cross.is_none() {
+                c.arg("-flat_namespace");
+            }
+            c.arg("-undefined").arg("dynamic_lookup");
             c
         };
 
@@ -5742,6 +5516,8 @@ pub fn run_with_parse_cache(
             target.as_deref(),
             &args.input,
             &ctx,
+            i18n_table.as_ref(),
+            i18n_config.as_ref(),
             format,
         )?;
         result_bundle_id = Some(bundle_id);
@@ -5973,4 +5749,71 @@ pub fn run_with_parse_cache(
         link_cache_stats: Some(link_cache_status.stats()),
         build_cache_stats: Some(build_cache_stats),
     })
+}
+
+/// (#6222) Apple SDK + clang triple for a cross-compiled **shared library** link.
+///
+/// The dylib path links with the host `cc` driver and does NOT link the runtime
+/// (symbols resolve from the host at `dlopen` time), so nothing else in that path
+/// consults `--target`. Without these flags the linker happily consumes a correctly
+/// cross-compiled iOS object and emits a **host-arch** dylib — the failure the user
+/// sees is a link error or a dylib that will never load on device.
+fn apple_dylib_cross_target(target: &str) -> Option<(&'static str, &'static str)> {
+    Some(match target {
+        "ios" => ("iphoneos", "arm64-apple-ios17.0"),
+        "ios-simulator" => ("iphonesimulator", "arm64-apple-ios17.0-simulator"),
+        "tvos" => ("appletvos", "arm64-apple-tvos17.0"),
+        "tvos-simulator" => ("appletvsimulator", "arm64-apple-tvos17.0-simulator"),
+        "watchos" => ("watchos", "arm64_32-apple-watchos10.0"),
+        "watchos-simulator" => ("watchsimulator", "arm64-apple-watchos10.0-simulator"),
+        "visionos" => ("xros", "arm64-apple-xros1.0"),
+        "visionos-simulator" => ("xrsimulator", "arm64-apple-xros1.0-simulator"),
+        _ => return None,
+    })
+}
+
+/// Resolve an Apple SDK sysroot via `xcrun`.
+fn apple_sdk_sysroot(sdk: &str) -> Result<PathBuf> {
+    let out = Command::new("xcrun")
+        .args(["--sdk", sdk, "--show-sdk-path"])
+        .output()
+        .with_context(|| {
+            format!("Failed to invoke `xcrun --sdk {sdk} --show-sdk-path` (is Xcode installed?)")
+        })?;
+    if !out.status.success() {
+        bail!(
+            "`xcrun --sdk {sdk} --show-sdk-path` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        bail!("`xcrun --sdk {sdk} --show-sdk-path` returned nothing");
+    }
+    Ok(PathBuf::from(path))
+}
+
+/// (#6222) Reject a `--target` the dylib link step cannot honour on this host,
+/// instead of silently linking the cross object into a host-arch shared library.
+/// The executable path already fails early and cleanly (it has to find a
+/// per-target `libperry_runtime.a`); the dylib path links no runtime, so it had
+/// no such check and produced a host binary in silence.
+fn verify_dylib_target_linkable(target: Option<&str>) -> Result<()> {
+    let Some(t) = target else { return Ok(()) };
+    let host_ok = match t {
+        "windows" | "windows-winui" => true,
+        t if t.starts_with("linux") => cfg!(target_os = "linux"),
+        t if apple_dylib_cross_target(t).is_some() => cfg!(target_os = "macos"),
+        _ => false,
+    };
+    if !host_ok {
+        bail!(
+            "--output-type dylib cannot link for target \"{t}\" on this host.\n\
+             The object is cross-compiled correctly, but the shared-library link step \
+             runs the host toolchain, so it would emit a host-architecture dylib.\n\
+             Apple targets (ios, ios-simulator, tvos, watchos, visionos and their \
+             simulators) require a macOS host with Xcode."
+        );
+    }
+    Ok(())
 }

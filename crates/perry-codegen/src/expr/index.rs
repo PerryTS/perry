@@ -345,9 +345,14 @@ pub(crate) fn lower_index_set_fast(
             "js_typed_feedback_record_fallback_call",
             &[(I64, feedback_site_id)],
         );
+        // Strict `arr[i] = v`: a frozen array's element is non-writable and a
+        // non-extensible array rejects a new index, so route to the throwing
+        // variant. (The inline fast/medium paths above are only reached for
+        // arrays with a proven dense-numeric layout, which excludes frozen /
+        // sealed / non-extensible arrays — those always fall to this call.)
         let new_handle = blk.call(
             I64,
-            "js_array_set_f64_extend",
+            "js_array_set_f64_extend_strict",
             &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, val_double)],
         );
         let new_box = nanbox_pointer_inline(blk, &new_handle);

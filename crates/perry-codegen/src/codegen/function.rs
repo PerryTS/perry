@@ -448,6 +448,7 @@ pub(super) fn compile_function(
         cross_module.flat_const_arrays.keys().copied().collect();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
+        &f.params,
         &flat_const_ids,
         &clamp_fn_ids,
         &cross_module.clamp3_functions,
@@ -455,6 +456,7 @@ pub(super) fn compile_function(
         module_globals,
         classes,
         &cross_module.compile_time_constants,
+        &cross_module.module_dispatch,
     );
 
     let mut ctx = FnCtx {
@@ -503,6 +505,7 @@ pub(super) fn compile_function(
         func_returns_class: &cross_module.func_returns_class,
         boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
+        tdz_boxes: std::collections::HashSet::new(),
         compiler_private_async_i32_control_locals: &cross_module
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
@@ -513,12 +516,12 @@ pub(super) fn compile_function(
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
-        namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_origin_names: &cross_module.namespace_member_origin_names,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
         local_generator_funcs: &cross_module.local_generator_funcs,
+        async_step_closures: &cross_module.async_step_closures,
         funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
@@ -543,6 +546,7 @@ pub(super) fn compile_function(
         cached_lengths: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
+        class_field_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
@@ -561,11 +565,17 @@ pub(super) fn compile_function(
         pod_records: std::collections::HashMap::new(),
         pod_views: std::collections::HashMap::new(),
         scalar_replaced_arrays: std::collections::HashMap::new(),
+        scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
+        scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
+        non_escaping_array_length_only_indices: native_facts
+            .non_escaping_array_length_only_indices()
+            .clone(),
+        fusible_uppercase_locals: native_facts.fusible_uppercase_locals().clone(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         non_escaping_object_literal_used_fields: native_facts
             .non_escaping_object_literal_used_fields()

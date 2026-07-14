@@ -274,3 +274,66 @@ fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
         "imported messaging constructors should route through worker_threads native constructors: {debug}"
     );
 }
+
+/// A TS **type** name in a mixed import from a node-core module
+/// (`import { createCipheriv, BinaryLike } from "crypto"` — `BinaryLike` is a
+/// type, not a runtime export) must be ERASED, not rejected. tsc, esbuild, and
+/// Bun all drop such a specifier; only Node's non-type-directed
+/// `--experimental-strip-types` rejects it, and it demands an explicit
+/// `import type`. Rejecting it failed the whole file to compile.
+#[test]
+fn type_only_names_in_a_mixed_import_are_erased_not_rejected() {
+    let cases = [
+        (
+            "crypto",
+            r#"
+            import { createCipheriv, BinaryLike, CipherGCM } from "crypto";
+            const key: BinaryLike = "0123456789abcdef";
+            function f(c: CipherGCM) { return c; }
+            console.log(typeof createCipheriv, key, typeof f);
+        "#,
+        ),
+        (
+            "stream",
+            r#"
+            import { Readable, WritableOptions } from "stream";
+            function logCall(fn: WritableOptions["write"], id: number) { return id; }
+            console.log(typeof Readable, logCall(undefined as any, 1));
+        "#,
+        ),
+        (
+            "type name never referenced at all",
+            r#"
+            import { readFileSync, PathLike } from "node:fs";
+            console.log(typeof readFileSync);
+        "#,
+        ),
+    ];
+
+    for (label, src) in cases {
+        assert!(
+            lower_result(src).is_ok(),
+            "{label}: a type-only name in a mixed import must be erased, not rejected"
+        );
+    }
+}
+
+/// The erasure above must NOT weaken the #3922 gate: a name that is not a value
+/// export and IS referenced in a value position is a genuine bad import and must
+/// still be rejected (Node throws a SyntaxError at module instantiation; binding
+/// `undefined` would silently diverge).
+#[test]
+fn unknown_named_import_used_as_a_value_is_still_rejected() {
+    let err = lower_result(
+        r#"
+        import { createCipheriv, definitelyNotAnExport } from "crypto";
+        console.log(typeof createCipheriv);
+        definitelyNotAnExport();
+    "#,
+    )
+    .expect_err("a non-export used as a value must be rejected");
+    assert!(
+        err.contains("does not provide an export named 'definitelyNotAnExport'"),
+        "expected the U006 export diagnostic, got: {err}"
+    );
+}

@@ -1040,6 +1040,14 @@ pub fn lower_module_full(
     module.uses_webassembly = ctx.uses_webassembly;
     module.extern_funcs = ctx.extern_func_types.clone();
 
+    // Pre-pass (#5951): a class capture that is MUTATED and shared between the
+    // declaring function and a lifted field-init/method closure cannot ride the
+    // value-based `__perry_cap_*` snapshot (each side gets its own copy). Desugar
+    // those captures to a one-element array box first — the array is captured by
+    // pointer, so all sides share the same `[0]` cell. Runs before the boxing
+    // pass so the rewritten capture is seen as a by-reference array.
+    shared_mutable_capture::desugar_shared_mutable_captures(&mut module);
+
     // Post-pass: widen `mutable_captures` across sibling closures. When two
     // closures in the same scope share a capture and one of them assigns to
     // it, the variable must be boxed; every closure that captures it must

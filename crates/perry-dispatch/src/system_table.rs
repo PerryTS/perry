@@ -100,6 +100,18 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         args: &[ArgKind::Str, ArgKind::F64],
         ret: ReturnKind::Void,
     },
+    // Haptic feedback — plays a system haptic effect. The single Str
+    // arg is the HapticType name ("success", "error", "light", ...);
+    // the platform FFI parses it and maps to the native haptic engine
+    // (WKInterfaceDevice / UIFeedbackGenerator / VibrationEffect /
+    // NSHapticFeedbackManager / navigator.vibrate). No-op on platforms
+    // without a haptic engine.
+    MethodRow {
+        method: "hapticPlay",
+        runtime: "perry_system_haptic_play",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
     MethodRow {
         method: "notificationSend",
         runtime: "perry_system_notification_send",

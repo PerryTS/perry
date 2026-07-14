@@ -27,6 +27,38 @@ pub fn is_registered_set_iterator(addr: usize) -> bool {
     SET_ITERATOR_ARRAYS.with(|r| r.borrow().contains(&addr))
 }
 
+/// Rekey legacy materialized-iterator brands after array evacuation without
+/// treating the metadata key as a root.
+pub(crate) fn scan_set_iterator_array_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    SET_ITERATOR_ARRAYS.with(|r| {
+        let mut arrays = r.borrow_mut();
+        let mut moved = Vec::new();
+        for old_addr in arrays.iter().copied() {
+            let mut new_addr = old_addr;
+            if visitor.visit_metadata_usize_slot(&mut new_addr) {
+                moved.push((old_addr, new_addr));
+            }
+        }
+        for (old_addr, new_addr) in moved {
+            arrays.remove(&old_addr);
+            arrays.insert(new_addr);
+        }
+    });
+}
+
+/// Remove legacy Set iterator brands whose array owners are provably dead
+/// under the centralized collection-specific liveness policy.
+pub(crate) fn prune_dead_set_iterator_array_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    SET_ITERATOR_ARRAYS.with(|r| {
+        r.borrow_mut().retain(|owner| !is_dead_owner(*owner));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_set_iterator_arrays() {
+    SET_ITERATOR_ARRAYS.with(|r| r.borrow_mut().clear());
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_FORCE_HELPER_GC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -244,6 +276,7 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     let capacity = (*set).capacity as usize;
     if !elements.is_null() && capacity > 0 {
         dealloc(elements as *mut u8, elements_layout(capacity));
+        crate::gc::gc_note_external_side_free(elements_layout(capacity).size());
     }
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external elements side-allocation pointer after deregistration/deallocation.
     (*set).elements = std::ptr::null_mut();
@@ -270,6 +303,53 @@ fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
         flags & crate::gc::GC_FLAG_ARENA != 0
             && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
     }
+}
+
+/// #6010: registry-driven finalization of DEAD Sets at sweep entry — the Set
+/// analog of `finalize_dead_registered_maps_post_trace` (see map.rs for the
+/// full rationale: dead collections in the ACTIVE nursery block are never
+/// object-walked by any sweeper, leaking their external elements buffers).
+pub(crate) fn collect_dead_registered_sets_post_trace(full_trace: bool) -> Vec<usize> {
+    SET_REGISTRY.with(|r| {
+        r.borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| unsafe { registered_set_is_dead_post_trace(addr, full_trace) })
+            .collect()
+    })
+}
+
+/// Finalize one collected-dead Set (budget-chunked by the sweep state).
+pub(crate) fn finalize_collected_dead_set(addr: usize) {
+    unsafe {
+        finalize_set_side_allocation_for_gc(addr as *mut SetHeader);
+    }
+}
+
+unsafe fn registered_set_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_SET {
+        return false;
+    }
+    let flags = header.gc_flags;
+    if flags
+        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
+        != 0
+    {
+        return false;
+    }
+    if full_trace {
+        return true;
+    }
+    if flags & crate::gc::GC_FLAG_TENURED != 0 {
+        return false;
+    }
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
 }
 
 pub(crate) fn finalize_dead_copied_minor_from_space_sets() -> usize {
@@ -532,7 +612,21 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
 
 /// Find the index of a value in the set, or -1 if not found.
 /// Uses the O(1) hash index side-table.
-unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
+/// C-ABI: current elements-array index of `value` (SameValueZero), or `-1.0` if
+/// absent. Companion to `js_map_find_key_index` for the delete-safe Set `for-of`
+/// fast path (#6075). Only invoked from generated IR, so `#[used]` keeps it.
+#[no_mangle]
+pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
+    let set = clean_set_ptr(crate::value::js_nanbox_get_pointer(set_boxed) as *const SetHeader);
+    if set.is_null() {
+        return -1.0;
+    }
+    unsafe { find_value_index(set, normalize_zero(value)) as f64 }
+}
+#[used]
+static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_value_index;
+
+pub(crate) unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
     SET_INDEX.with(|idx| {
         let idx = idx.borrow();
         if let Some(map) = idx.get(&(set as usize)) {
@@ -571,6 +665,10 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
     // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
     (*set).elements = new_elements;
     (*set).capacity = new_capacity;
+    // #6010: growth delta counts as external churn (see js_set_alloc). The
+    // header is consistent again, and a triggered cycle is conservative +
+    // non-moving, so the caller's raw `set`/elements pointers stay valid.
+    crate::gc::gc_note_external_side_alloc(new_layout.size() - old_layout.size());
     true
 }
 
@@ -605,6 +703,13 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
             idx.borrow_mut()
                 .insert(ptr as usize, crate::fast_hash::new_ptr_hash_map());
         });
+
+        // #6010: the elements buffer is invisible to the arena/malloc GC
+        // triggers; record its bytes as external churn so Set-heavy
+        // workloads still collect (and finalize dead siblings). Safe here:
+        // the header is fully initialized + registered, and the triggered
+        // cycle is conservative + non-moving, so `ptr` stays valid.
+        crate::gc::gc_note_external_side_alloc(elem_layout.size());
 
         ptr
     }
@@ -1275,13 +1380,28 @@ fn js_set_foreach_impl(
             };
             let elements = elements_ptr(set);
             let value = ptr::read(elements.add(i));
+            // Root the visited value so the post-callback slot comparison below
+            // stays valid across a GC move during the callback.
+            let value_handle = scope.root_nanbox_f64(value);
             let args = [value, value, set_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
-            i += 1;
+            // Deleting an entry compacts the backing vector (later entries
+            // shift left). If the callback deleted the just-visited entry (or
+            // an earlier one), slot `i` now holds the NEXT unvisited value —
+            // advancing would skip it (react-server-dom's task sweeps delete
+            // while iterating; ECMA-262 visits every not-yet-deleted entry).
+            // Only advance when slot `i` still holds the value just visited.
+            let set = set_handle.get_raw_const_ptr::<SetHeader>();
+            if i < (*set).size as usize {
+                let now = ptr::read(elements_ptr(set).add(i));
+                if now.to_bits() == value_handle.get_nanbox_f64().to_bits() {
+                    i += 1;
+                }
+            }
         }
     }
 }

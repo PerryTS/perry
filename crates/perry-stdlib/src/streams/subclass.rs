@@ -412,6 +412,8 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
                 None => break,
             }
         };
+        // Consumer progress: release transform writes parked on backpressure.
+        unsafe { super::transform::transform_release_writes(stream_id) };
         let mut got_chunk = false;
         for chunk in chunks {
             unsafe {

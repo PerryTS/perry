@@ -24,12 +24,24 @@ Installing picks the right prebuilt binary for your platform automatically — `
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
 
+### Linux: glibc version
+
+The glibc packages are built on Ubuntu 24.04 (glibc 2.39), so they need **glibc ≥ 2.39**. On an older glibc — Ubuntu 22.04 (2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) — the launcher automatically runs the fully-static musl build instead, which has no libc dependency at all and works everywhere ([#6298](https://github.com/PerryTS/perry/issues/6298)). It prints a one-time notice when it does; set `PERRY_NO_FALLBACK_NOTICE=1` to silence it.
+
+npm only installs the musl package when it thinks the machine is musl-based, so on an old-glibc host you have to ask for it once:
+
+```bash
+npm install --force @perryts/perry-linux-x64-musl   # or -arm64-musl
+```
+
+The launcher tells you this (with the exact command) instead of letting the binary die with `GLIBC_2.39 not found`. The static build is the same compiler; the one thing it cannot do is build `perry/ui` GTK4 desktop apps.
+
 ## Host requirements
 
 Perry produces native binaries by linking its runtime and stdlib (shipped as static archives in the platform package) into your code. That link step uses your system C toolchain, so you need:
 
 - **macOS** — Xcode Command Line Tools (`xcode-select --install`)
-- **Linux** — `gcc` or `clang` (e.g. `apt install build-essential` on Debian/Ubuntu, `apk add build-base` on Alpine)
+- **Linux** — `gcc` or `clang` (e.g. `apt install build-essential` on Debian/Ubuntu, `apk add build-base` on Alpine), plus **clang ≥ 15**: codegen emits opaque-pointer LLVM IR, which clang 14 and older reject with `error: expected type`. Ubuntu 22.04 defaults to clang 14 — `apt install clang-15` and `export PERRY_LLVM_CLANG=/usr/bin/clang-15`.
 - **Windows** — MSVC / Visual Studio Build Tools with the C++ workload
 
 Node.js 16 or later is required for the wrapper itself.

@@ -623,7 +623,12 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(e, out);
             }
         }
-        Expr::InstanceOf { expr, .. } => walk(expr, out),
+        Expr::InstanceOf { expr, ty_expr, .. } => {
+            walk(expr, out);
+            if let Some(t) = ty_expr {
+                walk(t, out);
+            }
+        }
         Expr::In { property, object } => {
             walk(property, out);
             walk(object, out);

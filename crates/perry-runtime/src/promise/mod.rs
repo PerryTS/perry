@@ -22,8 +22,11 @@ pub mod assimilate;
 pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
+pub(crate) mod keyed_table;
 pub mod microtasks;
 pub mod native_async;
+pub mod reactions;
+pub mod rejection;
 pub mod scanners;
 pub mod spec_combinators;
 pub mod subclass;
@@ -47,7 +50,7 @@ pub use combinators::{
     js_promise_all_settled, js_promise_any, js_promise_new_with_executor, js_promise_race,
     js_promise_rejected, js_promise_schedule_resolve, js_promise_try, js_value_is_promise,
 };
-pub use microtasks::js_promise_run_microtasks;
+pub use microtasks::{js_promise_run_microtasks, js_promise_run_microtasks_event_loop};
 pub use native_async::{
     js_native_async_completion_attach_handle, js_native_async_completion_cancel,
     js_native_async_completion_new, js_native_async_completion_promise,
@@ -61,6 +64,12 @@ pub use native_async::{
     PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK, PERRY_NATIVE_ASYNC_THREAD_MAIN,
     PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
+pub(crate) use reactions::js_promise_attach_settle_listener;
+pub(crate) use rejection::mark_rejection_handled;
+pub use rejection::{
+    js_promise_mark_internally_handled, js_promise_report_unhandled_rejections,
+    scan_unhandled_rejection_roots_mut,
+};
 pub use scanners::{js_promise_with_resolvers, scan_promise_roots, scan_promise_roots_mut};
 pub(crate) use scanners::{new_promise_root_scan_state, scan_promise_roots_mut_step};
 pub use spec_combinators::{
@@ -71,16 +80,15 @@ pub use spec_combinators::{
 pub use subclass::js_promise_subclass_init;
 pub(crate) use subclass::subclass_backing_promise;
 pub(crate) use then::{
-    box_promise_ptr, js_promise_attach_handlers, js_promise_attach_settle_listener,
-    mark_rejection_handled, promise_has_own_constructor, promise_has_own_property,
-    promise_proto_method, promise_prototype_catch_thunk, promise_prototype_finally_thunk,
-    promise_prototype_then_thunk,
+    box_promise_ptr, js_promise_attach_handlers, promise_has_own_constructor,
+    promise_has_own_property, promise_proto_method, promise_prototype_catch_thunk,
+    promise_prototype_finally_thunk, promise_prototype_then_thunk,
 };
 pub use then::{
-    js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free,
-    js_promise_mark_internally_handled, js_promise_new, js_promise_reason, js_promise_reject,
-    js_promise_resolve, js_promise_resolve_with_promise, js_promise_result, js_promise_state,
-    js_promise_then, js_promise_value,
+    js_promise_bound_method, js_promise_catch, js_promise_finally, js_promise_free, js_promise_new,
+    js_promise_new_cross_thread, js_promise_reason, js_promise_reject, js_promise_resolve,
+    js_promise_resolve_with_promise, js_promise_result, js_promise_state, js_promise_then,
+    js_promise_value,
 };
 
 #[cfg(test)]
@@ -655,34 +663,44 @@ pub(crate) fn enqueue_queue_microtask(callback: i64) {
 
 #[derive(Default)]
 pub(crate) struct PromiseContextStore {
-    entries: HashMap<usize, AsyncContextSnapshot>,
+    // The position stored with each snapshot makes removal and rekeying O(1)
+    // while `keys` remains the stable traversal surface for the GC scanners.
+    entries: HashMap<usize, (AsyncContextSnapshot, usize)>,
     keys: Vec<usize>,
 }
 
 impl PromiseContextStore {
     pub(crate) fn insert(&mut self, key: usize, snapshot: AsyncContextSnapshot) {
-        if !self.entries.contains_key(&key) {
-            self.keys.push(key);
+        if let Some((existing, _)) = self.entries.get_mut(&key) {
+            *existing = snapshot;
+            return;
         }
-        self.entries.insert(key, snapshot);
+
+        let position = self.keys.len();
+        self.keys.push(key);
+        self.entries.insert(key, (snapshot, position));
     }
 
     pub(crate) fn get(&self, key: &usize) -> Option<&AsyncContextSnapshot> {
-        self.entries.get(key)
+        self.entries.get(key).map(|(snapshot, _)| snapshot)
     }
 
     pub(crate) fn get_mut(&mut self, key: &usize) -> Option<&mut AsyncContextSnapshot> {
-        self.entries.get_mut(key)
+        self.entries.get_mut(key).map(|(snapshot, _)| snapshot)
     }
 
     pub(crate) fn remove(&mut self, key: &usize) -> Option<AsyncContextSnapshot> {
-        let removed = self.entries.remove(key);
-        if removed.is_some() {
-            if let Some(pos) = self.keys.iter().position(|candidate| candidate == key) {
-                self.keys.swap_remove(pos);
-            }
+        let (snapshot, position) = self.entries.remove(key)?;
+        debug_assert_eq!(self.keys.get(position), Some(key));
+        let removed_key = self.keys.swap_remove(position);
+        debug_assert_eq!(removed_key, *key);
+        if let Some(moved_key) = self.keys.get(position) {
+            self.entries
+                .get_mut(moved_key)
+                .expect("PromiseContextStore key vector and map must agree")
+                .1 = position;
         }
-        removed
+        Some(snapshot)
     }
 
     #[cfg(test)]
@@ -704,7 +722,7 @@ impl PromiseContextStore {
     pub(crate) fn first(&self) -> Option<(usize, &AsyncContextSnapshot)> {
         self.keys
             .first()
-            .and_then(|key| self.entries.get(key).map(|snapshot| (*key, snapshot)))
+            .and_then(|key| self.get(key).map(|snapshot| (*key, snapshot)))
     }
 
     fn retain(&mut self, mut keep: impl FnMut(usize, &mut AsyncContextSnapshot) -> bool) {
@@ -714,12 +732,12 @@ impl PromiseContextStore {
             let retain = self
                 .entries
                 .get_mut(&key)
-                .is_some_and(|snapshot| keep(key, snapshot));
+                .is_some_and(|(snapshot, _)| keep(key, snapshot));
             if retain {
                 index += 1;
             } else {
-                self.keys.swap_remove(index);
-                self.entries.remove(&key);
+                let removed = self.remove(&key);
+                debug_assert!(removed.is_some());
             }
         }
     }
@@ -728,15 +746,206 @@ impl PromiseContextStore {
         if old_key == new_key {
             return;
         }
-        let Some(context) = self.entries.remove(&old_key) else {
+        let Some((context, old_position)) = self.entries.remove(&old_key) else {
             return;
         };
-        if let Some(pos) = self.keys.iter().position(|key| *key == old_key) {
-            self.keys[pos] = new_key;
-        } else if !self.entries.contains_key(&new_key) {
-            self.keys.push(new_key);
+        debug_assert_eq!(self.keys.get(old_position), Some(&old_key));
+
+        if self.entries.contains_key(&new_key) {
+            // Preserve the moved promise's snapshot (the old key) and drop the
+            // stale target snapshot. The target key may be the last vector
+            // item, so update whichever key swap_remove relocates.
+            let removed_key = self.keys.swap_remove(old_position);
+            debug_assert_eq!(removed_key, old_key);
+            if let Some(moved_key) = self.keys.get(old_position) {
+                self.entries
+                    .get_mut(moved_key)
+                    .expect("PromiseContextStore key vector and map must agree")
+                    .1 = old_position;
+            }
+            self.entries
+                .get_mut(&new_key)
+                .expect("rekey collision target must remain present")
+                .0 = context;
+        } else {
+            self.keys[old_position] = new_key;
+            self.entries.insert(new_key, (context, old_position));
         }
-        self.entries.insert(new_key, context);
+    }
+
+    #[cfg(test)]
+    fn assert_invariants(&self) {
+        assert_eq!(self.entries.len(), self.keys.len());
+        for (position, key) in self.keys.iter().copied().enumerate() {
+            let (_, recorded_position) = self
+                .entries
+                .get(&key)
+                .expect("every key-vector entry must have a snapshot");
+            assert_eq!(*recorded_position, position);
+        }
+    }
+}
+
+#[cfg(test)]
+mod promise_context_store_bench {
+    use std::time::{Duration, Instant};
+
+    use super::{AsyncContextSnapshot, PromiseContextStore};
+
+    /// Reproducible regression probe for the former O(P²) key-vector search.
+    ///
+    /// Run with:
+    /// `cargo test -p perry-runtime --release promise_context_store_remove_front \
+    ///   -- --ignored --nocapture --test-threads=1`
+    #[test]
+    #[ignore = "manual performance regression probe"]
+    fn promise_context_store_remove_front() {
+        const BATCHES: [usize; 3] = [1_024, 4_096, 16_384];
+        const SAMPLES: usize = 5;
+
+        for batch in BATCHES {
+            let mut samples = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                let mut store = PromiseContextStore::default();
+                for key in 0..batch {
+                    store.insert(key, AsyncContextSnapshot::default());
+                }
+
+                let started = Instant::now();
+                for key in 0..batch {
+                    std::hint::black_box(store.remove(&key));
+                }
+                samples.push(started.elapsed());
+            }
+            samples.sort_unstable();
+            let median = samples[SAMPLES / 2];
+            report(batch, median);
+        }
+    }
+
+    fn report(batch: usize, elapsed: Duration) {
+        println!(
+            "promise_context_store_remove_front batch={batch} median_ns={} ns_per_remove={}",
+            elapsed.as_nanos(),
+            elapsed.as_nanos() / batch as u128,
+        );
+    }
+}
+
+#[cfg(test)]
+mod promise_context_store_tests {
+    use super::{AsyncContextSnapshot, PromiseContextStore};
+
+    fn snapshot(value: f64) -> AsyncContextSnapshot {
+        crate::async_context::test_snapshot_with_store(value)
+    }
+
+    fn stored_value(store: &PromiseContextStore, key: usize) -> Option<f64> {
+        store
+            .get(&key)
+            .and_then(crate::async_context::test_snapshot_first_store)
+    }
+
+    #[test]
+    fn duplicate_insert_missing_remove_and_last_swap_keep_index_consistent() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+        store.insert(20, snapshot(200.0));
+
+        assert_eq!(store.keys, vec![10, 20, 30]);
+        assert_eq!(stored_value(&store, 20), Some(200.0));
+        assert!(store.remove(&99).is_none());
+        store.assert_invariants();
+
+        assert!(store.remove(&10).is_some());
+        assert_eq!(store.keys, vec![30, 20]);
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        store.assert_invariants();
+
+        assert!(store.remove(&20).is_some());
+        assert_eq!(store.keys, vec![30]);
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn retain_partial_updates_positions_after_each_swap() {
+        let mut store = PromiseContextStore::default();
+        for key in 0..8 {
+            store.insert(key, snapshot(key as f64));
+        }
+
+        store.retain(|key, _| key % 2 == 0);
+
+        assert_eq!(store.entries.len(), 4);
+        for key in 0..8 {
+            assert_eq!(store.get(&key).is_some(), key % 2 == 0);
+        }
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn rekey_collision_keeps_moved_snapshot_and_removes_duplicate_key() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+
+        store.rekey(10, 20);
+
+        assert!(store.get(&10).is_none());
+        assert_eq!(stored_value(&store, 20), Some(10.0));
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        assert_eq!(store.keys.iter().filter(|&&key| key == 20).count(), 1);
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn gc_relocation_rekeys_during_traversal_without_skipping_contexts() {
+        let mut store = PromiseContextStore::default();
+        for key in 0..4 {
+            store.insert(key, snapshot(key as f64));
+        }
+
+        let mut index = 0;
+        while let Some(old_key) = store.key_at(index) {
+            let new_key = old_key + 100;
+            store.rekey(old_key, new_key);
+            assert_eq!(stored_value(&store, new_key), Some(old_key as f64));
+            index += 1;
+        }
+
+        assert_eq!(store.keys, vec![100, 101, 102, 103]);
+        store.assert_invariants();
+    }
+
+    #[test]
+    fn deferred_rekey_collision_scans_every_context_before_swapping_keys() {
+        let mut store = PromiseContextStore::default();
+        store.insert(10, snapshot(10.0));
+        store.insert(20, snapshot(20.0));
+        store.insert(30, snapshot(30.0));
+
+        let mut scanned = Vec::new();
+        let mut moved = Vec::new();
+        let mut index = 0;
+        while let Some(key) = store.key_at(index) {
+            scanned.push(key);
+            if key == 10 {
+                moved.push((key, 20));
+            }
+            index += 1;
+        }
+        assert_eq!(scanned, vec![10, 20, 30]);
+
+        for (old_key, new_key) in moved {
+            store.rekey(old_key, new_key);
+        }
+
+        assert_eq!(stored_value(&store, 20), Some(10.0));
+        assert_eq!(stored_value(&store, 30), Some(30.0));
+        store.assert_invariants();
     }
 }
 
@@ -779,43 +988,80 @@ pub(crate) fn clear_promise_context(promise: *mut Promise) {
     });
 }
 
+/// GC finalize hook (`GcFinalizeHookKind::PromiseCleanup`): a promise died in
+/// a sweep, so every side table keyed by its address must drop its entries —
+/// the async-context snapshot AND the settle-listener / overflow-reaction /
+/// Promise.all-state tables (2026-07-09 GC audit: those three had weak keys
+/// but strongly-rooted closures/result machinery pruned only at settle, so an
+/// abandoned pending promise leaked everything it captured forever).
 pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
     clear_promise_context(promise);
+    reactions::remove_settle_listeners_for_dead_promise(promise);
+    reactions::remove_overflow_reactions_for_dead_promise(promise);
+    combinators::remove_all_states_for_dead_promise(promise);
+}
+
+/// What the copied-minor from-space cleanup should do with a side-table entry
+/// keyed by promise address `key` after the copy/rewrite passes ran.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CopiedMinorPromiseKeyFate {
+    /// Not a from-space promise (already rewritten, old-gen, malloc'd, …).
+    Keep,
+    /// From-space promise that was evacuated but whose table key was not
+    /// rewritten by a scanner — rekey the entry to the to-space copy.
+    Rekey(usize),
+    /// Dead from-space promise — drop the entry.
+    Drop,
+}
+
+/// Classify a promise-address side-table key for the copied-minor cleanup.
+/// Shared by `PROMISE_CONTEXTS`, the settle-listener/overflow-reaction tables
+/// (`reactions.rs`) and `PROMISE_ALL_STATES` (`combinators.rs`).
+pub(crate) fn copied_minor_promise_key_fate(key: usize) -> CopiedMinorPromiseKeyFate {
+    let space = crate::arena::classify_heap_space(key);
+    let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
+        || space == crate::arena::active_survivor_space();
+    if !in_from_space || key < crate::gc::GC_HEADER_SIZE {
+        return CopiedMinorPromiseKeyFate::Keep;
+    }
+    unsafe {
+        let header =
+            (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*header).obj_type != crate::gc::GC_TYPE_PROMISE
+            || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
+        {
+            return CopiedMinorPromiseKeyFate::Keep;
+        }
+        if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+            let new_key = crate::gc::forwarding_address(header) as usize;
+            if new_key != key {
+                return CopiedMinorPromiseKeyFate::Rekey(new_key);
+            }
+            return CopiedMinorPromiseKeyFate::Keep;
+        }
+    }
+    CopiedMinorPromiseKeyFate::Drop
 }
 
 pub(crate) fn cleanup_copied_minor_promise_contexts_for_gc() {
     PROMISE_CONTEXTS.with(|contexts| {
         let mut contexts = contexts.borrow_mut();
         let mut moved = Vec::new();
-        contexts.retain(|key, _| {
-            let space = crate::arena::classify_heap_space(key);
-            let in_from_space = matches!(space, crate::arena::HeapSpace::NurseryEden)
-                || space == crate::arena::active_survivor_space();
-            if !in_from_space || key < crate::gc::GC_HEADER_SIZE {
-                return true;
+        contexts.retain(|key, _| match copied_minor_promise_key_fate(key) {
+            CopiedMinorPromiseKeyFate::Keep => true,
+            CopiedMinorPromiseKeyFate::Rekey(new_key) => {
+                moved.push((key, new_key));
+                true
             }
-            unsafe {
-                let header =
-                    (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*header).obj_type != crate::gc::GC_TYPE_PROMISE
-                    || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
-                {
-                    return true;
-                }
-                if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-                    let new_key = crate::gc::forwarding_address(header) as usize;
-                    if new_key != key {
-                        moved.push((key, new_key));
-                    }
-                    return true;
-                }
-            }
-            false
+            CopiedMinorPromiseKeyFate::Drop => false,
         });
         for (old_key, new_key) in moved {
             contexts.rekey(old_key, new_key);
         }
     });
+    reactions::cleanup_copied_minor_settle_listeners_for_gc();
+    reactions::cleanup_copied_minor_overflow_reactions_for_gc();
+    combinators::cleanup_copied_minor_all_states_for_gc();
 }
 
 pub(crate) fn enter_microtask_context(snapshot: &AsyncContextSnapshot) {
@@ -878,6 +1124,12 @@ pub extern "C" fn js_microtasks_pending() -> i32 {
         return 1;
     }
     if crate::builtins::queued_microtasks_pending() {
+        return 1;
+    }
+    // Undelivered FinalizationRegistry cleanup jobs from an automatic GC
+    // cycle: keep the loop alive one more turn so the pump's
+    // `drain_pending_finalization_jobs` converts them into tick callbacks.
+    if crate::weakref::pending_finalization_jobs_count() > 0 {
         return 1;
     }
     TASK_QUEUE.with(|q| if q.borrow().is_empty() { 0 } else { 1 })

@@ -496,6 +496,23 @@ pub(super) fn compile_module_entry(
             // the startup cost. The extern declaration at line ~3947
             // still emits for every non-entry prefix so the dispatch
             // site can resolve the symbol at link time.
+            // Seed `globalThis.AsyncLocalStorage` BEFORE any module init:
+            // Next.js modules (dist and the bundled app-page runtime alike)
+            // snapshot it at module scope, and the eager init order can run
+            // those snapshots before node-environment-baseline.js's own
+            // assignment — leaving a FakeAsyncLocalStorage that throws
+            // Next error E504 on the first request.
+            //
+            // Emitted ONLY for Next.js-shaped programs (the wall-54
+            // `.next/server/**` path-init list is non-empty). Node itself has
+            // NO `globalThis.AsyncLocalStorage` — Next's baseline assigns it
+            // at runtime — so seeding unconditionally diverges from node for
+            // ordinary programs AND installs the async_hooks surface at every
+            // program's entry (the native-ABI proof workload's write-barrier
+            // budget went 8 → 7921 on exactly that).
+            if !nextjs_path_inits.is_empty() {
+                blk.call_void("js_globalthis_seed_async_local_storage", &[]);
+            }
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -544,6 +561,7 @@ pub(super) fn compile_module_entry(
             .collect();
         let main_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &[],
             &flat_const_ids,
             &clamp_fn_ids,
             &cross_module.clamp3_functions,
@@ -551,6 +569,7 @@ pub(super) fn compile_module_entry(
             module_globals,
             classes,
             &cross_module.compile_time_constants,
+            &cross_module.module_dispatch,
         );
         let mut init_local_types: HashMap<u32, perry_types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
@@ -600,6 +619,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            tdz_boxes: std::collections::HashSet::new(),
             compiler_private_async_i32_control_locals: &cross_module
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
@@ -610,12 +630,12 @@ pub(super) fn compile_module_entry(
             option_object_locals: HashMap::new(),
             object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
-            namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
+            async_step_closures: &cross_module.async_step_closures,
             funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
             imported_func_param_counts: &cross_module.imported_func_param_counts,
@@ -640,6 +660,7 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             packed_f64_loop_facts: Vec::new(),
+            class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: main_native_facts.index_used_locals(),
@@ -658,6 +679,8 @@ pub(super) fn compile_module_entry(
             pod_records: std::collections::HashMap::new(),
             pod_views: std::collections::HashMap::new(),
             scalar_replaced_arrays: std::collections::HashMap::new(),
+            scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
+            scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
@@ -665,6 +688,10 @@ pub(super) fn compile_module_entry(
             non_escaping_array_used_indices: main_native_facts
                 .non_escaping_array_used_indices()
                 .clone(),
+            non_escaping_array_length_only_indices: main_native_facts
+                .non_escaping_array_length_only_indices()
+                .clone(),
+            fusible_uppercase_locals: main_native_facts.fusible_uppercase_locals().clone(),
             non_escaping_object_literals: main_native_facts.non_escaping_object_literals().clone(),
             non_escaping_object_literal_used_fields: main_native_facts
                 .non_escaping_object_literal_used_fields()
@@ -824,8 +851,20 @@ pub(super) fn compile_module_entry(
                 // Initial microtask flush (4 rounds) before entering the
                 // event loop — handles fire-and-forget .then() chains that
                 // don't need the full event loop.
+                //
+                // #6077: `js_promise_run_microtasks_event_loop` is
+                // `js_promise_run_microtasks` plus the unhandled-rejection
+                // checkpoint (Node's `processPromiseRejections`), which runs
+                // between the microtask drain and the timer queues. Only the
+                // codegen event loop may use it: this is the one pump whose
+                // caller has a fully unwound JS stack, so "no handler yet" here
+                // really means "no handler this turn" — the runtime's busy-wait
+                // pumps (`for await` over a stream, fs.cp) drain microtasks with
+                // a suspended JS frame on the stack and must NOT report.
                 for _ in 0..4 {
-                    let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                    let _ = ctx
+                        .block()
+                        .call(I32, "js_promise_run_microtasks_event_loop", &[]);
                     let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                     let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                     let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
@@ -886,7 +925,9 @@ pub(super) fn compile_module_entry(
 
                 // loop_body: tick everything, sleep, loop
                 ctx.current_block = body_idx;
-                let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                let _ = ctx
+                    .block()
+                    .call(I32, "js_promise_run_microtasks_event_loop", &[]);
                 let _ = ctx.block().call(I32, "js_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
@@ -913,7 +954,9 @@ pub(super) fn compile_module_entry(
                 let zero_code = "0x0".to_string();
                 ctx.block()
                     .call_void("js_process_emit_before_exit", &[(DOUBLE, &zero_code)]);
-                let _ = ctx.block().call(I32, "js_promise_run_microtasks", &[]);
+                let _ = ctx
+                    .block()
+                    .call(I32, "js_promise_run_microtasks_event_loop", &[]);
                 let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
@@ -1088,6 +1131,7 @@ pub(super) fn compile_module_entry(
             .collect();
         let init_native_facts = crate::collectors::collect_native_region_fact_graph(
             &hir.init,
+            &[],
             &flat_const_ids,
             &clamp_fn_ids,
             &cross_module.clamp3_functions,
@@ -1095,6 +1139,7 @@ pub(super) fn compile_module_entry(
             module_globals,
             classes,
             &cross_module.compile_time_constants,
+            &cross_module.module_dispatch,
         );
         let mut ctx = FnCtx {
             func: init_fn,
@@ -1142,6 +1187,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
+            tdz_boxes: std::collections::HashSet::new(),
             compiler_private_async_i32_control_locals: &cross_module
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
@@ -1152,12 +1198,12 @@ pub(super) fn compile_module_entry(
             option_object_locals: HashMap::new(),
             object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
-            namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_origin_names: &cross_module.namespace_member_origin_names,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
             local_generator_funcs: &cross_module.local_generator_funcs,
+            async_step_closures: &cross_module.async_step_closures,
             funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
             imported_func_param_counts: &cross_module.imported_func_param_counts,
@@ -1182,6 +1228,7 @@ pub(super) fn compile_module_entry(
             cached_lengths: HashMap::new(),
             bounded_index_pairs: Vec::new(),
             packed_f64_loop_facts: Vec::new(),
+            class_field_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             i1_local_slots: HashMap::new(),
             index_used_locals: init_native_facts.index_used_locals(),
@@ -1200,6 +1247,8 @@ pub(super) fn compile_module_entry(
             pod_records: std::collections::HashMap::new(),
             pod_views: std::collections::HashMap::new(),
             scalar_replaced_arrays: std::collections::HashMap::new(),
+            scalar_replaced_split_part_lengths: std::collections::HashMap::new(),
+            scalar_replaced_uppercase_sources: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: init_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: init_native_facts.non_escaping_new_used_fields().clone(),
@@ -1207,6 +1256,10 @@ pub(super) fn compile_module_entry(
             non_escaping_array_used_indices: init_native_facts
                 .non_escaping_array_used_indices()
                 .clone(),
+            non_escaping_array_length_only_indices: init_native_facts
+                .non_escaping_array_length_only_indices()
+                .clone(),
+            fusible_uppercase_locals: init_native_facts.fusible_uppercase_locals().clone(),
             non_escaping_object_literals: init_native_facts.non_escaping_object_literals().clone(),
             non_escaping_object_literal_used_fields: init_native_facts
                 .non_escaping_object_literal_used_fields()

@@ -93,6 +93,9 @@ fr = "EUR"
 
 [publish]
 server = "https://hub.perryts.com"
+exclude = ["screenshots", "docs"]
+# Deliberately send this input; see the archive safety policy below.
+include = [".env.publish"]
 
 [audit]
 fail_on = "B"
@@ -153,6 +156,10 @@ Build output settings.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `out_dir` | string | `"dist"` | Directory for build artifacts |
+| `march` | string | `native` for host builds, `generic` for cross builds, `x86-64-v2` for `perry publish linux` | CPU baseline for the generated machine code: an LLVM CPU name (`"x86-64-v2"`, `"x86-64-v3"`, `"znver2"`, `"apple-m1"`, …), `"native"` (tune to the build machine's full instruction set), or `"generic"` (the target architecture's portable baseline). Pin this when the binary runs on machines other than the build box — an unpinned host-native build on an AVX-512 machine crashes with SIGILL on older x86-64 CPUs. Equivalent to `--march` / `PERRY_TARGET_CPU`. |
+| `native_tuning` | bool | — | Boolean shorthand for `march`: `true` → `"native"`, `false` → `"generic"`. Ignored when `march` is set. |
+
+`perry publish` forwards the resolved baseline to the build worker, and defaults Linux builds to `x86-64-v2` so published services run on any x86-64 CPU from roughly the last 15 years instead of inheriting the build server's instruction set.
 
 ---
 
@@ -378,6 +385,25 @@ Publishing configuration.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server` | string | `https://hub.perryts.com` | Custom Perry Hub build server URL. Useful for self-hosted or enterprise deployments |
+| `exclude` | string[] | — | Project-root paths to omit from the upload. A bare name matches only a root entry; a path containing `/` matches that root-relative subtree. |
+| `include` | string[] | — | Project-root paths deliberately restored after automatic file filtering. It cannot override `exclude` or make Perry follow a symlink. |
+
+#### Upload archive safety
+
+`perry publish` and remote `perry run` package only regular files contained in
+their declared roots. Symlinks are never followed or included, whether they
+point inside the project, outside it, form a chain/cycle, or appear inside a
+`file:` dependency. A declared `file:` dependency is its own canonical root,
+so legitimate sibling packages remain supported, but links *inside* that
+dependency cannot escape it.
+
+The archive excludes `.env`, `.env.*`, `.npmrc`, certificate/key containers
+(`.pem`, `.key`, `.p12`, `.pfx`, `.crt`, `.cer`, `.der`, `.jks`, `.keystore`),
+and `service-account*.json` / `service_account*.json` by default. If a remote
+build genuinely needs one of these files, list its exact project-root path in
+`publish.include`; treat that as an intentional credential disclosure. An
+explicit `publish.exclude` always wins. The packed archive also contains a
+machine-readable `.perry/publish-manifest.json` inventory of included files.
 
 ---
 

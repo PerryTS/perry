@@ -468,7 +468,10 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             large_object_policy: GcLargeObjectPolicy::NotApplicable,
             pointer_free: false,
             move_hook_kind: GcMoveHookKind::MapSideTables,
-            rewrite_hook_kind: GcRewriteHookKind::None,
+            // #6084: object/bigint keys are indexed by pointer bits/content,
+            // so an evacuation that rewrites this Map's entry slots must
+            // rebuild MAP_PTR_INDEX (mirrors "set" below).
+            rewrite_hook_kind: GcRewriteHookKind::MapIndex,
             finalize_hook_kind: GcFinalizeHookKind::MapSideAllocation,
         },
         GcTypeInfo {
@@ -1126,4 +1129,49 @@ fn test_malloc_kind_telemetry_trace_json() {
         .find(|row| row["obj_type"].as_u64() == Some(0))
         .expect("unknown row should be present");
     assert_eq!(unknown_row["kind"].as_str(), Some("unknown"));
+}
+
+/// `MALLOC_STATE` starts small (4096-entry pre-size) and jumps to the
+/// heavy 256 k pre-size exactly once, the first time a thread's tracked
+/// object count crosses `MALLOC_STATE_HEAVY_LEN_THRESHOLD` — spawn
+/// workers keep the small floor, promise-heavy threads keep the
+/// rehash-amortization the old flat pre-size existed for.
+#[test]
+fn malloc_state_capacity_grows_once_for_heavy_threads() {
+    std::thread::spawn(|| {
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+        // Fresh thread → pristine MALLOC_STATE at the small pre-size.
+        let (initial_objects_cap, initial_set_cap) = MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            (s.objects.capacity(), s.set.capacity())
+        });
+        assert!(
+            initial_objects_cap < MALLOC_STATE_HEAVY_CAPACITY,
+            "objects Vec must not start at the heavy pre-size (got {initial_objects_cap})"
+        );
+        assert!(
+            initial_set_cap < MALLOC_STATE_HEAVY_CAPACITY,
+            "pointer set must not start at the heavy pre-size (got {initial_set_cap})"
+        );
+
+        // Cross the heavy threshold; the one-shot reserve must trip.
+        while MALLOC_STATE.with(|s| s.borrow().objects.len()) < MALLOC_STATE_HEAVY_LEN_THRESHOLD {
+            let _ = gc_malloc(16, GC_TYPE_STRING);
+        }
+        MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            assert!(
+                s.heavy_capacity_reserved,
+                "heavy latch must trip at the threshold"
+            );
+            assert!(
+                s.objects.capacity() >= MALLOC_STATE_HEAVY_CAPACITY,
+                "objects Vec must reserve the heavy capacity (got {})",
+                s.objects.capacity()
+            );
+        });
+    })
+    .join()
+    .expect("malloc capacity growth test panicked");
 }

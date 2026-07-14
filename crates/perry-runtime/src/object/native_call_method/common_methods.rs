@@ -155,7 +155,9 @@ pub(super) unsafe fn dispatch_common(
                                     ),
                                     ExoticKind::Date
                                     | ExoticKind::Temporal
-                                    | ExoticKind::Promise => false,
+                                    | ExoticKind::Promise
+                                    | ExoticKind::Map
+                                    | ExoticKind::Set => false,
                                 }
                         })
                         .unwrap_or(false);
@@ -696,7 +698,9 @@ pub(super) unsafe fn dispatch_common(
                         } else {
                             payload
                         };
-                        let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                        let s = if n.fract() == 0.0
+                            && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT
+                        {
                             (n as i64).to_string()
                         } else {
                             n.to_string()
@@ -753,7 +757,7 @@ pub(super) unsafe fn dispatch_common(
                         crate::value::js_jsvalue_to_string_radix(object, radix_arg.unwrap());
                     return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                 }
-                let s = if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+                let s = if n.fract() == 0.0 && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
                     (n as i64).to_string()
                 } else {
                     n.to_string()

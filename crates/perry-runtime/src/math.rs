@@ -26,6 +26,15 @@ pub extern "C" fn js_math_trunc(value: f64) -> f64 {
     js_math_to_number(value).trunc()
 }
 
+/// Math.round(x) -> number. ECMA-262 21.3.2.28 round-half-toward-+∞ with -0
+/// preservation. The naive `floor(x + 0.5)` mis-rounds `0.5 - ε/4` (the `+ 0.5`
+/// add pre-rounds up to 1.0) and large odd integers where the `.5` is lost; see
+/// `js_math_round_value` (test262 Math/round/S15.8.2.15_A7).
+#[no_mangle]
+pub extern "C" fn js_math_round(value: f64) -> f64 {
+    crate::object::js_math_round_value(js_math_to_number(value))
+}
+
 /// Math.sign(x) -> number
 #[no_mangle]
 pub extern "C" fn js_math_sign(value: f64) -> f64 {
@@ -208,11 +217,12 @@ pub extern "C" fn js_math_f16round(value: f64) -> f64 {
 /// Math.clz32(x) -> number — count leading zeros of 32-bit integer
 #[no_mangle]
 pub extern "C" fn js_math_clz32(x: f64) -> f64 {
-    // JS spec: convert to UInt32 first
-    let n = if x.is_nan() || x.is_infinite() {
+    // JS spec: ToUint32(x) first. `x as i64 as u32` SATURATES for |x| >= 2^63
+    // (Math.clz32(1e20) came out 0 instead of 1); use truncate-mod-2^32.
+    let n = if !x.is_finite() {
         0u32
     } else {
-        x as i64 as u32
+        x.trunc().rem_euclid(4_294_967_296.0) as u32
     };
     n.leading_zeros() as f64
 }
@@ -436,6 +446,28 @@ mod tests {
         assert_eq!(js_math_trunc(f64::INFINITY), f64::INFINITY);
         assert_eq!(js_math_trunc(f64::NEG_INFINITY), f64::NEG_INFINITY);
         assert!(is_neg_zero(js_math_trunc(-0.0)));
+    }
+
+    #[test]
+    fn js_math_round_matches_spec_half_and_neg_zero() {
+        // Half rounds toward +∞.
+        assert_eq!(js_math_round(0.5), 1.0);
+        assert_eq!(js_math_round(2.5), 3.0);
+        assert_eq!(js_math_round(-0.5), 0.0);
+        assert!(is_neg_zero(js_math_round(-0.5)));
+        assert!(is_neg_zero(js_math_round(-0.25)));
+        // `0.5 - ε/4` is strictly below a half → +0, where floor(x+0.5) gives 1.
+        let x = 0.5 - f64::EPSILON / 4.0;
+        assert_eq!(js_math_round(x), 0.0);
+        assert!(!is_neg_zero(js_math_round(x)));
+        // Large odd integers are returned unchanged (the `.5` add would vanish).
+        let big = 1.0 / f64::EPSILON + 1.0;
+        assert_eq!(js_math_round(big), big);
+        assert_eq!(js_math_round(-big), -big);
+        // NaN / ±0 / ±Infinity pass through.
+        assert!(js_math_round(f64::NAN).is_nan());
+        assert!(is_neg_zero(js_math_round(-0.0)));
+        assert_eq!(js_math_round(f64::INFINITY), f64::INFINITY);
     }
 
     #[test]

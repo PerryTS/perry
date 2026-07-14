@@ -183,7 +183,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut ModuleAudit) {
             }
         }
         // PreallocateBoxes carries only LocalIds, no Expr / Stmt children.
-        Stmt::PreallocateBoxes(_) => {}
+        Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => {}
     }
 }
 

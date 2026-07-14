@@ -4,6 +4,7 @@
 //! `lower_perry_ui_table_call` machinery, V8-fallback bridge calls,
 //! and the generic `perry_fn_<src>__<name>` consumer-prefix path.
 
+use super::builtin_table_gate::callee_is_from_perry_module;
 use anyhow::{anyhow, Result};
 use perry_api_manifest::{
     NativeAbiType, NativeHandleAbi, NativeHandleOwnership, NativeHandleThreadAffinity, NativePodAbi,
@@ -1427,21 +1428,30 @@ pub fn try_lower_extern_func_call(
     // keychainSave, etc.) to their perry_system_* / perry_* C symbols.
     // These arrive as ExternFuncRef because perry/system imports aren't
     // lowered to NativeMethodCall in the HIR.
-    if let Some(sig) = perry_system_table_lookup(name) {
-        return Ok(Some(lower_perry_ui_table_call(ctx, sig, args)?));
+    //
+    // Issue #6087: gated on the *import source*, not the bare name — see
+    // `callee_is_from_perry_module`.
+    if callee_is_from_perry_module(ctx, name, "perry/system") {
+        if let Some(sig) = perry_system_table_lookup(name) {
+            return Ok(Some(lower_perry_ui_table_call(ctx, sig, args)?));
+        }
     }
     // perry/updater dispatch: same shape as perry/system. Imports from
     // `perry/updater` arrive as ExternFuncRef; route by name to the
     // perry_updater_* runtime symbols in `perry-updater`.
-    if let Some(sig) = perry_updater_table_lookup(name) {
-        return Ok(Some(lower_perry_ui_table_call(ctx, sig, args)?));
+    if callee_is_from_perry_module(ctx, name, "perry/updater") {
+        if let Some(sig) = perry_updater_table_lookup(name) {
+            return Ok(Some(lower_perry_ui_table_call(ctx, sig, args)?));
+        }
     }
     // perry/background dispatch (issue #538): registerTask / schedule /
     // cancel from `perry/background`. Backed by perry_background_* in
     // libperry_ui_*.a (real impls on iOS + Android, no-op stubs
     // elsewhere). Same calling convention as perry/system.
-    if let Some(sig) = perry_background_table_lookup(name) {
-        return Ok(Some(lower_perry_ui_table_call(ctx, sig, args)?));
+    if callee_is_from_perry_module(ctx, name, "perry/background") {
+        if let Some(sig) = perry_background_table_lookup(name) {
+            return Ok(Some(lower_perry_ui_table_call(ctx, sig, args)?));
+        }
     }
     // Built-in runtime extern functions (`js_weakmap_set`,
     // `js_regexp_exec`, etc.) that start with `js_` are resolved

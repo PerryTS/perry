@@ -15,6 +15,7 @@ use crate::OutputFormat;
 // public API surface; helpers move to focused modules so unrelated
 // changes don't churn this file.
 mod app_metadata;
+mod apple_codesign;
 mod apple_info_plist;
 mod audit_manifest;
 mod bootstrap;
@@ -37,6 +38,7 @@ mod lock_scan;
 mod lowering_report;
 mod object_cache;
 mod optimized_libs;
+mod output_path;
 mod parse_cache;
 mod post_link;
 mod precompile_capture;
@@ -100,9 +102,10 @@ use resolve::{
 };
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
-    localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows,
-    strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
-    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+    dedup_ui_lib_against_linked_libs, localize_stdlib_stub_symbols,
+    localize_stdlib_stub_symbols_for_windows, strip_bundled_runtime_from_well_known_lib,
+    strip_bundled_shared_deps_from_well_known_lib, strip_duplicate_objects_from_lib,
+    strip_duplicate_objects_from_well_known_lib,
 };
 use targets::{
     apple_sdk_version, find_visionos_swift_runtime, find_watchos_swift_runtime,

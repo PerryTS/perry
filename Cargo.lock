@@ -1076,9 +1076,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck_derive"
-version = "1.10.2"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
+checksum = "f65693059b6b9c588b9f62fed1cedbf0a8b805631457ea162d68f0de186f3de5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1199,9 +1199,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.65"
+version = "1.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
+checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1755,9 +1755,9 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "cron"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "089df96cf6a25253b4b6b6744d86f91150a3d4df546f31a95def47976b8cba97"
+checksum = "a5dcd6f69605c2956916ce24e8af637b754964c9a83f4662d3a2361654cdba09"
 dependencies = [
  "chrono",
  "once_cell",
@@ -1797,9 +1797,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -4414,6 +4414,15 @@ checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
 name = "hybrid-array"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2d35805454dc9f8662a98d6d61886ffe26bd465f5960e0e55345c70d5c0d2a9"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
+name = "hybrid-array"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891d15931895091dea5c47afa5b3c9a01ba634b311919fd4d41388fa0e3d76af"
@@ -5429,9 +5438,9 @@ dependencies = [
 
 [[package]]
 name = "jiff"
-version = "0.2.31"
+version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccfe6121cbe750cf81efa362d85c0bde7ea298ec43092d3a193baca59cdbd634"
+checksum = "961d16382652bfdd8c6f68b223b26a8c93e0d475c672f414411db31c6c5c900e"
 dependencies = [
  "defmt",
  "jiff-static",
@@ -5443,9 +5452,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.31"
+version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e165e897f662d428f3cd3828a919dbe067c2d42bb1031eede74ef9d27ecdedd2"
+checksum = "d0879bd39df99c4c5e2c6615ccc026391a423dde10532c573e6086eb94a802cc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6236,6 +6245,18 @@ dependencies = [
 
 [[package]]
 name = "ml-kem"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97befee0c869cb56f3118f49d0f9bb68c9e3f380dec23c1100aedc4ec3ba239a"
+dependencies = [
+ "hybrid-array 0.2.3",
+ "kem",
+ "rand_core 0.6.4",
+ "sha3 0.10.9",
+]
+
+[[package]]
+name = "ml-kem"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e15f3e5b957493873e396a66914e83e616b6afe335cdef7efe5c6e1216aba66"
@@ -6376,9 +6397,9 @@ dependencies = [
 
 [[package]]
 name = "mozjs"
-version = "0.15.7"
+version = "0.15.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "226edc79aa3f990a61330d4011471910273f6ee6bbfd0dcb93b18f5a03505f6b"
+checksum = "99f453559a827f30c1a60db68d95e0149d141031f2483334682a4ffd47ebf2f1"
 dependencies = [
  "bindgen",
  "cc",
@@ -6391,9 +6412,9 @@ dependencies = [
 
 [[package]]
 name = "mozjs_sys"
-version = "0.140.8-2"
+version = "140.12.0-1-lts"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b50224a02c96e1e703f7d055377431333dfc5cd3a09ccf03f8a2c8a156c7af8"
+checksum = "3ad338ebb43b9faa0d8268d88d662eeda8774812c5401c1a26a50b56ab5f5a9c"
 dependencies = [
  "bindgen",
  "cc",
@@ -7280,7 +7301,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perry"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7298,6 +7319,7 @@ dependencies = [
  "hex",
  "indicatif",
  "jsonwebtoken",
+ "libc",
  "log",
  "notify",
  "perry-api-manifest",
@@ -7314,6 +7336,7 @@ dependencies = [
  "perry-runtime",
  "perry-transform",
  "perry-types",
+ "perry-updater",
  "rand 0.9.4",
  "rayon",
  "regex",
@@ -7331,20 +7354,21 @@ dependencies = [
  "toml",
  "url",
  "walkdir",
+ "windows-sys 0.61.2",
  "zip",
  "zstd",
 ]
 
 [[package]]
 name = "perry-api-manifest"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "perry-audio-miniaudio"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "cc",
  "libc",
@@ -7352,7 +7376,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "log",
@@ -7367,7 +7391,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-arkts"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -7376,7 +7400,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-glance"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -7384,7 +7408,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-js"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-dispatch",
@@ -7394,7 +7418,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-swiftui"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -7403,7 +7427,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wasm"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7416,7 +7440,7 @@ dependencies = [
 
 [[package]]
 name = "perry-codegen-wear-tiles"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -7424,13 +7448,13 @@ dependencies = [
 
 [[package]]
 name = "perry-container-compose"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "async-trait",
  "atty",
  "clap",
- "console 0.15.11",
+ "console 0.16.3",
  "dashmap",
  "dialoguer 0.11.0",
  "dotenvy",
@@ -7453,14 +7477,14 @@ dependencies = [
 
 [[package]]
 name = "perry-container-e2e"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "perry-diagnostics"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "serde",
  "serde_json",
@@ -7468,7 +7492,7 @@ dependencies = [
 
 [[package]]
 name = "perry-dispatch"
-version = "0.5.1239"
+version = "0.5.1258"
 
 [[package]]
 name = "perry-doc-fixture-my-bindings"
@@ -7479,7 +7503,7 @@ dependencies = [
 
 [[package]]
 name = "perry-doc-tests"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "clap",
@@ -7494,7 +7518,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ads"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "block2",
  "objc2",
@@ -7504,7 +7528,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-argon2"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "argon2",
  "perry-ffi",
@@ -7512,7 +7536,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-axios"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "reqwest",
@@ -7521,7 +7545,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-bcrypt"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bcrypt",
  "perry-ffi",
@@ -7529,7 +7553,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-better-sqlite3"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "rusqlite",
@@ -7537,7 +7561,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-cheerio"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "scraper",
@@ -7545,7 +7569,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-commander"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -7553,7 +7577,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-cron"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "chrono",
  "cron",
@@ -7563,7 +7587,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-dayjs"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "chrono",
  "perry-ffi",
@@ -7571,7 +7595,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-decimal"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "rust_decimal",
@@ -7579,7 +7603,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-dotenv"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "serde_json",
@@ -7587,7 +7611,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ethers"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "rand 0.8.6",
@@ -7595,7 +7619,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-events"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
@@ -7603,14 +7627,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-exponential-backoff"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
 ]
 
 [[package]]
 name = "perry-ext-fastify"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -7628,7 +7652,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-fetch"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -7641,7 +7665,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-http"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -7655,7 +7679,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-http-server"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bytes",
  "h2 0.4.14",
@@ -7678,7 +7702,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ioredis"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "lazy_static",
  "perry-ffi",
@@ -7688,7 +7712,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-jsonwebtoken"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "jsonwebtoken",
@@ -7699,7 +7723,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-lru-cache"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "lru",
  "perry-ffi",
@@ -7707,7 +7731,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-moment"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "chrono",
  "perry-ffi",
@@ -7715,7 +7739,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-mongodb"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bson",
  "futures-util",
@@ -7727,7 +7751,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-mysql2"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "chrono",
  "perry-ffi",
@@ -7737,7 +7761,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-nanoid"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "nanoid",
  "perry-ffi",
@@ -7746,7 +7770,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-net"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "bytes",
  "perry-ffi",
@@ -7759,7 +7783,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-nodemailer"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "lettre",
  "perry-ffi",
@@ -7769,7 +7793,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-pdf"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "printpdf",
@@ -7777,7 +7801,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-pg"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "sqlx",
@@ -7786,7 +7810,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ratelimit"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "governor",
  "perry-ffi",
@@ -7794,7 +7818,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-sharp"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "fast_image_resize",
  "image",
@@ -7804,14 +7828,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-slugify"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
 ]
 
 [[package]]
 name = "perry-ext-streams"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "lazy_static",
  "perry-ffi",
@@ -7820,7 +7844,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-uuid"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "uuid",
@@ -7828,7 +7852,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-validator"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ffi",
  "regex",
@@ -7838,19 +7862,20 @@ dependencies = [
 
 [[package]]
 name = "perry-ext-ws"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "futures-util",
  "lazy_static",
  "perry-ffi",
  "perry-runtime",
+ "rustls",
  "tokio",
  "tokio-tungstenite",
 ]
 
 [[package]]
 name = "perry-ext-zlib"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "brotli",
  "flate2",
@@ -7859,7 +7884,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ffi"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "dashmap",
  "once_cell",
@@ -7868,7 +7893,7 @@ dependencies = [
 
 [[package]]
 name = "perry-hir"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-api-manifest",
@@ -7886,7 +7911,7 @@ dependencies = [
 
 [[package]]
 name = "perry-parser"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-diagnostics",
@@ -7898,11 +7923,12 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dirs",
+ "encoding_rs",
  "fancy-regex",
  "hickory-proto",
  "hostname",
@@ -7931,14 +7957,14 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime-static"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-runtime",
 ]
 
 [[package]]
 name = "perry-stdlib"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -7978,7 +8004,7 @@ dependencies = [
  "libc",
  "lru",
  "md-5 0.11.0",
- "ml-kem",
+ "ml-kem 0.3.2",
  "mongodb",
  "nanoid",
  "once_cell",
@@ -8031,14 +8057,14 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib-static"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-stdlib",
 ]
 
 [[package]]
 name = "perry-transform"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-hir",
@@ -8048,7 +8074,7 @@ dependencies = [
 
 [[package]]
 name = "perry-types"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "anyhow",
  "thiserror 1.0.69",
@@ -8056,14 +8082,14 @@ dependencies = [
 
 [[package]]
 name = "perry-ui"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ui-model",
 ]
 
 [[package]]
 name = "perry-ui-android"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "itoa",
@@ -8080,7 +8106,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-geisterhand"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "rand 0.8.6",
  "serde",
@@ -8090,7 +8116,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-gtk4"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "cairo-rs 0.22.0",
@@ -8113,7 +8139,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-ios"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -8129,7 +8155,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-macos"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -8147,7 +8173,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-model"
-version = "0.5.1239"
+version = "0.5.1258"
 
 [[package]]
 name = "perry-ui-test"
@@ -8155,11 +8181,11 @@ version = "0.1.0"
 
 [[package]]
 name = "perry-ui-testkit"
-version = "0.5.1239"
+version = "0.5.1258"
 
 [[package]]
 name = "perry-ui-tvos"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -8175,7 +8201,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-visionos"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -8191,7 +8217,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-watchos"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "block2",
  "libc",
@@ -8204,7 +8230,7 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -8221,15 +8247,16 @@ dependencies = [
 
 [[package]]
 name = "perry-ui-windows-winui"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "perry-ui-windows",
 ]
 
 [[package]]
 name = "perry-updater"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "ed25519-dalek",
  "hex",
@@ -8238,11 +8265,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]
 name = "perry-wasm-host"
-version = "0.5.1239"
+version = "0.5.1258"
 dependencies = [
  "wasmi",
 ]
@@ -9470,9 +9498,9 @@ dependencies = [
 
 [[package]]
 name = "rustc-demangle"
-version = "0.1.27"
+version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b50b8869d9fc858ce7266cce0194bd74df58b9d0e3f6df3a9fc8eb470d95c09d"
+checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
 
 [[package]]
 name = "rustc-hash"
@@ -9988,9 +10016,9 @@ dependencies = [
 
 [[package]]
 name = "servo"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2311cff3de4f2352ea13a9db0718262645202c0773f668a4aad20cc07fe6b06f"
+checksum = "18a0e54898e139dcaa629c9762eaee479f0b52381168241e86a1731828ec3e80"
 dependencies = [
  "accesskit",
  "arboard",
@@ -10064,9 +10092,9 @@ dependencies = [
 
 [[package]]
 name = "servo-background-hang-monitor"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc008a0ae4a818390b09e67b0b113a17259666c8594372565186b8485a3dad13"
+checksum = "c5fdab34d5d941d9f06cf79dcb464de998920d6732938035b7638a196fcb6be0"
 dependencies = [
  "backtrace",
  "crossbeam-channel",
@@ -10080,9 +10108,9 @@ dependencies = [
 
 [[package]]
 name = "servo-background-hang-monitor-api"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8e6392cea0a079d759adeae3f9f4afdfbd2736680545be2dcdce90d61dd813a"
+checksum = "149bebe222137046f2479bf77f6d9ab9037178aef09954b025cb6714f2b53ef3"
 dependencies = [
  "serde",
  "servo-base",
@@ -10090,9 +10118,9 @@ dependencies = [
 
 [[package]]
 name = "servo-base"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "652c96d26c12eb1a80c1de5cd352eeae6d5450f4903f860484142138b26bb596"
+checksum = "903236d16125bd60d460ce29520c28d148a5ae1b35ebff539fddd3cb6e84449c"
 dependencies = [
  "accesskit",
  "crossbeam-channel",
@@ -10116,9 +10144,9 @@ dependencies = [
 
 [[package]]
 name = "servo-canvas"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a860146427668731437efb0b2fa98e09d3a481a4d29b826eb2cdcdad4cd5704"
+checksum = "61da216bfee9ce7aef8b50e424ea6abde2e117e60fc11436b9b593b616bf19ee"
 dependencies = [
  "bytemuck",
  "crossbeam-channel",
@@ -10142,9 +10170,9 @@ dependencies = [
 
 [[package]]
 name = "servo-canvas-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f18e3688716e4accaa2614a54bc17e71624b965a4132e66b6191218e77d75e7"
+checksum = "17979f4e69f82892850714dbd6a8b15a0fda1d4609c82ba596ccfb9dd22d13bb"
 dependencies = [
  "crossbeam-channel",
  "euclid",
@@ -10164,9 +10192,9 @@ dependencies = [
 
 [[package]]
 name = "servo-config"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d453a08194c46a1ef557b82bfc5d101ef26de6a8101e6d79a7eb6773ed346056"
+checksum = "6d7b9a3f0fa240062dc5fe201e8a0b9e81b9d5953173ae98dd46078e14a0e420"
 dependencies = [
  "serde",
  "serde_json",
@@ -10188,9 +10216,9 @@ dependencies = [
 
 [[package]]
 name = "servo-constellation"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2c5a79abbad7c9d96bedf6f047e69f777993ffd820c80ac4c66154475800afe"
+checksum = "06edcddc52dd42150549a5490e2f251703f4f14d70d5c5299b6e178520f7ba84"
 dependencies = [
  "accesskit",
  "backtrace",
@@ -10234,9 +10262,9 @@ dependencies = [
 
 [[package]]
 name = "servo-constellation-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9586a099986a4f42749f576cacd086054e031021cd91110dab5e0b8ef2e51ab"
+checksum = "80fcfba4c3e15c8771312136a933378281513d95f783c234fbfa8c2e0947433c"
 dependencies = [
  "content-security-policy",
  "encoding_rs",
@@ -10269,9 +10297,9 @@ dependencies = [
 
 [[package]]
 name = "servo-default-resources"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4207da426d1d47862349e6743ffd8ac8c1488d9a8a5eed03a83ff9e163697da"
+checksum = "3991a5abf44bc1eca4dffd892b422a5fcde324f9c11249e1a25d3d88f67baaca"
 dependencies = [
  "servo-embedder-traits",
 ]
@@ -10288,9 +10316,9 @@ dependencies = [
 
 [[package]]
 name = "servo-devtools"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "868371dece681d1ca370e763bd5093a4c322eab7fa137969a405a65b9cb9fceb"
+checksum = "2abe12cba4bf8c74b34ab1245f34d5b2f1d5b7c3e491f50981423f8c60d29a6c"
 dependencies = [
  "atomic_refcell",
  "base64 0.22.1",
@@ -10318,9 +10346,9 @@ dependencies = [
 
 [[package]]
 name = "servo-devtools-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e44b3824b411e24d2155baf43fda4de8ae31ccf28b978402c769226a1b082a77"
+checksum = "2d8adcc4976e973caa8ee14a9ef53b161d0361ca361d12bd5db6bf2a8b59715c"
 dependencies = [
  "http 1.4.1",
  "malloc_size_of_derive",
@@ -10347,9 +10375,9 @@ dependencies = [
 
 [[package]]
 name = "servo-embedder-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed5f5632ee546288b8d50c823b710afa56219aca202dd0d990fdc166c84120da"
+checksum = "a2b372b3fc2b94cb035fd07772a29faa90b4b767ce8f7d2ba6915337f77a8015"
 dependencies = [
  "accesskit",
  "bitflags 2.12.1",
@@ -10381,9 +10409,9 @@ dependencies = [
 
 [[package]]
 name = "servo-fonts"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db31f28feaab1159deb1e31b96ac3e320d54dd3e1a8b373acf8f95059354d15c"
+checksum = "1938887cdd7a9893820fdc18b306da71c18227a35482eb8b812a5cc6ccbaf5e5"
 dependencies = [
  "app_units",
  "bitflags 2.12.1",
@@ -10437,9 +10465,9 @@ dependencies = [
 
 [[package]]
 name = "servo-fonts-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7119d37b59f0c02b48499ad916a80b901114a174d3bdc872b8e59be9cc7e3c6"
+checksum = "0319c8f08cba912a9e1102f788b1c433de3c92f195541fe2bb9b95bd068b1adc"
 dependencies = [
  "atomic_refcell",
  "dwrote",
@@ -10462,9 +10490,9 @@ dependencies = [
 
 [[package]]
 name = "servo-geometry"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3bbac0f89e8f20941a26d6e68861f313fbb01e79b18b1c1bd56ca0179063676"
+checksum = "78dc8f12a92c0ebac3f315cf89694d84bcdebfa237dad761d1c1a8d31e13deb3"
 dependencies = [
  "app_units",
  "euclid",
@@ -10502,9 +10530,9 @@ dependencies = [
 
 [[package]]
 name = "servo-layout"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be71eb9497abe74c4e2daec8617bfa14e4378f293795231fd96597308ba27ac2"
+checksum = "20b7159bd1cf6439610bb8cdfe04bcf95e9e16981fe0d611d17166a88dc83726"
 dependencies = [
  "app_units",
  "atomic_refcell",
@@ -10555,9 +10583,9 @@ dependencies = [
 
 [[package]]
 name = "servo-layout-api"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b513bc3cc4d4efd5e1f689633095a4fc780642b3a9ba0082df1283ae395f84a2"
+checksum = "eb995d82ec78c84428e9ec1e10169405d0ea88ebd4c5a42bc9754d04ba00886e"
 dependencies = [
  "app_units",
  "atomic_refcell",
@@ -10631,9 +10659,9 @@ dependencies = [
 
 [[package]]
 name = "servo-media"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b832794132cd7f36b4a5f8f8a1b0a7640160b1f9d2716fa7a16c2e36df0df1ef"
+checksum = "33d6ff2e0360dcb2b1c7e26362fdd8b717a652e476f8c083e538fab008a908a1"
 dependencies = [
  "once_cell",
  "servo-media-audio",
@@ -10680,9 +10708,9 @@ dependencies = [
 
 [[package]]
 name = "servo-media-dummy"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "933cc33fb330745d7fef9437b1bf6ef00377ce2ffdfce3dd407a1b47ce018da2"
+checksum = "c10006795fda72202c01bcd625e2cfc876db468cc0a765f0d41f60665437272c"
 dependencies = [
  "ipc-channel",
  "servo-media",
@@ -10721,9 +10749,9 @@ dependencies = [
 
 [[package]]
 name = "servo-media-thread"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc8a15eefd0c1dfeb2feabe5ec449ce81df1fa5c1c12f95404fecbf38d090f9d"
+checksum = "2344b121d0db81c341edd18dc1c84901dcde02461b0176936f5adc5464b6b49d"
 dependencies = [
  "euclid",
  "ipc-channel",
@@ -10761,9 +10789,9 @@ dependencies = [
 
 [[package]]
 name = "servo-metrics"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349524fd3a66a99e0027575bd246807d657213711d1f606bbc019c996aacc67a"
+checksum = "19a2bb90ae96520abd1b6d9f861e9a1e80c25249c958a47cbb44b5f30be21d16"
 dependencies = [
  "malloc_size_of_derive",
  "servo-base",
@@ -10777,9 +10805,9 @@ dependencies = [
 
 [[package]]
 name = "servo-net"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c577079bb3ef21a4fd7bb36f452aa63b25882e2a7726276cea47ea577d224721"
+checksum = "2d0fa390a1761b36ecd0eb273ad1056ffcd48e41a395c2829d382a43fe765f19"
 dependencies = [
  "async-compression",
  "async-recursion",
@@ -10847,9 +10875,9 @@ dependencies = [
 
 [[package]]
 name = "servo-net-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9625ab5589003db438ba7a266f19d28dbfac09fe2b84cd08adb6c72d0625eab4"
+checksum = "68034c1beb21714a55f9f6dc27f68a5c1356aeabf1f94b72976970f01240b959"
 dependencies = [
  "content-security-policy",
  "cookie 0.18.1",
@@ -10888,9 +10916,9 @@ dependencies = [
 
 [[package]]
 name = "servo-paint"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d0a4a54c85d0d196aa3e2a1802b2b3cfe9b599a05bc32004138a798af2842a3"
+checksum = "007674e97e65c4fb2a4a981d20ec3ca8ed01b8a10fa419cb7aa73720fec882e4"
 dependencies = [
  "bitflags 2.12.1",
  "crossbeam-channel",
@@ -10926,9 +10954,9 @@ dependencies = [
 
 [[package]]
 name = "servo-paint-api"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3f579bc5f06a675ebebecee4b9dc3975010a0c06e68cae9cde805aff5800ca3"
+checksum = "e18a80a54113e97d25afec1b63153ad4a7099cb5067a734dc319d1594d51864f"
 dependencies = [
  "bitflags 2.12.1",
  "crossbeam-channel",
@@ -10962,9 +10990,9 @@ dependencies = [
 
 [[package]]
 name = "servo-pixels"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1fa7656e3deae84546d147ea7eeb5373d6ba2fb20bd3ed1ff82a19427aad6b4"
+checksum = "1ae9a8930376b7ae97ae55081029e675fec42bd76ad86b5ccdd027a60196baca"
 dependencies = [
  "euclid",
  "image",
@@ -10978,9 +11006,9 @@ dependencies = [
 
 [[package]]
 name = "servo-profile"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c977f737c66d814c5b6d121018e7541ddc861f4313a93a0b8acc14a2f7645202"
+checksum = "e96f151f9c0f34c5cf9153a16089a4cad7419b09015919b2cbe7252bf8b338ef"
 dependencies = [
  "libc",
  "log",
@@ -10998,9 +11026,9 @@ dependencies = [
 
 [[package]]
 name = "servo-profile-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fe4720dbdedadebe5b9c644305adfb8ec2293ce0ae65c832f3af83d58573377"
+checksum = "256c39202ad12b9325f08c29ed6cba90adafefad81a80c5ccf8b62982a49f954"
 dependencies = [
  "crossbeam-channel",
  "ipc-channel",
@@ -11015,8 +11043,9 @@ dependencies = [
 
 [[package]]
 name = "servo-script"
-version = "0.1.0"
-source = "git+https://github.com/PerryTS/servo-script-mlkem?rev=e4dc40a54366ac327845c8dd5013a3fb068d19b5#e4dc40a54366ac327845c8dd5013a3fb068d19b5"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d50488dc30ec50f21a53e8d810df2b05a5237c1f6b7bf30c2acc6dac9000cbb6"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -11067,7 +11096,7 @@ dependencies = [
  "mime-multipart-hyper1",
  "mime_guess",
  "ml-dsa",
- "ml-kem",
+ "ml-kem 0.2.1",
  "mozangle",
  "mozjs",
  "nom-rfc8288",
@@ -11151,9 +11180,9 @@ dependencies = [
 
 [[package]]
 name = "servo-script-bindings"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1237e5599ea3857a3cd76f0ec6cd6cfafd2acf274966f960ace001b87b2d891"
+checksum = "ce2496104e87f3df3e170b49740236bc0c2f197d46f8dd5eee8c3770f206db36"
 dependencies = [
  "bitflags 2.12.1",
  "crossbeam-channel",
@@ -11190,9 +11219,9 @@ dependencies = [
 
 [[package]]
 name = "servo-script-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edc2d83cc0e14e0d3914881ae51b1eead81502afe06dbee4996df1f137fb6a6c"
+checksum = "49aed2ab31e293fb46cf9f4e1f9c661df212d95cd1838860fe916c19b3f9df24"
 dependencies = [
  "accesskit",
  "crossbeam-channel",
@@ -11225,9 +11254,9 @@ dependencies = [
 
 [[package]]
 name = "servo-storage"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65ed9c35f2831bbafc3a846555daeb829e42a50c75cab753a0af691b1a92a324"
+checksum = "98db3c294e4f822d8ec28a5159a41122b39959dec72ea2b3ada0079d07c5a5f6"
 dependencies = [
  "libc",
  "log",
@@ -11251,9 +11280,9 @@ dependencies = [
 
 [[package]]
 name = "servo-storage-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b7c15d38ed849e268a2cf0f9adab96f80d1b2cbaf00e67b1787f035a6fde000"
+checksum = "651b7690b4919b91e47f2949ce3f7c1f38cd9c3eed1dbe50336edfbb7057b9ed"
 dependencies = [
  "malloc_size_of_derive",
  "serde",
@@ -11277,9 +11306,9 @@ dependencies = [
 
 [[package]]
 name = "servo-tracing"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "404ade73d66d656d6d84c43d4c5e52a744b1be33c0adf44dc48d5c90535b1009"
+checksum = "91230404bbe3ff749259b0718854dabdc5348aa730baa6029c837bd315ecbc85"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11288,9 +11317,9 @@ dependencies = [
 
 [[package]]
 name = "servo-url"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6704e3fcc79b00776e68fe896bc2429bf2f08dc665d3010a0e914b570993b8e"
+checksum = "1c00723fd5564b25733dd072beba7d75770ba24ea97c9a2bb8df594b268c67cd"
 dependencies = [
  "encoding_rs",
  "malloc_size_of_derive",
@@ -11303,9 +11332,9 @@ dependencies = [
 
 [[package]]
 name = "servo-webgl"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d6994dc5b85ac5d848ff58ad6ea74ce9a7444c1c46f1ef806aab76790ff60bb"
+checksum = "7e27ba2f7128ffa32fa6000c2bb92186d726e7d07e476243e9cb138822883ad7"
 dependencies = [
  "bitflags 2.12.1",
  "byteorder",
@@ -11327,9 +11356,9 @@ dependencies = [
 
 [[package]]
 name = "servo-webgpu"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26fcecae88239ee15fa5a10351c2bc5d09d084f63abdab0bc70931d8fb1f7947"
+checksum = "98f30dc687a622f668e5b2e7f46cd9194b2df17f0b0b3dd0b1bb589e2ce8664c"
 dependencies = [
  "arrayvec",
  "euclid",
@@ -11347,9 +11376,9 @@ dependencies = [
 
 [[package]]
 name = "servo-webgpu-traits"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe5ed6c27d606ce6537cfec6d7a1a249d9c69a4603dc53aa770a72e77bda6ef8"
+checksum = "b1122ef7d6c705ad8fa3d7081ead0542199c1a2ddb12faf4e610974a8718e23c"
 dependencies = [
  "arrayvec",
  "malloc_size_of_derive",
@@ -11364,9 +11393,9 @@ dependencies = [
 
 [[package]]
 name = "servo-webxr"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efdbc5c1be1fdf250978506d303132719a502ec9b81462c7c42f76688187feb5"
+checksum = "9b7a4d5bb2e03c017bf71688456bea557802f8c1a3f655abc0ed1f1c5ef877bf"
 dependencies = [
  "crossbeam-channel",
  "euclid",
@@ -11384,9 +11413,9 @@ dependencies = [
 
 [[package]]
 name = "servo-webxr-api"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32a475bc39579c269a02d9f988709d691b295dbbd2887e178ea613b482cecb50"
+checksum = "39740f879322f006c8fc7b8c52db6f1d96d034faca638817e692d2d5f57c07d9"
 dependencies = [
  "euclid",
  "ipc-channel",
@@ -13825,46 +13854,46 @@ dependencies = [
 
 [[package]]
 name = "wasmi"
-version = "0.51.5"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb321403ce594274827657a908e13d1d9918aa02257b8bf8391949d9764023ff"
+checksum = "2300d0f78cba12f14e29e8dd157ea64050c0a688179aefdb2050105805594a0c"
 dependencies = [
  "spin",
  "wasmi_collections",
  "wasmi_core",
  "wasmi_ir",
- "wasmparser 0.228.0",
+ "wasmparser 0.239.0",
 ]
 
 [[package]]
 name = "wasmi_collections"
-version = "0.51.5"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9b8e98e45a2a534489f8225e765cbf1cb9a3078072605e58158910cf4749172"
+checksum = "f8a8c42a2a76148d43097b1d7cc2a5bf33d5c23bd4dd69015fc887e311767884"
 
 [[package]]
 name = "wasmi_core"
-version = "0.51.5"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c25f375c0cdf14810eab07f532f61f14d4966f09c747a55067fdf3196e8512e6"
+checksum = "9013136083d988725953390bf668b64b7a218fabf26f8b913bbc59546b97ee27"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "wasmi_ir"
-version = "0.51.5"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "624e2a68a4293ecb8f564260b68394b29cf3b3edba6bce35532889a2cb33c3d9"
+checksum = "ba1fa003f79156f406d62ef0e1464dc03e11ace37170e9fa7524299a75ad8f68"
 dependencies = [
  "wasmi_core",
 ]
 
 [[package]]
 name = "wasmparser"
-version = "0.228.0"
+version = "0.239.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4abf1132c1fdf747d56bbc1bb52152400c70f336870f968b85e89ea422198ae3"
+checksum = "8c9d90bb93e764f6beabf1d02028c70a2156a6583e63ac4218dd07ef733368b0"
 dependencies = [
  "bitflags 2.12.1",
 ]
@@ -15095,9 +15124,9 @@ dependencies = [
 
 [[package]]
 name = "x448"
-version = "0.14.0-pre.11"
+version = "0.14.0-pre.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a6fb1c7b65593243419dae9d296b7cf5ceb720c266f002af33b093e143e3b4"
+checksum = "1c166d06b9fa4328c890d46bda797269fb6aeca96393aeaad0e74b4b11550e06"
 dependencies = [
  "ed448-goldilocks",
  "zeroize",
@@ -15588,3 +15617,8 @@ dependencies = [
  "syn 2.0.117",
  "winnow 1.0.3",
 ]
+
+[[patch.unused]]
+name = "servo-script"
+version = "0.1.0"
+source = "git+https://github.com/PerryTS/servo-script-mlkem?rev=e4dc40a54366ac327845c8dd5013a3fb068d19b5#e4dc40a54366ac327845c8dd5013a3fb068d19b5"

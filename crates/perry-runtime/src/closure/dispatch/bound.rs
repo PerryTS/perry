@@ -13,6 +13,16 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
 
+    // #6173: a SYMBOL-keyed class method read as a value — there is no name to
+    // re-resolve; the captures carry the already-resolved func_ptr + arity
+    // meta (see `SYMBOL_BOUND_METHOD_NAME` for the layout). Discriminated by
+    // pointer identity with the static marker, and it MUST run before any
+    // name-based interpretation of the captures below (slots 3/4 are not part
+    // of the name layout).
+    if method_name_ptr == crate::object::SYMBOL_BOUND_METHOD_NAME.as_ptr() as *const i8 {
+        return dispatch_symbol_bound_method(closure, namespace_obj, args);
+    }
+
     // Private-method value (`const f = this.#m; f.call(o)`): a `#`-named method
     // read off an instance yields the OWNER class's method function. Unlike a
     // public method, its invocation must dispatch the OWNER's `#m` body with the
@@ -93,6 +103,57 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
         args.as_ptr(),
         args.len(),
     )
+}
+
+/// #6173: invoke a symbol-bound class-method closure. `receiver` is capture
+/// slot 0 (a NaN-boxed instance/prototype-ref, or the INT32 class ref for a
+/// static method); the resolved func_ptr and packed param_count/has_rest/
+/// is_static meta live in slots 3/4 (see `SYMBOL_BOUND_METHOD_NAME`).
+/// Mirrors the direct-call symbol dispatch in `js_native_call_method_value`.
+unsafe fn dispatch_symbol_bound_method(
+    closure: *const ClosureHeader,
+    receiver: f64,
+    args: &[f64],
+) -> f64 {
+    let func_ptr = js_closure_get_capture_ptr(closure, 3) as usize;
+    let meta = js_closure_get_capture_ptr(closure, 4) as u64;
+    if func_ptr == 0 {
+        // A mis-shaped closure (e.g. a 3-capture name closure whose name
+        // pointer somehow aliased the marker) reads bounds-checked zeros here
+        // — fail soft rather than calling a null fn pointer.
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let param_count = (meta & 0xFFFF_FFFF) as u32;
+    let has_rest = (meta >> 32) & 1 == 1;
+    let is_static = (meta >> 33) & 1 == 1;
+    if is_static {
+        // Bind IMPLICIT_THIS to the class ref for the duration, exactly like
+        // the direct-call path. The one-shot static-`this` override (armed by
+        // the Function.prototype call/apply arms for a static bound-method
+        // value) still wins in the static-method prologue.
+        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let result = crate::object::call_registered_static_method(
+            func_ptr,
+            args.as_ptr(),
+            args.len(),
+            param_count,
+            has_rest,
+        );
+        crate::object::js_implicit_this_set(prev_this);
+        result
+    } else {
+        // Computed symbol methods never synthesize an `arguments` object but
+        // DO carry `has_rest` — mirrors the direct-call path.
+        crate::object::call_vtable_method(
+            func_ptr,
+            receiver.to_bits() as i64,
+            args.as_ptr(),
+            args.len(),
+            param_count,
+            false,
+            has_rest,
+        )
+    }
 }
 
 /// Dispatch a `Function.prototype.bind` result (BOUND_FUNCTION_FUNC_PTR

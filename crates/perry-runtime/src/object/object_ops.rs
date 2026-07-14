@@ -51,7 +51,24 @@ pub(crate) use keys_array::{ensure_key_in_keys_array, install_builtin_getter, ow
 pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
     let jsval = crate::JSValue::from_bits(value.to_bits());
     if jsval.is_pointer() {
-        jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader
+        let ptr = jsval.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        // A POINTER_TAG payload is not always an address. zlib streams, fetch
+        // Request/Response/Headers/Blob, net.Socket, crypto hashes and revocable
+        // Proxies all smuggle small registry *handles* under the same tag (see
+        // `value::addr_class` for the band map). A handle must never be
+        // dereferenced. Return null so every caller takes the `is_null()` path
+        // it already has, instead of reading unmapped low memory.
+        //
+        // This is the central fix for the #6271 crash class: `is_valid_obj_ptr`
+        // does NOT reject the handle band on Linux/Windows/Android/iOS (heap
+        // floor 0x1000, far below HANDLE_BAND_MAX), so callers that guard with
+        // it alone deref the handle and segfault there — while macOS silently
+        // takes the null path behind its 2 TB heap floor. Rejecting here makes
+        // every platform agree on the already-correct macOS behaviour.
+        if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
+            return ptr::null_mut();
+        }
+        ptr
     } else {
         let bits = value.to_bits();
         // Raw-I64-pointer fallback (module-level array/object vars store the
@@ -62,7 +79,11 @@ pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
         // sentinel (`require('buffer')`) reaching a generic object op like
         // `hasOwnProperty`. Without it, callers deref `[ptr-8]` for the
         // GcHeader on a misaligned garbage address → SIGBUS (#3527).
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 && bits & 0x7 == 0 {
+        if bits != 0
+            && bits <= 0x0000_FFFF_FFFF_FFFF
+            && crate::value::addr_class::is_above_handle_band(bits as usize)
+            && bits & 0x7 == 0
+        {
             bits as *mut ObjectHeader
         } else {
             ptr::null_mut()

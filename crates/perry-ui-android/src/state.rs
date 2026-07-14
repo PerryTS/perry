@@ -227,7 +227,9 @@ pub fn state_set(handle: i64, value: f64) {
             .unwrap_or_default()
     });
     for callback_f64 in callbacks_snapshot {
-        let closure_ptr = callback_f64.to_bits() as *const u8;
+        // onChange callbacks are NaN-boxed closures (same as button path).
+        // Do not use to_bits() as a raw pointer — leaves the 0x7ffd tag.
+        let closure_ptr = unsafe { js_nanbox_get_pointer(callback_f64) } as *const u8;
         unsafe {
             js_closure_call1(closure_ptr, value);
         }

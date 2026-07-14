@@ -70,6 +70,29 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // `split("literal")[constant].length` on a scalar-replaced split can
+    // read the precomputed numeric length directly. The split part itself was
+    // never observable as a string, so materializing a StringHeader would only
+    // create short-lived garbage.
+    if let Expr::PropertyGet { object, property } = expr {
+        if property == "length" {
+            if let Expr::IndexGet { object, index } = object.as_ref() {
+                if let (Expr::LocalGet(id), Some(index)) =
+                    (object.as_ref(), crate::collectors::const_index(index))
+                {
+                    if let Some(slot) = ctx
+                        .scalar_replaced_split_part_lengths
+                        .get(id)
+                        .and_then(|lengths| lengths.get(&index))
+                        .cloned()
+                    {
+                        return Ok(ctx.block().load(DOUBLE, &slot));
+                    }
+                }
+            }
+        }
+    }
+
     match expr {
         Expr::PropertyGet { object, property }
             if matches!(object.as_ref(), Expr::LocalGet(id)
@@ -1019,7 +1042,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     ));
                 }
+                // #6003: `class_name == "Headers"` only means the NATIVE
+                // fetch Headers when the user hasn't defined their own
+                // `class Headers` — a user class of that name owns the
+                // receiver type, so fall through to the user-class
+                // getter/method dispatch below.
                 if class_name == "Headers"
+                    && !ctx.classes.contains_key(&class_name)
                     && matches!(
                         property.as_str(),
                         "append"
@@ -1101,7 +1130,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "write" | "close" | "abort" | "releaseLock"
                         )
                 );
-                if class_name == "Headers" && is_headers_method_name(property) {
+                if class_name == "Headers"
+                    && !ctx.classes.contains_key(&class_name)
+                    && is_headers_method_name(property)
+                {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
@@ -1147,6 +1179,69 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.class_ids.get(&class_name),
                         ctx.class_keys_globals.get(&class_name).cloned(),
                     ) {
+                        // #5093 loop versioning: inside the fast clone of a
+                        // class-field versioned loop, a tracked field read on
+                        // the proven receiver lowers to a bare slot load on
+                        // the preheader-cached object pointer — no shape
+                        // check, no guard call, no fallback (the preheader
+                        // proved the shape once and the call-free clone keeps
+                        // it true; see stmt/loops.rs).
+                        let loop_fact_ptr = match object.as_ref() {
+                            Expr::LocalGet(recv_id) => crate::expr::class_field_loop_fact_lookup(
+                                &ctx.class_field_loop_facts,
+                                *recv_id,
+                                &class_name,
+                                property,
+                            )
+                            .filter(|(_, loop_idx)| *loop_idx == field_index)
+                            .map(|(fact, _)| fact.obj_ptr.clone()),
+                            _ => None,
+                        };
+                        if let Some(obj_ptr) = loop_fact_ptr {
+                            let field_idx_str = field_index.to_string();
+                            let blk = ctx.block();
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            let val = blk.load(DOUBLE, &field_ptr);
+                            let fast = LoweredValue {
+                                semantic: SemanticKind::JsNumber,
+                                rep: NativeRep::F64,
+                                llvm_ty: DOUBLE,
+                                value: val.clone(),
+                            };
+                            ctx.record_lowered_value_with_access_mode_and_facts(
+                                "ClassFieldGet",
+                                None,
+                                "class_field_get.loop_raw_f64_load",
+                                &fast,
+                                Some(BoundsState::Guarded {
+                                    guard_id: "class_field_loop_preheader_check".to_string(),
+                                }),
+                                None,
+                                Some(BufferAccessMode::CheckedNative),
+                                None,
+                                None,
+                                None,
+                                vec![raw_f64_layout_fact(
+                                    None,
+                                    "consumed",
+                                    "class_field_loop_preheader_check",
+                                    None,
+                                )],
+                                Vec::new(),
+                                false,
+                                false,
+                                vec![
+                                    format!("class={}", class_name),
+                                    format!("field={}", property),
+                                    format!("field_index={}", field_idx_str),
+                                    "receiver_proof=loop_preheader_shape_check".to_string(),
+                                    "field_layout=raw_f64_slot_array".to_string(),
+                                    "loop_versioning=class_field_fast_clone".to_string(),
+                                ],
+                            );
+                            return Ok(val);
+                        }
                         let recv_box = lower_expr(ctx, object)?;
                         let key_idx = ctx.strings.intern(property);
                         let key_handle_global =
@@ -1253,10 +1348,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
+                        // arm64_32 watchOS: the object fields region begins at
+                        // `size_of::<ObjectHeader>()` past the user pointer — 24 on
+                        // 64-bit, 20 on ILP32 (the trailing `keys_array` pointer is 4
+                        // bytes there). A hardcoded 24 reads every class field 4 bytes
+                        // off on a 32-bit watch, so this inline class-field load
+                        // disagreed with the generic-PIC load / runtime setter (both
+                        // target-aware) and typed-object string fields came back as
+                        // word-swapped NaN-boxes. Derive it from the target triple
+                        // (no-op on 64-bit; see `target_layout`).
+                        let header_skip =
+                            crate::target_layout::object_header_size_bytes(ctx.target_triple)
+                                .to_string();
                         let blk = ctx.block();
                         let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                        // Skip the 24-byte ObjectHeader.
-                        let header_skip = "24".to_string();
                         let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
                         let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
                         let val_fast = blk.load(DOUBLE, &field_ptr);

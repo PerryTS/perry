@@ -487,6 +487,7 @@ kind = "native_rep_benchmark"
 allow_hot_loop_conversions = true
 allowed_hot_loop_runtime_calls = [
   "js_buffer_get",
+  "js_buffer_index_get_value",
   "js_buffer_set",
   "js_shadow_slot_set",
 ]
@@ -520,12 +521,14 @@ allow_dynamic_property_runtime = true
 allow_hot_loop_conversions = true
 allowed_hot_loop_runtime_calls = [
   "js_buffer_get",
+  "js_buffer_index_get_value",
   "js_buffer_set",
   "js_closure_call1",
   "js_dyn_index_get",
   "js_dynamic_string_or_number_add",
   "js_number_coerce",
   "js_uint8array_get",
+  "js_uint8array_index_get_value",
   "js_uint8array_set",
   "js_value_length_f64",
 ]
@@ -1956,6 +1959,7 @@ allowed_hot_loop_runtime_calls = [
   "js_array_length",
   "js_array_push_f64",
   "js_buffer_get",
+  "js_buffer_index_get_value",
   "js_buffer_set",
   "js_handle_object_get_property",
   "js_boxed_number_new",
@@ -1972,6 +1976,7 @@ allowed_hot_loop_runtime_calls = [
   "js_shadow_slot_bind",
   "js_shadow_slot_set",
   "js_uint8array_get",
+  "js_uint8array_index_get_value",
   "js_uint8array_set",
   "js_write_barrier_root_nanbox",
 ]

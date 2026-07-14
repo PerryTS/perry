@@ -29,7 +29,7 @@ use crate::object::js_object_set_field_by_name;
 use crate::object::{js_object_get_field_by_name_f64, ObjectHeader};
 use crate::value::JSValue;
 
-mod async_iterator;
+pub(crate) mod async_iterator;
 mod readable_from_promises;
 
 #[path = "node_stream_event_emitter.rs"]
@@ -42,6 +42,19 @@ use event_emitter::{
     ns_remove_listener2, ns_set_max_listeners, remove_stream_listener_for_event,
     stream_listener_count_for_event,
 };
+
+/// Dispatch `event` to the listeners registered on `stream` through node:stream's
+/// own emitter registry.
+///
+/// Exposed for `child_process`: a child's `stdout`/`stderr` is an emitter-backed
+/// object with its *own* listener registry, but it carries node:stream's async
+/// iterator (see `async_iterator::install_readable_async_iterator_symbol`), whose
+/// `data`/`end`/`error` listeners land *here*. Without this bridge the reactor's
+/// emit would never reach them and `for await (const chunk of child.stdout)` would
+/// hang forever.
+pub(crate) fn emit_to_stream_listeners(stream: f64, event: &[u8], args: &[f64]) {
+    let _ = emit_stream_event(stream, string_value(event), args);
+}
 // #3049 — `process.setMaxListeners` reuses the EventEmitter setter
 // validation (TypeError/RangeError + fractional/Infinity storage).
 pub(crate) use event_emitter::validate_max_listeners;

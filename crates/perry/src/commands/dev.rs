@@ -291,6 +291,7 @@ fn build_once(
         target: None,
         libc: None,
         webview: "system".to_string(),
+        march: None,
         app_bundle_id: None,
         output_type: "executable".to_string(),
         bundle_extensions: None,

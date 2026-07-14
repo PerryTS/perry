@@ -55,6 +55,11 @@ pub fn declare_phase1(module: &mut LlModule) {
     // `main` prelude calls this unconditionally; the runtime symbol no-ops on
     // non-macOS targets and on binaries that aren't inside an `.app` bundle.
     module.declare_function("perry_macos_bundle_chdir", VOID, &[]);
+    // i18n runtime locale-row selection for `Expr::I18nString` sites whose
+    // translations differ between locales: (comma-separated locale-list
+    // StringHeader handle, default row index) -> resolved row index. Lazily
+    // detects + matches the system locale on first call, cached after.
+    module.declare_function("perry_i18n_locale_index_for", I32, &[I64, I32]);
     // Function-name registry — populated by `main()` once per top-level
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.

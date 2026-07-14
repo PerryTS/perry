@@ -1086,6 +1086,69 @@ pub(crate) fn build_bound_method_closure(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+/// #6173: sentinel "method name" installed in the name-capture slots (1, 2) of
+/// a BOUND_METHOD closure whose target is a SYMBOL-keyed class method. A
+/// symbol method has no string name to re-resolve at call time, so the
+/// closure instead carries the already-resolved dispatch data in two extra
+/// capture slots:
+///
+///   slot 0: receiver (NaN-boxed instance/prototype-ref, or the INT32 class
+///           ref for a static method)
+///   slot 1: `SYMBOL_BOUND_METHOD_NAME.as_ptr()` — the discriminant, compared
+///           by ADDRESS in `dispatch_bound_method`, never by content
+///   slot 2: `SYMBOL_BOUND_METHOD_NAME.len()`
+///   slot 3: resolved method func_ptr
+///   slot 4: packed meta — bits 0..32 param_count, bit 32 has_rest,
+///           bit 33 is_static
+///
+/// Slots 1/2 deliberately remain a VALID `(ptr, len)` name pair pointing at
+/// this static byte string: every reader that interprets a BOUND_METHOD's
+/// captures as a method name (`bound_native_callable_module_and_method`, the
+/// by-name dispatch fallbacks) stays memory-safe and merely sees a name that
+/// resolves to nothing. Only pointer identity with THIS static means "symbol
+/// bound"; even a pathological collision is harmless because reads of slots
+/// 3/4 on a 3-capture name closure are bounds-checked to 0 → undefined.
+pub(crate) static SYMBOL_BOUND_METHOD_NAME: &[u8] = b"@@__perry_symbol_bound_method__";
+
+/// #6173: materialize a symbol-keyed class method (already resolved via
+/// `lookup_class_symbol_method_in_chain`) as a callable bound-method value.
+/// See [`SYMBOL_BOUND_METHOD_NAME`] for the capture layout. All captures are
+/// populated immediately after allocation, BEFORE any allocating call — the
+/// capture slots are GC-scanned roots (mirrors `build_bound_method_closure`).
+pub(crate) fn build_symbol_bound_method_closure(
+    receiver: f64,
+    func_ptr: usize,
+    param_count: u32,
+    has_rest: bool,
+    is_static: bool,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 5);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::js_closure_set_capture_f64(closure, 0, receiver);
+    crate::closure::js_closure_set_capture_ptr(
+        closure,
+        1,
+        SYMBOL_BOUND_METHOD_NAME.as_ptr() as i64,
+    );
+    crate::closure::js_closure_set_capture_ptr(closure, 2, SYMBOL_BOUND_METHOD_NAME.len() as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
+    let meta: i64 = (param_count as i64) | ((has_rest as i64) << 32) | ((is_static as i64) << 33);
+    crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+    // Spec `.length` = declared params minus a trailing rest param.
+    set_builtin_closure_length(
+        closure as usize,
+        if has_rest {
+            param_count.saturating_sub(1)
+        } else {
+            param_count
+        },
+    );
+    crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 /// Resolve the owning class id for a `js_class_method_bind` receiver: a class
 /// constructor/prototype ref (INT32-tagged) or a real class instance pointer.
 /// Resolve the effective receiver for a BOUND_METHOD dispatch. When the

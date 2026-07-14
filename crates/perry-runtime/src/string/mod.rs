@@ -40,6 +40,11 @@ pub(crate) use split::spec_regex_split;
 #[cfg(test)]
 mod tests;
 
+/// #6085 guard-page regression tests: prove no string scanner reads past the
+/// end of an exact-sized payload. Unix-only (needs `mmap` + `mprotect`).
+#[cfg(all(test, unix))]
+mod tests_guard_page;
+
 // Explicit named re-exports — preserve the original `crate::string::*`
 // surface 1:1. NO glob re-exports.
 pub use alloc::{
@@ -64,7 +69,9 @@ pub use compare::{
 // #1781: SSO-aware key lookup helpers, used to retire the
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape
 // across object/.
-pub(crate) use compare::{js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes};
+pub(crate) use compare::{
+    js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes, utf16_cmp_bytes,
+};
 pub use concat::{
     js_string_concat, js_string_concat_box, js_string_concat_chain, js_string_concat_value,
     js_value_concat_string,
@@ -262,32 +269,115 @@ pub(crate) fn compute_utf16_len(data: *const u8, byte_len: u32) -> u32 {
     }
 }
 
+/// One bounded WTF-8 decode step at `bytes[i]` (caller guarantees `i < bytes.len()`).
+/// Returns `(advance, utf16_units, code_point)`.
+///
+/// Issue #6085: Perry heap-string payloads are EXACT-SIZED allocations
+/// (`string_storage_alloc` reserves `byte_len` bytes, no NUL terminator, no
+/// tail padding) and may legally hold non-UTF-8 bytes (WTF-8 lone surrogates,
+/// `Buffer.toString('utf8')` of arbitrary bytes, FFI blobs). Scanning such a
+/// payload through `str::from_utf8_unchecked(...)` + `chars()`/`encode_utf16()`
+/// is undefined behavior: the std decoders assume UTF-8 validity, so a
+/// multi-byte lead in the last 1–3 bytes licenses the optimizer to read the
+/// "guaranteed" continuation bytes past the end of the allocation. When the
+/// payload ends flush against an unmapped page that read is an access
+/// violation (`0x...FFF8`-style faulting addresses on Windows x64).
+///
+/// This helper is the bounds-driven replacement: it classifies the sequence
+/// from the lead byte exactly like [`compute_utf16_len_wtf8`] (so cursor walks
+/// agree with the `utf16_len` recorded in the header) and reads continuation
+/// bytes only via bounds-checked `get()`, substituting 0 for bytes that don't
+/// exist. Valid UTF-8/WTF-8 input decodes byte-for-byte identically to the
+/// std decoders.
+///
+/// - ASCII byte → `(1, 1, b)`
+/// - stray continuation byte in lead position → `(1, 0, 0xFFFD)` (skipped by
+///   unit counting, mirroring `compute_utf16_len_wtf8`)
+/// - 2/3-byte lead → `(2/3, 1, cp)`
+/// - 4-byte lead → `(4, 2, cp)` (astral → surrogate pair)
+///
+/// `advance` may point past `bytes.len()` for a truncated tail; loop
+/// conditions (`i < bytes.len()`) or an explicit `min(len)` clamp keep the
+/// cursor sound — exactly the convention `compute_utf16_len_wtf8` uses.
+#[inline]
+pub(crate) fn wtf8_step(bytes: &[u8], i: usize) -> (usize, usize, u32) {
+    let b = bytes[i];
+    if b < 0x80 {
+        return (1, 1, b as u32);
+    }
+    if b < 0xC0 {
+        // Continuation byte in lead position — invalid; skip one byte.
+        return (1, 0, 0xFFFD);
+    }
+    let b1 = bytes.get(i + 1).copied().unwrap_or(0) as u32;
+    if b < 0xE0 {
+        return (2, 1, ((b as u32 & 0x1F) << 6) | (b1 & 0x3F));
+    }
+    let b2 = bytes.get(i + 2).copied().unwrap_or(0) as u32;
+    if b < 0xF0 {
+        return (
+            3,
+            1,
+            ((b as u32 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F),
+        );
+    }
+    let b3 = bytes.get(i + 3).copied().unwrap_or(0) as u32;
+    (
+        4,
+        2,
+        ((b as u32 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F),
+    )
+}
+
 /// Convert a UTF-16 code unit index to a UTF-8 byte offset.
 /// Returns `s.len()` if `utf16_idx` is past the end.
+///
+/// Bounds-driven byte walk (#6085): the previous `s.chars()` loop decoded
+/// through the UTF-8-validity assumption, which over-reads an exact-sized
+/// payload ending in a truncated multi-byte lead. `wtf8_step` reads only
+/// bounds-checked bytes; valid input maps identically.
 #[inline]
 pub(crate) fn utf16_offset_to_byte_offset(s: &str, utf16_idx: usize) -> usize {
     if utf16_idx == 0 {
         return 0;
     }
-    let mut byte_off = 0;
-    let mut u16_count = 0;
-    for ch in s.chars() {
+    let bytes = s.as_bytes();
+    let mut byte_off = 0usize;
+    let mut u16_count = 0usize;
+    while byte_off < bytes.len() {
         if u16_count >= utf16_idx {
             return byte_off;
         }
-        byte_off += ch.len_utf8();
-        u16_count += ch.len_utf16();
+        let (advance, units, _) = wtf8_step(bytes, byte_off);
+        byte_off = (byte_off + advance).min(bytes.len());
+        u16_count += units;
     }
     byte_off // past the end → return full byte length
 }
 
 /// Convert a UTF-8 byte offset to a UTF-16 code unit index.
+///
+/// Bounds-driven (#6085): counts code units over the raw byte prefix instead
+/// of `s[..byte_off].encode_utf16()`, which both assumed UTF-8 validity and
+/// could panic on a non-char-boundary offset in an invalid payload.
 #[inline]
 pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
     if byte_off == 0 {
         return 0;
     }
-    s[..byte_off].encode_utf16().count()
+    let bytes = &s.as_bytes()[..byte_off.min(s.len())];
+    // ASCII fast path mirrors compute_utf16_len.
+    if bytes.iter().all(|&b| b < 0x80) {
+        return bytes.len();
+    }
+    let mut u16_count = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (advance, units, _) = wtf8_step(bytes, i);
+        i += advance;
+        u16_count += units;
+    }
+    u16_count
 }
 
 /// Heap storage policy for `StringHeader` strings.
@@ -453,6 +543,28 @@ pub(crate) fn string_copy_range(
         }
     }
     ptr
+}
+
+/// Does `bytes` contain a WTF-8 lone-surrogate sequence
+/// (`0xED 0xA0..=0xBF 0x80..=0xBF`)?
+///
+/// Used to derive `STRING_FLAG_HAS_LONE_SURROGATES` for a substring carved out
+/// of a WTF-8 source: the flag is a property of the BYTES, so a slice of a
+/// flagged string only carries it if the surrogate actually landed in that
+/// slice. Bounds-driven — never reads past the slice.
+#[inline]
+pub(crate) fn bytes_have_lone_surrogate(bytes: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if bytes[i] == 0xED
+            && (0xA0..=0xBF).contains(&bytes[i + 1])
+            && (0x80..=0xBF).contains(&bytes[i + 2])
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Count UTF-16 code units for a WTF-8 byte slice without using from_utf8.

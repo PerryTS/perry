@@ -267,6 +267,20 @@ pub enum SerializedValue {
     /// backing is never freed (see `crate::shared_sab`), so the raw address
     /// stays valid for the life of the process.
     SharedArrayBuffer { addr: usize },
+
+    /// A value whose runtime type cannot cross a `perry/thread` boundary
+    /// (Map, Set, Promise, Error, TypedArray, Buffer, Symbol, Temporal,
+    /// native handles, unmaterialized lazy JSON arrays, …).
+    ///
+    /// The serializer used to lower every one of these to `Inline(TAG_UNDEFINED)`,
+    /// so a capture/return of such a value crossed silently as `undefined`
+    /// with no diagnostic (2026-07-09 GC audit §6 / #6185). Instead we now
+    /// carry the human-readable type name here and raise a catchable
+    /// `TypeError` at the transfer boundary **on the main thread** — the
+    /// capture path throws synchronously from `spawn`/`parallelMap`, and the
+    /// `spawn` return path rejects the returned promise. This value is never
+    /// deserialized; its presence anywhere in a serialized tree is a hard error.
+    Unsupported(&'static str),
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
@@ -367,15 +381,102 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
                 // a fresh cell (deep-copy, like every other crossed value).
                 return SerializedValue::Date((*(raw_ptr as *const crate::date::DateCell)).ts);
             }
-            _ => {
-                // Unknown pointer type — treat as undefined
-                return SerializedValue::Inline(TAG_UNDEFINED);
+            // Everything below is a genuinely non-transferable runtime type.
+            // Previously all of these silently became `undefined` on the far
+            // side (#6185); now they surface a named TypeError at the boundary.
+            other => {
+                return SerializedValue::Unsupported(unsupported_transfer_type_name(other));
             }
         }
     }
 
     // Regular f64 number (no tag in the NaN-boxing range we use)
     SerializedValue::Inline(bits)
+}
+
+/// Human-readable name for a GC object type that cannot cross a thread
+/// boundary. Used only to build the TypeError message (#6185).
+///
+/// Note: a Symbol is POINTER_TAG'd but allocated with `GC_TYPE_STRING`
+/// (real strings arrive under `STRING_TAG` and never reach this match), so
+/// `GC_TYPE_STRING` here means "Symbol".
+fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
+    match obj_type {
+        gc::GC_TYPE_STRING => "Symbol",
+        gc::GC_TYPE_PROMISE => "Promise",
+        gc::GC_TYPE_BIGINT => "BigInt",
+        gc::GC_TYPE_ERROR => "Error",
+        gc::GC_TYPE_MAP => "Map",
+        gc::GC_TYPE_LAZY_ARRAY => "lazy (unmaterialized) JSON array",
+        gc::GC_TYPE_BUFFER => "Buffer",
+        gc::GC_TYPE_TYPED_ARRAY => "TypedArray",
+        gc::GC_TYPE_SET => "Set",
+        gc::GC_TYPE_NATIVE_ARENA_OWNER
+        | gc::GC_TYPE_NATIVE_TYPED_VIEW
+        | gc::GC_TYPE_NATIVE_HANDLE
+        | gc::GC_TYPE_NATIVE_POD_VIEW => "native handle",
+        gc::GC_TYPE_TEMPORAL => "Temporal value",
+        _ => "value of an unsupported type",
+    }
+}
+
+/// Depth-first search for the first non-transferable value anywhere in a
+/// serialized tree (a captured/returned Map, an object field holding a Set,
+/// an array element that is a Promise, …). Returns its type name, or `None`
+/// if the whole tree is transferable.
+pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'static str> {
+    match sv {
+        SerializedValue::Unsupported(name) => Some(name),
+        SerializedValue::Array(elements) => {
+            elements.iter().find_map(first_unsupported_transfer_type)
+        }
+        SerializedValue::Object { fields, .. } => {
+            fields.iter().find_map(first_unsupported_transfer_type)
+        }
+        SerializedValue::Closure { captures, .. } => {
+            captures.iter().find_map(first_unsupported_transfer_type)
+        }
+        _ => None,
+    }
+}
+
+/// Build (but do not throw) a `TypeError` value naming an unsupported
+/// cross-thread transfer. Used by the `spawn` return path, which *rejects*
+/// the returned promise rather than throwing.
+///
+/// # Safety
+/// Must run on the thread whose arena should own the error object (the main
+/// thread, at the drain boundary).
+unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
+    let msg =
+        format!("Cannot transfer a {type_name} across a perry/thread boundary (unsupported type)");
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+/// Throw a catchable `TypeError` naming an unsupported cross-thread transfer.
+///
+/// # Safety
+/// Must be called on the **main / calling thread** (never a worker): it
+/// `longjmp`s to the nearest active `setjmp` frame, which only the calling
+/// JS thread has established. Worker threads have no such frame, so a throw
+/// there would be undefined behavior — worker-side failures are surfaced by
+/// rejecting the returned promise on the main thread instead.
+unsafe fn throw_unsupported_transfer(type_name: &str) -> ! {
+    crate::exception::js_throw(make_unsupported_transfer_error(type_name));
+}
+
+/// Main-thread guard: if any value in `values` is non-transferable, throw a
+/// named `TypeError`. Call this at a `spawn`/`parallelMap`/`parallelFilter`
+/// serialization boundary, on the calling thread, before spawning any worker.
+///
+/// # Safety
+/// Same as [`throw_unsupported_transfer`] — main/calling thread only.
+unsafe fn guard_transferable(values: &[SerializedValue]) {
+    if let Some(name) = values.iter().find_map(first_unsupported_transfer_type) {
+        throw_unsupported_transfer(name);
+    }
 }
 
 /// Serialize an ArrayHeader into a SerializedValue::Array.
@@ -646,6 +747,12 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             crate::buffer::mark_as_shared_array_buffer(*addr);
             JSValue::pointer(*addr as *const u8).bits()
         }
+
+        // Non-transferable values are rejected at the boundary before we ever
+        // reach deserialization (main-thread throw for captures, promise
+        // rejection for `spawn` returns), so this arm should be unreachable.
+        // Defensive fallback to `undefined` rather than a panic.
+        SerializedValue::Unsupported(_) => TAG_UNDEFINED,
     }
 }
 
@@ -745,6 +852,9 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
         let bits = (*elements_ptr.add(i)).to_bits();
         serialized_elements.push(serialize_nanbox_for_thread(bits));
     }
+    // #6185: a non-transferable element (e.g. a Map in the input array) would
+    // otherwise cross as `undefined`. Fail loudly on the calling thread.
+    guard_transferable(&serialized_elements);
 
     // ── 5. Serialize closure captures (shared across all threads) ────
     let serialized_captures: Option<(usize, u32, Vec<SerializedValue>)> = {
@@ -758,6 +868,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
             for i in 0..actual {
                 caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
             }
+            guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
             Some((fp, cc, caps))
         } else {
             None
@@ -801,34 +912,56 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
             let captures_ref = captures_arc.clone();
 
             let handle = scope.spawn(move || {
-                // Each thread has its own arena (via thread_local!)
+                // #6185: own agent id before any allocation or enqueue, so this
+                // worker's drains can't touch the spawner's queued work (and
+                // anything it queues is tagged as its own).
+                let worker_agent = crate::agent::enter_worker_agent();
+                // Each thread has its own arena (via thread_local!).
+                // Register this thread's root scanners BEFORE any allocation
+                // can cross a GC trigger — a fresh worker otherwise collects
+                // with an empty scanner registry (and an empty shadow stack)
+                // and sweeps everything it just deserialized.
+                crate::gc::ensure_gc_initialized();
                 let mut results = Vec::with_capacity(chunk.len());
 
-                // Reconstruct closure on this thread's arena
-                let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
+                // Reconstruct closure on this thread's arena, rooted for the
+                // whole loop: per-element deserialization below can allocate
+                // and trigger a worker GC, and a bare local is not a root.
+                let gc_scope = crate::gc::RuntimeHandleScope::new();
+                let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
+                    let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_nanbox_on_current_thread(cap);
                         crate::closure::js_closure_set_capture_f64(
-                            c,
+                            h.get_raw_mut_ptr::<ClosureHeader>(),
                             i as u32,
                             f64::from_bits(bits),
                         );
                     }
-                    c as *const ClosureHeader
+                    Some(h)
                 } else {
-                    ptr::null()
+                    None
                 };
 
                 let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
+                    let local_closure = closure_handle
+                        .as_ref()
+                        .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
+                        .unwrap_or(ptr::null());
                     let result = call_fn(local_closure, arg);
                     results.push(serialize_nanbox_for_thread(result.to_bits()));
                 }
 
+                // #6185: results are already serialized into agent-independent
+                // form; this arena is about to go away with the scope, so purge
+                // anything this worker left in a global queue.
+                drop(gc_scope);
+                crate::agent::retire_agent(worker_agent);
                 (idx, results)
             });
             handles.push(handle);
@@ -843,6 +976,12 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     });
 
     // ── 7. Deserialize results into main thread's arena ──────────────
+    // #6185: a mapper that returns a non-transferable value (e.g. a Map) is a
+    // loud TypeError on the calling thread, not a silent `undefined`. The
+    // worker never throws (no setjmp frame there); the marker rode back here.
+    for chunk_results in &all_results {
+        guard_transferable(chunk_results);
+    }
     let total_results: usize = all_results.iter().map(|r| r.len()).sum();
     let result_arr = crate::array::js_array_alloc(total_results as u32);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -871,10 +1010,12 @@ unsafe fn single_thread_map(
     func: *const u8,
     closure_ptr: i64,
 ) -> i64 {
-    let elements_ptr =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
-    let result_arr = crate::array::js_array_alloc(len as u32);
+    // Root the input array BEFORE allocating the result (the allocation can
+    // trigger a moving minor), and re-derive the elements pointer from the
+    // rooted handle each iteration — the user callback can allocate too.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr as *mut crate::array::ArrayHeader);
+    let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let closure = if closure_ptr != 0 {
@@ -886,6 +1027,9 @@ unsafe fn single_thread_map(
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
 
     for i in 0..len {
+        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
         let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
@@ -954,6 +1098,8 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         let bits = (*elements_ptr.add(i)).to_bits();
         serialized_elements.push(serialize_nanbox_for_thread(bits));
     }
+    // #6185: fail loudly on a non-transferable input element.
+    guard_transferable(&serialized_elements);
 
     // Serialize closure captures
     let serialized_captures: Option<(usize, u32, Vec<SerializedValue>)> = {
@@ -965,6 +1111,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         for i in 0..actual {
             caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
         }
+        guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
         Some((fp, cc, caps))
     };
 
@@ -1001,28 +1148,40 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
             let captures_ref = captures_arc.clone();
 
             let handle = scope.spawn(move || {
+                // See parallel_map's worker: own agent (#6185) before anything
+                // can allocate or enqueue, scanner registration must precede
+                // any allocation, and the rebuilt closure must be rooted
+                // across the per-element deserialization allocations.
+                let worker_agent = crate::agent::enter_worker_agent();
+                crate::gc::ensure_gc_initialized();
                 let mut kept = Vec::new();
 
-                let local_closure: *const ClosureHeader = if let Some(ref caps) = captures_ref {
+                let gc_scope = crate::gc::RuntimeHandleScope::new();
+                let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
                     let c = closure::js_closure_alloc(fp as *const u8, cc);
+                    let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_nanbox_on_current_thread(cap);
                         crate::closure::js_closure_set_capture_f64(
-                            c,
+                            h.get_raw_mut_ptr::<ClosureHeader>(),
                             i as u32,
                             f64::from_bits(bits),
                         );
                     }
-                    c as *const ClosureHeader
+                    Some(h)
                 } else {
-                    ptr::null()
+                    None
                 };
 
                 let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
+                    let local_closure = closure_handle
+                        .as_ref()
+                        .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
+                        .unwrap_or(ptr::null());
                     let result = call_fn(local_closure, arg);
                     let keep = is_truthy_bits(result.to_bits());
                     if keep {
@@ -1030,6 +1189,10 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                     }
                 }
 
+                // #6185: see parallel_map's worker — purge this agent's queue
+                // entries before its arena goes away.
+                drop(gc_scope);
+                crate::agent::retire_agent(worker_agent);
                 (idx, kept)
             });
             handles.push(handle);
@@ -1071,16 +1234,20 @@ unsafe fn single_thread_filter(
     func: *const u8,
     closure: *const ClosureHeader,
 ) -> i64 {
-    let elements_ptr =
-        (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
-    let result_arr = crate::array::js_array_alloc(len as u32);
+    // Same rooting discipline as single_thread_map: the result allocation
+    // and every user callback can trigger a moving minor.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr as *mut crate::array::ArrayHeader);
+    let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
     let mut count = 0u32;
 
     for i in 0..len {
+        let elements_ptr = (arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
         let arg = *elements_ptr.add(i);
         let result = call_fn(closure, arg);
         let keep = is_truthy_bits(result.to_bits());
@@ -1131,16 +1298,11 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         return promise;
     };
 
-    // ── 1. Allocate Promise on main thread ───────────────────────────
-    let promise = crate::promise::js_promise_new();
-
-    // Pin the promise so GC doesn't collect it while the thread is running
-    let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
-    (*promise_header).gc_flags |= gc::GC_FLAG_PINNED;
-
-    let promise_usize = promise as usize;
-
-    // ── 2. Serialize closure captures ────────────────────────────────
+    // ── 1. Serialize closure captures (before allocating the promise) ─
+    // #6185: a captured non-transferable value (Map/Set/Promise/…) must throw
+    // a named TypeError here on the calling thread. Serializing *before* the
+    // promise is allocated keeps the throw clean — `js_throw` longjmps and does
+    // not run Rust destructors, so a pinned promise allocated first would leak.
     let serialized_captures: Option<(u32, Vec<SerializedValue>)> = {
         let cc = (*closure).capture_count;
         let actual = real_capture_count(cc) as usize;
@@ -1151,49 +1313,94 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
             for i in 0..actual {
                 caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
             }
+            guard_transferable(&caps);
             Some((cc, caps))
         } else {
             None
         }
     };
 
+    // ── 2. Allocate Promise on main thread ───────────────────────────
+    // Cross-thread variant: this promise is referenced only by a raw usize
+    // in PENDING_THREAD_RESULTS (no scanner) until drain — a nursery
+    // resident would be destroyed by the copied-minor from-space flip even
+    // while pinned. Malloc space is non-moving and sweeps honor the pin.
+    let promise = crate::promise::js_promise_new_cross_thread();
+
+    // Pin the promise so GC doesn't collect it while the thread is running
+    let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+    (*promise_header).gc_flags |= gc::GC_FLAG_PINNED;
+
+    let promise_usize = promise as usize;
+    // #6185: the promise lives in the SPAWNING agent's heap, so that is the
+    // agent allowed to settle it. Captured here, on the spawning thread —
+    // reading it inside the worker would yield the worker's own agent.
+    let owner_agent = crate::agent::current_agent();
+
     // ── 3. Spawn background thread ───────────────────────────────────
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
-        // Reconstruct closure in this thread's arena
-        let local_closure: *const ClosureHeader = if let Some((cc, ref cap_vals)) =
-            serialized_captures
-        {
+        // #6185: claim an agent id for this worker BEFORE it can allocate or
+        // enqueue anything, so every pointer it puts in a global queue is
+        // tagged as its own — and so its own drains skip the spawner's work.
+        let worker_agent = crate::agent::enter_worker_agent();
+        // Register this thread's root scanners before any allocation can
+        // cross a GC trigger (see the parallel_map worker for rationale).
+        crate::gc::ensure_gc_initialized();
+        // Reconstruct closure in this thread's arena, rooted across the
+        // capture-deserialization allocations.
+        let gc_scope = crate::gc::RuntimeHandleScope::new();
+        let closure_handle = if let Some((cc, ref cap_vals)) = serialized_captures {
             let c = closure::js_closure_alloc(func_usize as *const u8, cc);
+            let h = gc_scope.root_raw_mut_ptr(c);
             for (i, cap) in cap_vals.iter().enumerate() {
                 unsafe {
                     let bits = deserialize_nanbox_on_current_thread(cap);
-                    crate::closure::js_closure_set_capture_f64(c, i as u32, f64::from_bits(bits));
+                    crate::closure::js_closure_set_capture_f64(
+                        h.get_raw_mut_ptr::<ClosureHeader>(),
+                        i as u32,
+                        f64::from_bits(bits),
+                    );
                 }
             }
-            c as *const ClosureHeader
+            h
         } else {
             // No captures — create a minimal closure header
-            closure::js_closure_alloc(func_usize as *const u8, 0) as *const ClosureHeader
+            gc_scope.root_raw_mut_ptr(closure::js_closure_alloc(func_usize as *const u8, 0))
         };
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let call_fn: ClosureCall0Fn = unsafe { std::mem::transmute(func_usize) };
+            let local_closure =
+                closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
             unsafe { call_fn(local_closure) }
         }));
 
         match call_result {
             Ok(result) => {
-                // Serialize result for transfer back to main thread
+                // Serialize result for transfer back to the spawning agent.
                 let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
-                queue_thread_result(promise_usize, serialized_result);
+                queue_thread_result(owner_agent, promise_usize, serialized_result);
             }
             Err(_) => {
                 // Thread panicked — resolve with undefined to avoid hanging promise
-                queue_thread_result(promise_usize, SerializedValue::Inline(TAG_UNDEFINED));
+                queue_thread_result(
+                    owner_agent,
+                    promise_usize,
+                    SerializedValue::Inline(TAG_UNDEFINED),
+                );
             }
         }
+
+        // #6185: this worker's arena is about to be unmapped. Drop the shadow
+        // scope first (the result is already serialized into owner-independent
+        // form above), then purge any queue entry still tagged with this agent —
+        // nothing can ever legally settle those, and their pointers are about to
+        // dangle. Must run AFTER the result is queued: that entry is tagged with
+        // `owner_agent`, not `worker_agent`, so it survives the purge.
+        drop(gc_scope);
+        crate::agent::retire_agent(worker_agent);
     });
 
     promise
@@ -1204,7 +1411,11 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
 /// Uses the stdlib's PENDING_DEFERRED mechanism. The converter function
 /// runs on the main thread during `js_stdlib_process_pending()`, which
 /// deserializes the value into the main thread's arena.
-fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
+fn queue_thread_result(
+    owner: crate::agent::AgentId,
+    promise_usize: usize,
+    result: SerializedValue,
+) {
     // We need to interact with perry-stdlib's deferred resolution queue.
     // Since perry-runtime cannot depend on perry-stdlib, we use the same
     // pattern as timer resolution: store the result and let the pump pick it up.
@@ -1218,6 +1429,7 @@ fn queue_thread_result(promise_usize: usize, result: SerializedValue) {
             Err(poisoned) => poisoned.into_inner(),
         };
         pending.push(PendingThreadResult {
+            owner,
             promise_ptr: promise_usize,
             result,
         });
@@ -1247,24 +1459,42 @@ pub unsafe fn pin_promise(promise: *mut crate::promise::Promise) {
     (*header).gc_flags |= gc::GC_FLAG_PINNED;
 }
 
-/// Resolve the promise at `promise_usize` with a UTF-8 string on the main
-/// thread. Routes through the same pending-result path `spawn` uses (which
-/// unpins the promise, deserializes the value into the main arena, decrements
-/// the active-job count, and wakes the event loop). Used by `Atomics.waitAsync`.
-pub fn queue_promise_string_result(promise_usize: usize, value: &str) {
+/// Resolve the promise at `promise_usize` with a UTF-8 string on the agent that
+/// owns it. Routes through the same pending-result path `spawn` uses (which
+/// unpins the promise, deserializes the value into that agent's arena,
+/// decrements the active-job count, and wakes the event loop). Used by
+/// `Atomics.waitAsync`.
+///
+/// `owner` must be captured on the thread that CREATED the promise (#6185). The
+/// futex-waiter thread that calls this never runs JS and owns no heap, so it
+/// cannot derive the right agent from itself.
+pub fn queue_promise_string_result(
+    owner: crate::agent::AgentId,
+    promise_usize: usize,
+    value: &str,
+) {
     queue_thread_result(
+        owner,
         promise_usize,
         SerializedValue::String(value.as_bytes().to_vec()),
     );
 }
 
-/// A pending thread result waiting to be resolved on the main thread.
+/// A pending thread result waiting to be resolved on the agent that spawned it.
 struct PendingThreadResult {
+    /// #6185: the agent whose heap `promise_ptr` lives in — captured at spawn
+    /// time from the *spawning* thread, not the worker. Only that agent may
+    /// drain this entry; a worker pumping the global queue would otherwise
+    /// resolve a foreign-heap promise with a pointer into its own arena, which
+    /// is unmapped when it exits.
+    owner: crate::agent::AgentId,
     promise_ptr: usize,
     result: SerializedValue,
 }
 
-// Safety: SerializedValue is Send, usize is Send.
+// Safety: SerializedValue is Send, usize is Send. `promise_ptr` is a raw
+// pointer into `owner`'s arena; the `owner` tag plus the owner-filtered drain
+// in `js_thread_process_pending` is what makes dereferencing it sound.
 unsafe impl Send for PendingThreadResult {}
 
 /// Global queue for pending thread results.
@@ -1281,24 +1511,50 @@ static PENDING_THREAD_RESULTS: std::sync::Mutex<Vec<PendingThreadResult>> =
 /// Number of results processed.
 #[no_mangle]
 pub extern "C" fn js_thread_process_pending() -> i32 {
-    let mut pending = match PENDING_THREAD_RESULTS.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+    // #6185: take only the entries THIS agent owns. Every remaining entry names
+    // a promise in another agent's arena; draining it here would resolve a
+    // foreign-heap promise with a value deserialized into our arena (and, once
+    // that agent exits, dereference freed memory). Leave them for their owner —
+    // `retire_agent` purges any whose owner dies first.
+    let mine: Vec<PendingThreadResult> = {
+        let mut pending = match PENDING_THREAD_RESULTS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // Order-preserving partition: results must settle in the order they
+        // were queued (a `swap_remove` filter would reorder them).
+        let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(&mut *pending)
+            .into_iter()
+            .partition(|item| crate::agent::owns(item.owner));
+        *pending = theirs;
+        mine
     };
-    let count = pending.len() as i32;
+    let count = mine.len() as i32;
 
-    for item in pending.drain(..) {
+    // The lock is released before we settle anything: `js_promise_resolve` runs
+    // user `.then` callbacks, which can call `spawn` and re-enter
+    // `queue_thread_result` (deadlock on a re-entrant lock of the same Mutex).
+    for item in mine {
         unsafe {
             let promise = item.promise_ptr as *mut crate::promise::Promise;
 
-            // Deserialize the result into the main thread's arena
-            let result_bits = deserialize_nanbox_on_current_thread(&item.result);
-
-            // Unpin the promise now that we're resolving it
+            // Unpin the promise now that we're settling it.
             let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
             (*promise_header).gc_flags &= !gc::GC_FLAG_PINNED;
 
-            // Resolve the promise
+            // #6185: a worker that returned a non-transferable value (e.g.
+            // `spawn(() => new Map())`) can't throw on its own thread (no
+            // setjmp frame). The marker rode back in the serialized result;
+            // reject the returned promise here on the main thread with a named
+            // TypeError so `await`/`.catch` observes it instead of `undefined`.
+            if let Some(name) = first_unsupported_transfer_type(&item.result) {
+                let reason = make_unsupported_transfer_error(name);
+                crate::promise::js_promise_reject(promise, reason);
+                continue;
+            }
+
+            // Deserialize the result into the main thread's arena and resolve.
+            let result_bits = deserialize_nanbox_on_current_thread(&item.result);
             crate::promise::js_promise_resolve(promise, f64::from_bits(result_bits));
         }
     }
@@ -1313,10 +1569,183 @@ pub extern "C" fn js_thread_has_pending() -> i32 {
     if ACTIVE_THREAD_JOBS.load(Ordering::SeqCst) != 0 {
         return 1;
     }
-    let pending = PENDING_THREAD_RESULTS.lock().unwrap();
-    if pending.is_empty() {
-        0
-    } else {
-        1
+    // #6185: only entries THIS agent can actually settle count as work keeping
+    // its loop alive. Reporting a foreign entry here would spin the event loop
+    // forever on a result the drain (correctly) refuses to touch.
+    let pending = match PENDING_THREAD_RESULTS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    i32::from(pending.iter().any(|item| crate::agent::owns(item.owner)))
+}
+
+/// Drop every queued result owned by `agent`. Called from
+/// `agent::retire_agent` when a worker thread exits: those entries name
+/// promises in an arena that is being unmapped, so no thread can ever settle
+/// them, and leaving them would keep `js_thread_has_pending` honest but the
+/// pointers dangling.
+pub(crate) fn purge_agent_thread_results(agent: crate::agent::AgentId) {
+    let mut pending = match PENDING_THREAD_RESULTS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    pending.retain(|item| item.owner != agent);
+}
+
+#[cfg(test)]
+mod transfer_guard_tests {
+    //! #6185 (2026-07-09 GC audit §6): a non-transferable value crossing a
+    //! `perry/thread` boundary must surface a named `TypeError`, not silently
+    //! become `undefined`. These tests exercise the serialization-boundary
+    //! detection directly. The main-thread `js_throw` and promise-reject wiring
+    //! rides on top of this detection and needs the full JS runtime (setjmp
+    //! frame) to observe, so it is covered by the parity suite rather than here.
+    use super::*;
+
+    #[test]
+    fn unsupported_type_names_are_human_readable() {
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_MAP), "Map");
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_SET), "Set");
+        assert_eq!(
+            unsupported_transfer_type_name(gc::GC_TYPE_PROMISE),
+            "Promise"
+        );
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_ERROR), "Error");
+        assert_eq!(
+            unsupported_transfer_type_name(gc::GC_TYPE_TYPED_ARRAY),
+            "TypedArray"
+        );
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_BUFFER), "Buffer");
+        assert_eq!(
+            unsupported_transfer_type_name(gc::GC_TYPE_TEMPORAL),
+            "Temporal value"
+        );
+        // A Symbol is POINTER_TAG'd but allocated with GC_TYPE_STRING.
+        assert_eq!(unsupported_transfer_type_name(gc::GC_TYPE_STRING), "Symbol");
+        // Any unrecognized type still yields a message, never a panic.
+        assert_eq!(
+            unsupported_transfer_type_name(250),
+            "value of an unsupported type"
+        );
+    }
+
+    #[test]
+    fn first_unsupported_transfer_type_finds_nested_markers() {
+        // Top-level.
+        assert_eq!(
+            first_unsupported_transfer_type(&SerializedValue::Unsupported("Map")),
+            Some("Map")
+        );
+        // Inside an array element.
+        let arr = SerializedValue::Array(vec![
+            SerializedValue::Inline(TAG_NULL),
+            SerializedValue::Unsupported("Set"),
+        ]);
+        assert_eq!(first_unsupported_transfer_type(&arr), Some("Set"));
+        // Inside an object field, nested in an array.
+        let obj = SerializedValue::Object {
+            class_id: 0,
+            parent_class_id: 0,
+            fields: vec![
+                SerializedValue::Inline(TAG_TRUE),
+                SerializedValue::Array(vec![SerializedValue::Unsupported("Promise")]),
+            ],
+            keys: None,
+        };
+        assert_eq!(first_unsupported_transfer_type(&obj), Some("Promise"));
+        // Inside a closure capture.
+        let clo = SerializedValue::Closure {
+            func_ptr: 0,
+            capture_count: 1,
+            captures: vec![SerializedValue::Unsupported("Error")],
+        };
+        assert_eq!(first_unsupported_transfer_type(&clo), Some("Error"));
+    }
+
+    #[test]
+    fn transferable_trees_report_no_unsupported() {
+        let tree = SerializedValue::Array(vec![
+            SerializedValue::Inline(0x4045_0000_0000_0000), // a plain f64
+            SerializedValue::String(b"ok".to_vec()),
+            SerializedValue::Object {
+                class_id: 3,
+                parent_class_id: 0,
+                fields: vec![
+                    SerializedValue::Inline(TAG_FALSE),
+                    SerializedValue::Date(1.0),
+                ],
+                keys: None,
+            },
+            SerializedValue::BigInt([0u64; BIGINT_LIMBS]),
+        ]);
+        assert_eq!(first_unsupported_transfer_type(&tree), None);
+    }
+
+    #[test]
+    fn serialize_map_yields_unsupported_marker() {
+        // The concrete audit case: a real Map value serializes to a named
+        // Unsupported marker instead of Inline(undefined).
+        unsafe {
+            let map = crate::map::js_map_alloc(4);
+            let map_bits = POINTER_TAG | (map as u64 & POINTER_MASK);
+            let sv = serialize_nanbox_for_thread(map_bits);
+            assert!(
+                matches!(sv, SerializedValue::Unsupported("Map")),
+                "a Map must serialize to Unsupported(\"Map\"), got {sv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn serialize_supported_values_still_transfer() {
+        unsafe {
+            // Inline scalars round-trip their exact bits.
+            for bits in [TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE] {
+                assert!(matches!(
+                    serialize_nanbox_for_thread(bits),
+                    SerializedValue::Inline(b) if b == bits
+                ));
+            }
+            let int_bits = INT32_TAG | 42u64;
+            assert!(matches!(
+                serialize_nanbox_for_thread(int_bits),
+                SerializedValue::Inline(b) if b == int_bits
+            ));
+            let num_bits = 3.5f64.to_bits();
+            assert!(matches!(
+                serialize_nanbox_for_thread(num_bits),
+                SerializedValue::Inline(b) if b == num_bits
+            ));
+
+            // A real string transfers as its UTF-8 bytes.
+            let s = crate::string::js_string_from_bytes(b"hello".as_ptr(), 5);
+            let s_bits = JSValue::string_ptr(s).bits();
+            match serialize_nanbox_for_thread(s_bits) {
+                SerializedValue::String(bytes) => assert_eq!(bytes, b"hello"),
+                other => panic!("string must serialize to String, got {other:?}"),
+            }
+
+            // A real array of numbers transfers and round-trips.
+            let arr = crate::array::js_array_alloc(3);
+            for (i, v) in [10.0f64, 20.0, 30.0].iter().enumerate() {
+                store_thread_array_slot(arr, i, v.to_bits());
+            }
+            let arr_bits = JSValue::pointer(arr as *const u8).bits();
+            let sv = serialize_nanbox_for_thread(arr_bits);
+            assert_eq!(first_unsupported_transfer_type(&sv), None);
+            match &sv {
+                SerializedValue::Array(elems) => {
+                    assert_eq!(elems.len(), 3);
+                    assert!(
+                        matches!(elems[0], SerializedValue::Inline(b) if b == 10.0f64.to_bits())
+                    );
+                }
+                other => panic!("array must serialize to Array, got {other:?}"),
+            }
+            // Round-trip back into this thread's arena.
+            let back = deserialize_nanbox_on_current_thread(&sv);
+            let back_arr = (back & POINTER_MASK) as *const crate::array::ArrayHeader;
+            assert_eq!((*back_arr).length, 3);
+        }
     }
 }

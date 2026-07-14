@@ -12,6 +12,7 @@ pub mod image_picker;
 pub mod keychain;
 pub mod location;
 pub mod media_playback;
+pub mod memory_pressure;
 pub mod menu;
 pub mod network;
 pub mod notifications;

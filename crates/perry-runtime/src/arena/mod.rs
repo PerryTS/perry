@@ -27,9 +27,9 @@ pub(crate) use allocators::{
     inactive_survivor_index, with_survivor_arena, with_survivor_arena_mut,
 };
 pub(crate) use block::{
-    Arena, ArenaBlock, ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE,
-    FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE, LONGLIVED_ARENA, OLD_ARENA, SURVIVOR_ARENA_0,
-    SURVIVOR_ARENA_1,
+    old_gen_in_use_bytes_sub, Arena, ArenaBlock, ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES,
+    BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE, LONGLIVED_ARENA, OLD_ARENA,
+    OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
 pub(crate) use page_meta::{
     address_span_overlaps_pages, register_block_space, register_old_object_pages,
@@ -63,8 +63,8 @@ pub use walk::{
 };
 pub(crate) use walk::{
     arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
-    ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaTelemetrySnapshot,
-    ArenaWalkOrder,
+    general_block_sizes, ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder,
+    ArenaTelemetrySnapshot, ArenaWalkOrder,
 };
 
 // reset.rs
@@ -83,6 +83,8 @@ pub use stats::{
     js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes, pointer_in_nursery,
     pointer_in_old_gen,
 };
+#[cfg(test)]
+pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_resync};
 
 // page_meta.rs (public + pub(crate) classification/page-meta API)
 pub(crate) use page_meta::{

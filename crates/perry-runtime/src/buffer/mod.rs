@@ -1,6 +1,6 @@
 //! Buffer module - provides binary data handling similar to Node.js Buffer
 
-use std::alloc::{alloc, Layout};
+use std::alloc::Layout;
 use std::ptr;
 
 use crate::array::ArrayHeader;
@@ -14,6 +14,7 @@ mod coding;
 mod copy_bytes;
 mod copy_write;
 mod dataview;
+mod detach;
 mod encode;
 mod from;
 mod header;
@@ -24,7 +25,7 @@ mod query;
 mod transcode;
 mod u8_codec;
 pub mod validate;
-mod view;
+pub(crate) mod view;
 
 // ---- Re-exports: types & constants ----
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
@@ -35,10 +36,23 @@ pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
     is_any_array_buffer, is_array_buffer, is_data_view, is_registered_buffer, is_secret_key,
-    is_shared_array_buffer, is_uint8array_buffer, mark_as_array_buffer, mark_as_asymmetric_key,
-    mark_as_crypto_key, mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer,
-    mark_as_uint8array, register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias,
+    is_shared_array_buffer, is_uint8array_buffer, js_set_crypto_key_death_hook,
+    mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key, mark_as_data_view,
+    mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array, register_buffer,
+    resolve_buffer_ab_alias, set_buffer_ab_alias, CryptoKeyDeathHookFn,
 };
+pub(crate) use header::{
+    collect_dead_registered_buffers_post_trace, finalize_collected_dead_buffer,
+};
+#[cfg(test)]
+pub(crate) use header::{test_data_view_registry_len, test_shared_array_buffer_registry_len};
+
+// ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
+// `detach_array_buffer` dereferences the raw address it is given, so it stays
+// crate-internal; only the side-effect-free `is_detached_buffer` probe is
+// part of the public surface.
+pub use detach::is_detached_buffer;
+pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{
@@ -73,7 +87,8 @@ pub use u8_codec::{
 
 // ---- Re-exports: indexed access / slice / Uint8Array.set ----
 pub use access::{
-    js_buffer_get, js_buffer_set, js_buffer_set_from, js_buffer_set_from_value, js_buffer_slice,
+    js_buffer_get, js_buffer_index_get_value, js_buffer_set, js_buffer_set_from,
+    js_buffer_set_from_value, js_buffer_slice,
 };
 
 // ---- Re-exports: DataView numeric accessors (#2878) ----
@@ -134,6 +149,51 @@ pub use iter::{
 mod tests {
     use super::*;
 
+    /// The GC buffer sweep must drop the CryptoKey/secret-key side tables
+    /// along with the buffer identity ones. They are plain `addr -> metadata`
+    /// maps that never rooted the `BufferHeader`, so leaving them behind both
+    /// leaked an entry per key and let a recycled address inherit CryptoKey
+    /// identity (`crypto_key_meta`/`is_secret_key` gate `instanceof CryptoKey`,
+    /// `util.types.isCryptoKey`, `KeyObject.from`, `.export()` …) — the #6080
+    /// ABA class this finalizer exists to prevent.
+    #[test]
+    fn test_dead_buffer_finalize_prunes_crypto_key_side_tables() {
+        let buf = buffer_alloc(32);
+        assert!(!buf.is_null());
+        let addr = buf as usize;
+
+        // Shape a WebCrypto secret CryptoKey: HMAC / SHA-256 / secret.
+        mark_as_uint8array(addr);
+        mark_as_crypto_key(addr, 1, 2, 1);
+        mark_as_secret_key(addr);
+
+        assert!(crypto_key_meta(addr).is_some(), "meta registered");
+        assert!(is_secret_key(addr), "secret-key flag registered");
+        assert!(is_uint8array_buffer(addr), "uint8array flag registered");
+        assert!(is_registered_buffer(addr), "buffer registered");
+
+        // Exactly what the sweep subphase runs once the header is proven dead.
+        finalize_collected_dead_buffer(addr);
+
+        assert!(
+            crypto_key_meta(addr).is_none(),
+            "dead buffer must not keep CryptoKey metadata — a recycled address \
+             would answer to instanceof CryptoKey / KeyObject.from()"
+        );
+        assert!(
+            !is_secret_key(addr),
+            "dead buffer must not keep the secret-key flag"
+        );
+        assert!(
+            !is_uint8array_buffer(addr),
+            "dead buffer must not keep the uint8array flag"
+        );
+        assert!(
+            !is_registered_buffer(addr),
+            "dead buffer must not stay registered"
+        );
+    }
+
     #[test]
     fn test_small_buffer_slab_unique_addresses() {
         // Every allocation must occupy a distinct address (no overlap).
@@ -170,23 +230,33 @@ mod tests {
         }
     }
 
-    // #5226: every off-heap buffer (incl. `new Uint8Array(n)`, which lowers to
-    // a slab Buffer) must reserve a zeroed 8-byte sentinel before its pointer,
-    // so the runtime's many `*(ptr - GC_HEADER_SIZE)` type probes read a mapped
-    // `0` (matching no GC_TYPE) instead of crossing into the unmapped page
-    // before a freshly mapped slab/block and segfaulting. The sentinel must be
-    // `0`, never a real type tag.
+    // #5226 successor (2026-07-09 audit): every buffer — including the
+    // formerly slab-allocated small tier — now carries a REAL GcHeader with
+    // `GC_TYPE_BUFFER`, so the runtime's `*(ptr - GC_HEADER_SIZE)` type
+    // probes read a genuine header (matching no other GC_TYPE) instead of
+    // the old zeroed off-heap sentinel. The classification property the
+    // sentinel protected must keep holding.
     #[test]
     fn small_buffer_reserves_zeroed_header_sentinel() {
         for cap in [0u32, 1, 3, 16, 255] {
             let buf = buffer_alloc(cap);
             assert!(is_registered_buffer(buf as usize), "cap={cap}");
             unsafe {
-                let sentinel = *(buf as *const u8).sub(crate::gc::GC_HEADER_SIZE);
-                assert_eq!(sentinel, 0, "cap={cap}: header sentinel must be zero");
+                let header =
+                    (buf as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                assert_eq!(
+                    (*header).obj_type,
+                    crate::gc::GC_TYPE_BUFFER,
+                    "cap={cap}: buffers must carry a real GC_TYPE_BUFFER header"
+                );
+                assert_ne!(
+                    (*header).gc_flags & crate::gc::GC_FLAG_TENURED,
+                    0,
+                    "cap={cap}: buffers are born tenured in the old arena"
+                );
             }
-            // The header-probing classifiers must read the sentinel and answer
-            // "not my type" without faulting.
+            // The header-probing classifiers must answer "not my type"
+            // without faulting.
             let v = crate::value::js_nanbox_pointer(buf as i64);
             assert_eq!(crate::promise::js_value_is_promise(v), 0, "cap={cap}");
             assert!(!crate::date::is_date_cell_addr(buf as usize), "cap={cap}");
@@ -323,6 +393,39 @@ mod tests {
         let buf = js_buffer_alloc(5, 0);
         js_buffer_set(buf, 2, 0x42);
         assert_eq!(js_buffer_get(buf, 2), 0x42);
+    }
+
+    /// #6088: the JS-value accessor reads `undefined` for an out-of-range
+    /// canonical index (IntegerIndexedExotic `[[Get]]`), unlike the native
+    /// `js_buffer_get` which returns the `0` byte-sentinel. In-range reads
+    /// still return the byte as a plain (non-NaN) f64 number.
+    #[test]
+    fn test_buffer_index_get_value_oob_is_undefined() {
+        let buf = js_buffer_alloc(3, 0);
+        js_buffer_set(buf, 0, 5);
+        js_buffer_set(buf, 1, 6);
+        js_buffer_set(buf, 2, 7);
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+        // In-range: the byte value as a number (not undefined).
+        assert_eq!(js_buffer_index_get_value(buf, 0), 5.0);
+        assert_eq!(js_buffer_index_get_value(buf, 2), 7.0);
+
+        // Out-of-range and negative: undefined, NOT the 0 sentinel.
+        assert_eq!(js_buffer_index_get_value(buf, 3).to_bits(), undef.to_bits());
+        assert_eq!(js_buffer_index_get_value(buf, 9).to_bits(), undef.to_bits());
+        assert_eq!(
+            js_buffer_index_get_value(buf, -1).to_bits(),
+            undef.to_bits()
+        );
+        // The native accessor keeps its 0-for-OOB contract for its callers.
+        assert_eq!(js_buffer_get(buf, 9), 0);
+
+        // Null receiver: undefined.
+        assert_eq!(
+            js_buffer_index_get_value(std::ptr::null(), 0).to_bits(),
+            undef.to_bits()
+        );
     }
 
     #[test]

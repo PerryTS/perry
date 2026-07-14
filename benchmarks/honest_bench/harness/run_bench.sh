@@ -46,22 +46,38 @@ measure_once() {
   tmp_err=$(mktemp)
   tmp_out=$(mktemp)
 
-  local start_ns end_ns
+  local start_ns end_ns exit_code peak_kb
   start_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
-  set +e
-  /usr/bin/time -l "$BINARY" "$@" >"$tmp_out" 2>"$tmp_err"
-  local exit_code=$?
-  set -e
+  if [[ "$(uname)" == "Darwin" ]]; then
+    # `time -l` calls sysctl(kern.clockrate), which can fail after the child
+    # succeeds in sandboxed environments. wait4 reports child status and peak
+    # RSS directly without turning valid samples into exit-code failures.
+    local measurement
+    measurement=$(python3 - "$tmp_out" "$tmp_err" "$BINARY" "$@" <<'PYTHON'
+import resource
+import subprocess
+import sys
+
+stdout_path, stderr_path, *command = sys.argv[1:]
+with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+    completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+print(f"{completed.returncode}|{int(usage.ru_maxrss) // 1024}")
+PYTHON
+    )
+    exit_code="${measurement%%|*}"
+    peak_kb="${measurement##*|}"
+  else
+    set +e
+    /usr/bin/time -v "$BINARY" "$@" >"$tmp_out" 2>"$tmp_err"
+    exit_code=$?
+    set -e
+    peak_kb=$(awk -F': ' '/Maximum resident set size/ {print $2; exit}' "$tmp_err" 2>/dev/null || echo 0)
+    [[ -z "$peak_kb" ]] && peak_kb=0
+  fi
   end_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
 
   local wall_ns=$((end_ns - start_ns))
-
-  # macOS `time -l` stderr: peak memory footprint is in BYTES despite what
-  # `man time` implies on older macs. Convert to kB.
-  local peak_mem
-  peak_mem=$(awk '/peak memory footprint/ {print $1; exit}' "$tmp_err" 2>/dev/null || echo 0)
-  [[ -z "$peak_mem" ]] && peak_mem=0
-  local peak_kb=$((peak_mem / 1024))
 
   local stdout_first stdout_last
   stdout_first=$(head -1 "$tmp_out" 2>/dev/null | head -c 200 || true)
@@ -70,15 +86,18 @@ measure_once() {
   if [[ "$kind" == "measured" ]]; then
     python3 - \
         "$WORKLOAD" "$LANGUAGE" "$BINARY" "$run" "$wall_ns" "$peak_kb" \
-        "$exit_code" "$stdout_first" "$stdout_last" "$tmp_out" <<'PY'
-import json, os, subprocess, sys
+        "$exit_code" "$stdout_first" "$stdout_last" "$tmp_out" "$@" <<'PY'
+import json, os, shutil, subprocess, sys
 (_, workload, lang, binary, run, wall_ns, peak_kb,
- exit_code, stdout_first, stdout_last, stdout_path) = sys.argv
+ exit_code, stdout_first, stdout_last, stdout_path, *args) = sys.argv
+
+resolved_binary = shutil.which(binary) or os.path.realpath(binary)
 
 row = {
     "workload": workload,
     "language": lang,
-    "binary": binary,
+    "binary": resolved_binary,
+    "command": [resolved_binary, *args],
     "run": int(run),
     "wall_ms": int(wall_ns) / 1_000_000.0,
     "max_rss_kb": int(peak_kb),

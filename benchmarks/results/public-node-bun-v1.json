@@ -1,0 +1,6121 @@
+{
+  "schema_version": 1,
+  "kind": "perry-public-node-bun-baseline",
+  "commit": "36cf04e0147c68a55f362689ab6c56e2b39a3c67",
+  "perry_version": "perry 0.5.1258",
+  "generated_at": "2026-07-13T14:10:04Z",
+  "freshness": {
+    "source_fingerprint": "6015afdb3a8ef4fb1410bf570e4b6b05d7314837d728121a87e3305ec347758f",
+    "harness_fingerprint": "e3d9291d775d9f5fc9f9e5a70b5eaed1cead9059bc1a0de754189809bf4b274f"
+  },
+  "host": {
+    "os_version": "26.5.1",
+    "kernel": "Darwin Sergi.local 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:56 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6000 arm64",
+    "arch": "arm64",
+    "cpu": "Apple M1 Pro",
+    "ncpu": "10",
+    "ram_gb": 16.0
+  },
+  "runtimes": {
+    "perry": {
+      "available": true,
+      "version": "perry 0.5.1258",
+      "command": [
+        "<compiled-binary>"
+      ],
+      "compile_command": [
+        "/private/tmp/perry-performance-baseline-0713/target/release/perry",
+        "<source.ts>",
+        "-o",
+        "<compiled-binary>"
+      ],
+      "resolved_executable": "/private/tmp/perry-performance-baseline-0713/target/release/perry"
+    },
+    "node": {
+      "available": true,
+      "version": "v22.23.1",
+      "command": [
+        "node",
+        "<source.ts>"
+      ],
+      "resolved_executable": "/opt/homebrew/bin/node"
+    },
+    "bun": {
+      "available": true,
+      "version": "1.3.14",
+      "command": [
+        "bun",
+        "run",
+        "<source.ts>"
+      ],
+      "resolved_executable": "/Users/sergigonzalez/.bun/bin/bun"
+    }
+  },
+  "policy": {
+    "publishable": true,
+    "quiet_host": {
+      "metric": "aggregate CPU active percentage",
+      "maximum_percent": 25.0,
+      "consecutive_seconds": 60,
+      "checked_before_each_component": true
+    },
+    "requirements": [
+      "all required runtimes available",
+      "all requested raw samples present",
+      "all correctness checks passed",
+      "all components measured at one commit"
+    ]
+  },
+  "components": {
+    "suite": {
+      "schema_version": 2,
+      "commit": "36cf04e01",
+      "generated_at": "2026-07-13T11:47:56Z",
+      "run_config": {
+        "requested_samples": 5,
+        "expected_benchmarks": [
+          "02_loop_overhead",
+          "03_array_write",
+          "04_array_read",
+          "05_fibonacci",
+          "06_math_intensive",
+          "07_object_create",
+          "08_string_concat",
+          "09_method_calls",
+          "10_nested_loops",
+          "11_prime_sieve",
+          "12_binary_trees",
+          "13_factorial",
+          "14_closure",
+          "15_mandelbrot",
+          "16_matrix_multiply",
+          "bench_gc_pressure",
+          "bench_json_roundtrip",
+          "bench_object_property",
+          "bench_int_arithmetic",
+          "bench_buffer_readwrite",
+          "bench_array_grow",
+          "bench_string_heavy",
+          "bench_numeric_array_numeric",
+          "bench_numeric_array_downgrade"
+        ],
+        "warmup": "benchmark-defined internal warmup; five complete process samples"
+      },
+      "runtimes": {
+        "perry": {
+          "available": true,
+          "version": "perry 0.5.1258",
+          "command": [
+            "<compiled-binary>"
+          ],
+          "compile_command": [
+            "/private/tmp/perry-performance-baseline-0713/target/release/perry",
+            "<source.ts>",
+            "-o",
+            "<compiled-binary>"
+          ]
+        },
+        "node": {
+          "available": true,
+          "version": "v22.23.1",
+          "command": [
+            "node",
+            "<source.ts>"
+          ]
+        },
+        "bun": {
+          "available": true,
+          "version": "1.3.14",
+          "command": [
+            "bun",
+            "run",
+            "<source.ts>"
+          ]
+        }
+      },
+      "benchmarks": {
+        "02_loop_overhead": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  114,
+                  96,
+                  97,
+                  97,
+                  96
+                ],
+                "sample_count": 5,
+                "median": 97,
+                "p95": 114,
+                "min": 96,
+                "max": 114,
+                "mad": 1,
+                "stdev": 7.014271
+              },
+              "rss_kb": {
+                "samples": [
+                  8144,
+                  8144,
+                  8144,
+                  8144,
+                  8144
+                ],
+                "sample_count": 5,
+                "median": 8144,
+                "p95": 8144,
+                "min": 8144,
+                "max": 8144,
+                "mad": 0,
+                "stdev": 0
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  82,
+                  65,
+                  66,
+                  65,
+                  66
+                ],
+                "sample_count": 5,
+                "median": 66,
+                "p95": 82,
+                "min": 65,
+                "max": 82,
+                "mad": 1,
+                "stdev": 6.615134
+              },
+              "rss_kb": {
+                "samples": [
+                  68448,
+                  68576,
+                  68992,
+                  68512,
+                  68096
+                ],
+                "sample_count": 5,
+                "median": 68512,
+                "p95": 68992,
+                "min": 68096,
+                "max": 68992,
+                "mad": 64,
+                "stdev": 286.645705
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  51,
+                  41,
+                  39,
+                  41,
+                  40
+                ],
+                "sample_count": 5,
+                "median": 41,
+                "p95": 51,
+                "min": 39,
+                "max": 51,
+                "mad": 1,
+                "stdev": 4.363485
+              },
+              "rss_kb": {
+                "samples": [
+                  30480,
+                  30608,
+                  30528,
+                  30512,
+                  30480
+                ],
+                "sample_count": 5,
+                "median": 30512,
+                "p95": 30608,
+                "min": 30480,
+                "max": 30608,
+                "mad": 32,
+                "stdev": 47.030203
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 1.469697,
+              "rss": 0.11887
+            },
+            "perry_to_bun": {
+              "wall_time": 2.365854,
+              "rss": 0.266911
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:100000000"
+            ],
+            "expected_lines": [
+              "sum:100000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 97,
+          "perry_rss_kb": 8144,
+          "node_ms": 66,
+          "node_rss_kb": 68512,
+          "bun_ms": 41,
+          "bun_rss_kb": 30512,
+          "speed_ratio": 1.469697,
+          "memory_ratio": 0.11887
+        },
+        "03_array_write": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  10,
+                  5,
+                  8,
+                  3,
+                  5
+                ],
+                "sample_count": 5,
+                "median": 5,
+                "p95": 10,
+                "min": 3,
+                "max": 10,
+                "mad": 2,
+                "stdev": 2.481935
+              },
+              "rss_kb": {
+                "samples": [
+                  99344,
+                  99392,
+                  99344,
+                  99344,
+                  99344
+                ],
+                "sample_count": 5,
+                "median": 99344,
+                "p95": 99392,
+                "min": 99344,
+                "max": 99392,
+                "mad": 0,
+                "stdev": 19.2
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  8,
+                  8,
+                  8,
+                  8,
+                  7
+                ],
+                "sample_count": 5,
+                "median": 8,
+                "p95": 8,
+                "min": 7,
+                "max": 8,
+                "mad": 0,
+                "stdev": 0.4
+              },
+              "rss_kb": {
+                "samples": [
+                  374448,
+                  374144,
+                  373952,
+                  374192,
+                  374336
+                ],
+                "sample_count": 5,
+                "median": 374192,
+                "p95": 374448,
+                "min": 373952,
+                "max": 374448,
+                "mad": 144,
+                "stdev": 169.50941
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  6,
+                  6,
+                  7,
+                  5,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 6,
+                "p95": 7,
+                "min": 5,
+                "max": 7,
+                "mad": 0,
+                "stdev": 0.632456
+              },
+              "rss_kb": {
+                "samples": [
+                  291104,
+                  291200,
+                  245408,
+                  202992,
+                  291088
+                ],
+                "sample_count": 5,
+                "median": 291088,
+                "p95": 291200,
+                "min": 202992,
+                "max": 291200,
+                "mad": 112,
+                "stdev": 35426.608179
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.625,
+              "rss": 0.265489
+            },
+            "perry_to_bun": {
+              "wall_time": 0.833333,
+              "rss": 0.341285
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:9999999"
+            ],
+            "expected_lines": [
+              "checksum:9999999"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 5,
+          "perry_rss_kb": 99344,
+          "node_ms": 8,
+          "node_rss_kb": 374192,
+          "bun_ms": 6,
+          "bun_rss_kb": 291088,
+          "speed_ratio": 0.625,
+          "memory_ratio": 0.265489
+        },
+        "04_array_read": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  106,
+                  97,
+                  95,
+                  98,
+                  96
+                ],
+                "sample_count": 5,
+                "median": 97,
+                "p95": 106,
+                "min": 95,
+                "max": 106,
+                "mad": 1,
+                "stdev": 3.929377
+              },
+              "rss_kb": {
+                "samples": [
+                  99328,
+                  99312,
+                  99312,
+                  99312,
+                  99312
+                ],
+                "sample_count": 5,
+                "median": 99312,
+                "p95": 99328,
+                "min": 99312,
+                "max": 99328,
+                "mad": 0,
+                "stdev": 6.4
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  12,
+                  12,
+                  14,
+                  11,
+                  11
+                ],
+                "sample_count": 5,
+                "median": 12,
+                "p95": 14,
+                "min": 11,
+                "max": 14,
+                "mad": 1,
+                "stdev": 1.095445
+              },
+              "rss_kb": {
+                "samples": [
+                  375296,
+                  374816,
+                  374448,
+                  374432,
+                  374800
+                ],
+                "sample_count": 5,
+                "median": 374800,
+                "p95": 375296,
+                "min": 374432,
+                "max": 375296,
+                "mad": 352,
+                "stdev": 315.260908
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  20,
+                  16,
+                  17,
+                  17,
+                  15
+                ],
+                "sample_count": 5,
+                "median": 17,
+                "p95": 20,
+                "min": 15,
+                "max": 20,
+                "mad": 1,
+                "stdev": 1.67332
+              },
+              "rss_kb": {
+                "samples": [
+                  291888,
+                  285456,
+                  283584,
+                  283568,
+                  267936
+                ],
+                "sample_count": 5,
+                "median": 283584,
+                "p95": 291888,
+                "min": 267936,
+                "max": 291888,
+                "mad": 1872,
+                "stdev": 7890.466795
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 8.083333,
+              "rss": 0.264973
+            },
+            "perry_to_bun": {
+              "wall_time": 5.705882,
+              "rss": 0.350203
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:49999995000000"
+            ],
+            "expected_lines": [
+              "sum:49999995000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 97,
+          "perry_rss_kb": 99312,
+          "node_ms": 12,
+          "node_rss_kb": 374800,
+          "bun_ms": 17,
+          "bun_rss_kb": 283584,
+          "speed_ratio": 8.083333,
+          "memory_ratio": 0.264973
+        },
+        "05_fibonacci": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  329,
+                  310,
+                  309,
+                  310,
+                  309
+                ],
+                "sample_count": 5,
+                "median": 310,
+                "p95": 329,
+                "min": 309,
+                "max": 329,
+                "mad": 1,
+                "stdev": 7.81281
+              },
+              "rss_kb": {
+                "samples": [
+                  8224,
+                  8240,
+                  8256,
+                  8224,
+                  8224
+                ],
+                "sample_count": 5,
+                "median": 8224,
+                "p95": 8256,
+                "min": 8224,
+                "max": 8256,
+                "mad": 0,
+                "stdev": 12.8
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  948,
+                  943,
+                  947,
+                  950,
+                  955
+                ],
+                "sample_count": 5,
+                "median": 948,
+                "p95": 955,
+                "min": 943,
+                "max": 955,
+                "mad": 2,
+                "stdev": 3.929377
+              },
+              "rss_kb": {
+                "samples": [
+                  68816,
+                  68832,
+                  68880,
+                  68608,
+                  68432
+                ],
+                "sample_count": 5,
+                "median": 68816,
+                "p95": 68880,
+                "min": 68432,
+                "max": 68880,
+                "mad": 64,
+                "stdev": 168.904233
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  523,
+                  527,
+                  519,
+                  525,
+                  521
+                ],
+                "sample_count": 5,
+                "median": 523,
+                "p95": 527,
+                "min": 519,
+                "max": 527,
+                "mad": 2,
+                "stdev": 2.828427
+              },
+              "rss_kb": {
+                "samples": [
+                  29536,
+                  29520,
+                  29440,
+                  29488,
+                  29456
+                ],
+                "sample_count": 5,
+                "median": 29488,
+                "p95": 29536,
+                "min": 29440,
+                "max": 29536,
+                "mad": 32,
+                "stdev": 36.485614
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.327004,
+              "rss": 0.119507
+            },
+            "perry_to_bun": {
+              "wall_time": 0.592734,
+              "rss": 0.278893
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "fib(40):102334155"
+            ],
+            "expected_lines": [
+              "fib(40):102334155"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 310,
+          "perry_rss_kb": 8224,
+          "node_ms": 948,
+          "node_rss_kb": 68816,
+          "bun_ms": 523,
+          "bun_rss_kb": 29488,
+          "speed_ratio": 0.327004,
+          "memory_ratio": 0.119507
+        },
+        "06_math_intensive": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  70,
+                  51,
+                  51,
+                  51,
+                  52
+                ],
+                "sample_count": 5,
+                "median": 51,
+                "p95": 70,
+                "min": 51,
+                "max": 70,
+                "mad": 0,
+                "stdev": 7.509993
+              },
+              "rss_kb": {
+                "samples": [
+                  8112,
+                  8112,
+                  8112,
+                  8112,
+                  8112
+                ],
+                "sample_count": 5,
+                "median": 8112,
+                "p95": 8112,
+                "min": 8112,
+                "max": 8112,
+                "mad": 0,
+                "stdev": 0
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  52,
+                  51,
+                  51,
+                  51,
+                  52
+                ],
+                "sample_count": 5,
+                "median": 51,
+                "p95": 52,
+                "min": 51,
+                "max": 52,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  70608,
+                  70672,
+                  70528,
+                  70688,
+                  70544
+                ],
+                "sample_count": 5,
+                "median": 70608,
+                "p95": 70688,
+                "min": 70528,
+                "max": 70688,
+                "mad": 64,
+                "stdev": 64.795062
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  51,
+                  51,
+                  51,
+                  51,
+                  51
+                ],
+                "sample_count": 5,
+                "median": 51,
+                "p95": 51,
+                "min": 51,
+                "max": 51,
+                "mad": 0,
+                "stdev": 0
+              },
+              "rss_kb": {
+                "samples": [
+                  30784,
+                  30816,
+                  30704,
+                  30688,
+                  30704
+                ],
+                "sample_count": 5,
+                "median": 30704,
+                "p95": 30816,
+                "min": 30688,
+                "max": 30816,
+                "mad": 16,
+                "stdev": 50.999608
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 1.0,
+              "rss": 0.114888
+            },
+            "perry_to_bun": {
+              "wall_time": 1.0,
+              "rss": 0.2642
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "result:19.30474921829397"
+            ],
+            "expected_lines": [
+              "result:19.30474921829397"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 51,
+          "perry_rss_kb": 8112,
+          "node_ms": 51,
+          "node_rss_kb": 70608,
+          "bun_ms": 51,
+          "bun_rss_kb": 30704,
+          "speed_ratio": 1.0,
+          "memory_ratio": 0.114888
+        },
+        "07_object_create": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  7,
+                  4,
+                  5,
+                  4,
+                  4
+                ],
+                "sample_count": 5,
+                "median": 4,
+                "p95": 7,
+                "min": 4,
+                "max": 7,
+                "mad": 0,
+                "stdev": 1.16619
+              },
+              "rss_kb": {
+                "samples": [
+                  8256,
+                  8272,
+                  8272,
+                  8256,
+                  8256
+                ],
+                "sample_count": 5,
+                "median": 8256,
+                "p95": 8272,
+                "min": 8256,
+                "max": 8272,
+                "mad": 0,
+                "stdev": 7.838367
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  6,
+                  5,
+                  5,
+                  6,
+                  5
+                ],
+                "sample_count": 5,
+                "median": 5,
+                "p95": 6,
+                "min": 5,
+                "max": 6,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  70800,
+                  71232,
+                  71264,
+                  71424,
+                  71040
+                ],
+                "sample_count": 5,
+                "median": 71232,
+                "p95": 71424,
+                "min": 70800,
+                "max": 71424,
+                "mad": 192,
+                "stdev": 214.184967
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  8,
+                  6,
+                  6,
+                  6,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 6,
+                "p95": 8,
+                "min": 6,
+                "max": 8,
+                "mad": 0,
+                "stdev": 0.8
+              },
+              "rss_kb": {
+                "samples": [
+                  54912,
+                  48672,
+                  48912,
+                  50096,
+                  48960
+                ],
+                "sample_count": 5,
+                "median": 48960,
+                "p95": 54912,
+                "min": 48672,
+                "max": 54912,
+                "mad": 288,
+                "stdev": 2353.046842
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.8,
+              "rss": 0.115903
+            },
+            "perry_to_bun": {
+              "wall_time": 0.666667,
+              "rss": 0.168627
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:1000000000000"
+            ],
+            "expected_lines": [
+              "sum:1000000000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 4,
+          "perry_rss_kb": 8256,
+          "node_ms": 5,
+          "node_rss_kb": 71232,
+          "bun_ms": 6,
+          "bun_rss_kb": 48960,
+          "speed_ratio": 0.8,
+          "memory_ratio": 0.115903
+        },
+        "08_string_concat": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  3,
+                  3,
+                  2,
+                  3,
+                  3
+                ],
+                "sample_count": 5,
+                "median": 3,
+                "p95": 3,
+                "min": 2,
+                "max": 3,
+                "mad": 0,
+                "stdev": 0.4
+              },
+              "rss_kb": {
+                "samples": [
+                  8544,
+                  8544,
+                  8560,
+                  8544,
+                  8544
+                ],
+                "sample_count": 5,
+                "median": 8544,
+                "p95": 8560,
+                "min": 8544,
+                "max": 8560,
+                "mad": 0,
+                "stdev": 6.4
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  6,
+                  5,
+                  5,
+                  5,
+                  5
+                ],
+                "sample_count": 5,
+                "median": 5,
+                "p95": 6,
+                "min": 5,
+                "max": 6,
+                "mad": 0,
+                "stdev": 0.4
+              },
+              "rss_kb": {
+                "samples": [
+                  73840,
+                  74128,
+                  74032,
+                  73936,
+                  74096
+                ],
+                "sample_count": 5,
+                "median": 74032,
+                "p95": 74128,
+                "min": 73840,
+                "max": 74128,
+                "mad": 96,
+                "stdev": 105.93885
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  2,
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "sample_count": 5,
+                "median": 1,
+                "p95": 2,
+                "min": 1,
+                "max": 2,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  30048,
+                  30208,
+                  30304,
+                  30256,
+                  30352
+                ],
+                "sample_count": 5,
+                "median": 30256,
+                "p95": 30352,
+                "min": 30048,
+                "max": 30352,
+                "mad": 48,
+                "stdev": 104.478897
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.6,
+              "rss": 0.11541
+            },
+            "perry_to_bun": {
+              "wall_time": 3.0,
+              "rss": 0.28239
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "length:100000"
+            ],
+            "expected_lines": [
+              "length:100000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 3,
+          "perry_rss_kb": 8544,
+          "node_ms": 5,
+          "node_rss_kb": 74032,
+          "bun_ms": 1,
+          "bun_rss_kb": 30256,
+          "speed_ratio": 0.6,
+          "memory_ratio": 0.11541
+        },
+        "09_method_calls": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  97,
+                  82,
+                  92,
+                  81,
+                  82
+                ],
+                "sample_count": 5,
+                "median": 82,
+                "p95": 97,
+                "min": 81,
+                "max": 97,
+                "mad": 1,
+                "stdev": 6.493073
+              },
+              "rss_kb": {
+                "samples": [
+                  11856,
+                  11808,
+                  11840,
+                  11824,
+                  11808
+                ],
+                "sample_count": 5,
+                "median": 11824,
+                "p95": 11856,
+                "min": 11808,
+                "max": 11856,
+                "mad": 16,
+                "stdev": 18.659046
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  11,
+                  11,
+                  11,
+                  11,
+                  12
+                ],
+                "sample_count": 5,
+                "median": 11,
+                "p95": 12,
+                "min": 11,
+                "max": 12,
+                "mad": 0,
+                "stdev": 0.4
+              },
+              "rss_kb": {
+                "samples": [
+                  69120,
+                  68880,
+                  69136,
+                  69024,
+                  69168
+                ],
+                "sample_count": 5,
+                "median": 69120,
+                "p95": 69168,
+                "min": 68880,
+                "max": 69168,
+                "mad": 48,
+                "stdev": 104.478897
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  10,
+                  8,
+                  8,
+                  9,
+                  8
+                ],
+                "sample_count": 5,
+                "median": 8,
+                "p95": 10,
+                "min": 8,
+                "max": 10,
+                "mad": 0,
+                "stdev": 0.8
+              },
+              "rss_kb": {
+                "samples": [
+                  32448,
+                  31664,
+                  31808,
+                  31744,
+                  32432
+                ],
+                "sample_count": 5,
+                "median": 31808,
+                "p95": 32448,
+                "min": 31664,
+                "max": 32448,
+                "mad": 144,
+                "stdev": 346.635486
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 7.454545,
+              "rss": 0.171065
+            },
+            "perry_to_bun": {
+              "wall_time": 10.25,
+              "rss": 0.37173
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "value:10000000"
+            ],
+            "expected_lines": [
+              "value:10000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 82,
+          "perry_rss_kb": 11824,
+          "node_ms": 11,
+          "node_rss_kb": 69120,
+          "bun_ms": 8,
+          "bun_rss_kb": 31808,
+          "speed_ratio": 7.454545,
+          "memory_ratio": 0.171065
+        },
+        "10_nested_loops": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  181,
+                  162,
+                  165,
+                  163,
+                  164
+                ],
+                "sample_count": 5,
+                "median": 164,
+                "p95": 181,
+                "min": 162,
+                "max": 181,
+                "mad": 1,
+                "stdev": 7.071068
+              },
+              "rss_kb": {
+                "samples": [
+                  11856,
+                  11856,
+                  11856,
+                  11888,
+                  11856
+                ],
+                "sample_count": 5,
+                "median": 11856,
+                "p95": 11888,
+                "min": 11856,
+                "max": 11888,
+                "mad": 0,
+                "stdev": 12.8
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  20,
+                  19,
+                  19,
+                  18,
+                  18
+                ],
+                "sample_count": 5,
+                "median": 19,
+                "p95": 20,
+                "min": 18,
+                "max": 20,
+                "mad": 1,
+                "stdev": 0.748331
+              },
+              "rss_kb": {
+                "samples": [
+                  70832,
+                  71184,
+                  71072,
+                  71200,
+                  71104
+                ],
+                "sample_count": 5,
+                "median": 71104,
+                "p95": 71200,
+                "min": 70832,
+                "max": 71200,
+                "mad": 80,
+                "stdev": 132.172009
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  20,
+                  20,
+                  20,
+                  20,
+                  20
+                ],
+                "sample_count": 5,
+                "median": 20,
+                "p95": 20,
+                "min": 20,
+                "max": 20,
+                "mad": 0,
+                "stdev": 0
+              },
+              "rss_kb": {
+                "samples": [
+                  33184,
+                  33024,
+                  33104,
+                  33200,
+                  33184
+                ],
+                "sample_count": 5,
+                "median": 33184,
+                "p95": 33200,
+                "min": 33024,
+                "max": 33200,
+                "mad": 16,
+                "stdev": 66.664533
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 8.631579,
+              "rss": 0.166742
+            },
+            "perry_to_bun": {
+              "wall_time": 8.2,
+              "rss": 0.357281
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:26991000000"
+            ],
+            "expected_lines": [
+              "sum:26991000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 164,
+          "perry_rss_kb": 11856,
+          "node_ms": 19,
+          "node_rss_kb": 71104,
+          "bun_ms": 20,
+          "bun_rss_kb": 33184,
+          "speed_ratio": 8.631579,
+          "memory_ratio": 0.166742
+        },
+        "11_prime_sieve": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  258,
+                  253,
+                  254,
+                  254,
+                  250
+                ],
+                "sample_count": 5,
+                "median": 254,
+                "p95": 258,
+                "min": 250,
+                "max": 258,
+                "mad": 1,
+                "stdev": 2.56125
+              },
+              "rss_kb": {
+                "samples": [
+                  30160,
+                  30160,
+                  30160,
+                  30192,
+                  30144
+                ],
+                "sample_count": 5,
+                "median": 30160,
+                "p95": 30192,
+                "min": 30144,
+                "max": 30192,
+                "mad": 0,
+                "stdev": 15.676734
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  6,
+                  7,
+                  7,
+                  7,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 7,
+                "p95": 7,
+                "min": 6,
+                "max": 7,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  101136,
+                  100720,
+                  100496,
+                  100320,
+                  100752
+                ],
+                "sample_count": 5,
+                "median": 100720,
+                "p95": 101136,
+                "min": 100320,
+                "max": 101136,
+                "mad": 224,
+                "stdev": 274.976654
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  5,
+                  5,
+                  6,
+                  6,
+                  5
+                ],
+                "sample_count": 5,
+                "median": 5,
+                "p95": 6,
+                "min": 5,
+                "max": 6,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  62128,
+                  62096,
+                  67360,
+                  67392,
+                  62176
+                ],
+                "sample_count": 5,
+                "median": 62176,
+                "p95": 67392,
+                "min": 62096,
+                "max": 67392,
+                "mad": 80,
+                "stdev": 2568.517829
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 36.285714,
+              "rss": 0.299444
+            },
+            "perry_to_bun": {
+              "wall_time": 50.8,
+              "rss": 0.485075
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "primes:78498"
+            ],
+            "expected_lines": [
+              "primes:78498"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 254,
+          "perry_rss_kb": 30160,
+          "node_ms": 7,
+          "node_rss_kb": 100720,
+          "bun_ms": 5,
+          "bun_rss_kb": 62176,
+          "speed_ratio": 36.285714,
+          "memory_ratio": 0.299444
+        },
+        "12_binary_trees": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  12,
+                  5,
+                  6,
+                  6,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 6,
+                "p95": 12,
+                "min": 5,
+                "max": 12,
+                "mad": 0,
+                "stdev": 2.529822
+              },
+              "rss_kb": {
+                "samples": [
+                  8288,
+                  8320,
+                  8304,
+                  8288,
+                  8288
+                ],
+                "sample_count": 5,
+                "median": 8288,
+                "p95": 8320,
+                "min": 8288,
+                "max": 8320,
+                "mad": 0,
+                "stdev": 12.8
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  7,
+                  7,
+                  7,
+                  7,
+                  7
+                ],
+                "sample_count": 5,
+                "median": 7,
+                "p95": 7,
+                "min": 7,
+                "max": 7,
+                "mad": 0,
+                "stdev": 0
+              },
+              "rss_kb": {
+                "samples": [
+                  71104,
+                  71152,
+                  71472,
+                  71312,
+                  71360
+                ],
+                "sample_count": 5,
+                "median": 71312,
+                "p95": 71472,
+                "min": 71104,
+                "max": 71472,
+                "mad": 160,
+                "stdev": 135.386853
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  9,
+                  8,
+                  9,
+                  8,
+                  8
+                ],
+                "sample_count": 5,
+                "median": 8,
+                "p95": 9,
+                "min": 8,
+                "max": 9,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  54688,
+                  51328,
+                  52480,
+                  50880,
+                  51408
+                ],
+                "sample_count": 5,
+                "median": 51408,
+                "p95": 54688,
+                "min": 50880,
+                "max": 54688,
+                "mad": 528,
+                "stdev": 1370.34746
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.857143,
+              "rss": 0.116222
+            },
+            "perry_to_bun": {
+              "wall_time": 0.75,
+              "rss": 0.16122
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:1500001500000"
+            ],
+            "expected_lines": [
+              "sum:1500001500000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 6,
+          "perry_rss_kb": 8288,
+          "node_ms": 7,
+          "node_rss_kb": 71312,
+          "bun_ms": 8,
+          "bun_rss_kb": 51408,
+          "speed_ratio": 0.857143,
+          "memory_ratio": 0.116222
+        },
+        "13_factorial": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  1568,
+                  1549,
+                  1554,
+                  1555,
+                  1641
+                ],
+                "sample_count": 5,
+                "median": 1555,
+                "p95": 1641,
+                "min": 1549,
+                "max": 1641,
+                "mad": 6,
+                "stdev": 34.3779
+              },
+              "rss_kb": {
+                "samples": [
+                  8160,
+                  8160,
+                  8160,
+                  8160,
+                  7392
+                ],
+                "sample_count": 5,
+                "median": 8160,
+                "p95": 8160,
+                "min": 7392,
+                "max": 8160,
+                "mad": 0,
+                "stdev": 307.2
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  115,
+                  98,
+                  99,
+                  106,
+                  98
+                ],
+                "sample_count": 5,
+                "median": 99,
+                "p95": 115,
+                "min": 98,
+                "max": 115,
+                "mad": 1,
+                "stdev": 6.615134
+              },
+              "rss_kb": {
+                "samples": [
+                  70128,
+                  70352,
+                  69968,
+                  70448,
+                  70016
+                ],
+                "sample_count": 5,
+                "median": 70128,
+                "p95": 70448,
+                "min": 69968,
+                "max": 70448,
+                "mad": 160,
+                "stdev": 187.575691
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  116,
+                  99,
+                  99,
+                  100,
+                  98
+                ],
+                "sample_count": 5,
+                "median": 99,
+                "p95": 116,
+                "min": 98,
+                "max": 116,
+                "mad": 1,
+                "stdev": 6.829348
+              },
+              "rss_kb": {
+                "samples": [
+                  31088,
+                  31488,
+                  31472,
+                  31408,
+                  31408
+                ],
+                "sample_count": 5,
+                "median": 31408,
+                "p95": 31488,
+                "min": 31088,
+                "max": 31488,
+                "mad": 64,
+                "stdev": 146.082716
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 15.707071,
+              "rss": 0.116359
+            },
+            "perry_to_bun": {
+              "wall_time": 15.707071,
+              "rss": 0.259806
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:49950000000"
+            ],
+            "expected_lines": [
+              "sum:49950000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 1555,
+          "perry_rss_kb": 8160,
+          "node_ms": 99,
+          "node_rss_kb": 70128,
+          "bun_ms": 99,
+          "bun_rss_kb": 31408,
+          "speed_ratio": 15.707071,
+          "memory_ratio": 0.116359
+        },
+        "14_closure": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  67,
+                  49,
+                  49,
+                  48,
+                  48
+                ],
+                "sample_count": 5,
+                "median": 49,
+                "p95": 67,
+                "min": 48,
+                "max": 67,
+                "mad": 1,
+                "stdev": 7.413501
+              },
+              "rss_kb": {
+                "samples": [
+                  8208,
+                  8208,
+                  8208,
+                  8240,
+                  8208
+                ],
+                "sample_count": 5,
+                "median": 8208,
+                "p95": 8240,
+                "min": 8208,
+                "max": 8240,
+                "mad": 0,
+                "stdev": 12.8
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  51,
+                  50,
+                  51,
+                  51,
+                  51
+                ],
+                "sample_count": 5,
+                "median": 51,
+                "p95": 51,
+                "min": 50,
+                "max": 51,
+                "mad": 0,
+                "stdev": 0.4
+              },
+              "rss_kb": {
+                "samples": [
+                  71344,
+                  70992,
+                  71008,
+                  71008,
+                  70944
+                ],
+                "sample_count": 5,
+                "median": 71008,
+                "p95": 71344,
+                "min": 70944,
+                "max": 71344,
+                "mad": 16,
+                "stdev": 144.319645
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  52,
+                  50,
+                  50,
+                  52,
+                  51
+                ],
+                "sample_count": 5,
+                "median": 51,
+                "p95": 52,
+                "min": 50,
+                "max": 52,
+                "mad": 1,
+                "stdev": 0.894427
+              },
+              "rss_kb": {
+                "samples": [
+                  31312,
+                  31424,
+                  31328,
+                  31376,
+                  31376
+                ],
+                "sample_count": 5,
+                "median": 31376,
+                "p95": 31424,
+                "min": 31312,
+                "max": 31424,
+                "mad": 48,
+                "stdev": 39.710956
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.960784,
+              "rss": 0.115593
+            },
+            "perry_to_bun": {
+              "wall_time": 0.960784,
+              "rss": 0.261601
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "sum:2500000000000000"
+            ],
+            "expected_lines": [
+              "sum:2500000000000000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 49,
+          "perry_rss_kb": 8208,
+          "node_ms": 51,
+          "node_rss_kb": 71008,
+          "bun_ms": 51,
+          "bun_rss_kb": 31376,
+          "speed_ratio": 0.960784,
+          "memory_ratio": 0.115593
+        },
+        "15_mandelbrot": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  38,
+                  23,
+                  23,
+                  22,
+                  22
+                ],
+                "sample_count": 5,
+                "median": 23,
+                "p95": 38,
+                "min": 22,
+                "max": 38,
+                "mad": 1,
+                "stdev": 6.216108
+              },
+              "rss_kb": {
+                "samples": [
+                  8128,
+                  8144,
+                  8144,
+                  8128,
+                  8128
+                ],
+                "sample_count": 5,
+                "median": 8128,
+                "p95": 8144,
+                "min": 8128,
+                "max": 8144,
+                "mad": 0,
+                "stdev": 7.838367
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  26,
+                  26,
+                  25,
+                  26,
+                  25
+                ],
+                "sample_count": 5,
+                "median": 26,
+                "p95": 26,
+                "min": 25,
+                "max": 26,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  71024,
+                  70560,
+                  70928,
+                  70704,
+                  70896
+                ],
+                "sample_count": 5,
+                "median": 70896,
+                "p95": 71024,
+                "min": 70560,
+                "max": 71024,
+                "mad": 128,
+                "stdev": 167.381719
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  31,
+                  32,
+                  30,
+                  29,
+                  30
+                ],
+                "sample_count": 5,
+                "median": 30,
+                "p95": 32,
+                "min": 29,
+                "max": 32,
+                "mad": 1,
+                "stdev": 1.019804
+              },
+              "rss_kb": {
+                "samples": [
+                  31616,
+                  31584,
+                  31616,
+                  31552,
+                  31504
+                ],
+                "sample_count": 5,
+                "median": 31584,
+                "p95": 31616,
+                "min": 31504,
+                "max": 31616,
+                "mad": 32,
+                "stdev": 42.452797
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.884615,
+              "rss": 0.114647
+            },
+            "perry_to_bun": {
+              "wall_time": 0.766667,
+              "rss": 0.257345
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "total_iter:8011148"
+            ],
+            "expected_lines": [
+              "total_iter:8011148"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 23,
+          "perry_rss_kb": 8128,
+          "node_ms": 26,
+          "node_rss_kb": 70896,
+          "bun_ms": 30,
+          "bun_rss_kb": 31584,
+          "speed_ratio": 0.884615,
+          "memory_ratio": 0.114647
+        },
+        "16_matrix_multiply": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  2219,
+                  2403,
+                  2192,
+                  2344,
+                  2311
+                ],
+                "sample_count": 5,
+                "median": 2311,
+                "p95": 2403,
+                "min": 2192,
+                "max": 2403,
+                "mad": 92,
+                "stdev": 78.356621
+              },
+              "rss_kb": {
+                "samples": [
+                  14832,
+                  14704,
+                  15424,
+                  15408,
+                  15408
+                ],
+                "sample_count": 5,
+                "median": 15408,
+                "p95": 15424,
+                "min": 14704,
+                "max": 15424,
+                "mad": 16,
+                "stdev": 318.781681
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  43,
+                  35,
+                  35,
+                  34,
+                  35
+                ],
+                "sample_count": 5,
+                "median": 35,
+                "p95": 43,
+                "min": 34,
+                "max": 43,
+                "mad": 0,
+                "stdev": 3.32265
+              },
+              "rss_kb": {
+                "samples": [
+                  75376,
+                  75040,
+                  75184,
+                  75328,
+                  75040
+                ],
+                "sample_count": 5,
+                "median": 75184,
+                "p95": 75376,
+                "min": 75040,
+                "max": 75376,
+                "mad": 144,
+                "stdev": 140.435893
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  40,
+                  35,
+                  34,
+                  34,
+                  35
+                ],
+                "sample_count": 5,
+                "median": 35,
+                "p95": 40,
+                "min": 34,
+                "max": 40,
+                "mad": 1,
+                "stdev": 2.244994
+              },
+              "rss_kb": {
+                "samples": [
+                  37904,
+                  38080,
+                  38080,
+                  38000,
+                  37968
+                ],
+                "sample_count": 5,
+                "median": 38000,
+                "p95": 38080,
+                "min": 37904,
+                "max": 38080,
+                "mad": 80,
+                "stdev": 67.579879
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 66.028571,
+              "rss": 0.204937
+            },
+            "perry_to_bun": {
+              "wall_time": 66.028571,
+              "rss": 0.405474
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:41079519680"
+            ],
+            "expected_lines": [
+              "checksum:41079519680"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 2311,
+          "perry_rss_kb": 15408,
+          "node_ms": 35,
+          "node_rss_kb": 75184,
+          "bun_ms": 35,
+          "bun_rss_kb": 38000,
+          "speed_ratio": 66.028571,
+          "memory_ratio": 0.204937
+        },
+        "bench_gc_pressure": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  33,
+                  20,
+                  21,
+                  20,
+                  20
+                ],
+                "sample_count": 5,
+                "median": 20,
+                "p95": 33,
+                "min": 20,
+                "max": 33,
+                "mad": 0,
+                "stdev": 5.114685
+              },
+              "rss_kb": {
+                "samples": [
+                  27888,
+                  27904,
+                  27888,
+                  27888,
+                  27904
+                ],
+                "sample_count": 5,
+                "median": 27888,
+                "p95": 27904,
+                "min": 27888,
+                "max": 27904,
+                "mad": 0,
+                "stdev": 7.838367
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  18,
+                  18,
+                  17,
+                  17,
+                  18
+                ],
+                "sample_count": 5,
+                "median": 18,
+                "p95": 18,
+                "min": 17,
+                "max": 18,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  77872,
+                  77712,
+                  78304,
+                  77776,
+                  78160
+                ],
+                "sample_count": 5,
+                "median": 77872,
+                "p95": 78304,
+                "min": 77712,
+                "max": 78304,
+                "mad": 160,
+                "stdev": 228.61531
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  29,
+                  23,
+                  22,
+                  34,
+                  37
+                ],
+                "sample_count": 5,
+                "median": 29,
+                "p95": 37,
+                "min": 22,
+                "max": 37,
+                "mad": 6,
+                "stdev": 5.899152
+              },
+              "rss_kb": {
+                "samples": [
+                  79504,
+                  78080,
+                  77792,
+                  78064,
+                  77872
+                ],
+                "sample_count": 5,
+                "median": 78064,
+                "p95": 79504,
+                "min": 77792,
+                "max": 79504,
+                "mad": 192,
+                "stdev": 630.538056
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 1.111111,
+              "rss": 0.358126
+            },
+            "perry_to_bun": {
+              "wall_time": 0.689655,
+              "rss": 0.357245
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:249999500000"
+            ],
+            "expected_lines": [
+              "checksum:249999500000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 20,
+          "perry_rss_kb": 27888,
+          "node_ms": 18,
+          "node_rss_kb": 77872,
+          "bun_ms": 29,
+          "bun_rss_kb": 78064,
+          "speed_ratio": 1.111111,
+          "memory_ratio": 0.358126
+        },
+        "bench_json_roundtrip": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  450,
+                  444,
+                  447,
+                  447,
+                  448
+                ],
+                "sample_count": 5,
+                "median": 447,
+                "p95": 450,
+                "min": 444,
+                "max": 450,
+                "mad": 1,
+                "stdev": 1.939072
+              },
+              "rss_kb": {
+                "samples": [
+                  158816,
+                  158832,
+                  158816,
+                  158832,
+                  158832
+                ],
+                "sample_count": 5,
+                "median": 158832,
+                "p95": 158832,
+                "min": 158816,
+                "max": 158832,
+                "mad": 0,
+                "stdev": 7.838367
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  423,
+                  416,
+                  425,
+                  421,
+                  418
+                ],
+                "sample_count": 5,
+                "median": 421,
+                "p95": 425,
+                "min": 416,
+                "max": 425,
+                "mad": 3,
+                "stdev": 3.261901
+              },
+              "rss_kb": {
+                "samples": [
+                  128320,
+                  126192,
+                  127024,
+                  127392,
+                  126832
+                ],
+                "sample_count": 5,
+                "median": 127024,
+                "p95": 128320,
+                "min": 126192,
+                "max": 128320,
+                "mad": 368,
+                "stdev": 701.741833
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  253,
+                  238,
+                  242,
+                  238,
+                  237
+                ],
+                "sample_count": 5,
+                "median": 238,
+                "p95": 253,
+                "min": 237,
+                "max": 253,
+                "mad": 1,
+                "stdev": 5.95315
+              },
+              "rss_kb": {
+                "samples": [
+                  81840,
+                  83456,
+                  85648,
+                  84608,
+                  84736
+                ],
+                "sample_count": 5,
+                "median": 84608,
+                "p95": 85648,
+                "min": 81840,
+                "max": 85648,
+                "mad": 1040,
+                "stdev": 1309.367114
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 1.061758,
+              "rss": 1.250409
+            },
+            "perry_to_bun": {
+              "wall_time": 1.878151,
+              "rss": 1.877269
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:53735550"
+            ],
+            "expected_lines": [
+              "checksum:53735550"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 447,
+          "perry_rss_kb": 158832,
+          "node_ms": 421,
+          "node_rss_kb": 127024,
+          "bun_ms": 238,
+          "bun_rss_kb": 84608,
+          "speed_ratio": 1.061758,
+          "memory_ratio": 1.250409
+        },
+        "bench_object_property": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  284,
+                  268,
+                  273,
+                  283,
+                  275
+                ],
+                "sample_count": 5,
+                "median": 275,
+                "p95": 284,
+                "min": 268,
+                "max": 284,
+                "mad": 7,
+                "stdev": 6.08605
+              },
+              "rss_kb": {
+                "samples": [
+                  64912,
+                  64912,
+                  64912,
+                  64912,
+                  64896
+                ],
+                "sample_count": 5,
+                "median": 64912,
+                "p95": 64912,
+                "min": 64896,
+                "max": 64912,
+                "mad": 0,
+                "stdev": 6.4
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  17,
+                  16,
+                  16,
+                  17,
+                  16
+                ],
+                "sample_count": 5,
+                "median": 16,
+                "p95": 17,
+                "min": 16,
+                "max": 17,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  70784,
+                  70864,
+                  70512,
+                  70640,
+                  71056
+                ],
+                "sample_count": 5,
+                "median": 70784,
+                "p95": 71056,
+                "min": 70512,
+                "max": 71056,
+                "mad": 144,
+                "stdev": 186.700187
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  11,
+                  7,
+                  18,
+                  17,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 11,
+                "p95": 18,
+                "min": 6,
+                "max": 18,
+                "mad": 5,
+                "stdev": 4.955805
+              },
+              "rss_kb": {
+                "samples": [
+                  37792,
+                  33680,
+                  46208,
+                  46192,
+                  33712
+                ],
+                "sample_count": 5,
+                "median": 37792,
+                "p95": 46208,
+                "min": 33680,
+                "max": 46208,
+                "mad": 4112,
+                "stdev": 5658.079618
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 17.1875,
+              "rss": 0.917043
+            },
+            "perry_to_bun": {
+              "wall_time": 25.0,
+              "rss": 1.717612
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:1999990000"
+            ],
+            "expected_lines": [
+              "checksum:1999990000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 275,
+          "perry_rss_kb": 64912,
+          "node_ms": 16,
+          "node_rss_kb": 70784,
+          "bun_ms": 11,
+          "bun_rss_kb": 37792,
+          "speed_ratio": 17.1875,
+          "memory_ratio": 0.917043
+        },
+        "bench_int_arithmetic": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  590,
+                  577,
+                  576,
+                  578,
+                  573
+                ],
+                "sample_count": 5,
+                "median": 577,
+                "p95": 590,
+                "min": 573,
+                "max": 590,
+                "mad": 1,
+                "stdev": 5.844656
+              },
+              "rss_kb": {
+                "samples": [
+                  8512,
+                  8512,
+                  8512,
+                  8512,
+                  8528
+                ],
+                "sample_count": 5,
+                "median": 8512,
+                "p95": 8528,
+                "min": 8512,
+                "max": 8528,
+                "mad": 0,
+                "stdev": 6.4
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  98,
+                  98,
+                  101,
+                  102,
+                  101
+                ],
+                "sample_count": 5,
+                "median": 101,
+                "p95": 102,
+                "min": 98,
+                "max": 102,
+                "mad": 1,
+                "stdev": 1.67332
+              },
+              "rss_kb": {
+                "samples": [
+                  69696,
+                  69360,
+                  69184,
+                  68928,
+                  69504
+                ],
+                "sample_count": 5,
+                "median": 69360,
+                "p95": 69696,
+                "min": 68928,
+                "max": 69696,
+                "mad": 176,
+                "stdev": 263.801137
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  41,
+                  40,
+                  41,
+                  58,
+                  41
+                ],
+                "sample_count": 5,
+                "median": 41,
+                "p95": 58,
+                "min": 40,
+                "max": 58,
+                "mad": 0,
+                "stdev": 6.910861
+              },
+              "rss_kb": {
+                "samples": [
+                  36160,
+                  36096,
+                  36128,
+                  36064,
+                  36240
+                ],
+                "sample_count": 5,
+                "median": 36128,
+                "p95": 36240,
+                "min": 36064,
+                "max": 36240,
+                "mad": 32,
+                "stdev": 60.377479
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 5.712871,
+              "rss": 0.122722
+            },
+            "perry_to_bun": {
+              "wall_time": 14.073171,
+              "rss": 0.235607
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:5760000"
+            ],
+            "expected_lines": [
+              "checksum:5760000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 577,
+          "perry_rss_kb": 8512,
+          "node_ms": 101,
+          "node_rss_kb": 69360,
+          "bun_ms": 41,
+          "bun_rss_kb": 36128,
+          "speed_ratio": 5.712871,
+          "memory_ratio": 0.122722
+        },
+        "bench_buffer_readwrite": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  108,
+                  101,
+                  96,
+                  96,
+                  96
+                ],
+                "sample_count": 5,
+                "median": 96,
+                "p95": 108,
+                "min": 96,
+                "max": 108,
+                "mad": 0,
+                "stdev": 4.71593
+              },
+              "rss_kb": {
+                "samples": [
+                  9440,
+                  9440,
+                  9440,
+                  9440,
+                  9440
+                ],
+                "sample_count": 5,
+                "median": 9440,
+                "p95": 9440,
+                "min": 9440,
+                "max": 9440,
+                "mad": 0,
+                "stdev": 0
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  100,
+                  99,
+                  100,
+                  99,
+                  100
+                ],
+                "sample_count": 5,
+                "median": 100,
+                "p95": 100,
+                "min": 99,
+                "max": 100,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  69936,
+                  70176,
+                  69248,
+                  68960,
+                  69008
+                ],
+                "sample_count": 5,
+                "median": 69248,
+                "p95": 70176,
+                "min": 68960,
+                "max": 70176,
+                "mad": 288,
+                "stdev": 497.65916
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  104,
+                  104,
+                  109,
+                  105,
+                  105
+                ],
+                "sample_count": 5,
+                "median": 105,
+                "p95": 109,
+                "min": 104,
+                "max": 109,
+                "mad": 1,
+                "stdev": 1.854724
+              },
+              "rss_kb": {
+                "samples": [
+                  34192,
+                  34176,
+                  34240,
+                  34240,
+                  34176
+                ],
+                "sample_count": 5,
+                "median": 34192,
+                "p95": 34240,
+                "min": 34176,
+                "max": 34240,
+                "mad": 16,
+                "stdev": 29.328484
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 0.96,
+              "rss": 0.136322
+            },
+            "perry_to_bun": {
+              "wall_time": 0.914286,
+              "rss": 0.276088
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:12749385600"
+            ],
+            "expected_lines": [
+              "checksum:12749385600"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 96,
+          "perry_rss_kb": 9440,
+          "node_ms": 100,
+          "node_rss_kb": 69248,
+          "bun_ms": 105,
+          "bun_rss_kb": 34192,
+          "speed_ratio": 0.96,
+          "memory_ratio": 0.136322
+        },
+        "bench_array_grow": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  164,
+                  150,
+                  150,
+                  151,
+                  150
+                ],
+                "sample_count": 5,
+                "median": 150,
+                "p95": 164,
+                "min": 150,
+                "max": 164,
+                "mad": 0,
+                "stdev": 5.51362
+              },
+              "rss_kb": {
+                "samples": [
+                  45152,
+                  45120,
+                  45104,
+                  45136,
+                  45120
+                ],
+                "sample_count": 5,
+                "median": 45120,
+                "p95": 45152,
+                "min": 45104,
+                "max": 45152,
+                "mad": 16,
+                "stdev": 16.316862
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  26,
+                  21,
+                  20,
+                  23,
+                  20
+                ],
+                "sample_count": 5,
+                "median": 21,
+                "p95": 26,
+                "min": 20,
+                "max": 26,
+                "mad": 1,
+                "stdev": 2.280351
+              },
+              "rss_kb": {
+                "samples": [
+                  133104,
+                  132896,
+                  132912,
+                  133168,
+                  133232
+                ],
+                "sample_count": 5,
+                "median": 133104,
+                "p95": 133232,
+                "min": 132896,
+                "max": 133232,
+                "mad": 128,
+                "stdev": 135.613569
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  11,
+                  12,
+                  13,
+                  10,
+                  11
+                ],
+                "sample_count": 5,
+                "median": 11,
+                "p95": 13,
+                "min": 10,
+                "max": 13,
+                "mad": 1,
+                "stdev": 1.019804
+              },
+              "rss_kb": {
+                "samples": [
+                  75824,
+                  67040,
+                  75488,
+                  71008,
+                  75920
+                ],
+                "sample_count": 5,
+                "median": 75488,
+                "p95": 75920,
+                "min": 67040,
+                "max": 75920,
+                "mad": 432,
+                "stdev": 3526.060238
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 7.142857,
+              "rss": 0.338983
+            },
+            "perry_to_bun": {
+              "wall_time": 13.636364,
+              "rss": 0.597711
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "length:2000000",
+              "checksum:2998500000"
+            ],
+            "expected_lines": [
+              "length:2000000",
+              "checksum:2998500000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 150,
+          "perry_rss_kb": 45120,
+          "node_ms": 21,
+          "node_rss_kb": 133104,
+          "bun_ms": 11,
+          "bun_rss_kb": 75488,
+          "speed_ratio": 7.142857,
+          "memory_ratio": 0.338983
+        },
+        "bench_string_heavy": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  84,
+                  66,
+                  72,
+                  74,
+                  77
+                ],
+                "sample_count": 5,
+                "median": 74,
+                "p95": 84,
+                "min": 66,
+                "max": 84,
+                "mad": 3,
+                "stdev": 5.919459
+              },
+              "rss_kb": {
+                "samples": [
+                  63744,
+                  63728,
+                  63728,
+                  63744,
+                  63728
+                ],
+                "sample_count": 5,
+                "median": 63728,
+                "p95": 63744,
+                "min": 63728,
+                "max": 63744,
+                "mad": 0,
+                "stdev": 7.838367
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  55,
+                  52,
+                  52,
+                  45,
+                  45
+                ],
+                "sample_count": 5,
+                "median": 52,
+                "p95": 55,
+                "min": 45,
+                "max": 55,
+                "mad": 3,
+                "stdev": 4.069398
+              },
+              "rss_kb": {
+                "samples": [
+                  68704,
+                  68768,
+                  68672,
+                  69056,
+                  68480
+                ],
+                "sample_count": 5,
+                "median": 68704,
+                "p95": 69056,
+                "min": 68480,
+                "max": 69056,
+                "mad": 64,
+                "stdev": 186.590461
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  32,
+                  33,
+                  31,
+                  30,
+                  31
+                ],
+                "sample_count": 5,
+                "median": 31,
+                "p95": 33,
+                "min": 30,
+                "max": 33,
+                "mad": 1,
+                "stdev": 1.019804
+              },
+              "rss_kb": {
+                "samples": [
+                  62560,
+                  62592,
+                  62560,
+                  62496,
+                  62544
+                ],
+                "sample_count": 5,
+                "median": 62560,
+                "p95": 62592,
+                "min": 62496,
+                "max": 62592,
+                "mad": 16,
+                "stdev": 31.353469
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 1.423077,
+              "rss": 0.927573
+            },
+            "perry_to_bun": {
+              "wall_time": 2.387097,
+              "rss": 1.01867
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:21063000"
+            ],
+            "expected_lines": [
+              "checksum:21063000"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 74,
+          "perry_rss_kb": 63728,
+          "node_ms": 52,
+          "node_rss_kb": 68704,
+          "bun_ms": 31,
+          "bun_rss_kb": 62560,
+          "speed_ratio": 1.423077,
+          "memory_ratio": 0.927573
+        },
+        "bench_numeric_array_numeric": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  154,
+                  154,
+                  154,
+                  157,
+                  154
+                ],
+                "sample_count": 5,
+                "median": 154,
+                "p95": 157,
+                "min": 154,
+                "max": 157,
+                "mad": 0,
+                "stdev": 1.2
+              },
+              "rss_kb": {
+                "samples": [
+                  30128,
+                  30128,
+                  30144,
+                  30128,
+                  30144
+                ],
+                "sample_count": 5,
+                "median": 30128,
+                "p95": 30144,
+                "min": 30128,
+                "max": 30144,
+                "mad": 0,
+                "stdev": 7.838367
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  6,
+                  7,
+                  6,
+                  7,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 6,
+                "p95": 7,
+                "min": 6,
+                "max": 7,
+                "mad": 0,
+                "stdev": 0.489898
+              },
+              "rss_kb": {
+                "samples": [
+                  89184,
+                  89632,
+                  89568,
+                  89744,
+                  89936
+                ],
+                "sample_count": 5,
+                "median": 89632,
+                "p95": 89936,
+                "min": 89184,
+                "max": 89936,
+                "mad": 112,
+                "stdev": 248.159948
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  4,
+                  6,
+                  6,
+                  4,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 6,
+                "p95": 6,
+                "min": 4,
+                "max": 6,
+                "mad": 0,
+                "stdev": 0.979796
+              },
+              "rss_kb": {
+                "samples": [
+                  46400,
+                  46608,
+                  46496,
+                  46640,
+                  46560
+                ],
+                "sample_count": 5,
+                "median": 46560,
+                "p95": 46640,
+                "min": 46400,
+                "max": 46640,
+                "mad": 64,
+                "stdev": 85.506491
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 25.666667,
+              "rss": 0.33613
+            },
+            "perry_to_bun": {
+              "wall_time": 25.666667,
+              "rss": 0.647079
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:6500625"
+            ],
+            "expected_lines": [
+              "checksum:6500625"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 154,
+          "perry_rss_kb": 30128,
+          "node_ms": 6,
+          "node_rss_kb": 89632,
+          "bun_ms": 6,
+          "bun_rss_kb": 46560,
+          "speed_ratio": 25.666667,
+          "memory_ratio": 0.33613
+        },
+        "bench_numeric_array_downgrade": {
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  11052,
+                  11028,
+                  11011,
+                  11016,
+                  11071
+                ],
+                "sample_count": 5,
+                "median": 11028,
+                "p95": 11071,
+                "min": 11011,
+                "max": 11071,
+                "mad": 17,
+                "stdev": 22.668039
+              },
+              "rss_kb": {
+                "samples": [
+                  19360,
+                  15872,
+                  17712,
+                  21472,
+                  19568
+                ],
+                "sample_count": 5,
+                "median": 19360,
+                "p95": 21472,
+                "min": 15872,
+                "max": 21472,
+                "mad": 1648,
+                "stdev": 1886.790121
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  10,
+                  7,
+                  7,
+                  7,
+                  7
+                ],
+                "sample_count": 5,
+                "median": 7,
+                "p95": 10,
+                "min": 7,
+                "max": 10,
+                "mad": 0,
+                "stdev": 1.2
+              },
+              "rss_kb": {
+                "samples": [
+                  89840,
+                  90320,
+                  89856,
+                  89952,
+                  89792
+                ],
+                "sample_count": 5,
+                "median": 89856,
+                "p95": 90320,
+                "min": 89792,
+                "max": 90320,
+                "mad": 64,
+                "stdev": 191.198326
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  6,
+                  6,
+                  5,
+                  6,
+                  6
+                ],
+                "sample_count": 5,
+                "median": 6,
+                "p95": 6,
+                "min": 5,
+                "max": 6,
+                "mad": 0,
+                "stdev": 0.4
+              },
+              "rss_kb": {
+                "samples": [
+                  47680,
+                  48000,
+                  48048,
+                  47760,
+                  48016
+                ],
+                "sample_count": 5,
+                "median": 48000,
+                "p95": 48048,
+                "min": 47680,
+                "max": 48048,
+                "mad": 48,
+                "stdev": 150.570117
+              }
+            }
+          },
+          "ratios": {
+            "perry_to_node": {
+              "wall_time": 1575.428571,
+              "rss": 0.215456
+            },
+            "perry_to_bun": {
+              "wall_time": 1838.0,
+              "rss": 0.403333
+            }
+          },
+          "correctness": {
+            "status": "pass",
+            "reference": "node",
+            "actual_lines": [
+              "checksum:6500875"
+            ],
+            "expected_lines": [
+              "checksum:6500875"
+            ],
+            "reason": "all 5 Perry sample(s) matched node semantic output"
+          },
+          "perry_ms": 11028,
+          "perry_rss_kb": 19360,
+          "node_ms": 7,
+          "node_rss_kb": 89856,
+          "bun_ms": 6,
+          "bun_rss_kb": 48000,
+          "speed_ratio": 1575.428571,
+          "memory_ratio": 0.215456
+        }
+      }
+    },
+    "polyglot": {
+      "schema_version": 1,
+      "suite": "polyglot",
+      "commit": "36cf04e0147c68a55f362689ab6c56e2b39a3c67",
+      "generated_at": "2026-07-13T13:08:20Z",
+      "run_config": {
+        "warmup": "none beyond benchmark-specific setup",
+        "requested_samples": 11,
+        "pinning": "macOS scheduler hint (taskpolicy -t 0 -l 0 \u2014 P-core preferred via throughput/latency tiers, NOT strict affinity)"
+      },
+      "commands": {
+        "perry": [
+          "../../target/release/perry",
+          "compile",
+          "<source.ts>",
+          "-o",
+          "<binary>"
+        ],
+        "node": [
+          "/tmp/perry-bench-tools/bin/node",
+          "<precompiled.mjs>"
+        ],
+        "bun": [
+          "/tmp/perry-bench-tools/bin/bun",
+          "run",
+          "<source.ts>"
+        ],
+        "runner": [
+          "benchmarks/polyglot/run_all.sh",
+          "11"
+        ]
+      },
+      "runtime_metadata": {
+        "perry": {
+          "version": "perry 0.5.1258",
+          "resolved_executable": "/private/tmp/perry-performance-baseline-0713/target/release/perry"
+        },
+        "node": {
+          "version": "v22.23.1",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/node"
+        },
+        "bun": {
+          "version": "1.3.14",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/bun"
+        }
+      },
+      "benchmarks": {
+        "accumulate": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "45e7000362b678343915ceae0bbf34e9c236096552f86ca83f6cb91d6b0b5c67"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  1511.0,
+                  1496.0,
+                  1500.0,
+                  1494.0,
+                  1494.0,
+                  1495.0,
+                  1503.0,
+                  1501.0,
+                  1495.0,
+                  1505.0,
+                  1502.0
+                ],
+                "sample_count": 11,
+                "median": 1500.0,
+                "p95": 1511.0,
+                "min": 1494.0,
+                "max": 1511.0,
+                "stdev": 5.192174658652231
+              },
+              "output_sha256": "45e7000362b678343915ceae0bbf34e9c236096552f86ca83f6cb91d6b0b5c67"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  95.0,
+                  94.0,
+                  94.0,
+                  94.0,
+                  95.0,
+                  95.0,
+                  94.0,
+                  94.0,
+                  94.0,
+                  94.0,
+                  95.0
+                ],
+                "sample_count": 11,
+                "median": 94.0,
+                "p95": 95.0,
+                "min": 94.0,
+                "max": 95.0,
+                "stdev": 0.48104569292083466
+              },
+              "output_sha256": "45e7000362b678343915ceae0bbf34e9c236096552f86ca83f6cb91d6b0b5c67"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  97.0,
+                  98.0,
+                  98.0,
+                  97.0,
+                  98.0,
+                  99.0,
+                  98.0,
+                  99.0,
+                  99.0,
+                  95.0,
+                  96.0
+                ],
+                "sample_count": 11,
+                "median": 98.0,
+                "p95": 99.0,
+                "min": 95.0,
+                "max": 99.0,
+                "stdev": 1.2264306875665492
+              },
+              "output_sha256": "45e7000362b678343915ceae0bbf34e9c236096552f86ca83f6cb91d6b0b5c67"
+            }
+          }
+        },
+        "array_read": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "9a59b9a771dcc3170ca6608099bc1dbe482831939679e81ae72f7bf4bd249674"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  93.0,
+                  93.0,
+                  92.0,
+                  94.0,
+                  93.0,
+                  92.0,
+                  93.0,
+                  92.0,
+                  92.0,
+                  92.0,
+                  99.0
+                ],
+                "sample_count": 11,
+                "median": 93.0,
+                "p95": 99.0,
+                "min": 92.0,
+                "max": 99.0,
+                "stdev": 1.9455395053666087
+              },
+              "output_sha256": "9a59b9a771dcc3170ca6608099bc1dbe482831939679e81ae72f7bf4bd249674"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  11.0,
+                  10.0,
+                  14.0,
+                  11.0,
+                  11.0,
+                  11.0,
+                  11.0,
+                  11.0,
+                  10.0,
+                  10.0,
+                  15.0
+                ],
+                "sample_count": 11,
+                "median": 11.0,
+                "p95": 15.0,
+                "min": 10.0,
+                "max": 15.0,
+                "stdev": 1.5534552264213692
+              },
+              "output_sha256": "9a59b9a771dcc3170ca6608099bc1dbe482831939679e81ae72f7bf4bd249674"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  15.0,
+                  16.0,
+                  15.0,
+                  16.0,
+                  14.0,
+                  15.0,
+                  19.0,
+                  20.0,
+                  17.0,
+                  18.0,
+                  19.0
+                ],
+                "sample_count": 11,
+                "median": 16.0,
+                "p95": 20.0,
+                "min": 14.0,
+                "max": 20.0,
+                "stdev": 1.9112541856026035
+              },
+              "output_sha256": "9a59b9a771dcc3170ca6608099bc1dbe482831939679e81ae72f7bf4bd249674"
+            }
+          }
+        },
+        "array_write": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "a76ae1255a79f86acf51281a91633021374b072ef8c7fc75e6f1adf69e1e9ed4"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  6.0,
+                  3.0,
+                  3.0,
+                  10.0,
+                  9.0,
+                  10.0,
+                  2.0,
+                  3.0,
+                  2.0,
+                  7.0,
+                  3.0
+                ],
+                "sample_count": 11,
+                "median": 3.0,
+                "p95": 10.0,
+                "min": 2.0,
+                "max": 10.0,
+                "stdev": 3.0775110690565013
+              },
+              "output_sha256": "a76ae1255a79f86acf51281a91633021374b072ef8c7fc75e6f1adf69e1e9ed4"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  8.0,
+                  7.0,
+                  7.0,
+                  7.0,
+                  6.0,
+                  7.0,
+                  7.0,
+                  7.0,
+                  7.0,
+                  7.0,
+                  7.0
+                ],
+                "sample_count": 11,
+                "median": 7.0,
+                "p95": 8.0,
+                "min": 6.0,
+                "max": 8.0,
+                "stdev": 0.4264014327112209
+              },
+              "output_sha256": "a76ae1255a79f86acf51281a91633021374b072ef8c7fc75e6f1adf69e1e9ed4"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  12.0,
+                  11.0,
+                  5.0,
+                  12.0,
+                  6.0,
+                  6.0,
+                  11.0,
+                  7.0,
+                  5.0,
+                  7.0,
+                  11.0
+                ],
+                "sample_count": 11,
+                "median": 7.0,
+                "p95": 12.0,
+                "min": 5.0,
+                "max": 12.0,
+                "stdev": 2.7753340949952268
+              },
+              "output_sha256": "a76ae1255a79f86acf51281a91633021374b072ef8c7fc75e6f1adf69e1e9ed4"
+            }
+          }
+        },
+        "fibonacci": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "834774a30aeb60ab0f0a8dac4482efb07689d7b249da0942aa1260a78a3fa77d"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  300.0,
+                  302.0,
+                  299.0,
+                  299.0,
+                  299.0,
+                  298.0,
+                  300.0,
+                  299.0,
+                  299.0,
+                  299.0,
+                  304.0
+                ],
+                "sample_count": 11,
+                "median": 299.0,
+                "p95": 304.0,
+                "min": 298.0,
+                "max": 304.0,
+                "stdev": 1.6414063713879807
+              },
+              "output_sha256": "834774a30aeb60ab0f0a8dac4482efb07689d7b249da0942aa1260a78a3fa77d"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  922.0,
+                  924.0,
+                  938.0,
+                  939.0,
+                  926.0,
+                  922.0,
+                  922.0,
+                  922.0,
+                  923.0,
+                  921.0,
+                  922.0
+                ],
+                "sample_count": 11,
+                "median": 922.0,
+                "p95": 939.0,
+                "min": 921.0,
+                "max": 939.0,
+                "stdev": 6.2430126230506895
+              },
+              "output_sha256": "834774a30aeb60ab0f0a8dac4482efb07689d7b249da0942aa1260a78a3fa77d"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  522.0,
+                  510.0,
+                  512.0,
+                  512.0,
+                  529.0,
+                  522.0,
+                  548.0,
+                  519.0,
+                  517.0,
+                  522.0,
+                  521.0
+                ],
+                "sample_count": 11,
+                "median": 521.0,
+                "p95": 548.0,
+                "min": 510.0,
+                "max": 548.0,
+                "stdev": 9.991732119297517
+              },
+              "output_sha256": "834774a30aeb60ab0f0a8dac4482efb07689d7b249da0942aa1260a78a3fa77d"
+            }
+          }
+        },
+        "loop_data_dependent": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "6cb3a76d1ca7915e12bb42333de96a572ad2f85a93f3d7bb6c2148d08be2bb2d"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  1724.0,
+                  1736.0,
+                  1729.0,
+                  1743.0,
+                  1727.0,
+                  1718.0,
+                  1727.0,
+                  1722.0,
+                  1714.0,
+                  1728.0,
+                  1714.0
+                ],
+                "sample_count": 11,
+                "median": 1727.0,
+                "p95": 1743.0,
+                "min": 1714.0,
+                "max": 1743.0,
+                "stdev": 8.391258733974055
+              },
+              "output_sha256": "6cb3a76d1ca7915e12bb42333de96a572ad2f85a93f3d7bb6c2148d08be2bb2d"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  223.0,
+                  221.0,
+                  221.0,
+                  221.0,
+                  219.0,
+                  220.0,
+                  221.0,
+                  220.0,
+                  220.0,
+                  220.0,
+                  220.0
+                ],
+                "sample_count": 11,
+                "median": 220.0,
+                "p95": 223.0,
+                "min": 219.0,
+                "max": 223.0,
+                "stdev": 0.9875254992000196
+              },
+              "output_sha256": "6cb3a76d1ca7915e12bb42333de96a572ad2f85a93f3d7bb6c2148d08be2bb2d"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  229.0,
+                  231.0,
+                  226.0,
+                  233.0,
+                  230.0,
+                  222.0,
+                  222.0,
+                  223.0,
+                  223.0,
+                  227.0,
+                  224.0
+                ],
+                "sample_count": 11,
+                "median": 226.0,
+                "p95": 233.0,
+                "min": 222.0,
+                "max": 233.0,
+                "stdev": 3.7239452996843716
+              },
+              "output_sha256": "6cb3a76d1ca7915e12bb42333de96a572ad2f85a93f3d7bb6c2148d08be2bb2d"
+            }
+          }
+        },
+        "loop_overhead": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "d68797a2b161b634fec27feb8b6bc77e100157293c334376792cb0341b9c5f51"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  94.0,
+                  94.0,
+                  94.0,
+                  93.0,
+                  94.0,
+                  94.0,
+                  94.0,
+                  94.0,
+                  94.0,
+                  93.0,
+                  93.0
+                ],
+                "sample_count": 11,
+                "median": 94.0,
+                "p95": 94.0,
+                "min": 93.0,
+                "max": 94.0,
+                "stdev": 0.4453617714151233
+              },
+              "output_sha256": "d68797a2b161b634fec27feb8b6bc77e100157293c334376792cb0341b9c5f51"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  63.0,
+                  63.0,
+                  63.0,
+                  63.0,
+                  63.0,
+                  63.0,
+                  63.0,
+                  64.0,
+                  63.0,
+                  63.0,
+                  63.0
+                ],
+                "sample_count": 11,
+                "median": 63.0,
+                "p95": 64.0,
+                "min": 63.0,
+                "max": 64.0,
+                "stdev": 0.28747978728803447
+              },
+              "output_sha256": "d68797a2b161b634fec27feb8b6bc77e100157293c334376792cb0341b9c5f51"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  42.0,
+                  40.0,
+                  40.0,
+                  42.0,
+                  40.0,
+                  39.0,
+                  40.0,
+                  39.0,
+                  39.0,
+                  40.0,
+                  39.0
+                ],
+                "sample_count": 11,
+                "median": 40.0,
+                "p95": 42.0,
+                "min": 39.0,
+                "max": 42.0,
+                "stdev": 1.044465935734187
+              },
+              "output_sha256": "d68797a2b161b634fec27feb8b6bc77e100157293c334376792cb0341b9c5f51"
+            }
+          }
+        },
+        "math_intensive": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "02dbcc45c8e22eb2287af9c9106f65c992f093273c79f14f5fa49a4fc7ef0289"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  49.0,
+                  49.0,
+                  49.0,
+                  49.0,
+                  49.0,
+                  49.0,
+                  48.0,
+                  49.0,
+                  49.0,
+                  50.0,
+                  49.0
+                ],
+                "sample_count": 11,
+                "median": 49.0,
+                "p95": 50.0,
+                "min": 48.0,
+                "max": 50.0,
+                "stdev": 0.4264014327112209
+              },
+              "output_sha256": "02dbcc45c8e22eb2287af9c9106f65c992f093273c79f14f5fa49a4fc7ef0289"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  49.0,
+                  49.0,
+                  48.0,
+                  49.0,
+                  48.0,
+                  48.0,
+                  49.0,
+                  49.0,
+                  49.0,
+                  49.0,
+                  49.0
+                ],
+                "sample_count": 11,
+                "median": 49.0,
+                "p95": 49.0,
+                "min": 48.0,
+                "max": 49.0,
+                "stdev": 0.4453617714151233
+              },
+              "output_sha256": "02dbcc45c8e22eb2287af9c9106f65c992f093273c79f14f5fa49a4fc7ef0289"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  62.0,
+                  50.0,
+                  49.0,
+                  49.0,
+                  50.0,
+                  50.0,
+                  50.0,
+                  51.0,
+                  49.0,
+                  50.0,
+                  50.0
+                ],
+                "sample_count": 11,
+                "median": 50.0,
+                "p95": 62.0,
+                "min": 49.0,
+                "max": 62.0,
+                "stdev": 3.553603688307648
+              },
+              "output_sha256": "02dbcc45c8e22eb2287af9c9106f65c992f093273c79f14f5fa49a4fc7ef0289"
+            }
+          }
+        },
+        "nested_loops": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "8e77f4e216b88148ae91a1b1fafd99b59948aa3d0a447313af68e39a25cc21e2"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  162.0,
+                  160.0,
+                  157.0,
+                  157.0,
+                  158.0,
+                  157.0,
+                  157.0,
+                  160.0,
+                  157.0,
+                  158.0,
+                  157.0
+                ],
+                "sample_count": 11,
+                "median": 157.0,
+                "p95": 162.0,
+                "min": 157.0,
+                "max": 162.0,
+                "stdev": 1.6414063713879807
+              },
+              "output_sha256": "8e77f4e216b88148ae91a1b1fafd99b59948aa3d0a447313af68e39a25cc21e2"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  18.0,
+                  18.0,
+                  18.0,
+                  17.0,
+                  19.0,
+                  18.0,
+                  18.0,
+                  18.0,
+                  17.0,
+                  18.0,
+                  17.0
+                ],
+                "sample_count": 11,
+                "median": 18.0,
+                "p95": 19.0,
+                "min": 17.0,
+                "max": 19.0,
+                "stdev": 0.5749595745760689
+              },
+              "output_sha256": "8e77f4e216b88148ae91a1b1fafd99b59948aa3d0a447313af68e39a25cc21e2"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  19.0,
+                  19.0,
+                  19.0,
+                  19.0,
+                  19.0,
+                  19.0,
+                  19.0,
+                  20.0,
+                  19.0,
+                  19.0,
+                  19.0
+                ],
+                "sample_count": 11,
+                "median": 19.0,
+                "p95": 20.0,
+                "min": 19.0,
+                "max": 20.0,
+                "stdev": 0.28747978728803447
+              },
+              "output_sha256": "8e77f4e216b88148ae91a1b1fafd99b59948aa3d0a447313af68e39a25cc21e2"
+            }
+          }
+        },
+        "object_create": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "output_sha256": "e70c38907b55a22165abecab6fbc7e4901cc69e6aeee9fb0c32635455ec55134"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  5.0,
+                  4.0,
+                  4.0,
+                  4.0,
+                  5.0,
+                  4.0,
+                  4.0,
+                  4.0,
+                  5.0,
+                  4.0,
+                  4.0
+                ],
+                "sample_count": 11,
+                "median": 4.0,
+                "p95": 5.0,
+                "min": 4.0,
+                "max": 5.0,
+                "stdev": 0.4453617714151233
+              },
+              "output_sha256": "e70c38907b55a22165abecab6fbc7e4901cc69e6aeee9fb0c32635455ec55134"
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  5.0,
+                  5.0,
+                  5.0,
+                  6.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0
+                ],
+                "sample_count": 11,
+                "median": 5.0,
+                "p95": 6.0,
+                "min": 5.0,
+                "max": 6.0,
+                "stdev": 0.28747978728803447
+              },
+              "output_sha256": "e70c38907b55a22165abecab6fbc7e4901cc69e6aeee9fb0c32635455ec55134"
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  8.0,
+                  6.0,
+                  6.0,
+                  6.0,
+                  7.0,
+                  6.0,
+                  6.0,
+                  6.0,
+                  6.0,
+                  5.0,
+                  6.0
+                ],
+                "sample_count": 11,
+                "median": 6.0,
+                "p95": 8.0,
+                "min": 5.0,
+                "max": 8.0,
+                "stdev": 0.7158188976374373
+              },
+              "output_sha256": "e70c38907b55a22165abecab6fbc7e4901cc69e6aeee9fb0c32635455ec55134"
+            }
+          }
+        }
+      }
+    },
+    "json_polyglot": {
+      "schema_version": 1,
+      "suite": "json_polyglot",
+      "commit": "36cf04e0147c68a55f362689ab6c56e2b39a3c67",
+      "generated_at": "2026-07-13T13:27:59Z",
+      "run_config": {
+        "warmup": "3 untimed iterations inside each benchmark process",
+        "requested_samples": 11,
+        "pinning": "macOS scheduler hint (taskpolicy -t 0 -l 0 \u2014 P-core preferred via throughput/latency tiers, NOT strict affinity)"
+      },
+      "commands": {
+        "perry": [
+          "/private/tmp/perry-performance-baseline-0713/target/release/perry",
+          "compile",
+          "bench.ts",
+          "-o",
+          "<binary>"
+        ],
+        "node": [
+          "/tmp/perry-bench-tools/bin/node",
+          "<precompiled.mjs>"
+        ],
+        "bun": [
+          "/tmp/perry-bench-tools/bin/bun",
+          "bench.ts"
+        ],
+        "runner": [
+          "benchmarks/json_polyglot/run.sh"
+        ]
+      },
+      "runtime_metadata": {
+        "perry": {
+          "version": "perry 0.5.1258",
+          "resolved_executable": "/private/tmp/perry-performance-baseline-0713/target/release/perry"
+        },
+        "node": {
+          "version": "v22.23.1",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/node"
+        },
+        "bun": {
+          "version": "1.3.14",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/bun"
+        }
+      },
+      "benchmarks": {
+        "roundtrip": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "53735550"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  410.0,
+                  428.0,
+                  421.0,
+                  445.0,
+                  414.0,
+                  401.0,
+                  398.0,
+                  500.0,
+                  468.0,
+                  485.0,
+                  425.0
+                ],
+                "sample_count": 11,
+                "median": 425.0,
+                "p95": 500.0,
+                "min": 398.0,
+                "max": 500.0,
+                "stdev": 32.80924078657925
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  427.0,
+                  427.0,
+                  412.0,
+                  408.0,
+                  397.0,
+                  395.0,
+                  400.0,
+                  412.0,
+                  394.0,
+                  395.0,
+                  474.0
+                ],
+                "sample_count": 11,
+                "median": 408.0,
+                "p95": 474.0,
+                "min": 394.0,
+                "max": 474.0,
+                "stdev": 22.509869277186688
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  244.0,
+                  239.0,
+                  254.0,
+                  237.0,
+                  239.0,
+                  238.0,
+                  236.0,
+                  237.0,
+                  240.0,
+                  241.0,
+                  241.0
+                ],
+                "sample_count": 11,
+                "median": 239.0,
+                "p95": 254.0,
+                "min": 236.0,
+                "max": 254.0,
+                "stdev": 4.774242183818503
+              }
+            }
+          }
+        },
+        "field_access": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "2552985550"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  6800.0,
+                  6732.0,
+                  6908.0,
+                  6690.0,
+                  6916.0,
+                  7472.0,
+                  7670.0,
+                  6886.0,
+                  16330.0,
+                  6700.0,
+                  6730.0
+                ],
+                "sample_count": 11,
+                "median": 6886.0,
+                "p95": 16330.0,
+                "min": 6690.0,
+                "max": 16330.0,
+                "stdev": 2714.027850548649
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  405.0,
+                  387.0,
+                  399.0,
+                  392.0,
+                  414.0,
+                  417.0,
+                  412.0,
+                  407.0,
+                  401.0,
+                  400.0,
+                  412.0
+                ],
+                "sample_count": 11,
+                "median": 405.0,
+                "p95": 417.0,
+                "min": 387.0,
+                "max": 417.0,
+                "stdev": 8.993110310557258
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  242.0,
+                  258.0,
+                  243.0,
+                  244.0,
+                  242.0,
+                  240.0,
+                  243.0,
+                  242.0,
+                  243.0,
+                  257.0,
+                  244.0
+                ],
+                "sample_count": 11,
+                "median": 243.0,
+                "p95": 258.0,
+                "min": 240.0,
+                "max": 258.0,
+                "stdev": 5.863460180580764
+              }
+            }
+          }
+        }
+      }
+    },
+    "app_patterns": {
+      "schema_version": 1,
+      "suite": "app_patterns",
+      "commit": "36cf04e0147c68a55f362689ab6c56e2b39a3c67",
+      "generated_at": "2026-07-13T13:44:50Z",
+      "run_config": {
+        "warmup": 3,
+        "requested_samples": 15,
+        "interleaved": true
+      },
+      "commands": {
+        "perry": [
+          "/private/tmp/perry-performance-baseline-0713/target/release/perry",
+          "<kernel.ts>",
+          "-o",
+          "<compiled-kernel>"
+        ],
+        "node": [
+          "/tmp/perry-bench-tools/bin/node",
+          "--experimental-strip-types",
+          "<kernel.ts>"
+        ],
+        "bun": [
+          "/tmp/perry-bench-tools/bin/bun",
+          "run",
+          "<kernel.ts>"
+        ],
+        "measurement": [
+          "hyperfine",
+          "--warmup",
+          "3",
+          "--runs",
+          "15"
+        ]
+      },
+      "runtime_metadata": {
+        "perry": {
+          "version": "perry 0.5.1258",
+          "resolved_executable": "/private/tmp/perry-performance-baseline-0713/target/release/perry"
+        },
+        "node": {
+          "version": "v22.23.1",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/node"
+        },
+        "bun": {
+          "version": "1.3.14",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/bun"
+        }
+      },
+      "benchmarks": {
+        "buffer_transcode": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 53760000"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  61.561556,
+                  62.221139,
+                  62.843264,
+                  60.287847,
+                  60.289347,
+                  70.488722,
+                  72.200223,
+                  62.138306,
+                  63.877723,
+                  59.238556,
+                  61.352431,
+                  60.233014,
+                  59.991098,
+                  60.914389,
+                  62.680514
+                ],
+                "sample_count": 15,
+                "median": 61.561556,
+                "p95": 72.200223,
+                "min": 59.238556,
+                "max": 72.200223,
+                "stdev": 3.6166730952279584
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  84.757056,
+                  87.497555,
+                  84.881223,
+                  87.681764,
+                  85.975806,
+                  85.900597,
+                  85.899973,
+                  85.053347,
+                  85.185222,
+                  87.33968,
+                  87.161347,
+                  86.738389,
+                  94.197472,
+                  84.183014,
+                  85.665055
+                ],
+                "sample_count": 15,
+                "median": 85.900597,
+                "p95": 94.197472,
+                "min": 84.183014,
+                "max": 94.197472,
+                "stdev": 2.30008696088534
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  43.383306,
+                  45.107723,
+                  43.271139,
+                  44.102556,
+                  43.573556,
+                  45.508222,
+                  43.86918,
+                  44.584473,
+                  44.613181,
+                  44.144931,
+                  42.607931,
+                  43.614222,
+                  46.107722,
+                  43.887805,
+                  43.044431
+                ],
+                "sample_count": 15,
+                "median": 43.887805,
+                "p95": 46.107722,
+                "min": 42.607931,
+                "max": 46.107722,
+                "stdev": 0.9194853193613534
+              }
+            }
+          }
+        },
+        "date_format_parse": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 170004999949769570"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  43.453237,
+                  42.840488,
+                  43.124487,
+                  43.318529,
+                  43.011363,
+                  42.95982,
+                  43.901029,
+                  43.205237,
+                  43.222154,
+                  42.542446,
+                  43.928404,
+                  47.158904,
+                  48.569154,
+                  48.360445,
+                  46.100904
+                ],
+                "sample_count": 15,
+                "median": 43.318529,
+                "p95": 48.569154,
+                "min": 42.542446,
+                "max": 48.569154,
+                "stdev": 2.0071456037585573
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  119.326237,
+                  113.787195,
+                  115.17607,
+                  117.339529,
+                  113.749029,
+                  113.91907,
+                  114.91482,
+                  112.677862,
+                  113.141862,
+                  115.559029,
+                  119.955612,
+                  114.947571,
+                  118.141446,
+                  112.867237,
+                  115.447487
+                ],
+                "sample_count": 15,
+                "median": 114.947571,
+                "p95": 119.955612,
+                "min": 112.677862,
+                "max": 119.955612,
+                "stdev": 2.227224904334265
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  45.620904,
+                  46.08982,
+                  45.339821,
+                  45.423863,
+                  45.076113,
+                  44.946904,
+                  46.283154,
+                  45.978029,
+                  45.946529,
+                  45.274237,
+                  45.906946,
+                  47.777487,
+                  49.434196,
+                  47.870112,
+                  45.829863
+                ],
+                "sample_count": 15,
+                "median": 45.906946,
+                "p95": 49.434196,
+                "min": 44.946904,
+                "max": 49.434196,
+                "stdev": 1.196064508058539
+              }
+            }
+          }
+        },
+        "json_parse_1mb": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 374925000 bytes: 757607"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  277.046861,
+                  305.702819,
+                  283.582319,
+                  277.38961,
+                  276.212652,
+                  288.151694,
+                  275.919069,
+                  277.66261,
+                  280.287027,
+                  273.945527,
+                  276.461735,
+                  277.191444,
+                  276.070235,
+                  274.808527,
+                  272.624319
+                ],
+                "sample_count": 15,
+                "median": 277.046861,
+                "p95": 305.702819,
+                "min": 272.624319,
+                "max": 305.702819,
+                "stdev": 7.927344424039686
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  122.622361,
+                  124.778027,
+                  128.35461,
+                  126.450569,
+                  133.490444,
+                  126.166527,
+                  132.111611,
+                  125.377194,
+                  122.091319,
+                  125.507986,
+                  124.472569,
+                  127.266235,
+                  129.493527,
+                  124.263485,
+                  122.921193
+                ],
+                "sample_count": 15,
+                "median": 125.507986,
+                "p95": 133.490444,
+                "min": 122.091319,
+                "max": 133.490444,
+                "stdev": 3.21203745590347
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  73.500486,
+                  68.536986,
+                  68.403735,
+                  68.689735,
+                  68.251611,
+                  68.707194,
+                  73.923819,
+                  68.700486,
+                  67.98236,
+                  68.657194,
+                  68.718318,
+                  68.266777,
+                  67.862152,
+                  68.297361,
+                  69.382527
+                ],
+                "sample_count": 15,
+                "median": 68.657194,
+                "p95": 73.923819,
+                "min": 67.862152,
+                "max": 73.923819,
+                "stdev": 1.8083441035266403
+              }
+            }
+          }
+        },
+        "json_stringify_1mb": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 22728210"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  98.815099,
+                  98.414517,
+                  99.843891,
+                  99.917308,
+                  99.745641,
+                  100.358766,
+                  99.142183,
+                  99.411183,
+                  99.013183,
+                  99.922224,
+                  98.707266,
+                  99.400141,
+                  100.359433,
+                  99.329475,
+                  99.00435
+                ],
+                "sample_count": 15,
+                "median": 99.400141,
+                "p95": 100.359433,
+                "min": 98.414517,
+                "max": 100.359433,
+                "stdev": 0.5690701883673042
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  94.095683,
+                  99.038433,
+                  109.336558,
+                  108.479933,
+                  97.265267,
+                  97.337266,
+                  94.167016,
+                  96.014933,
+                  96.482683,
+                  95.080225,
+                  95.2771,
+                  96.309933,
+                  94.861308,
+                  96.846558,
+                  95.613808
+                ],
+                "sample_count": 15,
+                "median": 96.309933,
+                "p95": 109.336558,
+                "min": 94.095683,
+                "max": 109.336558,
+                "stdev": 4.555540118666806
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  38.400475,
+                  38.914016,
+                  37.637392,
+                  37.780599,
+                  38.368808,
+                  38.084641,
+                  39.125016,
+                  38.260849,
+                  38.276891,
+                  38.028099,
+                  37.99485,
+                  37.837183,
+                  37.775349,
+                  39.247225,
+                  43.77785
+                ],
+                "sample_count": 15,
+                "median": 38.260849,
+                "p95": 43.77785,
+                "min": 37.637392,
+                "max": 43.77785,
+                "stdev": 1.4541324168392584
+              }
+            }
+          }
+        },
+        "map_1m": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 249999500000 249999500000 10000 size: 500000"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  853.893171,
+                  884.38863,
+                  918.820504,
+                  861.530755,
+                  861.589963,
+                  845.464463,
+                  892.072922,
+                  858.361213,
+                  843.786296,
+                  887.588004,
+                  849.774671,
+                  871.659004,
+                  890.025338,
+                  849.166754,
+                  854.865838
+                ],
+                "sample_count": 15,
+                "median": 861.530755,
+                "p95": 918.820504,
+                "min": 843.786296,
+                "max": 918.820504,
+                "stdev": 21.04087690691445
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  263.412046,
+                  278.21438,
+                  344.044379,
+                  263.435545,
+                  258.02638,
+                  275.066213,
+                  260.407504,
+                  270.322046,
+                  282.001838,
+                  263.636797,
+                  282.335045,
+                  296.706838,
+                  296.124088,
+                  301.784045,
+                  285.116379
+                ],
+                "sample_count": 15,
+                "median": 278.21438,
+                "p95": 344.044379,
+                "min": 258.02638,
+                "max": 344.044379,
+                "stdev": 21.49074407912306
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  227.214628,
+                  234.87888,
+                  236.508255,
+                  231.006088,
+                  228.968713,
+                  231.175378,
+                  227.51713,
+                  234.309463,
+                  239.174879,
+                  225.417171,
+                  242.516672,
+                  235.032504,
+                  227.565754,
+                  233.228129,
+                  235.73217
+                ],
+                "sample_count": 15,
+                "median": 233.228129,
+                "p95": 242.516672,
+                "min": 225.417171,
+                "max": 242.516672,
+                "stdev": 4.694030859786649
+              }
+            }
+          }
+        },
+        "object_deep_clone": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 1249975000"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  781.44291,
+                  793.640826,
+                  800.82991,
+                  797.234368,
+                  826.808326,
+                  765.107243,
+                  772.361535,
+                  780.295702,
+                  770.95191,
+                  799.007702,
+                  784.482285,
+                  802.288035,
+                  835.05766,
+                  764.802451,
+                  805.454744
+                ],
+                "sample_count": 15,
+                "median": 793.640826,
+                "p95": 835.05766,
+                "min": 764.802451,
+                "max": 835.05766,
+                "stdev": 20.17621558184826
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  55.341577,
+                  56.181077,
+                  57.897326,
+                  56.15191,
+                  57.030868,
+                  54.493702,
+                  55.527369,
+                  55.523577,
+                  56.41866,
+                  56.329119,
+                  56.719576,
+                  56.436493,
+                  61.627618,
+                  59.457994,
+                  55.735535
+                ],
+                "sample_count": 15,
+                "median": 56.329119,
+                "p95": 61.627618,
+                "min": 54.493702,
+                "max": 61.627618,
+                "stdev": 1.7258865687911031
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  17.44741,
+                  18.051535,
+                  18.241368,
+                  18.230619,
+                  17.11891,
+                  18.294118,
+                  17.81816,
+                  18.177993,
+                  18.984201,
+                  18.56516,
+                  17.225494,
+                  18.503243,
+                  20.152743,
+                  18.137743,
+                  18.462535
+                ],
+                "sample_count": 15,
+                "median": 18.230619,
+                "p95": 20.152743,
+                "min": 17.11891,
+                "max": 20.152743,
+                "stdev": 0.7108513787847983
+              }
+            }
+          }
+        },
+        "promise_all_chains": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 2500050000"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  212.555857,
+                  207.330524,
+                  206.933898,
+                  207.192023,
+                  206.936357,
+                  209.023232,
+                  206.321107,
+                  208.006066,
+                  207.947649,
+                  211.736399,
+                  205.210607,
+                  208.729857,
+                  269.515315,
+                  273.424524,
+                  218.365649
+                ],
+                "sample_count": 15,
+                "median": 208.006066,
+                "p95": 273.424524,
+                "min": 205.210607,
+                "max": 273.424524,
+                "stdev": 21.494031462960333
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  67.776982,
+                  64.302815,
+                  64.699816,
+                  67.892065,
+                  70.489691,
+                  68.94494,
+                  73.067523,
+                  77.755524,
+                  72.292232,
+                  68.659607,
+                  71.504357,
+                  69.097023,
+                  68.669857,
+                  68.150024,
+                  67.03744
+                ],
+                "sample_count": 15,
+                "median": 68.669857,
+                "p95": 77.755524,
+                "min": 64.302815,
+                "max": 77.755524,
+                "stdev": 3.252922612912587
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  26.199482,
+                  25.727232,
+                  23.668399,
+                  23.765982,
+                  23.91719,
+                  23.37519,
+                  22.916024,
+                  23.681024,
+                  22.761232,
+                  22.932023,
+                  23.803816,
+                  31.490065,
+                  29.736982,
+                  27.323232,
+                  27.692024
+                ],
+                "sample_count": 15,
+                "median": 23.803816,
+                "p95": 31.490065,
+                "min": 22.761232,
+                "max": 31.490065,
+                "stdev": 2.6079525569492983
+              }
+            }
+          }
+        },
+        "regex_replace": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 5000000"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  61.324555,
+                  62.282263,
+                  61.97843,
+                  61.276013,
+                  61.26693,
+                  61.101179,
+                  61.269721,
+                  58.674054,
+                  60.601638,
+                  57.94693,
+                  57.780138,
+                  56.69868,
+                  58.116263,
+                  57.966929,
+                  56.768138
+                ],
+                "sample_count": 15,
+                "median": 60.601638,
+                "p95": 62.282263,
+                "min": 56.69868,
+                "max": 62.282263,
+                "stdev": 1.925126218541093
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  97.908138,
+                  99.401846,
+                  97.682346,
+                  98.977471,
+                  101.751305,
+                  100.254138,
+                  100.747679,
+                  103.399429,
+                  98.118888,
+                  99.520554,
+                  99.24993,
+                  101.530347,
+                  99.970054,
+                  99.088388,
+                  104.129929
+                ],
+                "sample_count": 15,
+                "median": 99.520554,
+                "p95": 104.129929,
+                "min": 97.682346,
+                "max": 104.129929,
+                "stdev": 1.839550544279417
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  54.177096,
+                  49.974055,
+                  48.332888,
+                  50.095805,
+                  48.836888,
+                  51.196263,
+                  53.01943,
+                  76.618054,
+                  58.343013,
+                  54.04493,
+                  50.715638,
+                  49.847305,
+                  49.990221,
+                  50.336471,
+                  49.547471
+                ],
+                "sample_count": 15,
+                "median": 50.336471,
+                "p95": 76.618054,
+                "min": 48.332888,
+                "max": 76.618054,
+                "stdev": 6.792280897260824
+              }
+            }
+          }
+        },
+        "string_concat_csv": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 6459261 rows: 100000"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  55.952237,
+                  56.390987,
+                  56.619071,
+                  59.49082,
+                  60.104737,
+                  59.529945,
+                  63.394862,
+                  65.227695,
+                  68.353946,
+                  61.636654,
+                  60.489279,
+                  96.189153,
+                  65.362945,
+                  57.611946,
+                  58.019945
+                ],
+                "sample_count": 15,
+                "median": 60.104737,
+                "p95": 96.189153,
+                "min": 55.952237,
+                "max": 96.189153,
+                "stdev": 9.555659785329802
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  88.211695,
+                  90.555362,
+                  99.42807,
+                  89.74657,
+                  98.351737,
+                  93.091445,
+                  96.645571,
+                  92.917904,
+                  90.855153,
+                  93.36657,
+                  89.495112,
+                  89.878029,
+                  87.420404,
+                  89.126112,
+                  88.33107
+                ],
+                "sample_count": 15,
+                "median": 90.555362,
+                "p95": 99.42807,
+                "min": 87.420404,
+                "max": 99.42807,
+                "stdev": 3.6226786209615627
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  31.135945,
+                  28.613987,
+                  29.368404,
+                  28.239612,
+                  30.96957,
+                  29.302154,
+                  29.64157,
+                  33.601904,
+                  29.952487,
+                  55.411695,
+                  34.250695,
+                  29.557487,
+                  29.808154,
+                  30.038612,
+                  32.313696
+                ],
+                "sample_count": 15,
+                "median": 29.952487,
+                "p95": 55.411695,
+                "min": 28.239612,
+                "max": 55.411695,
+                "stdev": 6.4368855001559275
+              }
+            }
+          }
+        },
+        "string_split_map_join": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 1380242 kept: 33333"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  53.03551,
+                  58.133885,
+                  53.643052,
+                  53.051718,
+                  57.332719,
+                  53.278677,
+                  50.823261,
+                  52.002802,
+                  50.674594,
+                  55.451219,
+                  51.745219,
+                  52.236177,
+                  50.656219,
+                  51.792427,
+                  51.256885
+                ],
+                "sample_count": 15,
+                "median": 52.236177,
+                "p95": 58.133885,
+                "min": 50.656219,
+                "max": 58.133885,
+                "stdev": 2.234874292962014
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  84.878927,
+                  82.588344,
+                  88.59376,
+                  83.901094,
+                  81.933636,
+                  81.443052,
+                  85.252677,
+                  82.829552,
+                  80.693344,
+                  82.843593,
+                  80.859094,
+                  85.618802,
+                  83.368594,
+                  80.616469,
+                  81.390552
+                ],
+                "sample_count": 15,
+                "median": 82.829552,
+                "p95": 88.59376,
+                "min": 80.616469,
+                "max": 88.59376,
+                "stdev": 2.151621707867814
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  52.714677,
+                  48.912219,
+                  46.802261,
+                  47.107718,
+                  49.965802,
+                  46.211552,
+                  46.56001,
+                  45.563719,
+                  47.215635,
+                  45.381802,
+                  44.871718,
+                  45.702511,
+                  45.700427,
+                  47.181219,
+                  44.926468
+                ],
+                "sample_count": 15,
+                "median": 46.56001,
+                "p95": 52.714677,
+                "min": 44.871718,
+                "max": 52.714677,
+                "stdev": 2.0483508894096962
+              }
+            }
+          }
+        },
+        "string_template_interp": {
+          "correctness": {
+            "status": "pass",
+            "reference": "node+bun",
+            "checksum": "checksum: 7948890"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  86.025622,
+                  84.922079,
+                  86.350663,
+                  84.824622,
+                  84.673371,
+                  87.812579,
+                  88.880871,
+                  85.709329,
+                  85.605788,
+                  85.222288,
+                  86.11983,
+                  88.647163,
+                  88.227497,
+                  87.254038,
+                  83.377579
+                ],
+                "sample_count": 15,
+                "median": 86.025622,
+                "p95": 88.880871,
+                "min": 83.377579,
+                "max": 88.880871,
+                "stdev": 1.5577778256793788
+              }
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  112.672496,
+                  115.451663,
+                  107.742163,
+                  112.304538,
+                  108.110497,
+                  107.802329,
+                  115.22287,
+                  113.826079,
+                  108.540788,
+                  111.748871,
+                  108.304747,
+                  107.62558,
+                  106.887912,
+                  112.093038,
+                  113.060163
+                ],
+                "sample_count": 15,
+                "median": 111.748871,
+                "p95": 115.451663,
+                "min": 106.887912,
+                "max": 115.451663,
+                "stdev": 2.899016387147231
+              }
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  47.892746,
+                  48.464288,
+                  46.47233,
+                  50.458496,
+                  49.333788,
+                  49.339329,
+                  47.333078,
+                  47.788747,
+                  48.62758,
+                  52.414912,
+                  47.36258,
+                  45.518829,
+                  46.336663,
+                  50.641371,
+                  49.287288
+                ],
+                "sample_count": 15,
+                "median": 48.464288,
+                "p95": 52.414912,
+                "min": 45.518829,
+                "max": 52.414912,
+                "stdev": 1.7699382298741637
+              }
+            }
+          }
+        }
+      }
+    },
+    "honest_bench": {
+      "schema_version": 1,
+      "suite": "honest_bench",
+      "commit": "36cf04e0147c68a55f362689ab6c56e2b39a3c67",
+      "generated_at": "2026-07-13T14:04:19.584429Z",
+      "run_config": {
+        "warmup": 5,
+        "requested_samples": 20
+      },
+      "commands": {
+        "perry": [
+          "<compiled-workload>"
+        ],
+        "perry_compile": [
+          "/private/tmp/perry-performance-baseline-0713/target/release/perry",
+          "<source.ts>",
+          "-o",
+          "<compiled-workload>"
+        ],
+        "node": [
+          "/tmp/perry-bench-tools/bin/node",
+          "--experimental-strip-types",
+          "<source.ts>"
+        ],
+        "bun": [
+          "/tmp/perry-bench-tools/bin/bun",
+          "run",
+          "<source.ts>"
+        ],
+        "perry_http": [
+          "<compiled-kernel>"
+        ],
+        "perry_http_compile": [
+          "/private/tmp/perry-performance-baseline-0713/target/release/perry",
+          "<kernel.ts>",
+          "-o",
+          "<compiled-kernel>"
+        ],
+        "node_http": [
+          "node",
+          "--import",
+          "tsx",
+          "<kernel.ts>"
+        ],
+        "bun_http": [
+          "bun",
+          "run",
+          "<kernel.ts>"
+        ],
+        "oha": [
+          "/tmp/oha",
+          "-z",
+          "15s",
+          "-c",
+          "10",
+          "-r",
+          "0",
+          "--no-tui",
+          "--output-format",
+          "json",
+          "<url>"
+        ]
+      },
+      "runtime_metadata": {
+        "perry": {
+          "version": "perry 0.5.1258",
+          "resolved_executable": "/private/tmp/perry-performance-baseline-0713/target/release/perry"
+        },
+        "node": {
+          "version": "v22.23.1",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/node"
+        },
+        "bun": {
+          "version": "1.3.14",
+          "resolved_executable": "/tmp/perry-bench-tools/bin/bun"
+        }
+      },
+      "benchmarks": {
+        "image_convolution": {
+          "correctness": {
+            "status": "pass",
+            "reference": "bun"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  305.148041,
+                  303.918958,
+                  303.849625,
+                  304.390708,
+                  303.592125,
+                  304.011209,
+                  304.911083,
+                  304.407458,
+                  304.221083,
+                  302.936541,
+                  303.79225,
+                  305.190541,
+                  327.3785,
+                  311.18975,
+                  304.264,
+                  310.239458,
+                  309.620209,
+                  304.634208,
+                  305.197792,
+                  303.585291
+                ],
+                "sample_count": 20,
+                "median": 304.399083,
+                "p95": 311.18975,
+                "min": 302.936541,
+                "max": 327.3785,
+                "stdev": 5.329782639417633
+              },
+              "rss_kb": {
+                "samples": [
+                  61456.0,
+                  61440.0,
+                  61440.0,
+                  61456.0,
+                  61440.0,
+                  61456.0,
+                  61456.0,
+                  61440.0,
+                  61456.0,
+                  61440.0,
+                  61440.0,
+                  61456.0,
+                  61440.0,
+                  61440.0,
+                  61456.0,
+                  61440.0,
+                  61440.0,
+                  61440.0,
+                  61456.0,
+                  61456.0
+                ],
+                "sample_count": 20,
+                "median": 61440.0,
+                "p95": 61456.0,
+                "min": 61440.0,
+                "max": 61456.0,
+                "stdev": 7.95989949685296
+              },
+              "measured_command": [
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv"
+              ]
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  1217.942834,
+                  1217.252,
+                  1215.709708,
+                  1216.76425,
+                  1221.413042,
+                  1221.242875,
+                  1215.722125,
+                  1221.337916,
+                  1213.143917,
+                  1225.192292,
+                  1215.167334,
+                  1224.893875,
+                  1222.175333,
+                  1211.241458,
+                  1223.111708,
+                  1241.298833,
+                  1218.937459,
+                  1216.710833,
+                  1224.819208,
+                  1217.772084
+                ],
+                "sample_count": 20,
+                "median": 1218.4401465,
+                "p95": 1225.192292,
+                "min": 1211.241458,
+                "max": 1241.298833,
+                "stdev": 6.206022884752623
+              },
+              "rss_kb": {
+                "samples": [
+                  120320.0,
+                  120896.0,
+                  120512.0,
+                  120464.0,
+                  120640.0,
+                  120432.0,
+                  120480.0,
+                  120544.0,
+                  120352.0,
+                  120320.0,
+                  120672.0,
+                  120512.0,
+                  120640.0,
+                  120640.0,
+                  120544.0,
+                  120592.0,
+                  120464.0,
+                  120480.0,
+                  120560.0,
+                  120496.0
+                ],
+                "sample_count": 20,
+                "median": 120512.0,
+                "p95": 120672.0,
+                "min": 120320.0,
+                "max": 120896.0,
+                "stdev": 130.47605144240072
+              },
+              "measured_command": [
+                "/tmp/perry-bench-tools/bin/node",
+                "--experimental-strip-types",
+                "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/3_image_convolution/node/image_conv.ts"
+              ]
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  869.799208,
+                  912.699667,
+                  902.608584,
+                  894.959334,
+                  897.634458,
+                  973.888416,
+                  862.893833,
+                  864.126083,
+                  862.553208,
+                  895.642333,
+                  901.769459,
+                  904.755542,
+                  870.550416,
+                  868.566584,
+                  906.519583,
+                  918.389208,
+                  894.307958,
+                  889.638459,
+                  879.471916,
+                  1012.531209
+                ],
+                "sample_count": 20,
+                "median": 895.3008335,
+                "p95": 973.888416,
+                "min": 862.553208,
+                "max": 1012.531209,
+                "stdev": 36.14414593758989
+              },
+              "rss_kb": {
+                "samples": [
+                  84944.0,
+                  85104.0,
+                  85120.0,
+                  85024.0,
+                  85088.0,
+                  85136.0,
+                  84944.0,
+                  84928.0,
+                  84960.0,
+                  85152.0,
+                  85040.0,
+                  85008.0,
+                  84928.0,
+                  84912.0,
+                  85008.0,
+                  85056.0,
+                  85024.0,
+                  85072.0,
+                  84944.0,
+                  85152.0
+                ],
+                "sample_count": 20,
+                "median": 85024.0,
+                "p95": 85152.0,
+                "min": 84912.0,
+                "max": 85152.0,
+                "stdev": 78.48159019795662
+              },
+              "measured_command": [
+                "/tmp/perry-bench-tools/bin/bun",
+                "run",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/3_image_convolution/node/image_conv.ts"
+              ]
+            }
+          }
+        },
+        "json_pipeline_full": {
+          "correctness": {
+            "status": "pass",
+            "reference": "bun"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  3518.109666,
+                  3549.768375,
+                  3513.453584,
+                  3541.486584,
+                  3811.164792,
+                  3642.191,
+                  3709.851291,
+                  3687.651584,
+                  3754.142292,
+                  3783.563042,
+                  3779.859,
+                  3772.413209,
+                  3623.724458,
+                  3520.407666,
+                  3579.668084,
+                  3537.071375,
+                  3551.982791,
+                  3526.684542,
+                  3628.441583,
+                  3543.547375
+                ],
+                "sample_count": 20,
+                "median": 3601.696271,
+                "p95": 3783.563042,
+                "min": 3513.453584,
+                "max": 3811.164792,
+                "stdev": 103.00509650693311
+              },
+              "rss_kb": {
+                "samples": [
+                  1002128.0,
+                  933632.0,
+                  1002128.0,
+                  1002128.0,
+                  1002128.0,
+                  1002432.0,
+                  1002144.0,
+                  1002432.0,
+                  935328.0,
+                  984816.0,
+                  1002080.0,
+                  976208.0,
+                  1002448.0,
+                  1002128.0,
+                  933616.0,
+                  977184.0,
+                  1002432.0,
+                  1002128.0,
+                  1002080.0,
+                  985136.0
+                ],
+                "sample_count": 20,
+                "median": 1002128.0,
+                "p95": 1002432.0,
+                "min": 933616.0,
+                "max": 1002448.0,
+                "stdev": 24071.32201105706
+              },
+              "measured_command": [
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/assets/input.json",
+                "/tmp/out_perry.json"
+              ]
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  1177.850208,
+                  1178.8145,
+                  1157.770333,
+                  1148.726083,
+                  1151.347375,
+                  1152.115625,
+                  1191.983917,
+                  1170.108917,
+                  1158.799834,
+                  1137.887833,
+                  1152.506458,
+                  1169.959,
+                  1211.888666,
+                  1186.638083,
+                  1166.519666,
+                  1194.302208,
+                  1163.824417,
+                  1187.153708,
+                  1193.8205,
+                  1190.642417
+                ],
+                "sample_count": 20,
+                "median": 1170.0339585000002,
+                "p95": 1194.302208,
+                "min": 1137.887833,
+                "max": 1211.888666,
+                "stdev": 19.00568140852154
+              },
+              "rss_kb": {
+                "samples": [
+                  793712.0,
+                  793472.0,
+                  793664.0,
+                  793632.0,
+                  793504.0,
+                  793600.0,
+                  793632.0,
+                  793792.0,
+                  793392.0,
+                  793712.0,
+                  793280.0,
+                  793504.0,
+                  797360.0,
+                  795280.0,
+                  793648.0,
+                  793328.0,
+                  793504.0,
+                  795856.0,
+                  793664.0,
+                  793632.0
+                ],
+                "sample_count": 20,
+                "median": 793632.0,
+                "p95": 795856.0,
+                "min": 793280.0,
+                "max": 797360.0,
+                "stdev": 995.482917985035
+              },
+              "measured_command": [
+                "/tmp/perry-bench-tools/bin/node",
+                "--experimental-strip-types",
+                "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/1_json_pipeline/node/json_pipeline.ts",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/assets/input.json",
+                "/tmp/out_node.json"
+              ]
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  575.4055,
+                  572.179041,
+                  599.701166,
+                  576.903334,
+                  630.339167,
+                  582.149541,
+                  574.841208,
+                  589.411166,
+                  570.27875,
+                  581.733791,
+                  586.508333,
+                  570.968458,
+                  573.62675,
+                  625.739167,
+                  595.050292,
+                  580.682834,
+                  583.081208,
+                  571.579958,
+                  576.525833,
+                  571.054083
+                ],
+                "sample_count": 20,
+                "median": 578.7930839999999,
+                "p95": 625.739167,
+                "min": 570.27875,
+                "max": 630.339167,
+                "stdev": 16.586656871562763
+              },
+              "rss_kb": {
+                "samples": [
+                  594064.0,
+                  591600.0,
+                  594112.0,
+                  593584.0,
+                  594016.0,
+                  594448.0,
+                  594112.0,
+                  593152.0,
+                  593552.0,
+                  591584.0,
+                  593264.0,
+                  593952.0,
+                  591632.0,
+                  594288.0,
+                  592944.0,
+                  591200.0,
+                  593936.0,
+                  594960.0,
+                  593520.0,
+                  593392.0
+                ],
+                "sample_count": 20,
+                "median": 593568.0,
+                "p95": 594448.0,
+                "min": 591200.0,
+                "max": 594960.0,
+                "stdev": 1038.8951053884123
+              },
+              "measured_command": [
+                "/tmp/perry-bench-tools/bin/bun",
+                "run",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/1_json_pipeline/node/json_pipeline.ts",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/assets/input.json",
+                "/tmp/out_bun.json"
+              ]
+            }
+          }
+        },
+        "json_pipeline_small": {
+          "correctness": {
+            "status": "pass",
+            "reference": "bun"
+          },
+          "runtimes": {
+            "perry": {
+              "wall_ms": {
+                "samples": [
+                  59.002,
+                  59.581958,
+                  58.936125,
+                  59.229583,
+                  59.77425,
+                  60.93,
+                  58.834875,
+                  58.971166,
+                  59.4195,
+                  60.964833,
+                  59.122667,
+                  58.531209,
+                  60.794083,
+                  58.67925,
+                  63.269958,
+                  63.349292,
+                  62.816875,
+                  62.591708,
+                  63.956542,
+                  60.846667
+                ],
+                "sample_count": 20,
+                "median": 59.678104000000005,
+                "p95": 63.349292,
+                "min": 58.531209,
+                "max": 63.956542,
+                "stdev": 1.7481512093715317
+              },
+              "rss_kb": {
+                "samples": [
+                  12976.0,
+                  12976.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12976.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12976.0,
+                  12976.0,
+                  12960.0,
+                  12960.0,
+                  12960.0,
+                  12960.0
+                ],
+                "sample_count": 20,
+                "median": 12960.0,
+                "p95": 12976.0,
+                "min": 12960.0,
+                "max": 12976.0,
+                "stdev": 6.928203230275509
+              },
+              "measured_command": [
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/1_json_pipeline/perry/json_pipeline",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/assets/input_small.json",
+                "/tmp/out_perry.json"
+              ]
+            },
+            "node": {
+              "wall_ms": {
+                "samples": [
+                  110.445875,
+                  104.884125,
+                  100.940625,
+                  103.365792,
+                  106.667375,
+                  100.778042,
+                  102.51825,
+                  102.9125,
+                  100.867041,
+                  103.38225,
+                  193.011292,
+                  117.896583,
+                  111.740666,
+                  116.791833,
+                  110.930375,
+                  107.069666,
+                  135.800084,
+                  101.626833,
+                  127.81125,
+                  119.3865
+                ],
+                "sample_count": 20,
+                "median": 106.8685205,
+                "p95": 135.800084,
+                "min": 100.778042,
+                "max": 193.011292,
+                "stdev": 20.401324060536414
+              },
+              "rss_kb": {
+                "samples": [
+                  65872.0,
+                  65632.0,
+                  65632.0,
+                  65504.0,
+                  65632.0,
+                  65568.0,
+                  65520.0,
+                  65488.0,
+                  65472.0,
+                  65728.0,
+                  65728.0,
+                  65296.0,
+                  65312.0,
+                  65600.0,
+                  65760.0,
+                  65648.0,
+                  65520.0,
+                  65520.0,
+                  65472.0,
+                  66064.0
+                ],
+                "sample_count": 20,
+                "median": 65584.0,
+                "p95": 65872.0,
+                "min": 65296.0,
+                "max": 66064.0,
+                "stdev": 173.649762453048
+              },
+              "measured_command": [
+                "/tmp/perry-bench-tools/bin/node",
+                "--experimental-strip-types",
+                "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/1_json_pipeline/node/json_pipeline.ts",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/assets/input_small.json",
+                "/tmp/out_node.json"
+              ]
+            },
+            "bun": {
+              "wall_ms": {
+                "samples": [
+                  80.517125,
+                  69.320708,
+                  68.838459,
+                  67.22125,
+                  66.322208,
+                  66.148458,
+                  65.898625,
+                  66.67725,
+                  66.162375,
+                  67.424917,
+                  66.391917,
+                  67.006042,
+                  72.998834,
+                  104.80575,
+                  72.398417,
+                  67.330791,
+                  67.461084,
+                  69.695542,
+                  66.2685,
+                  68.871292
+                ],
+                "sample_count": 20,
+                "median": 67.377854,
+                "p95": 80.517125,
+                "min": 65.898625,
+                "max": 104.80575,
+                "stdev": 8.578291149453086
+              },
+              "rss_kb": {
+                "samples": [
+                  30704.0,
+                  30688.0,
+                  30832.0,
+                  30832.0,
+                  30896.0,
+                  30896.0,
+                  30896.0,
+                  30880.0,
+                  30928.0,
+                  30912.0,
+                  30880.0,
+                  30880.0,
+                  30880.0,
+                  30912.0,
+                  30896.0,
+                  30896.0,
+                  30880.0,
+                  30896.0,
+                  30896.0,
+                  30880.0
+                ],
+                "sample_count": 20,
+                "median": 30888.0,
+                "p95": 30912.0,
+                "min": 30688.0,
+                "max": 30928.0,
+                "stdev": 61.527229744236
+              },
+              "measured_command": [
+                "/tmp/perry-bench-tools/bin/bun",
+                "run",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/workloads/1_json_pipeline/node/json_pipeline.ts",
+                "/private/tmp/perry-performance-baseline-0713/benchmarks/honest_bench/assets/input_small.json",
+                "/tmp/out_bun.json"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

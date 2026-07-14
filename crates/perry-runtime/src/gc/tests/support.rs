@@ -166,7 +166,7 @@ pub(super) struct IncrementalMarkBarrierTestGuard<'a> {
 
 impl<'a> IncrementalMarkBarrierTestGuard<'a> {
     pub(super) fn new(valid_ptrs: &'a ValidPointerSet) -> Self {
-        incremental_mark_barrier_enable(valid_ptrs);
+        incremental_mark_barrier_enable(valid_ptrs, /* minor_only = */ false);
         Self {
             _valid_ptrs: valid_ptrs,
         }
@@ -182,7 +182,15 @@ impl Drop for IncrementalMarkBarrierTestGuard<'_> {
 
 static COPYING_NURSERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub(super) fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
+/// Serializes every test that mutates PROCESS-GLOBAL runtime side tables.
+/// The guards' state reset clears global stores (e.g. `CLOSURE_PROPS` via
+/// `test_clear_closure_side_tables`) from whatever test thread runs it, so a
+/// test elsewhere in the crate that populates-then-asserts one of those
+/// globals under only its own private lock races the reset (observed:
+/// `closure::dynamic_props::tests_1802` losing its parked entry mid-test).
+/// Such tests must take this lock too — reachable crate-wide as
+/// `crate::gc::global_side_table_test_lock()`.
+pub(crate) fn copying_nursery_isolation_lock() -> std::sync::MutexGuard<'static, ()> {
     COPYING_NURSERY_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -401,7 +409,13 @@ impl GcTriggerThresholdTestGuard {
     }
 
     pub(super) fn make_arena_trigger_due(&self) {
-        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(0));
+        // Just-due, not zero: with debt-proportional assist pacing
+        // (`gc_mutator_assist_scaled_work_units`), trigger=0 would read the
+        // ENTIRE arena as debt and scale the first assist into a monolithic
+        // collection — these tests want "trigger due, collector keeping up"
+        // (debt ≈ 1 byte). Pacing-specific tests inflate debt explicitly.
+        let just_due = crate::arena::arena_total_bytes().saturating_sub(1);
+        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(just_due));
     }
 }
 

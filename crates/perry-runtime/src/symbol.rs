@@ -294,6 +294,57 @@ static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mut
 static SYMBOL_PROPERTY_ATTRS: Mutex<Option<HashMap<(usize, usize), crate::object::PropertyAttrs>>> =
     Mutex::new(None);
 
+/// Death pruning for the symbol-keyed property side tables (2026-07-09 GC
+/// audit wave 2). Both tables are PROCESS-global and owner-keyed; the values
+/// are strongly rooted by `symbol/gc_roots.rs`, so entries of a dead owner
+/// immortalized the whole value graph. `is_dead_owner` is one of the GC's
+/// deadness predicates (`gc::dead_owner`), which only attributes THIS
+/// thread's heap addresses — entries owned by other threads' objects are
+/// skipped (documented residual: cross-thread owners are only reclaimed by
+/// the owning thread's own collections; addresses that classify as no-heap
+/// are never pruned).
+pub(crate) fn prune_dead_symbol_property_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let mut verdicts: HashMap<usize, bool> = HashMap::new();
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        if let Some(map) = guard.as_mut() {
+            map.retain(|owner, _| {
+                !*verdicts
+                    .entry(*owner)
+                    .or_insert_with(|| is_dead_owner(*owner))
+            });
+        }
+    }
+    {
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
+        if let Some(map) = guard.as_mut() {
+            map.retain(|(owner, _), _| {
+                !*verdicts
+                    .entry(*owner)
+                    .or_insert_with(|| is_dead_owner(*owner))
+            });
+        }
+    }
+}
+
+/// Death pruning for `SYMBOL_POINTERS` (2026-07-09 GC audit wave 2): one
+/// entry per `Symbol()` ever created, previously only forward-renamed on
+/// moves and never removed on death — so the set grew monotonically and
+/// `js_is_symbol` aliased later allocations at recycled addresses.
+/// `is_dead_symbol` is a `gc::dead_owner` predicate narrowed to
+/// `GC_TYPE_STRING` (what `alloc_symbol` gc_malloc's). `Box`-leaked
+/// persistent symbols (well-known, `Symbol.for`, the Intl fallback) have no
+/// GcHeader and are skipped by the predicate's heap attribution. Residual:
+/// a symbol freed by a minor malloc sweep between full traces leaves its
+/// entry behind permanently (the address no longer attributes) — fixing
+/// that needs a dedicated symbol GC type with a finalize hook.
+pub(crate) fn prune_dead_symbol_pointers(is_dead_symbol: &dyn Fn(usize) -> bool) {
+    let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
+    if let Some(set) = guard.as_mut() {
+        set.retain(|&ptr| !is_dead_symbol(ptr));
+    }
+}
+
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but
 // Symbol semantics are compatible with coarse locking.
 static NEXT_SYMBOL_ID: Mutex<u64> = Mutex::new(1);

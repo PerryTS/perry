@@ -13,7 +13,7 @@ pub async fn remote_build_and_launch(
     format: OutputFormat,
 ) -> Result<()> {
     use super::super::publish::{
-        auto_register_license, create_project_tarball_with_excludes, load_config, save_config,
+        auto_register_license, create_project_tarball_with_filters, load_config, save_config,
     };
     use base64::Engine;
     use futures_util::{SinkExt, StreamExt};
@@ -87,19 +87,30 @@ pub async fn remote_build_and_launch(
         std::io::stdout().flush().ok();
     }
 
-    // Read [publish].exclude from perry.toml so `run` excludes the same dirs as `publish`
-    let publish_excludes = std::fs::read_to_string(project_root.join("perry.toml"))
-        .ok()
-        .and_then(|s| toml::from_str::<toml::Value>(&s).ok())
-        .and_then(|v| v.get("publish")?.get("exclude")?.as_array().cloned())
-        .map(|arr| {
-            arr.into_iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let tarball = create_project_tarball_with_excludes(&project_root, &publish_excludes)
-        .context("Failed to create project tarball")?;
+    // Read [publish] filters so remote runs use the same archive policy as publish.
+    let (publish_excludes, publish_includes) =
+        std::fs::read_to_string(project_root.join("perry.toml"))
+            .ok()
+            .and_then(|s| toml::from_str::<toml::Value>(&s).ok())
+            .and_then(|v| v.get("publish").cloned())
+            .map(|publish| {
+                let strings = |key: &str| {
+                    publish
+                        .get(key)
+                        .and_then(|value| value.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|value| value.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                };
+                (strings("exclude"), strings("include"))
+            })
+            .unwrap_or_default();
+    let tarball =
+        create_project_tarball_with_filters(&project_root, &publish_excludes, &publish_includes)
+            .context("Failed to create project tarball")?;
 
     if let OutputFormat::Text = format {
         println!(

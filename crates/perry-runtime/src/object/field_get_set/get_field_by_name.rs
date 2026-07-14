@@ -60,6 +60,29 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // A receiver that LOOKS like a bare heap pointer (top 16 bits clear) but does
+    // not land in the platform heap range is a MIS-decoded primitive, not an
+    // object. The common case is a `number` whose raw f64 bits alias a sub-heap
+    // address: a dynamic `arr[i]` read (`js_dyn_index_get`) returns the element's
+    // JSValue bits, codegen forwards them straight to the object field-read ABI
+    // on the type-erased path, and a denormal such as `0x0000_0090_8000_0201`
+    // (~620 GB) arrives here as `obj`. It clears the `>> 48 == 0` check and sits
+    // ABOVE the 1 MB handle band, so the `is_above_handle_band`-only guards on the
+    // special-case reads below (and the `own_key_present` / `js_object_get_class_id`
+    // ObjectHeader derefs they call) passed it straight through — and the read
+    // dereferenced it as a GcHeader → KERN_INVALID_ADDRESS (real macOS allocations
+    // sit at ~3–5 TB, never 620 GB). Pair the band check with `is_valid_obj_ptr`
+    // (the canonical heap-range predicate) and treat a non-heap receiver as a
+    // property miss: reading any data property off a primitive is `undefined`, and
+    // the primitive-prototype methods are resolved on the by-name f64 wrapper's own
+    // path, which never reaches this pointer dereference.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+        && !crate::value::addr_class::is_valid_obj_ptr(obj as *const u8)
+    {
+        return JSValue::undefined();
+    }
     // `class X extends Map | Set` instance — `.size` reads the hidden backing
     // collection's size. A subclass CAN still define an own `size` (class field
     // or `Object.defineProperty`), so check own-property precedence first and
@@ -97,6 +120,46 @@ pub extern "C" fn js_object_get_field_by_name(
                             return JSValue::number(crate::set::js_set_size(s) as f64);
                         }
                         None => {}
+                    }
+                }
+            }
+        }
+    }
+    // WeakMap / WeakSet instance — a VALUE read of the collection methods
+    // (`w.add`, `wm.set`, `typeof w.has`; react-server-dom's chunk-preload
+    // dedup does `u.add.bind(u, a)` — #5989) must resolve the brand-checking
+    // prototype thunk. Method CALLS dispatch via js_native_call_method's weak
+    // arms, but this by-name read path had no equivalent, so the read yielded
+    // `undefined` and the subsequent `.bind` threw. Own keys keep precedence
+    // (fresh instances only carry the `__perry_wk_entries` sentinel).
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        unsafe {
+            let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+            if let Some(cid) = crate::weakref::weak_class_id_from_receiver(boxed) {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::slice::from_raw_parts(name_ptr, name_len);
+                let (builtin, known) = if cid == crate::weakref::CLASS_ID_WEAKMAP {
+                    (
+                        "WeakMap",
+                        matches!(name, b"set" | b"get" | b"has" | b"delete"),
+                    )
+                } else {
+                    ("WeakSet", matches!(name, b"add" | b"has" | b"delete"))
+                };
+                if known && !super::super::own_key_present(obj as *mut ObjectHeader, key) {
+                    if let Ok(method_name) = std::str::from_utf8(name) {
+                        if let Some(v) =
+                            super::super::collection_proto_thunks::collection_proto_method_value(
+                                builtin,
+                                method_name,
+                            )
+                        {
+                            return JSValue::from_bits(v.to_bits());
+                        }
                     }
                 }
             }
@@ -365,6 +428,36 @@ pub extern "C" fn js_object_get_field_by_name(
         let is_primitive_number =
             (top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16)) || (top16 == 0 && bits == 0);
         if is_primitive_number {
+            // #5989: a live Web Stream handle is itself a finite positive float
+            // (`id as f64`, stream band [0x100000, 0x200000)), so it classifies
+            // as a primitive number HERE and returned `undefined` for every
+            // property — the dedicated stream arm further down never ran.
+            // React's `renderToReadableStream` reads back the `allReady`
+            // expando it attached (`stream.allReady`), got `undefined`, and the
+            // Next.js dynamic render 500'd on `undefined.finally`. Route a
+            // registered stream id to the handle property dispatcher (getter /
+            // bound-method / expando arms) before the primitive-number return.
+            {
+                let f = f64::from_bits(bits);
+                if !key.is_null() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
+                    let id = f as usize;
+                    if crate::value::addr_class::is_stream_id_band(id) {
+                        if let Some(probe) = crate::object::stream_handle_probe() {
+                            unsafe {
+                                if probe(id) {
+                                    if let Some(dispatch) = handle_property_dispatch() {
+                                        let key_ptr = (key as *const u8)
+                                            .add(std::mem::size_of::<crate::StringHeader>());
+                                        let key_len = (*key).byte_len as usize;
+                                        let v = dispatch(id as i64, key_ptr, key_len);
+                                        return JSValue::from_bits(v.to_bits());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // #2138: auto-box the primitive number for the inherited
             // `.constructor` read so `n.constructor === Number` (and the
             // duck-type `value.constructor.name === "Number"` lodash/date-fns
@@ -442,6 +535,13 @@ pub extern "C" fn js_object_get_field_by_name(
                             f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
                         let result = super::super::js_class_method_bind(this_f64, key_ptr, key_len);
                         return JSValue::from_bits(result.to_bits());
+                    }
+                    // TextDecoder/TextEncoder registry handles — see
+                    // `text_handle_property` (text.rs).
+                    if let Some(v) =
+                        crate::text::text_handle_property(raw, key_bytes, key_ptr, key_len)
+                    {
+                        return v;
                     }
                     if key_bytes == b"constructor" {
                         let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
@@ -831,6 +931,20 @@ pub extern "C" fn js_object_get_field_by_name(
                             );
                             return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                         }
+                    }
+                    // No own static / inherited entry resolved the name. A class
+                    // constructor is a function, so a bare read of `.caller` or
+                    // `.arguments` hits the poison-pill %ThrowTypeError% accessor
+                    // on `Function.prototype` — strict-mode throws (Perry only
+                    // compiles strict code). Placed last so any own static field,
+                    // accessor, or `defineProperty`-installed data prop of that
+                    // name takes precedence. Prototype-refs (`C.prototype`) are
+                    // plain objects and are excluded.
+                    if !is_prototype_ref && matches!(name, "caller" | "arguments") {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
                     }
                 }
             }

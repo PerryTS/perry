@@ -634,6 +634,61 @@ fn read_registry_kits_root_10() -> Option<PathBuf> {
     None
 }
 
+/// Issue #6023: locate the Windows SDK `bin\<ver>\x64` (or `x86`) directory
+/// containing `mt.exe`, the manifest tool MSVC `link.exe` shells out to when
+/// given `/MANIFEST:EMBED`. Perry launches a vswhere-located `link.exe` from a
+/// plain shell — not a `vcvars64.bat` developer prompt — so the SDK bin dir is
+/// normally *not* on `PATH` and the link dies with `LNK1158: cannot run
+/// 'mt.exe'`. Probes the same SDK roots as `find_msvc_lib_paths` (registry
+/// `KitsRoot10`, ProgramFiles envs, legacy hardcoded path), newest SDK
+/// version first.
+#[cfg(target_os = "windows")]
+pub(super) fn find_windows_sdk_mt_dir() -> Option<PathBuf> {
+    let mut bin_roots: Vec<PathBuf> = Vec::new();
+    if let Some(reg_root) = read_registry_kits_root_10() {
+        bin_roots.push(reg_root.join("bin"));
+    }
+    for env_var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Ok(pf) = std::env::var(env_var) {
+            bin_roots.push(PathBuf::from(pf).join(r"Windows Kits\10\bin"));
+        }
+    }
+    bin_roots.push(PathBuf::from(r"C:\Program Files (x86)\Windows Kits\10\bin"));
+    bin_roots
+        .into_iter()
+        .find_map(|root| newest_mt_dir_under(&root))
+}
+
+/// Given a Windows SDK `bin` root, return the arch dir holding `mt.exe`: the
+/// newest versioned subdir's `x64` (then `x86`, which runs fine on x64 hosts),
+/// falling back to the unversioned `bin\<arch>` layout of pre-10.0.15063 SDKs.
+/// The newest-version pick mirrors the descending file-name sort
+/// `find_msvc_lib_paths` uses for `Lib\<ver>`. Host-independent so the
+/// selection logic can be unit-tested off-Windows (`windows_link_tests`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(super) fn newest_mt_dir_under(bin_root: &Path) -> Option<PathBuf> {
+    let mut version_dirs: Vec<PathBuf> = match std::fs::read_dir(bin_root) {
+        Ok(entries) => entries.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+        Err(_) => return None,
+    };
+    version_dirs.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    for dir in version_dirs {
+        for arch in ["x64", "x86"] {
+            let cand = dir.join(arch);
+            if cand.join("mt.exe").is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    for arch in ["x64", "x86"] {
+        let cand = bin_root.join(arch);
+        if cand.join("mt.exe").is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
 #[cfg(not(target_os = "windows"))]
 pub(super) fn find_msvc_lib_paths() -> Option<String> {
     let sysroot = std::env::var("PERRY_WINDOWS_SYSROOT").ok()?;
