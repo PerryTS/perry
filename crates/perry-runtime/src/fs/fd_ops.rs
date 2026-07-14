@@ -313,10 +313,23 @@ pub extern "C" fn js_fs_write_string_sync_options(
     position_value: f64,
 ) -> f64 {
     crate::fs::validate::validate_fd_open(fd_value, "write");
-    write_string_sync_inner(fd_value as i32, data_value, position_value)
+    match write_string_sync_result(fd_value as i32, data_value, position_value) {
+        Ok(bytes) => bytes,
+        Err(err) => unsafe {
+            crate::exception::js_throw(build_fs_error_value_no_path(&err, "write"))
+        },
+    }
 }
 
 pub(crate) fn write_string_sync_inner(fd: i32, data_value: f64, position_value: f64) -> f64 {
+    write_string_sync_result(fd, data_value, position_value).unwrap_or(0.0)
+}
+
+pub(crate) fn write_string_sync_result(
+    fd: i32,
+    data_value: f64,
+    position_value: f64,
+) -> Result<f64, std::io::Error> {
     let bytes = bytes_from_value(data_value);
     let position = if position_value.is_finite() && position_value >= 0.0 {
         Some(position_value as u64)
@@ -326,16 +339,13 @@ pub(crate) fn write_string_sync_inner(fd: i32, data_value: f64, position_value: 
     FD_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(file) = reg.get_mut(&fd) else {
-            return 0.0;
+            return Ok(0.0);
         };
         let restore_pos = position.and_then(|_| file.stream_position().ok());
         if let Some(pos) = position {
             let _ = file.seek(SeekFrom::Start(pos));
         }
-        let result = match file.write(&bytes) {
-            Ok(n) => n as f64,
-            Err(_) => 0.0,
-        };
+        let result = file.write(&bytes).map(|written| written as f64);
         if let Some(pos) = restore_pos {
             let _ = file.seek(SeekFrom::Start(pos));
         }
@@ -353,13 +363,18 @@ pub extern "C" fn js_fs_write_buffer_sync(
     position_value: f64,
 ) -> f64 {
     crate::fs::validate::validate_fd_open(fd_value, "write");
-    write_buffer_sync_inner(
+    match write_buffer_sync_result(
         fd_value as i32,
         buffer_value,
         offset_value,
         length_value,
         position_value,
-    )
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => unsafe {
+            crate::exception::js_throw(build_fs_error_value_no_path(&err, "write"))
+        },
+    }
 }
 
 pub(crate) fn write_buffer_sync_inner(
@@ -369,6 +384,17 @@ pub(crate) fn write_buffer_sync_inner(
     length_value: f64,
     position_value: f64,
 ) -> f64 {
+    write_buffer_sync_result(fd, buffer_value, offset_value, length_value, position_value)
+        .unwrap_or(0.0)
+}
+
+pub(crate) fn write_buffer_sync_result(
+    fd: i32,
+    buffer_value: f64,
+    offset_value: f64,
+    length_value: f64,
+    position_value: f64,
+) -> Result<f64, std::io::Error> {
     let offset = offset_value.max(0.0) as usize;
     let length = length_value.max(0.0) as usize;
     let position = if position_value.is_finite() && position_value >= 0.0 {
@@ -378,12 +404,12 @@ pub(crate) fn write_buffer_sync_inner(
     };
     let buf = buffer_ptr_from_value(buffer_value);
     if buf.is_null() {
-        return 0.0;
+        return Ok(0.0);
     }
     FD_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(file) = reg.get_mut(&fd) else {
-            return 0.0;
+            return Ok(0.0);
         };
         let restore_pos = position.and_then(|_| file.stream_position().ok());
         if let Some(pos) = position {
@@ -395,14 +421,13 @@ pub(crate) fn write_buffer_sync_inner(
                 if let Some(pos) = restore_pos {
                     let _ = file.seek(SeekFrom::Start(pos));
                 }
-                return 0.0;
+                return Ok(0.0);
             }
             let n = length.min(cap - offset);
             let data = crate::buffer::buffer_data(buf).add(offset);
-            let result = match file.write(std::slice::from_raw_parts(data, n)) {
-                Ok(written) => written as f64,
-                Err(_) => 0.0,
-            };
+            let result = file
+                .write(std::slice::from_raw_parts(data, n))
+                .map(|written| written as f64);
             if let Some(pos) = restore_pos {
                 let _ = file.seek(SeekFrom::Start(pos));
             }
