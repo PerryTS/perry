@@ -21,6 +21,21 @@ pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
             code if code == libc::ENOSPC => return "ENOSPC",
             code if code == libc::ETIMEDOUT => return "ETIMEDOUT",
             code if code == libc::EAGAIN => return "EAGAIN",
+            // Descriptor- and write-side errnos. Rust has no `ErrorKind` for
+            // these, so without an arm here they fall through to the
+            // `ErrorKind` match below and come back as the catch-all "EIO" —
+            // `fs.write()` to a closed fd reported `EIO` where Node reports
+            // `EBADF`. `io_error_errno` already returns the raw errno, so only
+            // the code string was wrong.
+            code if code == libc::EBADF => return "EBADF",
+            code if code == libc::EPIPE => return "EPIPE",
+            code if code == libc::EROFS => return "EROFS",
+            code if code == libc::EFBIG => return "EFBIG",
+            code if code == libc::ESPIPE => return "ESPIPE",
+            code if code == libc::EBUSY => return "EBUSY",
+            code if code == libc::EMFILE => return "EMFILE",
+            code if code == libc::ENFILE => return "ENFILE",
+            code if code == libc::EXDEV => return "EXDEV",
             _ => {}
         }
     }
@@ -59,6 +74,15 @@ pub(crate) fn io_error_errno(err: &std::io::Error) -> i32 {
         "ENOSPC" => -libc::ENOSPC,
         "ETIMEDOUT" => -libc::ETIMEDOUT,
         "EAGAIN" => -libc::EAGAIN,
+        "EBADF" => -libc::EBADF,
+        "EPIPE" => -libc::EPIPE,
+        "EROFS" => -libc::EROFS,
+        "EFBIG" => -libc::EFBIG,
+        "ESPIPE" => -libc::ESPIPE,
+        "EBUSY" => -libc::EBUSY,
+        "EMFILE" => -libc::EMFILE,
+        "ENFILE" => -libc::ENFILE,
+        "EXDEV" => -libc::EXDEV,
         _ => -libc::EIO,
     }
     #[cfg(not(unix))]
