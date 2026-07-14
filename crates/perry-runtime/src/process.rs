@@ -33,7 +33,7 @@ pub use ipc::*;
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{
-    is_process_env_object, js_getenv, js_getenv_value, js_process_abort,
+    is_process_env_object, is_process_env_ptr, js_getenv, js_getenv_value, js_process_abort,
     js_process_active_resources_info, js_process_add_uncaught_exception_capture_callback,
     js_process_available_memory, js_process_binding, js_process_chdir_jsv,
     js_process_constrained_memory, js_process_cpu_usage, js_process_debug_end,

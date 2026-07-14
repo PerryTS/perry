@@ -861,6 +861,9 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
             Ok(s) => s,
             Err(_) => return,
         };
+        if !env_name_is_settable(name) {
+            return;
+        }
 
         // Coerce value to string. js_jsvalue_to_string handles
         // numbers/booleans/null/undefined and returns a *mut StringHeader.
@@ -1011,6 +1014,28 @@ thread_local! {
 pub fn is_process_env_object(value: f64) -> bool {
     let cached = CACHED_ENV.with(|c| c.get());
     cached != 0.0 && cached.to_bits() == value.to_bits()
+}
+
+/// True when `addr` is the heap address of the cached `process.env` object.
+///
+/// The pointer form of [`is_process_env_object`], for call sites that have
+/// already unboxed the target (`Object.assign`'s write funnel).
+pub fn is_process_env_ptr(addr: usize) -> bool {
+    let cached = CACHED_ENV.with(|c| c.get());
+    if cached == 0.0 {
+        return false;
+    }
+    crate::value::js_nanbox_get_pointer(cached) as usize == addr
+}
+
+/// `std::env::set_var` PANICS — and, being called from an `extern "C"` frame,
+/// aborts the process — when the name is empty, contains `=`, or contains a NUL
+/// byte. `Object.assign(process.env, parsed)` feeds it arbitrary object keys, so
+/// a single malformed key in a `.env` file would take the whole server down.
+/// Node accepts such an assignment silently, so skip these names rather than
+/// crash.
+fn env_name_is_settable(name: &str) -> bool {
+    !name.is_empty() && !name.contains('=') && !name.contains('\0')
 }
 
 fn js_process_env_impl() -> f64 {
