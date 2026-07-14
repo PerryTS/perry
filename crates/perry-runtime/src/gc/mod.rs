@@ -400,6 +400,12 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::v8::scan_v8_promise_hook_roots_mut);
     gc_register_mutable_root_scanner(crate::typed_feedback::scan_typed_feedback_roots_mut);
     gc_register_mutable_root_scanner(crate::typedarray_props::scan_typed_array_own_props_roots_mut);
+    // A typed array's materialized backing ArrayBuffer lives only as a raw
+    // address in TYPED_ARRAY_VIEW_META — collectable/stale under a live typed
+    // array, which made `subarray` hand back a garbage-length view.
+    gc_register_mutable_root_scanner(
+        crate::typedarray_view::scan_typed_array_view_meta_roots_mut,
+    );
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);

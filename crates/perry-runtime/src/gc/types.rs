@@ -160,6 +160,12 @@ pub(crate) enum GcFinalizeHookKind {
     NativeTypedView,
     NativeHandle,
     NativePodView,
+    /// Drop a dead typed array's `TYPED_ARRAY_VIEW_META` entry. The table is
+    /// keyed by the header address and records the array's materialized backing
+    /// ArrayBuffer; leaving the entry behind both keeps that buffer rooted
+    /// forever and lets whatever is allocated at the reused address inherit a
+    /// backing that is not its own.
+    TypedArrayViewMeta,
     /// Drop the embedded `temporal_rs` value in a `GC_TYPE_TEMPORAL` cell so a
     /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
     /// released when the cell is swept. POD variants drop to a no-op.
@@ -388,7 +394,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::None,
+        GcFinalizeHookKind::TypedArrayViewMeta,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_SET,
@@ -698,6 +704,9 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         }
         GcFinalizeHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr as usize);
+        }
+        GcFinalizeHookKind::TypedArrayViewMeta => {
+            crate::typedarray_view::clear_view_meta(user_ptr as usize);
         }
     }
 }
