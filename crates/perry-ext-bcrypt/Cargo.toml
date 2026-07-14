@@ -10,7 +10,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-bcrypt = "0.17"
+bcrypt = "0.19"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
