@@ -140,7 +140,6 @@ static STDIN_DESTROYED: AtomicBool = AtomicBool::new(false);
 /// fires (#5227): bytes accumulate into `PENDING_LINES` that nothing drains.
 static STDIN_DATA_FLOWING: AtomicBool = AtomicBool::new(false);
 
-
 /// `process.stdin` listener lists.
 ///
 /// These are SHARED statics, not `thread_local`. The registration
@@ -199,8 +198,14 @@ extern "C" fn stdin_listeners_provider(name_ptr: *const u8, name_len: usize) -> 
     };
     let list: Vec<i64> = match name {
         "data" => DATA_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default(),
-        "readable" => READABLE_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default(),
-        "keypress" => KEYPRESS_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default(),
+        "readable" => READABLE_CALLBACKS
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default(),
+        "keypress" => KEYPRESS_CALLBACKS
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default(),
         _ => Vec::new(),
     };
     let mut arr = perry_runtime::array::js_array_alloc(list.len() as u32);
@@ -1305,7 +1310,9 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
     let event = string_header_to_string(event_ptr);
     match event.as_str() {
         "data" => {
-            if let Ok(mut v) = DATA_CALLBACKS.lock() { v.push(callback); }
+            if let Ok(mut v) = DATA_CALLBACKS.lock() {
+                v.push(callback);
+            }
             // A 'data' listener switches stdin into flowing mode (Node
             // auto-resumes on the first data listener). Tell the reader to
             // deliver cooked input as 'data' chunks even without raw mode.
@@ -1314,7 +1321,9 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
             ensure_reader_started();
         }
         "keypress" => {
-            if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() { v.push(callback); }
+            if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
+                v.push(callback);
+            }
             try_register_pump();
             ensure_reader_started();
         }
@@ -1325,7 +1334,9 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
         // set STDIN_DATA_FLOWING: in paused mode the bytes are not pushed to a
         // listener, they are buffered until the consumer pulls them.
         "readable" => {
-            if let Ok(mut v) = READABLE_CALLBACKS.lock() { v.push(callback); }
+            if let Ok(mut v) = READABLE_CALLBACKS.lock() {
+                v.push(callback);
+            }
             try_register_pump();
             ensure_reader_started();
         }
@@ -1423,8 +1434,12 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
     if let Ok(mut q) = PENDING_LINES.lock() {
         q.clear();
     }
-    if let Ok(mut v) = DATA_CALLBACKS.lock() { v.clear(); }
-    if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() { v.clear(); }
+    if let Ok(mut v) = DATA_CALLBACKS.lock() {
+        v.clear();
+    }
+    if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
+        v.clear();
+    }
     QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     LINE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
@@ -1578,7 +1593,10 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             perry_runtime::os::stdin_push_bytes(chunk);
         }
     }
-    let readable_callbacks = READABLE_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default();
+    let readable_callbacks = READABLE_CALLBACKS
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default();
     for cb_i64 in &readable_callbacks {
         let closure = *cb_i64 as *const ClosureHeader;
         js_closure_call0(closure);
@@ -1595,7 +1613,10 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             fired += 1;
         }
         // 'keypress' callback receives (sequence_string, key_object).
-        let keypress_callbacks = KEYPRESS_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default();
+        let keypress_callbacks = KEYPRESS_CALLBACKS
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default();
         for cb_i64 in keypress_callbacks {
             if let Some((name, ctrl, shift, meta, seq)) = parse_keypress(&chunk) {
                 let seq_str = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
@@ -1669,9 +1690,18 @@ pub extern "C" fn js_readline_has_active() -> i32 {
     let refed = STDIN_REFED.load(Ordering::Acquire);
     let has_lines = PENDING_LINES.lock().map(|q| !q.is_empty()).unwrap_or(false);
     let has_data = PENDING_DATA.lock().map(|q| !q.is_empty()).unwrap_or(false);
-    let has_stdin_callbacks = DATA_CALLBACKS.lock().map(|v| !v.is_empty()).unwrap_or(false)
-        || KEYPRESS_CALLBACKS.lock().map(|v| !v.is_empty()).unwrap_or(false)
-        || READABLE_CALLBACKS.lock().map(|v| !v.is_empty()).unwrap_or(false);
+    let has_stdin_callbacks = DATA_CALLBACKS
+        .lock()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || KEYPRESS_CALLBACKS
+            .lock()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        || READABLE_CALLBACKS
+            .lock()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
     let has_line_callbacks = QUESTION_CALLBACK.with(|c| c.borrow().is_some())
         || LINE_CALLBACK.with(|c| c.borrow().is_some());
     let has_close_cb =
@@ -1753,9 +1783,15 @@ mod tests {
         QUESTION_CALLBACK.with(|c| *c.borrow_mut() = None);
         LINE_CALLBACK.with(|c| *c.borrow_mut() = None);
         CLOSE_CALLBACK.with(|c| *c.borrow_mut() = None);
-        if let Ok(mut v) = DATA_CALLBACKS.lock() { v.clear(); }
-        if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() { v.clear(); }
-        if let Ok(mut v) = READABLE_CALLBACKS.lock() { v.clear(); }
+        if let Ok(mut v) = DATA_CALLBACKS.lock() {
+            v.clear();
+        }
+        if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
+            v.clear();
+        }
+        if let Ok(mut v) = READABLE_CALLBACKS.lock() {
+            v.clear();
+        }
         PENDING_LINES.lock().unwrap().clear();
         PENDING_DATA.lock().unwrap().clear();
         EOF_REACHED.store(false, Ordering::Release);

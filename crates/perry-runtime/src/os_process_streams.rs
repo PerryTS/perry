@@ -240,9 +240,7 @@ static STDIN_LISTENERS_FN: std::sync::atomic::AtomicPtr<()> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
 #[no_mangle]
-pub extern "C" fn js_register_stdin_listeners_provider(
-    f: extern "C" fn(*const u8, usize) -> f64,
-) {
+pub extern "C" fn js_register_stdin_listeners_provider(f: extern "C" fn(*const u8, usize) -> f64) {
     STDIN_LISTENERS_FN.store(f as *mut (), std::sync::atomic::Ordering::Release);
 }
 
@@ -322,7 +320,12 @@ fn stdin_ops_provider() -> Option<(
     if on.is_null() || off.is_null() {
         return None;
     }
-    unsafe { Some((std::mem::transmute(on), std::mem::transmute(off))) }
+    unsafe {
+        Some((
+            std::mem::transmute::<*mut (), extern "C" fn(*const u8, usize, i64, i32)>(on),
+            std::mem::transmute::<*mut (), extern "C" fn(*const u8, usize, i64)>(off),
+        ))
+    }
 }
 
 /// `process.stdin.addListener(event, cb)` / `.on(...)` reached as an object method.
@@ -850,7 +853,9 @@ fn build_stream_object_with_write(
         // registers a keyboard listener instead of dropping it (#input).
         let on = stdin_native_method(process_stdin_on as *const u8, "on", 2);
         js_object_set_field(obj, 3, JSValue::from_bits(on.to_bits()));
-        let once = stdin_native_method(process_stdin_once as *const u8, "once", 2);
+        // `once` routes through the same registry as `on`/`addListener` so a
+        // one-shot listener registered on an aliased binding is not dropped either.
+        let once = stdin_native_method(process_stdin_add_listener_once as *const u8, "once", 2);
         js_object_set_field(obj, 4, JSValue::from_bits(once.to_bits()));
     } else {
         let on = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
@@ -918,7 +923,8 @@ fn build_stream_object_with_write(
         // here rather than on codegen's direct `process.stdin.on(...)` extern. As
         // no-op stubs they silently discarded the handler.
         if is_stdin {
-            let add = stdin_native_method(process_stdin_add_listener as *const u8, "addListener", 2);
+            let add =
+                stdin_native_method(process_stdin_add_listener as *const u8, "addListener", 2);
             js_object_set_field(obj, start, JSValue::from_bits(add.to_bits()));
             let rm = stdin_native_method(
                 process_stdin_remove_listener as *const u8,
@@ -949,16 +955,14 @@ fn build_stream_object_with_write(
             set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
             if is_stdin {
-                let se = stdin_native_method(
-                    process_stdin_set_encoding as *const u8,
-                    "setEncoding",
-                    1,
-                );
+                let se =
+                    stdin_native_method(process_stdin_set_encoding as *const u8, "setEncoding", 1);
                 js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
             } else {
-                set_field_with_stub(start + 9, process_stream_set_encoding_stub); // setEncoding
+                set_field_with_stub(start + 9, process_stream_set_encoding_stub);
+                // setEncoding
             }
-                                                                              // field 22: Readable.read() returns buffered keyboard input.
+            // field 22: Readable.read() returns buffered keyboard input.
             let read = stdin_native_method(process_stdin_read as *const u8, "read", 1);
             js_object_set_field(obj, 22, JSValue::from_bits(read.to_bits()));
             let listeners =
