@@ -96,7 +96,7 @@ jobs:
           echo "version=$node_version" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js (matches the pinned test corpus, NOT .node-version)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ steps.node_core_version.outputs.version }}
 

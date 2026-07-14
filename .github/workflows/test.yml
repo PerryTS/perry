@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Node.js for benchmark harness tests
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Kept in lockstep with benchmark.yml's peer-comparison Node via the
           # shared .node-version pin — these harness tests exercise the same
@@ -913,7 +913,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -1003,7 +1003,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -1581,7 +1581,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -1647,7 +1647,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -1700,7 +1700,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
