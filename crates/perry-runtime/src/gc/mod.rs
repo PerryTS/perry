@@ -479,6 +479,7 @@ pub fn gc_init() {
     // captured young values or future cache hits miss on stale addresses.
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+    gc_register_mutable_root_scanner(crate::buffer::scan_buffer_own_props_roots_mut);
     // Generic per-handle expando properties (`blob.colors = [...]` and other
     // arbitrary own props on native HANDLE values). Keys are stable small handle
     // ids; only the stored VALUES are JS references that must be traced.

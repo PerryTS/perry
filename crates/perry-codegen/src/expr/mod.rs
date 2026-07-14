@@ -1766,6 +1766,25 @@ fn lower_numeric_binary_value(
         return Ok(None);
     }
 
+    // Hand this proven shape to `binary::lower`, which owns the existing
+    // integer remainder and negative-zero repair. This must run before operand
+    // lowering so returning `None` emits no dead loads or duplicate records.
+    if matches!(op, BinaryOp::Mod)
+        && matches!(
+            left,
+            Expr::LocalGet(id)
+                if ctx.i32_counter_slots.contains_key(id)
+                    && !ctx.unsigned_i32_locals.contains(id)
+        )
+        && matches!(
+            right,
+            Expr::Integer(value)
+                if i32::try_from(*value).is_ok_and(|divisor| divisor > 0)
+        )
+    {
+        return Ok(None);
+    }
+
     let Some(left) = lower_numeric_operand_value(ctx, left)? else {
         return Ok(None);
     };

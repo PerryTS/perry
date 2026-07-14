@@ -223,6 +223,30 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // already does further down this function.
     if obj_val.is_pointer() {
         let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
+        // A Buffer is an ordinary Uint8Array in Node, so `"k" in buf` must see both
+        // the own properties user code hangs on it and the inherited
+        // `Buffer.prototype` methods. Perry keeps buffers outside the object model
+        // (a raw `BufferHeader`), so the generic pointer path below reads the header
+        // as an `ObjectHeader` and reported `false` for both.
+        if crate::buffer::is_registered_buffer(addr) {
+            if let Some(name) = unsafe { crate::object::metadata_key_to_string(key) } {
+                if crate::buffer::buffer_get_own_prop(addr, &name).is_some()
+                    || crate::object::buffer_dispatch::is_buffer_method_name(&name)
+                {
+                    return nanbox_true;
+                }
+                // A numeric key is an index into the bytes: present iff in range.
+                if let Ok(idx) = name.parse::<usize>() {
+                    let len = unsafe { (*(addr as *const crate::buffer::BufferHeader)).length };
+                    return if idx < len as usize {
+                        nanbox_true
+                    } else {
+                        nanbox_false
+                    };
+                }
+                return nanbox_false;
+            }
+        }
         if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
             && crate::value::addr_class::is_handle_band(addr)
         {

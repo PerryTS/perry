@@ -202,6 +202,14 @@ pub(crate) fn test_shared_array_buffer_registry_len() -> usize {
 
 /// Register a buffer pointer in the thread-local registry
 pub fn register_buffer(ptr: *const BufferHeader) {
+    // A FRESH buffer must not inherit the own properties of a dead one that
+    // happened to sit at the same address (the own-prop table is address-keyed
+    // and buffer storage is recycled). mysql2 measures a packet against a
+    // zero-length Buffer whose write methods it overrode with no-ops, then
+    // allocates the real packet buffer — which lands on the freed mock's
+    // address, and without this the no-ops would carry over and the real packet
+    // would serialize as all zeros (the MySQL server then times out reading it).
+    super::own_props::clear_buffer_own_props(ptr as usize);
     BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
 }
 

@@ -1071,7 +1071,24 @@ fn lower_assignment_target(
                     // typed `Buffer` must route through the byte-write path.
                     if let Expr::LocalGet(id) = &*object {
                         if let Some((_, _, ty)) = ctx.locals.iter().find(|(_, lid, _)| lid == id) {
-                            if matches!(ty, Type::Named(n) if n == "Uint8Array" || n == "Buffer") {
+                            // Numeric keys only — a STRING key stores an own
+                            // property on the Buffer (Node's Buffer is an
+                            // ordinary Uint8Array object), and an own key
+                            // shadows the same-named prototype method. Folding
+                            // it to the byte-write path silently dropped the
+                            // store (see the mirrored comment in IndexGet).
+                            let key_is_string = matches!(index.as_ref(), Expr::String(_))
+                                || matches!(
+                                    index.as_ref(),
+                                    Expr::LocalGet(kid) if ctx
+                                        .locals
+                                        .iter()
+                                        .find(|(_, lid, _)| lid == kid)
+                                        .is_some_and(|(_, _, kty)| matches!(kty, Type::String))
+                                );
+                            if !key_is_string
+                                && matches!(ty, Type::Named(n) if n == "Uint8Array" || n == "Buffer")
+                            {
                                 return Ok(wrap_assign_object_prelude(
                                     prelude.take(),
                                     Expr::Uint8ArraySet {

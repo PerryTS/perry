@@ -984,6 +984,23 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         return Ok(None);
     }
 
+    // A scalar-replaced array has no heap allocation at all: its elements live
+    // in stack slots and the local never holds an array. Lowering `arr[i]`
+    // through the guarded element path would take that empty slot as the
+    // receiver — the guard sees a null array and declines, and the boxed
+    // fallback coerces the resulting `undefined` to NaN. So
+    // `const a = [1, 2, 3]; a[0] + 1` produced NaN while a bare `a[0]` (which
+    // `lower` serves from the scalar slot) was correct. Leave these locals to
+    // `lower`, exactly as the inline-TA path already does.
+    if let Expr::LocalGet(id) = object.as_ref() {
+        if ctx.scalar_replaced_arrays.contains_key(id)
+            || ctx.array_row_aliases.contains_key(id)
+            || ctx.scalar_replaced.contains_key(id)
+        {
+            return Ok(None);
+        }
+    }
+
     if let Expr::LocalGet(arr_id) = object.as_ref() {
         if let Some((fact, idx_id, offset)) =
             packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
