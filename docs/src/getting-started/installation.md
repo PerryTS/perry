@@ -5,8 +5,10 @@
 Perry compiles TypeScript to native binaries by linking with your system's C toolchain, so every install path needs a linker:
 
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `gcc` or `clang` — see your distro below
+- **Linux**: `gcc` or `clang` for linking, plus **clang ≥ 15** for codegen — see your distro below
 - **Windows**: LLVM (`winget install LLVM.LLVM`) + `perry setup windows` (lightweight, ~1.5 GB, no Visual Studio needed), or MSVC Build Tools with the "Desktop development with C++" workload — see the [Windows platform guide](../platforms/windows.md) for both options
+
+> **clang ≥ 15 on Linux.** Perry's LLVM backend emits opaque-pointer IR (`ptr`) and compiles it with `clang -c`. clang 14 and older reject it with `error: expected type`. Ubuntu 22.04's default `clang` is 14 — install a newer one (`sudo apt install clang-15`) and point Perry at it if it isn't the default: `export PERRY_LLVM_CLANG=/usr/bin/clang-15`. Ubuntu 24.04, Debian 13, Fedora 39+ and Arch all ship a new enough clang.
 
 Linux C toolchain by distribution:
 
@@ -62,6 +64,21 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 | Linux x64 (musl / Alpine) | `@perryts/perry-linux-x64-musl` |
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
+
+#### Linux glibc requirement
+
+The Linux **glibc** binaries are built on Ubuntu 24.04, so they require **glibc ≥ 2.39**. Older distributions — Ubuntu 22.04 (glibc 2.35), Debian 12 (2.36), RHEL 9 / Amazon Linux 2023 (2.34) — cannot load them; the dynamic loader fails with `GLIBC_2.39 not found` before Perry starts.
+
+On those hosts Perry uses the **fully-static musl build** instead, which has no libc dependency and runs on any Linux:
+
+- **`install.sh`** detects the glibc version and downloads `perry-linux-<arch>-musl.tar.gz` automatically.
+- **npm** — the launcher routes to `@perryts/perry-linux-x64-musl` (or `-arm64-musl`) and prints a one-time notice. npm does not install that package on a glibc machine by itself (its `libc` selector says `musl`), so install it once:
+
+  ```bash
+  npm install --force @perryts/perry-linux-x64-musl
+  ```
+
+The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. Tracking issue: [#6298](https://github.com/PerryTS/perry/issues/6298).
 
 ### Homebrew (macOS)
 

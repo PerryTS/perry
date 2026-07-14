@@ -71,7 +71,46 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     // the rebind targets the right object. Ordinary `obj.method(args)` calls do
     // NOT reach here (they lower straight to `js_native_call_method`), so this
     // only governs method-as-value invocations.
-    namespace_obj = crate::object::canonical_bound_method_receiver(namespace_obj);
+    // The captured slot-0 prototype-ref names the OWNER class. A method value is a
+    // FIXED function object (spec: reading `C.prototype.m` yields *that* function;
+    // invoking it later does not re-resolve `m` against whatever receiver it is
+    // called on), so dispatch the OWNER's body with the call-time `this` rather than
+    // re-resolving the name on the RECEIVER's class below.
+    //
+    // Re-resolution breaks as soon as the value is COPIED onto another class's
+    // prototype — `Execute.prototype.resultsetHeader = Query.prototype.resultsetHeader`,
+    // the block copy mysql2's Command state machine performs. Invoking it on an
+    // `Execute` then re-resolved "resultsetHeader" against Execute, found the copy
+    // (this very closure), and recursed until the call-depth guard returned the null
+    // object — user-visible as `[object Object]` instead of the method's result,
+    // exactly the failure the comment below describes for the self-shadowing `bind`
+    // case.
+    let owner_proto_ref = namespace_obj;
+    let call_receiver = crate::object::canonical_bound_method_receiver(owner_proto_ref);
+    if method_name_len > 0 && !method_name_ptr.is_null() {
+        if let Some(owner_id) = crate::object::class_prototype_ref_id(owner_proto_ref) {
+            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(
+                method_name_ptr as *const u8,
+                method_name_len,
+            )) {
+                if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
+                    crate::object::lookup_class_method_in_chain(owner_id, name)
+                {
+                    return crate::object::call_vtable_method(
+                        func_ptr,
+                        call_receiver.to_bits() as i64,
+                        args.as_ptr(),
+                        args.len(),
+                        param_count,
+                        has_synth_args,
+                        has_rest,
+                    );
+                }
+            }
+        }
+    }
+
+    namespace_obj = call_receiver;
 
     // A bound-method VALUE (`const f = obj.method`) is resolved at READ time and
     // must always invoke that method — even if `obj.method` is later reassigned.

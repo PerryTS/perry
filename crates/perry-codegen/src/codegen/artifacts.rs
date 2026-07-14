@@ -74,7 +74,14 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub func_signatures: &'a HashMap<u32, (usize, bool, bool, bool)>,
     pub func_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub module_boxed_vars: &'a std::collections::HashSet<u32>,
+    /// Typed-ABI capture-representation oracle: module-wide `Stmt::Let` types
+    /// MINUS boxed ids (#5869). Only the typed closure clones read this.
     pub module_local_types: &'a HashMap<u32, perry_types::Type>,
+    /// #6369: receiver-type oracle for closure bodies — the same module-wide
+    /// `Stmt::Let` types with no representation filtering, mirroring the
+    /// `module_global_types` seed that `compile_function` / `compile_method`
+    /// already use. Feeds `FnCtx.local_types` only.
+    pub module_receiver_types: &'a HashMap<u32, perry_types::Type>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
@@ -194,6 +201,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         func_synthetic_arguments,
         module_boxed_vars,
         module_local_types,
+        module_receiver_types,
         closure_rest_params,
         closure_synthetic_arguments,
         closure_rest_and_arguments,
@@ -277,7 +285,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             func_synthetic_arguments,
             module_prefix,
             module_boxed_vars,
-            module_local_types,
+            module_receiver_types,
             closure_rest_params,
             cross_module,
         )
@@ -561,7 +569,16 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         {
             let ctor_body = if let Some(c) = class.constructor.as_ref() {
                 (c.params.clone(), c.body.clone(), c.captures.clone())
-            } else if class.extends_name.is_some() {
+            } else if class.extends_name.is_some() || class.extends_expr.is_some() {
+                // `extends_expr.is_some()` (with NO extends_name): a PURELY
+                // dynamic parent — `class extends <local var> {}`, the shape a
+                // bundled mysql2 promise-mixin takes (`module.exports = class
+                // extends Pool { promise() {…} }`). It needs the same
+                // forwarding signature; `synthesized_ctor_param_count` already
+                // resolves it to the unresolved-parent fixed band. Previously
+                // this fell to the empty-ctor branch, so the standalone ctor
+                // dropped every construction arg AND never called super — the
+                // instance silently lost all inherited ctor state (wall 7).
                 // No own ctor + heritage → JS spec default ctor
                 // `constructor(...args) { super(...args) }`. Synthesize forwarding
                 // params matching the closest ancestor ctor's arity (incl.

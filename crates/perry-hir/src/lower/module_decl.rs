@@ -195,12 +195,18 @@ pub(crate) fn lower_module_decl(
                                     &source, &imported,
                                 )
                             {
-                                crate::lower_bail!(
-                                    named.span,
-                                    "The requested module '{}' does not provide an export named '{}'",
-                                    raw_source,
-                                    imported
+                                // Almost always a TS TYPE in a mixed import —
+                                // `import { createCipheriv, BinaryLike } from "crypto"`.
+                                // tsc/esbuild/Bun all erase such a specifier; bailing here
+                                // failed the whole file. Defer: record it, bind nothing, and
+                                // let `lower_ident_expr` raise this same error if the local is
+                                // ever referenced as a VALUE (type positions are erased before
+                                // expression lowering, so a genuine bad import still errors).
+                                ctx.deferred_unknown_native_imports.insert(
+                                    local.clone(),
+                                    (imported.clone(), raw_source.clone(), named.span),
                                 );
+                                continue;
                             }
                             // Register as native module function with the original method name
                             // e.g., import { v4 as uuid } from 'uuid' -> uuid maps to uuid.v4.

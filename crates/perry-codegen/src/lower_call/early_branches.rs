@@ -203,9 +203,24 @@ pub fn try_lower_index_get_call(
         // expression — those have dedicated lowering and aren't method
         // dispatch. Class refs are the exception: `C[1]()` is a static
         // computed method call after ToPropertyKey canonicalizes `1` to "1".
+        //
+        // The receiver must actually be an array for that bail to be sound. A
+        // numeric key alone is not enough: `obj[k]()` on a *plain object* is
+        // still a method call and must bind `this = obj` (#6328). The element
+        // lowering reads the slot and calls it as a bare closure, dropping the
+        // receiver. That used to be unreachable here because in an `async` body
+        // the async-to-generator transform boxes body locals, so `k`'s numeric
+        // type was invisible and this guard never fired; #6369 restores those
+        // declared types, which made the plain-object case reachable and
+        // resurrected the `this === undefined` bug. Gate on the receiver being
+        // a real array so non-arrays fall through to the dispatch tower below,
+        // which binds `this` for both numeric and string keys.
         let object_is_class_ref = matches!(object.as_ref(), Expr::ClassRef(_))
             || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
-        if crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref {
+        if crate::type_analysis::is_numeric_expr(ctx, index)
+            && crate::type_analysis::is_array_expr(ctx, object)
+            && !object_is_class_ref
+        {
             return Ok(None);
         }
         if crate::type_analysis::receiver_class_name(ctx, object).as_deref() == Some("Server")

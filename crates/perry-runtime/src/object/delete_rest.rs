@@ -58,8 +58,6 @@ pub extern "C" fn js_object_delete_field(
     // boundary (HANDLE_BAND_MAX = 0x100000), so the fetch (0x40000..0xE0000) and
     // zlib (0xE0000..0xF0000) handle bands fell through to the heap path below
     // and got dereferenced -> SIGSEGV on Linux. Use the centralized predicate.
-    // A handle simply misses `class_name_for_id` and returns 1, which is the
-    // correct result for `delete request.foo` (Node: true).
     if crate::value::addr_class::is_handle_band(obj as usize) {
         unsafe {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
@@ -68,6 +66,17 @@ pub extern "C" fn js_object_delete_field(
                     super::class_registry::class_delete_own_dynamic_prop(class_id, name);
                     super::class_registry::class_mark_key_deleted(class_id, name);
                 }
+                // #6363: a native HANDLE's own properties are its user expandos.
+                // `delete` used to unconditionally report success while LEAVING
+                // the property in place — `delete headers.foo` returned true and
+                // `headers.foo` still read back its old value. Actually remove
+                // it, and reject (false) a non-configurable one, matching
+                // ordinary `[[Delete]]`. An absent key still reports true, which
+                // is what `delete request.__nope` must do (Node: true).
+                return i32::from(super::handle_expando::handle_expando_delete(
+                    obj as usize as i64,
+                    name,
+                ));
             }
         }
         return 1;

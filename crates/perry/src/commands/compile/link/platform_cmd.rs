@@ -588,27 +588,11 @@ pub fn select_linker_command(
                  %LOCALAPPDATA%\\Android\\Sdk\\ndk\\28.0.12433566 (Windows)"
             )
         })?;
-        // #1508: Windows host falls through to "linux-x86_64" and points at
-        // a path that doesn't exist on the NDK. The NDK ships per-host
-        // prebuilt toolchains under `toolchains/llvm/prebuilt/<host>/`;
-        // the host tag must match the build machine, not the target.
-        let host_tag = if cfg!(target_os = "macos") {
-            "darwin-x86_64"
-        } else if cfg!(target_os = "windows") {
-            "windows-x86_64"
-        } else {
-            "linux-x86_64"
-        };
-        let clang = format!(
-            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
-            ndk_home,
-            host_tag,
-            if cfg!(target_os = "windows") {
-                ".cmd"
-            } else {
-                ""
-            }
-        );
+        // #1508 (per-host toolchain tag) + #5740 (drive `clang` directly rather
+        // than the NDK's `.cmd`/shell wrapper) — see `ndk_clang_path`. The
+        // `-target aarch64-linux-android24` below is what the wrapper would have
+        // added, so nothing else changes.
+        let clang = ndk_clang_path(&ndk_home);
         if !PathBuf::from(&clang).exists() {
             return Err(anyhow!("Android NDK clang not found at: {}", clang));
         }

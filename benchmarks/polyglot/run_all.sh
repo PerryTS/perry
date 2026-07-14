@@ -22,6 +22,10 @@ SUITE="../suite"
 RUNS=${1:-${RUNS:-11}}
 TMPDIR=/tmp/perry_polyglot_bench
 mkdir -p "$TMPDIR"
+PUBLIC_JSON_OUT="${PUBLIC_BENCH_JSON_OUT:-}"
+RAW_SAMPLES_DIR="$TMPDIR/raw_samples"
+rm -rf "$RAW_SAMPLES_DIR"
+mkdir -p "$RAW_SAMPLES_DIR"
 
 # --- Runtime detection ---
 HAS_BUN=0
@@ -185,25 +189,41 @@ compute_stats() {
 # of stdout per run, return "median|p95|stddev|min|max" via stdout.
 # Outputs "-|-|-|-|-" if no successful runs.
 stats_of() {
-    local cmd="$1" key="$2"
+    local cmd="$1" key="$2" runtime="$3" bench="$4"
     local samples="$TMPDIR/.samples.$$"
+    local outputs="$TMPDIR/.outputs.$$"
     : > "$samples"
+    : > "$outputs"
     local i
     for i in $(seq 1 $RUNS); do
         local out
-        out=$("${PIN_CMD[@]}" $cmd 2>/dev/null) || true
+        if [[ -n "${PIN_CMD[*]-}" ]]; then
+            out=$("${PIN_CMD[@]}" $cmd 2>/dev/null) || true
+        else
+            out=$($cmd 2>/dev/null) || true
+        fi
         local t
         t=$(get_time "$out" "$key")
-        [[ -n "$t" ]] && echo "$t" >> "$samples"
+        if [[ -n "$t" ]]; then
+            echo "$t" >> "$samples"
+            printf '%s\n' "$out" \
+                | sed -E "/^${key}:[0-9]+$/d" \
+                | shasum -a 256 \
+                | awk '{print $1}' >> "$outputs"
+        fi
     done
     if [[ ! -s "$samples" ]]; then
         rm -f "$samples"
+        rm -f "$outputs"
         echo "-|-|-|-|-"
         return
     fi
     local result
     result=$(compute_stats < "$samples")
-    rm -f "$samples"
+    mkdir -p "$RAW_SAMPLES_DIR/$runtime"
+    cp "$samples" "$RAW_SAMPLES_DIR/$runtime/$bench.txt"
+    cp "$outputs" "$RAW_SAMPLES_DIR/$runtime/$bench.outputs"
+    rm -f "$samples" "$outputs"
     echo "$result"
 }
 
@@ -216,7 +236,7 @@ run_lang() {
     for bk in "fibonacci:fibonacci" "loop_overhead:loop_overhead" "loop_data_dependent:loop_data_dependent" "array_write:array_write" "array_read:array_read" "math_intensive:math_intensive" "object_create:object_create" "nested_loops:nested_loops" "accumulate:accumulate"; do
         IFS=: read -r bench key <<< "$bk"
         local stats
-        stats=$(stats_of "$cmd" "$key")
+        stats=$(stats_of "$cmd" "$key" "$lang" "$bench")
         printf "%s\t%s\n" "$bench" "$stats" >> "$results"
     done
     echo "  $lang: done"
@@ -226,7 +246,7 @@ run_lang() {
 : > "$TMPDIR/results_perry.tsv"
 for bk in "fibonacci:05_fibonacci:fibonacci" "loop_overhead:02_loop_overhead:loop_overhead" "loop_data_dependent:17_loop_data_dependent:loop_data_dependent" "array_write:03_array_write:array_write" "array_read:04_array_read:array_read" "math_intensive:06_math_intensive:math_intensive" "object_create:07_object_create:object_create" "nested_loops:10_nested_loops:nested_loops" "accumulate:13_factorial:accumulate"; do
     IFS=: read -r bench ts key <<< "$bk"
-    stats=$(stats_of "$TMPDIR/perry_${ts}" "$key")
+    stats=$(stats_of "$TMPDIR/perry_${ts}" "$key" "perry" "$bench")
     printf "%s\t%s\n" "$bench" "$stats" >> "$TMPDIR/results_perry.tsv"
 done
 echo "  Perry: done"
@@ -245,9 +265,9 @@ for bk in "fibonacci:05_fibonacci:fibonacci" "loop_overhead:02_loop_overhead:loo
         precompile_to_mjs "$SUITE/${ts}.ts" "$TMPDIR/node_${ts}.mjs" && node_input="$TMPDIR/node_${ts}.mjs"
     fi
     if [[ -n "$node_input" ]]; then
-        stats=$(stats_of "node $node_input" "$key")
+        stats=$(stats_of "node $node_input" "$key" "node" "$bench")
     else
-        stats=$(stats_of "node --experimental-strip-types $SUITE/${ts}.ts" "$key")
+        stats=$(stats_of "node --experimental-strip-types $SUITE/${ts}.ts" "$key" "node" "$bench")
     fi
     printf "%s\t%s\n" "$bench" "$stats" >> "$TMPDIR/results_node.tsv"
 done
@@ -258,7 +278,7 @@ echo "  Node: done"
 if [ $HAS_BUN -eq 1 ]; then
     for bk in "fibonacci:05_fibonacci:fibonacci" "loop_overhead:02_loop_overhead:loop_overhead" "loop_data_dependent:17_loop_data_dependent:loop_data_dependent" "array_write:03_array_write:array_write" "array_read:04_array_read:array_read" "math_intensive:06_math_intensive:math_intensive" "object_create:07_object_create:object_create" "nested_loops:10_nested_loops:nested_loops" "accumulate:13_factorial:accumulate"; do
         IFS=: read -r bench ts key <<< "$bk"
-        stats=$(stats_of "bun run $SUITE/${ts}.ts" "$key")
+        stats=$(stats_of "bun run $SUITE/${ts}.ts" "$key" "bun" "$bench")
         printf "%s\t%s\n" "$bench" "$stats" >> "$TMPDIR/results_bun.tsv"
     done
     echo "  Bun: done"
@@ -275,7 +295,7 @@ if [ $HAS_SHERMES -eq 1 ]; then
     for bk in "fibonacci:05_fibonacci:fibonacci" "loop_overhead:02_loop_overhead:loop_overhead" "loop_data_dependent:17_loop_data_dependent:loop_data_dependent" "array_write:03_array_write:array_write" "array_read:04_array_read:array_read" "math_intensive:06_math_intensive:math_intensive" "object_create:07_object_create:object_create" "nested_loops:10_nested_loops:nested_loops" "accumulate:13_factorial:accumulate"; do
         IFS=: read -r bench ts key <<< "$bk"
         if [ -x "$TMPDIR/shermes_${ts}" ]; then
-            stats=$(stats_of "$TMPDIR/shermes_${ts}" "$key")
+            stats=$(stats_of "$TMPDIR/shermes_${ts}" "$key" "hermes" "$bench")
         else
             stats="-|-|-|-|-"
         fi
@@ -357,3 +377,74 @@ stats_str() {
 
 echo ""
 echo "Wrote $(pwd)/RESULTS_AUTO.md"
+
+if [[ -n "$PUBLIC_JSON_OUT" ]]; then
+    mkdir -p "$(dirname "$PUBLIC_JSON_OUT")"
+    PYTHONPATH="$PERRY_ROOT" python3 - "$RAW_SAMPLES_DIR" "$PUBLIC_JSON_OUT" "$PERRY_ROOT" "$RUNS" "$PIN_NOTE" <<'PY'
+import json, subprocess, sys
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from benchmarks.public_baseline import distribution
+
+raw_dir, output_path, root, requested, pinning = sys.argv[1:]
+raw_dir = Path(raw_dir)
+requested = int(requested)
+benchmarks = {}
+for sample_path in sorted((raw_dir / "perry").glob("*.txt")):
+    name = sample_path.stem
+    runtime_results = {}
+    for runtime in ("perry", "node", "bun"):
+        path = raw_dir / runtime / f"{name}.txt"
+        outputs_path = raw_dir / runtime / f"{name}.outputs"
+        samples = [float(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+        outputs = outputs_path.read_text().splitlines() if outputs_path.exists() else []
+        if len(samples) != requested:
+            raise SystemExit(f"polyglot/{name}: {runtime} has {len(samples)}/{requested} samples")
+        if len(outputs) != requested or len(set(outputs)) != 1:
+            raise SystemExit(f"polyglot/{name}: {runtime} correctness evidence is incomplete or unstable")
+        runtime_results[runtime] = {"wall_ms": distribution(samples)}
+        runtime_results[runtime]["output_sha256"] = outputs[0]
+    hashes = {runtime_results[runtime]["output_sha256"] for runtime in ("perry", "node", "bun")}
+    if len(hashes) != 1:
+        raise SystemExit(f"polyglot/{name}: Perry/Node/Bun outputs differ")
+    benchmarks[name] = {
+        "correctness": {"status": "pass", "reference": "node+bun", "output_sha256": hashes.pop()},
+        "runtimes": runtime_results,
+    }
+component = {
+    "schema_version": 1,
+    "suite": "polyglot",
+    "commit": subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip(),
+    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "run_config": {
+        "warmup": "none beyond benchmark-specific setup",
+        "requested_samples": requested,
+        "pinning": pinning,
+    },
+    "commands": {
+        "perry": [root + "/target/release/perry", "compile", "<source.ts>", "-o", "<binary>"],
+        "node": [shutil.which("node"), "<precompiled.mjs>"],
+        "bun": [shutil.which("bun"), "run", "<source.ts>"],
+        "runner": ["benchmarks/polyglot/run_all.sh", str(requested)],
+    },
+    "runtime_metadata": {
+        "perry": {
+            "version": subprocess.check_output([root + "/target/release/perry", "--version"], text=True).strip(),
+            "resolved_executable": str(Path(root + "/target/release/perry").resolve()),
+        },
+        "node": {
+            "version": subprocess.check_output(["node", "--version"], text=True).strip(),
+            "resolved_executable": shutil.which("node"),
+        },
+        "bun": {
+            "version": subprocess.check_output(["bun", "--version"], text=True).strip(),
+            "resolved_executable": shutil.which("bun"),
+        },
+    },
+    "benchmarks": benchmarks,
+}
+Path(output_path).write_text(json.dumps(component, indent=2) + "\n")
+PY
+    echo "Machine-readable results: $PUBLIC_JSON_OUT"
+fi

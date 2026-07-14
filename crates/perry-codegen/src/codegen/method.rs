@@ -369,6 +369,8 @@ pub(super) fn compile_method(
         &cross_module.clamp3_functions,
         &method_boxed_vars,
         module_globals,
+        // #6369: declared types of module-scope bindings this body reads through.
+        &local_types,
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
@@ -564,7 +566,14 @@ pub(super) fn compile_method(
         //     later (after super() in own-body case, after explicit parent
         //     ctor call in no-own-body case).
         //   - no extends: apply all (= just self) here.
-        let init_mode = if class.extends_name.is_some() {
+        // A no-own-ctor class with a PURELY dynamic parent (`extends_expr`,
+        // no `extends_name`) now emits a synthesized dynamic super below —
+        // stage its self fields AFTER that call (tail SelfOnly), like any
+        // other heritage class, instead of applying them twice.
+        let no_ctor_dynamic_parent = class.constructor.is_none()
+            && class.extends_name.is_none()
+            && class.extends_expr.is_some();
+        let init_mode = if class.extends_name.is_some() || no_ctor_dynamic_parent {
             crate::lower_call::FieldInitMode::AncestorsOnly
         } else {
             crate::lower_call::FieldInitMode::All
@@ -585,7 +594,9 @@ pub(super) fn compile_method(
         // call to the parent's standalone ctor symbol here, forwarding all
         // args. The walk skips empty-bodied parents (matching the JS spec
         // chain semantics).
-        if class.constructor.is_none() && class.extends_name.is_some() {
+        if class.constructor.is_none()
+            && (class.extends_name.is_some() || class.extends_expr.is_some())
+        {
             let builtin_parent_runtime = match class.extends_name.as_deref() {
                 Some("Writable") => Some("js_node_stream_writable_subclass_init"),
                 Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
@@ -1293,6 +1304,8 @@ pub(super) fn compile_static_method(
         &cross_module.clamp3_functions,
         &static_boxed_vars,
         module_globals,
+        // #6369: declared types of module-scope bindings this body reads through.
+        &local_types,
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,

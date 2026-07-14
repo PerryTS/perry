@@ -454,6 +454,8 @@ pub(super) fn compile_function(
         &cross_module.clamp3_functions,
         &boxed_vars,
         module_globals,
+        // #6369: declared types of module-scope bindings this body reads through.
+        &local_types,
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,

@@ -32,6 +32,7 @@ pub(crate) mod type_analysis_facts;
 pub(crate) mod type_analysis_net;
 pub(crate) mod typed_shape;
 pub mod types;
+pub(crate) mod volatile_setjmp;
 
 pub use codegen::{
     compile_module, resolve_target_triple, AppMetadata, CompileOptions, FpContractMode,

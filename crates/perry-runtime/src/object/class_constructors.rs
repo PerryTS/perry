@@ -950,17 +950,48 @@ pub(crate) unsafe fn replay_class_object_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) {
-    let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(class_cid) else {
+    // Spec: a derived class with no own `constructor` gets the implicit
+    // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
+    // must run with the same argument list. `lookup_class_constructor` holds
+    // OWN ctors only, so walk the parent chain (static edges and the
+    // dynamically-registered `class X extends <runtime value>` edges both
+    // live in CLASS_REGISTRY). Bailing out here instead constructed a
+    // FIELD-LESS instance silently — mysql2's promise mixin
+    // (`module.exports = class extends Pool { promise() {…} }`) produced a
+    // Pool whose ctor never ran, so `pool.config` was undefined and Next.js
+    // requests died far from the fault (myairank wall 7).
+    let mut ctor_cid = class_cid;
+    let mut depth = 0usize;
+    let found = loop {
+        if let Some(found) = lookup_class_constructor(ctor_cid) {
+            break Some(found);
+        }
+        match super::class_registry::get_parent_class_id(ctor_cid) {
+            Some(p) if p != 0 && p != ctor_cid && depth < 32 => {
+                ctor_cid = p;
+                depth += 1;
+            }
+            _ => break None,
+        }
+    };
+    let Some((ctor_ptr, total_params, sig_caps)) = found else {
         return;
     };
 
     // Read the snapshotted captures (an own array, in capture-param order).
-    // Absent → no captures.
-    let caps_val = crate::object::js_object_get_own_field_or_undef(
-        classobj_value,
-        b"__perry_ctor_caps".as_ptr(),
-        17,
-    );
+    // Absent → no captures. The `__perry_ctor_caps` snapshot on this class
+    // object belongs to ITS OWN ctor — when the walk above resolved an
+    // ANCESTOR's ctor, that snapshot doesn't apply; use the ancestor's
+    // decl-site snapshot (CLASS_CAPTURE_VALUES) via the fallback below.
+    let caps_val = if ctor_cid == class_cid {
+        crate::object::js_object_get_own_field_or_undef(
+            classobj_value,
+            b"__perry_ctor_caps".as_ptr(),
+            17,
+        )
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
     let caps_jv = crate::value::JSValue::from_bits(caps_val.to_bits());
     let (caps_arr, n_caps): (*const crate::array::ArrayHeader, u32) = if caps_jv.is_pointer() {
         let arr = caps_jv.as_pointer::<crate::array::ArrayHeader>();
@@ -981,7 +1012,9 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // (p-queue's `new PQueue({...})` left `i.default` undefined and
     // `new e.queueClass` threw "undefined is not a constructor").
     let snapshot_caps: Vec<u64> = if n_caps == 0 {
-        class_capture_values(class_cid).unwrap_or_default()
+        // Keyed by the ctor's OWNING class (`ctor_cid` — differs from
+        // `class_cid` when the parent walk resolved an ancestor's ctor).
+        class_capture_values(ctor_cid).unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -1065,7 +1098,31 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) {
-    let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(class_cid) else {
+    // Spec: a derived class with no own `constructor` gets the implicit
+    // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
+    // runs with the same argument list. `lookup_class_constructor` holds OWN
+    // ctors only, so walk the parent chain (static edges and the
+    // dynamically-registered `class X extends <runtime value>` edges both
+    // live in CLASS_REGISTRY). Bailing out here instead constructed a
+    // FIELD-LESS instance silently — mysql2's promise mixin
+    // (`module.exports = class extends Pool { promise() {…} }`) produced a
+    // Pool whose ctor never ran, and the first `.config` read blew up far
+    // from the fault.
+    let mut ctor_cid = class_cid;
+    let mut depth = 0usize;
+    let found = loop {
+        if let Some(found) = lookup_class_constructor(ctor_cid) {
+            break Some(found);
+        }
+        match super::class_registry::get_parent_class_id(ctor_cid) {
+            Some(p) if p != 0 && p != ctor_cid && depth < 32 => {
+                ctor_cid = p;
+                depth += 1;
+            }
+            _ => break None,
+        }
+    };
+    let Some((ctor_ptr, total_params, sig_caps)) = found else {
         return;
     };
 
@@ -1073,7 +1130,9 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     // snapshot (see CLASS_CAPTURE_VALUES). The ctor's trailing
     // `__perry_cap_<id>` params are filled from it; user args fill the rest.
     // #5957: the split is the SIGNATURE cap count, not the snapshot length.
-    let caps = class_capture_values(class_cid).unwrap_or_default();
+    // Keyed by the ctor's OWNING class (`ctor_cid`), which differs from
+    // `class_cid` when the walk above resolved an ancestor's ctor.
+    let caps = class_capture_values(ctor_cid).unwrap_or_default();
     let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);

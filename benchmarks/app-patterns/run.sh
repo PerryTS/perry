@@ -23,6 +23,9 @@ PERRY_BIN="$REPO_ROOT/target/release/perry"
 KERNELS_DIR="$SCRIPT_DIR/kernels"
 RESULTS_DIR="$SCRIPT_DIR/results"
 mkdir -p "$RESULTS_DIR"
+PUBLIC_JSON_OUT="${PUBLIC_BENCH_JSON_OUT:-}"
+RAW_JSONL=$(mktemp "${TMPDIR:-/tmp}/perry-app-patterns.XXXXXX")
+trap 'rm -f "$RAW_JSONL"' EXIT
 
 if [ ! -x "$PERRY_BIN" ]; then
   echo "Error: perry binary not found at $PERRY_BIN — build first with"
@@ -115,6 +118,10 @@ for KERNEL in "${KERNELS[@]}"; do
     echo "    Perry: $PERRY_SUM"
     echo "    Bun:   $BUN_SUM"
     echo "    Node:  $NODE_SUM"
+    {
+      echo "| $NAME | **CORRECTNESS FAIL** | – | – | – | – |"
+    } >> "$OUTPUT"
+    continue
   fi
 
   # Run hyperfine on all three runtimes in one invocation so the runs
@@ -127,6 +134,20 @@ for KERNEL in "${KERNELS[@]}"; do
     --command-name "bun"    "bun run $KERNEL" \
     --command-name "node"   "node --experimental-strip-types $KERNEL" \
     >/dev/null 2>&1
+
+  python3 - "$JSON" "$NAME" "$PERRY_SUM" >> "$RAW_JSONL" <<'PY'
+import json, sys
+path, name, checksum = sys.argv[1:]
+payload = json.load(open(path))
+print(json.dumps({
+    "benchmark": name,
+    "checksum": checksum,
+    "runtimes": {
+        runtime: [round(value * 1000, 6) for value in result["times"]]
+        for runtime, result in zip(("perry", "bun", "node"), payload["results"])
+    },
+}))
+PY
 
   # Extract mean / min for each runtime.
   read PERRY_MEAN PERRY_MIN < <(python3 -c "
@@ -186,3 +207,60 @@ echo
 echo "=== Done ==="
 echo "Results: $OUTPUT"
 cat "$OUTPUT"
+
+if [ -n "$PUBLIC_JSON_OUT" ]; then
+  mkdir -p "$(dirname "$PUBLIC_JSON_OUT")"
+  PYTHONPATH="$REPO_ROOT" python3 - "$RAW_JSONL" "$PUBLIC_JSON_OUT" "$REPO_ROOT" <<'PY'
+import json, shutil, subprocess, sys
+from datetime import datetime, timezone
+from pathlib import Path
+from benchmarks.public_baseline import distribution
+
+records_path, output_path, root = sys.argv[1:]
+records = [json.loads(line) for line in open(records_path) if line.strip()]
+expected = sorted(path.rsplit("/", 1)[-1].removesuffix(".ts")
+                  for path in __import__("glob").glob(root + "/benchmarks/app-patterns/kernels/*.ts"))
+if sorted(record["benchmark"] for record in records) != expected:
+    raise SystemExit("app-pattern component is incomplete or has a correctness failure")
+benchmarks = {}
+for record in records:
+    runtimes = record["runtimes"]
+    benchmarks[record["benchmark"]] = {
+        "correctness": {"status": "pass", "reference": "node+bun", "checksum": record["checksum"]},
+        "runtimes": {
+            runtime: {"wall_ms": distribution(runtimes[runtime])}
+            for runtime in ("perry", "node", "bun")
+        },
+    }
+component = {
+    "schema_version": 1,
+    "suite": "app_patterns",
+    "commit": subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip(),
+    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "run_config": {"warmup": 3, "requested_samples": 15, "interleaved": True},
+    "commands": {
+        "perry": [root + "/target/release/perry", "<kernel.ts>", "-o", "<compiled-kernel>"],
+        "node": [shutil.which("node"), "--experimental-strip-types", "<kernel.ts>"],
+        "bun": [shutil.which("bun"), "run", "<kernel.ts>"],
+        "measurement": ["hyperfine", "--warmup", "3", "--runs", "15"],
+    },
+    "runtime_metadata": {
+        "perry": {
+            "version": subprocess.check_output([root + "/target/release/perry", "--version"], text=True).strip(),
+            "resolved_executable": str(Path(root + "/target/release/perry").resolve()),
+        },
+        "node": {
+            "version": subprocess.check_output(["node", "--version"], text=True).strip(),
+            "resolved_executable": shutil.which("node"),
+        },
+        "bun": {
+            "version": subprocess.check_output(["bun", "--version"], text=True).strip(),
+            "resolved_executable": shutil.which("bun"),
+        },
+    },
+    "benchmarks": benchmarks,
+}
+open(output_path, "w").write(json.dumps(component, indent=2) + "\n")
+PY
+  echo "Machine-readable results: $PUBLIC_JSON_OUT"
+fi

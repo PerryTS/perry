@@ -127,6 +127,17 @@ pub(super) fn try_local_array_methods(
                         ctx.lookup_class(name).is_some()
                             || ctx.is_interface_type(name)
                             || is_imported_class_name(name)
+                            // A `function Q() {…}` used as a constructor (`new Q()`)
+                            // types its instances `Named("Q")`, but it is not a class
+                            // decl, so `lookup_class` misses it. Its methods live on
+                            // `Q.prototype` (registered via
+                            // `Expr::RegisterFunctionPrototypeMethod`), and when one of
+                            // them shares an Array name — `Q.prototype.push`, the shape
+                            // denque uses for mysql2's command queue — the array fast
+                            // path folded `q.push(x)` to `Expr::ArrayPush`, read the
+                            // instance's ObjectHeader as an ArrayHeader (silently
+                            // corrupting it) and never ran the method.
+                            || ctx.functions_index.contains_key(name.as_str())
                     }
                     Some(Type::Generic { base, .. }) => {
                         !builtin_generic_bases.contains(&base.as_str())

@@ -15,12 +15,28 @@
 //! storage that closures get from `CLOSURE_PROPS` (see
 //! `closure/dynamic_props.rs`), modeled directly on that code.
 //!
+//! Attributes / accessors (#6363): `Object.defineProperty(handle, k, desc)`
+//! stores the VALUE here but records the `writable`/`enumerable`/`configurable`
+//! bits and any `get`/`set` pair in the ordinary
+//! `descriptor_state::{PROPERTY_DESCRIPTORS, ACCESSOR_DESCRIPTORS}` side tables,
+//! keyed by the handle id. Those tables are keyed by a plain `usize` and heap
+//! addresses always sit above `HANDLE_BAND_MAX`, so a handle id can never
+//! collide with a real owner address; their GC scanners leave the key alone
+//! (a handle is not a forwardable heap address) and their dead-owner sweep
+//! skips it (`attributed_owner_header` rejects an address that belongs to no
+//! arena page / malloc header). Reusing them gets attribute + accessor storage,
+//! rooting of the accessor closures, and `getOwnPropertyDescriptor` for free.
+//!
 //! GC: handle ids are stable small integers that never move, so — unlike the
 //! closure table — no metadata re-keying is needed. Only the stored VALUES are
 //! real JS references, so the registered mutable root scanner traces them in
 //! every phase (keeping e.g. a stored array and its elements alive) and rewrites
 //! the stored bits when a copying collection moves the value.
 
+use super::descriptor_state::{
+    get_accessor_descriptor, get_property_attrs, PropertyAttrs, ACCESSOR_DESCRIPTORS,
+    PROPERTY_DESCRIPTORS,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -32,8 +48,13 @@ use std::collections::HashMap;
 // keeps the side-table aligned with the per-thread GC, matching the documented
 // threading model. The mutable root scanner is registered once but reads the
 // CURRENT thread's table on each GC, so each thread traces only its own values.
+//
+// The per-handle entry is a `Vec<(name, bits)>` rather than a `HashMap` so own
+// keys come back in INSERTION order — `Object.keys(handle)` / `{...handle}` are
+// ordered in JS, and handles carry a handful of expandos at most, so the linear
+// scan is cheaper than hashing.
 thread_local! {
-    static HANDLE_EXPANDO_PROPS: RefCell<HashMap<i64, HashMap<String, u64>>> =
+    static HANDLE_EXPANDO_PROPS: RefCell<HashMap<i64, Vec<(String, u64)>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -46,10 +67,12 @@ pub fn handle_expando_set(handle: i64, name: &str, value: f64) {
     }
     let bits = value.to_bits();
     HANDLE_EXPANDO_PROPS.with(|cell| {
-        cell.borrow_mut()
-            .entry(handle)
-            .or_default()
-            .insert(name.to_string(), bits);
+        let mut map = cell.borrow_mut();
+        let props = map.entry(handle).or_default();
+        match props.iter_mut().find(|(k, _)| k == name) {
+            Some(slot) => slot.1 = bits,
+            None => props.push((name.to_string(), bits)),
+        }
     });
     // Parent is the (non-heap) handle id, so pass 0 as the parent address — the
     // scanner traces the value unconditionally, and the barrier only needs to
@@ -60,7 +83,37 @@ pub fn handle_expando_set(handle: i64, name: &str, value: f64) {
 /// Read back an own property previously stored via `handle_expando_set`.
 /// Returns `None` when no such property exists (caller falls through to its
 /// `undefined` default). Mirrors `closure_get_own_dynamic_prop`.
+///
+/// #6363: an own property installed by `Object.defineProperty(handle, k, {get})`
+/// has no stored value — the getter must run instead. This is the single choke
+/// point every handle read funnels through (perry-stdlib's
+/// `js_handle_property_dispatch` consults it after every typed property misses),
+/// so resolving the accessor here makes `handle.accessorProp` work on every read
+/// path at once.
 pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
+    if handle == 0 {
+        return None;
+    }
+    if let Some(acc) = handle_expando_accessor(handle, name) {
+        if acc.get == 0 {
+            // Setter-only accessor: reads yield `undefined`, they do NOT fall
+            // through to a stale data value.
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        let closure =
+            (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if closure.is_null() {
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        return Some(crate::closure::js_closure_call0(closure));
+    }
+    handle_expando_data_get(handle, name)
+}
+
+/// The stored DATA value for `(handle, name)`, ignoring any accessor. Used by
+/// `getOwnPropertyDescriptor` (which must report the descriptor without running
+/// the getter) and by the accessor-aware [`handle_expando_get`] above.
+pub(crate) fn handle_expando_data_get(handle: i64, name: &str) -> Option<f64> {
     if handle == 0 {
         return None;
     }
@@ -68,13 +121,103 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
         .with(|cell| {
             cell.borrow()
                 .get(&handle)
-                .and_then(|p| p.get(name).copied())
+                .and_then(|p| p.iter().find(|(k, _)| k == name).map(|(_, v)| *v))
         })
         .map(f64::from_bits)
 }
 
+/// The accessor pair installed on `(handle, name)` by a `defineProperty`
+/// accessor descriptor, if any.
+pub(crate) fn handle_expando_accessor(
+    handle: i64,
+    name: &str,
+) -> Option<super::descriptor_state::AccessorDescriptor> {
+    if handle == 0 {
+        return None;
+    }
+    get_accessor_descriptor(handle as usize, name)
+}
+
+/// The attributes of the own expando `(handle, name)`. A plain
+/// `handle.foo = v` write records no entry, so it defaults — like any ordinary
+/// JS assignment — to `{writable, enumerable, configurable}: true`.
+pub(crate) fn handle_expando_attrs(handle: i64, name: &str) -> PropertyAttrs {
+    get_property_attrs(handle as usize, name).unwrap_or(PropertyAttrs::new(true, true, true))
+}
+
+/// True when `name` is an own expando property of `handle` (data OR accessor).
+pub(crate) fn handle_expando_has(handle: i64, name: &str) -> bool {
+    if handle == 0 {
+        return false;
+    }
+    if handle_expando_accessor(handle, name).is_some() {
+        return true;
+    }
+    HANDLE_EXPANDO_PROPS.with(|cell| {
+        cell.borrow()
+            .get(&handle)
+            .map(|p| p.iter().any(|(k, _)| k == name))
+            .unwrap_or(false)
+    })
+}
+
+/// Own expando property names of `handle`, in insertion order. When
+/// `enumerable_only`, non-enumerable entries (a `defineProperty` default) are
+/// filtered out — that is the `Object.keys` / `for-in` / spread surface;
+/// `Object.getOwnPropertyNames` passes `false`.
+pub(crate) fn handle_expando_own_keys(handle: i64, enumerable_only: bool) -> Vec<String> {
+    if handle == 0 {
+        return Vec::new();
+    }
+    let mut keys: Vec<String> = HANDLE_EXPANDO_PROPS.with(|cell| {
+        cell.borrow()
+            .get(&handle)
+            .map(|p| p.iter().map(|(k, _)| k.clone()).collect())
+            .unwrap_or_default()
+    });
+    // A pure accessor define stores no data slot, so pick those up from the
+    // accessor table (appended after the data keys — close enough to insertion
+    // order for the mixed case, and exact for the common all-data one).
+    for k in super::descriptor_state::accessor_descriptor_keys_for_obj(handle as usize) {
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
+    }
+    if enumerable_only {
+        keys.retain(|k| handle_expando_attrs(handle, k).enumerable());
+    }
+    keys
+}
+
+/// Remove the own expando `(handle, name)` and its descriptor state. Returns
+/// `false` when the property exists but is non-configurable (`[[Delete]]`
+/// rejects it), `true` otherwise — the same contract as an ordinary object's
+/// `[[Delete]]`, so `delete handle.absent` still reports `true`.
+pub(crate) fn handle_expando_delete(handle: i64, name: &str) -> bool {
+    if handle == 0 {
+        return true;
+    }
+    if !handle_expando_has(handle, name) {
+        return true;
+    }
+    if !handle_expando_attrs(handle, name).configurable() {
+        return false;
+    }
+    HANDLE_EXPANDO_PROPS.with(|cell| {
+        if let Some(props) = cell.borrow_mut().get_mut(&handle) {
+            props.retain(|(k, _)| k != name);
+        }
+    });
+    PROPERTY_DESCRIPTORS.with(|m| {
+        m.borrow_mut().remove(&(handle as usize, name.to_string()));
+    });
+    ACCESSOR_DESCRIPTORS.with(|m| {
+        m.borrow_mut().remove(&(handle as usize, name.to_string()));
+    });
+    true
+}
+
 /// True when the handle has at least one user-assigned expando property.
-/// (`Object.keys` / `in` support can build on this later.)
 #[allow(dead_code)]
 pub fn handle_expando_has_any(handle: i64) -> bool {
     if handle == 0 {
@@ -105,7 +248,7 @@ pub fn scan_handle_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
         else {
             continue;
         };
-        for bits in props.values_mut() {
+        for (_, bits) in props.iter_mut() {
             let mut v = f64::from_bits(*bits);
             visitor.visit_nanbox_f64_slot(&mut v);
             *bits = v.to_bits();
@@ -115,11 +258,24 @@ pub fn scan_handle_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
                 std::collections::hash_map::Entry::Occupied(mut e) => {
                     // A re-entrant set added/updated entries while we held no
                     // borrow; those newer writes must win. Only restore scanned
-                    // keys that were not concurrently re-written.
+                    // keys that were not concurrently re-written, and keep the
+                    // scanned (older) keys FIRST so insertion order survives.
                     let dst = e.get_mut();
-                    for (k, v) in props {
-                        dst.entry(k).or_insert(v);
+                    for (k, v) in props.iter_mut() {
+                        if let Some(newer) = dst.iter().find(|(nk, _)| nk == k) {
+                            *v = newer.1;
+                        }
                     }
+                    for (k, v) in dst.iter() {
+                        if !props.iter().any(|(pk, _)| pk == k) {
+                            props.push((k.clone(), *v));
+                        }
+                    }
+                    // GC_STORE_AUDIT(ROOT): HANDLE_EXPANDO_PROPS entries are scanned by
+                    // scan_handle_expando_roots_mut (this function) — the merged vec holds
+                    // values this pass just traced/rewrote, plus any re-entrant write that
+                    // the mutator already barriered on its own way in.
+                    *dst = props;
                 }
                 std::collections::hash_map::Entry::Vacant(e) => {
                     e.insert(props);
@@ -167,6 +323,57 @@ mod tests {
         );
         HANDLE_EXPANDO_PROPS.with(|cell| {
             cell.borrow_mut().remove(&h);
+        });
+    }
+
+    /// #6363: own keys come back in INSERTION order (`Object.keys(handle)` /
+    /// `{...handle}` are ordered in JS), and a re-set of an existing key must
+    /// update in place rather than move it to the back.
+    #[test]
+    fn own_keys_preserve_insertion_order() {
+        let h = 0x4_2426i64;
+        for name in ["b", "a", "c"] {
+            handle_expando_set(h, name, f64::from_bits(crate::value::TAG_TRUE));
+        }
+        handle_expando_set(h, "b", f64::from_bits(crate::value::TAG_FALSE));
+        assert_eq!(handle_expando_own_keys(h, false), vec!["b", "a", "c"]);
+        HANDLE_EXPANDO_PROPS.with(|cell| {
+            cell.borrow_mut().remove(&h);
+        });
+    }
+
+    /// #6363: a `defineProperty` default descriptor is NON-enumerable, so it
+    /// stays out of the `Object.keys` surface but is still an own property —
+    /// and being non-configurable, `[[Delete]]` must reject it.
+    #[test]
+    fn non_enumerable_define_hides_from_keys_and_rejects_delete() {
+        let h = 0x4_2427i64;
+        handle_expando_set(h, "vis", f64::from_bits(crate::value::TAG_TRUE));
+        handle_expando_set(h, "hid", f64::from_bits(crate::value::TAG_TRUE));
+        super::super::descriptor_state::set_property_attrs(
+            h as usize,
+            "hid".to_string(),
+            PropertyAttrs::new(false, false, false),
+        );
+
+        assert!(handle_expando_has(h, "hid"));
+        assert_eq!(handle_expando_own_keys(h, false), vec!["vis", "hid"]);
+        assert_eq!(handle_expando_own_keys(h, true), vec!["vis"]);
+
+        // Non-configurable → delete rejects, property survives.
+        assert!(!handle_expando_delete(h, "hid"));
+        assert!(handle_expando_has(h, "hid"));
+        // Absent key → delete reports success (Node: `delete x.__nope` is true).
+        assert!(handle_expando_delete(h, "__nope"));
+        // Plain-write default is fully configurable → delete removes it.
+        assert!(handle_expando_delete(h, "vis"));
+        assert!(!handle_expando_has(h, "vis"));
+
+        HANDLE_EXPANDO_PROPS.with(|cell| {
+            cell.borrow_mut().remove(&h);
+        });
+        PROPERTY_DESCRIPTORS.with(|m| {
+            m.borrow_mut().remove(&(h as usize, "hid".to_string()));
         });
     }
 }

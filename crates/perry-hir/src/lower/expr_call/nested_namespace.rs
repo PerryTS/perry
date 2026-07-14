@@ -525,6 +525,21 @@ pub(super) fn dispatch_path_subnamespace(
             return Ok(Expr::String(".".to_string()));
         }
         if sub == "win32" {
+            // Node's `join` normalizes the joined result, so a SINGLE segment is
+            // `win32.normalize(seg)` — not the segment itself. The win32 arm used
+            // to fold only over `iter.skip(1)` and hand back arg 0 untouched, so a
+            // one-argument call was an identity no-op: `path.win32.join("a/b")`
+            // returned `"a/b"` instead of `"a\b"`, `join("")` returned `""` instead
+            // of `"."`, and `join("a/.")` returned `"a/."` instead of `"a"`. The
+            // posix arm below already special-cased this (`PathNormalize`); mirror
+            // it with the win32 normalizer. (`PathWin32Join` is binary, so it can't
+            // express the single-segment case itself.)
+            if args.len() == 1 {
+                return Ok(Expr::PathWin32 {
+                    method: crate::ir::PathWin32Method::Normalize,
+                    args,
+                });
+            }
             let mut iter = args.into_iter();
             let mut result = iter.next().unwrap();
             for next_arg in iter {

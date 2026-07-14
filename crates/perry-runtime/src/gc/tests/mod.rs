@@ -19,5 +19,6 @@ mod roots;
 mod runtime_roots;
 mod smoke;
 pub(super) mod support;
+mod teardown;
 mod telemetry_verifier;
 mod triggers;

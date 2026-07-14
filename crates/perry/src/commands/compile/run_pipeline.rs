@@ -4722,51 +4722,11 @@ pub fn run_with_parse_cache(
                 p
             }
         }
-        None => default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
+        // The default output path when no `-o` is given. Lives in
+        // `compile/output_path.rs` so the build cache fingerprints the same
+        // file this link is about to write (#5740).
+        None => output_path::default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
     };
-
-    // The default output path when no `-o` is given. Extracted to a free fn so
-    // the `-o`-provided extension-defaulting above stays readable.
-    fn default_output_path(
-        is_dylib: bool,
-        is_staticlib: bool,
-        target: Option<&str>,
-        stem: &str,
-    ) -> PathBuf {
-        if is_dylib {
-            #[cfg(target_os = "macos")]
-            {
-                PathBuf::from(format!("{}.dylib", stem))
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                PathBuf::from(format!("{}.so", stem))
-            }
-        } else if is_staticlib {
-            // #1088 — Windows hosts expect `.lib`; everywhere else uses
-            // the Unix `lib<stem>.a` convention so the archive is reachable
-            // from `-l<stem>` at the host's link step.
-            if matches!(target, Some("windows") | Some("windows-winui"))
-                || (target.is_none() && cfg!(target_os = "windows"))
-            {
-                PathBuf::from(format!("{}.lib", stem))
-            } else {
-                PathBuf::from(format!("lib{}.a", stem))
-            }
-        } else if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
-            // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
-            // napi_module_register — there is no standalone executable
-            // shipping shape. `lib` prefix matches the dlopen name used by
-            // the generated ArkTS shim (`import entry from 'libapp.so'`).
-            PathBuf::from(format!("lib{}.so", stem))
-        } else if matches!(target, Some("windows") | Some("windows-winui"))
-            || (target.is_none() && cfg!(target_os = "windows"))
-        {
-            PathBuf::from(format!("{}.exe", stem))
-        } else {
-            PathBuf::from(stem)
-        }
-    }
 
     if !failed_modules.is_empty() {
         // The loud failure summary + abort already ran earlier (right

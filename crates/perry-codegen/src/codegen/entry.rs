@@ -567,6 +567,9 @@ pub(super) fn compile_module_entry(
             &cross_module.clamp3_functions,
             &main_boxed_vars,
             module_globals,
+            // Module scope IS this body: its `Stmt::Let`s are walked directly, so
+            // there is nothing to seed from an enclosing scope (#6369).
+            &HashMap::new(),
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
@@ -957,6 +960,13 @@ pub(super) fn compile_module_entry(
                 // oracle for `Promise.reject`/combinator-reject programs).
                 ctx.block()
                     .call_void("js_promise_report_unhandled_rejections", &[]);
+                // The Unix main thread is not guaranteed to run Rust TLS
+                // destructors. Release registry-owned collection buffers at
+                // the real process-exit boundary, after all exit callbacks.
+                ctx.block().call_void(
+                    "js_gc_release_current_thread_collection_side_allocations",
+                    &[],
+                );
                 ctx.block().ret(I32, "0");
             }
         }
@@ -1127,6 +1137,8 @@ pub(super) fn compile_module_entry(
             &cross_module.clamp3_functions,
             &init_boxed_vars,
             module_globals,
+            // Module scope IS this body — see the `main` fact graph above (#6369).
+            &HashMap::new(),
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
@@ -1376,3 +1388,6 @@ pub(super) fn compile_module_entry(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

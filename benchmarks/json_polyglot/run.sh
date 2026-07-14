@@ -39,8 +39,10 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+PERRY_ROOT=$(cd ../.. && pwd)
 PERRY=${PERRY:-../../target/release/perry}
 RUNS=${RUNS:-11}
+PUBLIC_JSON_OUT="${PUBLIC_BENCH_JSON_OUT:-}"
 TMPDIR=$(mktemp -d)
 KEEP=${KEEP:-0}
 [[ "${1:-}" == "--keep" ]] && KEEP=1
@@ -176,6 +178,8 @@ echo
 # Results accumulator — TSV: median|label|profile|p95|stddev|min|max|rss_mb
 RESULTS_FILE="$TMPDIR/results.tsv"
 : > "$RESULTS_FILE"
+RAW_RESULTS_FILE="$TMPDIR/public-results.tsv"
+: > "$RAW_RESULTS_FILE"
 
 # Compute median, p95, stddev, min, max from a list of integer ms values.
 # Reads values one per line on stdin. Outputs single line:
@@ -223,7 +227,9 @@ run_bench() {
     local label="$1"; shift
     local env_str="$1"; shift
     local samples_file="$TMPDIR/samples.$$"
+    local checksums_file="$TMPDIR/checksums.$$"
     : > "$samples_file"
+    : > "$checksums_file"
     local worst_rss=0
     local i
     # Build the time-wrapper prefix once per call. Empty when /usr/bin/time
@@ -233,31 +239,42 @@ run_bench() {
     for i in $(seq 1 "$RUNS"); do
         local stderr_file="$TMPDIR/stderr.$$.$i"
         local out
-        if [[ -n "$env_str" ]]; then
+        if [[ -n "$env_str" && -n "${PIN_CMD[*]-}" ]]; then
             out=$(env $env_str "${PIN_CMD[@]}" "${time_prefix[@]}" "$@" 2>"$stderr_file" || true)
-        else
+        elif [[ -n "$env_str" ]]; then
+            out=$(env $env_str "${time_prefix[@]}" "$@" 2>"$stderr_file" || true)
+        elif [[ -n "${PIN_CMD[*]-}" ]]; then
             out=$("${PIN_CMD[@]}" "${time_prefix[@]}" "$@" 2>"$stderr_file" || true)
+        else
+            out=$("${time_prefix[@]}" "$@" 2>"$stderr_file" || true)
         fi
         local ms
         ms=$(printf '%s\n' "$out" | sed -n 's/^ms:\([0-9]*\)$/\1/p' | head -1)
+        local checksum
+        checksum=$(printf '%s\n' "$out" | sed -n 's/^checksum:\(.*\)$/\1/p' | head -1)
         local rss_bytes
         rss_bytes=$(rss_extract "$stderr_file")
         rm -f "$stderr_file"
         [[ -z "$ms" ]] && continue
         [[ -z "$rss_bytes" ]] && rss_bytes=0
         echo "$ms" >> "$samples_file"
+        [[ -n "$checksum" ]] && echo "$checksum" >> "$checksums_file"
         if [[ "$rss_bytes" -gt "$worst_rss" ]]; then worst_rss="$rss_bytes"; fi
     done
     local sample_count
     sample_count=$(wc -l < "$samples_file" | awk '{print $1}')
     if [[ "$sample_count" -eq 0 ]]; then
         printf "  %-44s  FAILED (no successful runs)\n" "$label"
-        rm -f "$samples_file"
+        rm -f "$samples_file" "$checksums_file"
         return
     fi
     local stats
     stats=$(compute_stats < "$samples_file")
-    rm -f "$samples_file"
+    local raw_samples raw_checksums checksum_count
+    raw_samples=$(paste -sd, "$samples_file")
+    raw_checksums=$(paste -sd, "$checksums_file")
+    checksum_count=$(wc -l < "$checksums_file" | awk '{print $1}')
+    rm -f "$samples_file" "$checksums_file"
     local median p95 stddev min max
     IFS='|' read -r median p95 stddev min max <<< "$stats"
     local rss_mb
@@ -267,6 +284,11 @@ run_bench() {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "$workload" "$median" "$label" "$profile" "$p95" "$stddev" "$min" "$max" "$rss_mb" \
         >> "$RESULTS_FILE"
+    if [[ "$label" == perry* || "$label" == node* || "$label" == bun* ]]; then
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+            "$workload" "$profile" "$label" "$raw_samples" "$raw_checksums" "$checksum_count" \
+            >> "$RAW_RESULTS_FILE"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -519,3 +541,78 @@ fi
 echo
 echo "Wrote $(pwd)/RESULTS.md"
 cat RESULTS.md
+
+if [[ -n "$PUBLIC_JSON_OUT" ]]; then
+    mkdir -p "$(dirname "$PUBLIC_JSON_OUT")"
+    PYTHONPATH="$(cd "$PERRY_ROOT" && pwd)" python3 - "$RAW_RESULTS_FILE" "$PUBLIC_JSON_OUT" "$(cd "$PERRY_ROOT" && pwd)" "$RUNS" "$PIN_NOTE" <<'PY'
+import json, shutil, subprocess, sys
+from datetime import datetime, timezone
+from pathlib import Path
+from benchmarks.public_baseline import distribution
+
+raw_path, output_path, root, requested, pinning = sys.argv[1:]
+requested = int(requested)
+selected = {}
+for line in open(raw_path):
+    workload, profile, label, raw, raw_checksums, checksum_count = line.rstrip("\n").split("\t")
+    runtime = label.split()[0]
+    wanted = ((runtime == "perry" and profile == "optimized") or
+              (runtime in ("node", "bun") and profile == "idiomatic"))
+    if not wanted or (workload, runtime) in selected:
+        continue
+    samples = [float(value) for value in raw.split(",") if value]
+    checksums = [value for value in raw_checksums.split(",") if value]
+    if len(samples) != requested or int(checksum_count) != requested or len(checksums) != requested:
+        raise SystemExit(f"json_polyglot/{workload}: {runtime} raw samples are incomplete")
+    if len(set(checksums)) != 1:
+        raise SystemExit(f"json_polyglot/{workload}: {runtime} checksum changed across samples")
+    selected[(workload, runtime)] = (samples, checksums[0])
+
+benchmarks = {}
+for workload in ("roundtrip", "field_access"):
+    checksums = {selected[(workload, runtime)][1] for runtime in ("perry", "node", "bun")}
+    if len(checksums) != 1:
+        raise SystemExit(f"json_polyglot/{workload}: checksum mismatch {sorted(checksums)}")
+    benchmarks[workload] = {
+        "correctness": {"status": "pass", "reference": "node+bun", "checksum": checksums.pop()},
+        "runtimes": {
+            runtime: {"wall_ms": distribution(selected[(workload, runtime)][0])}
+            for runtime in ("perry", "node", "bun")
+        },
+    }
+component = {
+    "schema_version": 1,
+    "suite": "json_polyglot",
+    "commit": subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip(),
+    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "run_config": {
+        "warmup": "3 untimed iterations inside each benchmark process",
+        "requested_samples": requested,
+        "pinning": pinning,
+    },
+    "commands": {
+        "perry": [root + "/target/release/perry", "compile", "bench.ts", "-o", "<binary>"],
+        "node": [shutil.which("node"), "<precompiled.mjs>"],
+        "bun": [shutil.which("bun"), "bench.ts"],
+        "runner": ["benchmarks/json_polyglot/run.sh"],
+    },
+    "runtime_metadata": {
+        "perry": {
+            "version": subprocess.check_output([str(Path(root + "/target/release/perry")), "--version"], text=True).strip(),
+            "resolved_executable": str(Path(root + "/target/release/perry").resolve()),
+        },
+        "node": {
+            "version": subprocess.check_output(["node", "--version"], text=True).strip(),
+            "resolved_executable": shutil.which("node"),
+        },
+        "bun": {
+            "version": subprocess.check_output(["bun", "--version"], text=True).strip(),
+            "resolved_executable": shutil.which("bun"),
+        },
+    },
+    "benchmarks": benchmarks,
+}
+Path(output_path).write_text(json.dumps(component, indent=2) + "\n")
+PY
+    echo "Machine-readable results: $PUBLIC_JSON_OUT"
+fi

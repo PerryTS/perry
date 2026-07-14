@@ -1609,6 +1609,30 @@ pub unsafe extern "C" fn js_native_call_method(
             }
         }
     }
+    // A BARE heap pointer — a real object whose value was never NaN-boxed, so its
+    // top 16 bits are zero and it decodes as a denormal double. Classifying it as a
+    // "number" here throws `<method> is not a function` on a perfectly good object.
+    // Validate deref-free (above the handle band + a genuinely tracked allocation),
+    // rebox as a POINTER_TAG value and dispatch on the object it actually is.
+    // Perry already recovers bare pointers on other dispatch paths; this one threw
+    // before it ever got the chance.
+    if jsval.is_number() && (jsval.bits() >> 48) == 0 {
+        let raw = jsval.bits() as usize;
+        if crate::value::addr_class::is_above_handle_band(raw)
+            && crate::value::addr_class::is_valid_obj_ptr(raw as *const u8)
+        {
+            let reboxed = crate::value::JSValue::pointer(raw as *const u8);
+            if reboxed.bits() != jsval.bits() {
+                return js_native_call_method(
+                    f64::from_bits(reboxed.bits()),
+                    method_name_ptr,
+                    method_name_len,
+                    args_ptr,
+                    args_len,
+                );
+            }
+        }
+    }
     let primitive_kind: Option<&'static str> = if jsval.is_any_string() {
         Some("string")
     } else if jsval.is_int32() || jsval.is_number() {

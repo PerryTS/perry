@@ -48,21 +48,44 @@ done
 # ------------------------------ 1. metadata -----------------------------------
 echo "--- capturing metadata"
 python3 - <<PY > "$RESULTS_DIR/metadata.json"
-import json, subprocess, datetime, platform, os
+import json, subprocess, datetime, platform, os, shutil
 def run(cmd):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
-    except Exception as e:
-        return f"error: {e}"
+        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return completed.stdout.strip() if completed.returncode == 0 else ""
+    except Exception:
+        return ""
+
+def system_profiler_hardware():
+    if platform.system() != "Darwin":
+        return {}
+    try:
+        raw = run(["system_profiler", "SPHardwareDataType", "-json"])
+        return json.loads(raw).get("SPHardwareDataType", [{}])[0] if raw else {}
+    except (IndexError, json.JSONDecodeError):
+        return {}
+
+hardware = system_profiler_hardware()
+cpu = run(["sysctl", "-n", "machdep.cpu.brand_string"]) or hardware.get("chip_type") or platform.processor()
+ncpu = run(["sysctl", "-n", "hw.ncpu"]) or str(os.cpu_count() or "")
+ram_bytes = run(["sysctl", "-n", "hw.memsize"])
+try:
+    ram_gb = round(int(ram_bytes) / (1024**3), 2)
+except (TypeError, ValueError):
+    try:
+        ram_gb = round(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1024**3), 2)
+    except (AttributeError, OSError, ValueError):
+        ram_gb = 0.0
 meta = {
     "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "commit": run(["git", "-C", "$PERRY_ROOT", "rev-parse", "HEAD"]),
     "host": {
         "os_version": run(["sw_vers", "-productVersion"]),
         "kernel":     run(["uname", "-a"]),
         "arch":       platform.machine(),
-        "cpu":        run(["sysctl", "-n", "machdep.cpu.brand_string"]),
-        "ncpu":       run(["sysctl", "-n", "hw.ncpu"]),
-        "ram_gb":     round(int(run(["sysctl", "-n", "hw.memsize"]) or 0) / (1024**3), 2),
+        "cpu":        cpu,
+        "ncpu":       ncpu,
+        "ram_gb":     ram_gb,
     },
     "toolchains": {
         "rustc": run(["rustc", "--version"]),
@@ -74,6 +97,11 @@ meta = {
         "oha": run([os.environ.get("HONEST_BENCH_OHA", "/tmp/oha"), "--version"]),
         "perry": run([os.path.join("$PERRY_ROOT", "target/release/perry"), "--version"]) or "(local build)",
     },
+    "executables": {
+        "perry": os.path.realpath(os.path.join("$PERRY_ROOT", "target/release/perry")),
+        "node": shutil.which("node"),
+        "bun": shutil.which("bun"),
+    },
     "harness": {
         "warmup":   int(os.environ.get("HONEST_BENCH_WARMUP", 5)),
         "measured": int(os.environ.get("HONEST_BENCH_MEASURED", 20)),
@@ -82,6 +110,10 @@ meta = {
         "http_concurrency": int(os.environ.get("HONEST_BENCH_HTTP_CONC", 10)),
     },
     "commands": {
+        "perry": ["<compiled-workload>"],
+        "perry_compile": [os.path.join("$PERRY_ROOT", "target/release/perry"), "<source.ts>", "-o", "<compiled-workload>"],
+        "node": [shutil.which("node"), "--experimental-strip-types", "<source.ts>"],
+        "bun": [shutil.which("bun"), "run", "<source.ts>"],
         "perry_http": ["<compiled-kernel>"],
         "perry_http_compile": [os.path.join("$PERRY_ROOT", "target/release/perry"), "<kernel.ts>", "-o", "<compiled-kernel>"],
         "node_http": ["node", "--import", "tsx", "<kernel.ts>"],

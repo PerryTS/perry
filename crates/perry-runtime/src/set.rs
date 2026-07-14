@@ -81,8 +81,68 @@ fn maybe_force_helper_gc_for_test() {
 #[inline(always)]
 fn maybe_force_helper_gc_for_test() {}
 
+#[cfg(test)]
+static TEST_SET_SIDE_DEALLOCATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+static TEST_SET_SIDE_DEALLOCATED_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn note_test_set_side_deallocation(bytes: usize) {
+    use std::sync::atomic::Ordering;
+
+    TEST_SET_SIDE_DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    TEST_SET_SIDE_DEALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+#[inline]
+fn note_test_set_side_deallocation(_bytes: usize) {}
+
+#[cfg(test)]
+pub(crate) fn test_set_side_deallocation_snapshot() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+
+    (
+        TEST_SET_SIDE_DEALLOCATIONS.load(Ordering::Relaxed),
+        TEST_SET_SIDE_DEALLOCATED_BYTES.load(Ordering::Relaxed),
+    )
+}
+
+struct SetSideAllocation {
+    elements: *mut f64,
+    capacity: usize,
+}
+
+impl SetSideAllocation {
+    fn new(elements: *mut f64, capacity: usize) -> Self {
+        Self { elements, capacity }
+    }
+
+    fn byte_len(&self) -> usize {
+        elements_layout(self.capacity).size()
+    }
+}
+
+impl Drop for SetSideAllocation {
+    fn drop(&mut self) {
+        if self.elements.is_null() || self.capacity == 0 {
+            return;
+        }
+        let layout = elements_layout(self.capacity);
+        unsafe {
+            dealloc(self.elements as *mut u8, layout);
+        }
+        note_test_set_side_deallocation(layout.size());
+        self.elements = std::ptr::null_mut();
+        self.capacity = 0;
+    }
+}
+
 thread_local! {
-    static SET_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    static SET_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, SetSideAllocation>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// A wrapper around f64 JSValues that implements Hash and Eq using
@@ -136,8 +196,15 @@ thread_local! {
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-fn register_set(ptr: *mut SetHeader) {
-    SET_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
+fn register_set(ptr: *mut SetHeader, elements: *mut f64, capacity: usize) {
+    SET_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        assert!(
+            !registry.contains_key(&(ptr as usize)),
+            "Set side allocation registered twice for the same header"
+        );
+        registry.insert(ptr as usize, SetSideAllocation::new(elements, capacity));
+    });
 }
 
 pub fn is_registered_set(addr: usize) -> bool {
@@ -153,7 +220,7 @@ pub fn is_registered_set(addr: usize) -> bool {
     // arbitrary candidate pointers (e.g. garbage read off a TypedArray
     // header by a mis-typed caller) — segfaults on Linux where freed/foreign
     // pages get unmapped (mimalloc on macOS retains them, hiding the bug).
-    if !SET_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+    if !SET_REGISTRY.with(|r| r.borrow().contains_key(&addr)) {
         return false;
     }
     // A registered address is a live arena Set; the header read is safe and
@@ -190,7 +257,16 @@ pub fn set_ptr_from_receiver_bits(bits: u64) -> Option<*mut SetHeader> {
 
 #[cfg(test)]
 pub(crate) fn test_clear_set_roots() {
-    SET_REGISTRY.with(|r| r.borrow_mut().clear());
+    let allocations = SET_REGISTRY.with(|r| {
+        r.borrow_mut()
+            .drain()
+            .map(|(_, allocation)| allocation)
+            .collect::<Vec<_>>()
+    });
+    for allocation in allocations {
+        crate::gc::gc_note_external_side_free(allocation.byte_len());
+        drop(allocation);
+    }
     SET_INDEX.with(|idx| idx.borrow_mut().clear());
 }
 
@@ -235,9 +311,10 @@ pub fn drop_set_index(addr: usize) {
     SET_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
-    SET_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
+    if let Some(allocation) = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
+        crate::gc::gc_note_external_side_free(allocation.byte_len());
+        drop(allocation);
+    }
 }
 
 pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
@@ -246,9 +323,14 @@ pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     }
     SET_REGISTRY.with(|r| {
         let mut registry = r.borrow_mut();
-        if registry.remove(&old_addr) {
-            registry.insert(new_addr);
+        let Some(allocation) = registry.remove(&old_addr) else {
+            return;
+        };
+        if registry.contains_key(&new_addr) {
+            registry.insert(old_addr, allocation);
+            panic!("Set move destination already owns a side allocation");
         }
+        registry.insert(new_addr, allocation);
     });
     SET_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
@@ -264,20 +346,16 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
         return;
     }
     let addr = set as usize;
-    let was_registered = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
+    let allocation = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
     SET_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
-    if !was_registered {
+    let Some(allocation) = allocation else {
         return;
-    }
+    };
 
-    let elements = (*set).elements;
-    let capacity = (*set).capacity as usize;
-    if !elements.is_null() && capacity > 0 {
-        dealloc(elements as *mut u8, elements_layout(capacity));
-        crate::gc::gc_note_external_side_free(elements_layout(capacity).size());
-    }
+    crate::gc::gc_note_external_side_free(allocation.byte_len());
+    drop(allocation);
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external elements side-allocation pointer after deregistration/deallocation.
     (*set).elements = std::ptr::null_mut();
     (*set).capacity = 0;
@@ -312,7 +390,7 @@ fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
 pub(crate) fn collect_dead_registered_sets_post_trace(full_trace: bool) -> Vec<usize> {
     SET_REGISTRY.with(|r| {
         r.borrow()
-            .iter()
+            .keys()
             .copied()
             .filter(|&addr| unsafe { registered_set_is_dead_post_trace(addr, full_trace) })
             .collect()
@@ -355,7 +433,7 @@ unsafe fn registered_set_is_dead_post_trace(addr: usize, full_trace: bool) -> bo
 pub(crate) fn finalize_dead_copied_minor_from_space_sets() -> usize {
     let sets = SET_REGISTRY.with(|r| {
         r.borrow()
-            .iter()
+            .keys()
             .copied()
             .filter(|&addr| is_dead_copied_minor_from_space_set(addr))
             .collect::<Vec<_>>()
@@ -377,6 +455,30 @@ pub(crate) fn test_set_index_contains(set: *const SetHeader, value: f64) -> bool
             .get(&(set as usize))
             .is_some_and(|slot| slot.contains_key(&JSValueKey(value)))
     })
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_side_allocation(addr: usize) -> Option<(usize, usize)> {
+    SET_REGISTRY.with(|r| {
+        r.borrow()
+            .get(&addr)
+            .map(|allocation| (allocation.elements as usize, allocation.capacity))
+    })
+}
+
+pub(crate) fn release_current_thread_set_side_allocations() {
+    let allocations = SET_REGISTRY.with(|registry| {
+        registry
+            .borrow_mut()
+            .drain()
+            .map(|(_, allocation)| allocation)
+            .collect::<Vec<_>>()
+    });
+    for allocation in allocations {
+        crate::gc::gc_note_external_side_free(allocation.byte_len());
+        drop(allocation);
+    }
+    SET_INDEX.with(|idx| idx.borrow_mut().clear());
 }
 
 /// Set header - GC-movable address, elements allocated separately
@@ -665,6 +767,14 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
     // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
     (*set).elements = new_elements;
     (*set).capacity = new_capacity;
+    SET_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let allocation = registry
+            .get_mut(&(set as usize))
+            .expect("grown Set must retain its side-allocation owner record");
+        allocation.elements = new_elements;
+        allocation.capacity = new_capacity as usize;
+    });
     // #6010: growth delta counts as external churn (see js_set_alloc). The
     // header is consistent again, and a triggered cycle is conservative +
     // non-moving, so the caller's raw `set`/elements pointers stay valid.
@@ -696,7 +806,7 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         (*ptr).elements = elements;
 
         // Register in set registry for runtime type detection
-        register_set(ptr);
+        register_set(ptr, elements, cap as usize);
 
         // Initialize O(1) lookup index
         SET_INDEX.with(|idx| {

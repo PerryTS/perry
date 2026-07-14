@@ -218,6 +218,197 @@ fn ensure_stdin_reader() {
     }
 }
 
+/// Append bytes to the buffer that `process.stdin.read()` drains.
+///
+/// `process.stdin.on(...)` / `.setRawMode(...)` / `.pause()` / `.resume()` do NOT
+/// dispatch on this object — codegen lowers them to direct extern calls into
+/// `perry-stdlib`'s readline, which runs its own fd-0 reader. `read()` has no such
+/// route, so it stays a method here and drains `STDIN_BUFFER`. Paused-mode input
+/// (`on("readable")` + `read()`) therefore needs readline's reader to deposit its
+/// bytes here, or the two halves of that pattern would talk to different buffers
+/// and `read()` would always return null.
+/// `perry-stdlib`'s readline owns the `process.stdin` listener lists (codegen
+/// lowers `stdin.on(...)` to a direct extern into it), but the stdin *object*
+/// lives here — so `stdin.listeners(event)` cannot see them without a bridge.
+/// stdlib registers a provider at init; the method below calls through it.
+///
+/// Node TUIs need this: they suspend the keyboard by reading
+/// `stdin.listeners("readable")`, stashing them, and removing each one, then
+/// restore them afterwards. With `listeners` missing, that call throws
+/// `TypeError: listeners is not a function` and the restore never happens.
+static STDIN_LISTENERS_FN: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_stdin_listeners_provider(f: extern "C" fn(*const u8, usize) -> f64) {
+    STDIN_LISTENERS_FN.store(f as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+/// Registration ops, owned by perry-stdlib's readline for the same reason as the
+/// listener list itself. `addListener`/`removeListener`/`off` on the stdin OBJECT
+/// were no-op stubs, so a TUI that registers through an aliased binding —
+/// `const {stdin} = props; stdin.addListener("readable", handler)`, which is what
+/// real TUI libraries do — had its keyboard handler silently discarded, while the
+/// direct `process.stdin.on(...)` form (lowered to a readline extern by codegen)
+/// worked. Route both to the same registry so there is one listener list and one
+/// fd-0 reader.
+static STDIN_ON_FN: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static STDIN_OFF_FN: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Encoding set via `process.stdin.setEncoding(enc)`. `None` — Node's default —
+/// means `data` chunks arrive as **Buffers**, not strings.
+static STDIN_ENCODING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// True once `setEncoding` has been called; readline's pump consults this too, so
+/// both stdin delivery paths agree on Buffer-vs-string.
+pub fn stdin_has_encoding() -> bool {
+    STDIN_ENCODING.lock().map(|e| e.is_some()).unwrap_or(false)
+}
+
+/// A `data` chunk as Node delivers it: a Buffer by default, a string once an
+/// encoding is set.
+pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
+    if stdin_has_encoding() {
+        let s = crate::string::js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
+        return f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+    }
+    let buf = crate::buffer::buffer_alloc(chunk.len() as u32);
+    unsafe {
+        let dst = crate::buffer::buffer_data_mut(buf);
+        if !dst.is_null() && !chunk.is_empty() {
+            // GC_STORE_AUDIT(POINTER_FREE): raw stdin bytes into a freshly
+            // allocated Buffer's data area. The payload is bytes, never
+            // JSValues, so the destination slots hold no GC references and no
+            // write barrier is required. `buffer_alloc` returns before any
+            // safepoint, so `dst` cannot have been moved between the
+            // allocation and this copy.
+            std::ptr::copy_nonoverlapping(chunk.as_ptr(), dst, chunk.len());
+        }
+    }
+    f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+}
+
+/// `process.stdin.setEncoding(enc)`. Was a no-op stub, which forced every `data`
+/// chunk to be delivered as a string. Node delivers a **Buffer** unless an
+/// encoding has been set — so code that does `Buffer.concat([buf, chunk])` on
+/// stdin data (a normal pattern) got a string and threw. Record the encoding so
+/// the reader can decide.
+extern "C" fn process_stdin_set_encoding(
+    _closure: *const crate::closure::ClosureHeader,
+    encoding: f64,
+) -> f64 {
+    let name = stdin_event_name(encoding).unwrap_or_default();
+    if let Ok(mut e) = STDIN_ENCODING.lock() {
+        *e = if name.is_empty() { None } else { Some(name) };
+    }
+    stdin_this_value()
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_stdin_listener_ops(
+    on: extern "C" fn(*const u8, usize, i64, i32),
+    off: extern "C" fn(*const u8, usize, i64),
+) {
+    STDIN_ON_FN.store(on as *mut (), std::sync::atomic::Ordering::Release);
+    STDIN_OFF_FN.store(off as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+/// True when readline owns the stdin listener registry (it always does once
+/// perry-stdlib is linked).
+fn stdin_ops_provider() -> Option<(
+    extern "C" fn(*const u8, usize, i64, i32),
+    extern "C" fn(*const u8, usize, i64),
+)> {
+    let on = STDIN_ON_FN.load(std::sync::atomic::Ordering::Acquire);
+    let off = STDIN_OFF_FN.load(std::sync::atomic::Ordering::Acquire);
+    if on.is_null() || off.is_null() {
+        return None;
+    }
+    unsafe {
+        Some((
+            std::mem::transmute::<*mut (), extern "C" fn(*const u8, usize, i64, i32)>(on),
+            std::mem::transmute::<*mut (), extern "C" fn(*const u8, usize, i64)>(off),
+        ))
+    }
+}
+
+/// `process.stdin.addListener(event, cb)` / `.on(...)` reached as an object method.
+extern "C" fn process_stdin_add_listener(
+    closure: *const crate::closure::ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    if let Some((on, _)) = stdin_ops_provider() {
+        let name = stdin_event_name(event).unwrap_or_default();
+        let cb = stdin_callback_ptr(callback);
+        if cb != 0 {
+            on(name.as_ptr(), name.len(), cb, 0);
+        }
+        return stdin_this_value();
+    }
+    process_stdin_on(closure, event, callback)
+}
+
+/// `process.stdin.once(event, cb)` reached as an object method.
+extern "C" fn process_stdin_add_listener_once(
+    closure: *const crate::closure::ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    if let Some((on, _)) = stdin_ops_provider() {
+        let name = stdin_event_name(event).unwrap_or_default();
+        let cb = stdin_callback_ptr(callback);
+        if cb != 0 {
+            on(name.as_ptr(), name.len(), cb, 1);
+        }
+        return stdin_this_value();
+    }
+    process_stdin_once(closure, event, callback)
+}
+
+/// `process.stdin.removeListener(event, cb)` / `.off(...)`.
+extern "C" fn process_stdin_remove_listener(
+    _closure: *const crate::closure::ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    if let Some((_, off)) = stdin_ops_provider() {
+        let name = stdin_event_name(event).unwrap_or_default();
+        let cb = stdin_callback_ptr(callback);
+        if cb != 0 {
+            off(name.as_ptr(), name.len(), cb);
+        }
+    }
+    stdin_this_value()
+}
+
+/// `process.stdin.listeners(event)` — the registered listeners for `event`,
+/// as a real array (empty when there are none), like Node's EventEmitter.
+extern "C" fn process_stdin_listeners(
+    _closure: *const crate::closure::ClosureHeader,
+    event: f64,
+) -> f64 {
+    let name = stdin_event_name(event).unwrap_or_default();
+    let f = STDIN_LISTENERS_FN.load(std::sync::atomic::Ordering::Acquire);
+    if !f.is_null() {
+        let func: extern "C" fn(*const u8, usize) -> f64 = unsafe { std::mem::transmute(f) };
+        return func(name.as_ptr(), name.len());
+    }
+    let arr = crate::array::js_array_alloc(0);
+    f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
+}
+
+pub fn stdin_push_bytes(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if let Ok(mut buf) = STDIN_BUFFER.lock() {
+        buf.extend_from_slice(bytes);
+    }
+}
+
 /// The `process.stdin` stream object as a JS value, for `this`-binding during
 /// listener dispatch (Node calls stream listeners with `this === stream`).
 fn stdin_this_value() -> f64 {
@@ -426,15 +617,12 @@ fn pump_stdin_data_chunks() {
             return;
         }
         let this = stdin_this_value();
-        let s = String::from_utf8_lossy(&bytes);
         for cb in data_listeners {
             let scope = crate::gc::RuntimeHandleScope::new();
             let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
             // Allocate the arg string inside the scope so GC during the call
             // can't free or move it out from under the callback.
-            let sh = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            let arg =
-                f64::from_bits(crate::value::STRING_TAG | (sh as u64 & crate::value::POINTER_MASK));
+            let arg = stdin_chunk_jsvalue(&bytes);
             let arg_handles = scope.root_nanbox_f64_slice(&[arg]);
             let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let closure = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
@@ -609,6 +797,7 @@ fn build_stream_object_with_write(
             let mut keys = b"write\0fd\0emit\0on\0once\0writable\0readable\0readableEnded\0destroyed\0closed\0isRaw\0isTTY\0".to_vec();
             keys.extend_from_slice(STDIN_TEARDOWN_KEYS);
             keys.extend_from_slice(b"read\0"); // field 22: Readable.read()
+            keys.extend_from_slice(b"listeners\0"); // field 23: EventEmitter.listeners()
             (
                 if is_tty {
                     crate::tty::CLASS_ID_TTY_READ_STREAM
@@ -616,7 +805,7 @@ fn build_stream_object_with_write(
                     0
                 },
                 keys,
-                23,
+                24,
                 Some(12),
             )
         } else if is_tty {
@@ -670,7 +859,9 @@ fn build_stream_object_with_write(
         // registers a keyboard listener instead of dropping it (#input).
         let on = stdin_native_method(process_stdin_on as *const u8, "on", 2);
         js_object_set_field(obj, 3, JSValue::from_bits(on.to_bits()));
-        let once = stdin_native_method(process_stdin_once as *const u8, "once", 2);
+        // `once` routes through the same registry as `on`/`addListener` so a
+        // one-shot listener registered on an aliased binding is not dropped either.
+        let once = stdin_native_method(process_stdin_add_listener_once as *const u8, "once", 2);
         js_object_set_field(obj, 4, JSValue::from_bits(once.to_bits()));
     } else {
         let on = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
@@ -733,9 +924,27 @@ fn build_stream_object_with_write(
         } else {
             process_stream_on_once_stub
         };
-        set_field_with_stub(start, process_stream_on_once_stub); // addListener
-        set_field_with_stub(start + 1, process_stream_on_once_stub); // removeListener
-        set_field_with_stub(start + 2, process_stream_on_once_stub); // off
+        // On stdin these must be REAL: a TUI registers its keyboard through an
+        // aliased binding (`stdin.addListener("readable", handler)`), which lands
+        // here rather than on codegen's direct `process.stdin.on(...)` extern. As
+        // no-op stubs they silently discarded the handler.
+        if is_stdin {
+            let add =
+                stdin_native_method(process_stdin_add_listener as *const u8, "addListener", 2);
+            js_object_set_field(obj, start, JSValue::from_bits(add.to_bits()));
+            let rm = stdin_native_method(
+                process_stdin_remove_listener as *const u8,
+                "removeListener",
+                2,
+            );
+            js_object_set_field(obj, start + 1, JSValue::from_bits(rm.to_bits()));
+            let off = stdin_native_method(process_stdin_remove_listener as *const u8, "off", 2);
+            js_object_set_field(obj, start + 2, JSValue::from_bits(off.to_bits()));
+        } else {
+            set_field_with_stub(start, process_stream_on_once_stub); // addListener
+            set_field_with_stub(start + 1, process_stream_on_once_stub); // removeListener
+            set_field_with_stub(start + 2, process_stream_on_once_stub); // off
+        }
         set_field_with_stub(start + 3, process_stream_on_once_stub); // removeAllListeners
         set_field_with_stub(start + 4, lifecycle); // pause
                                                    // resume: real flowing-mode start on stdin, no-op on stdout/stderr.
@@ -751,10 +960,20 @@ fn build_stream_object_with_write(
         if is_stdin {
             set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
-            set_field_with_stub(start + 9, process_stream_set_encoding_stub); // setEncoding
-                                                                              // field 22: Readable.read() returns buffered keyboard input.
+            if is_stdin {
+                let se =
+                    stdin_native_method(process_stdin_set_encoding as *const u8, "setEncoding", 1);
+                js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
+            } else {
+                set_field_with_stub(start + 9, process_stream_set_encoding_stub);
+                // setEncoding
+            }
+            // field 22: Readable.read() returns buffered keyboard input.
             let read = stdin_native_method(process_stdin_read as *const u8, "read", 1);
             js_object_set_field(obj, 22, JSValue::from_bits(read.to_bits()));
+            let listeners =
+                stdin_native_method(process_stdin_listeners as *const u8, "listeners", 1);
+            js_object_set_field(obj, 23, JSValue::from_bits(listeners.to_bits()));
         } else {
             set_field_with_stub(start + 7, lifecycle); // destroy
         }

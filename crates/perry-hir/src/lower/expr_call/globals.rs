@@ -135,19 +135,25 @@ pub(super) fn try_global_builtins(
                     byte_offset: 0,
                 }));
             }
+            // A missing argument to these is NOT an error in JS — the parameter is
+            // simply `undefined`, and each has well-defined behavior for it
+            // (`isNaN() === true`, `isFinite() === false`, `encodeURI() === "undefined"`,
+            // …, all verified against Node). Rejecting the call at COMPILE time made
+            // perry refuse to compile legal JS. Lower the omitted argument to
+            // `Expr::Undefined` and let the existing intrinsic produce Node's answer.
+            //
+            // NOT extended to `atob`/`btoa`/`structuredClone`: those are WebIDL
+            // required-argument throws where `f()` and `f(undefined)` genuinely
+            // DIFFER (`atob()` → TypeError but `atob(undefined)` → InvalidCharacterError;
+            // `btoa()` → TypeError but `btoa(undefined)` → "dW5kZWZpbmVk"), so they
+            // cannot be modelled by padding and need real arity plumbing. See #6366.
             "isNaN" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::IsNaN(Box::new(args.remove(0)))));
-                } else {
-                    return Err(anyhow!("isNaN requires one argument"));
-                }
+                let arg = arg_or_undefined(&mut args);
+                return Ok(Ok(Expr::IsNaN(Box::new(arg))));
             }
             "isFinite" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::IsFinite(Box::new(args.remove(0)))));
-                } else {
-                    return Err(anyhow!("isFinite requires one argument"));
-                }
+                let arg = arg_or_undefined(&mut args);
+                return Ok(Ok(Expr::IsFinite(Box::new(arg))));
             }
             "atob" => {
                 if !args.is_empty() {
@@ -164,32 +170,20 @@ pub(super) fn try_global_builtins(
                 }
             }
             "encodeURI" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::EncodeURI(Box::new(args.remove(0)))));
-                } else {
-                    return Err(anyhow!("encodeURI requires one argument"));
-                }
+                let arg = arg_or_undefined(&mut args);
+                return Ok(Ok(Expr::EncodeURI(Box::new(arg))));
             }
             "decodeURI" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::DecodeURI(Box::new(args.remove(0)))));
-                } else {
-                    return Err(anyhow!("decodeURI requires one argument"));
-                }
+                let arg = arg_or_undefined(&mut args);
+                return Ok(Ok(Expr::DecodeURI(Box::new(arg))));
             }
             "encodeURIComponent" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::EncodeURIComponent(Box::new(args.remove(0)))));
-                } else {
-                    return Err(anyhow!("encodeURIComponent requires one argument"));
-                }
+                let arg = arg_or_undefined(&mut args);
+                return Ok(Ok(Expr::EncodeURIComponent(Box::new(arg))));
             }
             "decodeURIComponent" => {
-                if !args.is_empty() {
-                    return Ok(Ok(Expr::DecodeURIComponent(Box::new(args.remove(0)))));
-                } else {
-                    return Err(anyhow!("decodeURIComponent requires one argument"));
-                }
+                let arg = arg_or_undefined(&mut args);
+                return Ok(Ok(Expr::DecodeURIComponent(Box::new(arg))));
             }
             "structuredClone" => {
                 if !args.is_empty() {
@@ -977,4 +971,14 @@ pub(super) fn try_global_builtins(
     // receiver in a fluent generic chain and turns `a.b().c().d()` into an
     // exponential lowering walk.
     Ok(Err(args))
+}
+
+/// An omitted argument to a JS global is `undefined`, not an error — mirrors the
+/// `parseInt` / `parseFloat` / `BigInt` / `Object` padding above.
+fn arg_or_undefined(args: &mut Vec<Expr>) -> Expr {
+    if args.is_empty() {
+        Expr::Undefined
+    } else {
+        args.remove(0)
+    }
 }
