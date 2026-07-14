@@ -57,8 +57,37 @@ pub(crate) const CLASS_ID_FS_STATS_EXPORT: u32 = 0xFFFF_008A;
 pub(crate) const CLASS_ID_FS_UTF8_STREAM: u32 = 0xFFFF_008B;
 pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 
+/// Seed the registry with the process-standard descriptors.
+///
+/// `allocate_synthetic_fd` hands out ids from 100 up, so 0/1/2 were never
+/// inserted by anything and every fs op on stdin/stdout/stderr failed the
+/// `fd_is_registered` gate with EBADF — `fs.writeSync(1, …)` threw where Node
+/// writes to the terminal.
+///
+/// Each entry is backed by a `dup` of the real descriptor: the registry owns
+/// `fs::File`s and closes them when an entry is dropped (`closeSync`, thread
+/// teardown), and that must never take the process's actual stdout with it.
+/// The duplicate shares the open file description, so reads and writes land on
+/// the same terminal/pipe.
+fn std_fd_registry() -> StdHashMap<i32, fs::File> {
+    let mut map = StdHashMap::new();
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        for fd in 0..=2 {
+            // SAFETY: `dup` returns a fresh descriptor we exclusively own, so
+            // handing it to `File` (which closes on drop) cannot double-close.
+            let duped = unsafe { libc::dup(fd) };
+            if duped >= 0 {
+                map.insert(fd, unsafe { fs::File::from_raw_fd(duped) });
+            }
+        }
+    }
+    map
+}
+
 thread_local! {
-    static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(StdHashMap::new());
+    static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(std_fd_registry());
     static FD_PATHS: RefCell<StdHashMap<i32, String>> = RefCell::new(StdHashMap::new());
     static FD_APPEND_MODE: RefCell<StdHashMap<i32, bool>> = RefCell::new(StdHashMap::new());
     static FILEHANDLE_OBJECT_FDS: RefCell<StdHashMap<usize, i32>> = RefCell::new(StdHashMap::new());

@@ -960,6 +960,13 @@ pub(super) fn compile_module_entry(
                 // oracle for `Promise.reject`/combinator-reject programs).
                 ctx.block()
                     .call_void("js_promise_report_unhandled_rejections", &[]);
+                // The Unix main thread is not guaranteed to run Rust TLS
+                // destructors. Release registry-owned collection buffers at
+                // the real process-exit boundary, after all exit callbacks.
+                ctx.block().call_void(
+                    "js_gc_release_current_thread_collection_side_allocations",
+                    &[],
+                );
                 ctx.block().ret(I32, "0");
             }
         }
@@ -1381,3 +1388,6 @@ pub(super) fn compile_module_entry(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

@@ -856,6 +856,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_emit_before_exit", VOID, &[DOUBLE]);
     module.declare_function("js_process_run_finalization_exit", VOID, &[]);
     module.declare_function("js_promise_report_unhandled_rejections", VOID, &[]);
+    module.declare_function(
+        "js_gc_release_current_thread_collection_side_allocations",
+        VOID,
+        &[],
+    );
     module.declare_function("js_process_remove_listener", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_off", DOUBLE, &[I64, I64]);
     module.declare_function("js_process_remove_all_listeners", DOUBLE, &[I64]);

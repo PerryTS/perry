@@ -33,11 +33,26 @@ function syncCode(label: string, fn: () => void): void {
   }
 }
 
+// The three callback-form calls below are dispatched to the libuv threadpool
+// concurrently, so their callbacks fire in *completion* order, which is not
+// deterministic — node itself emits `fchown closed cb` before `futimes closed
+// cb` on roughly one run in six. Comparing raw interleaving against a freshly
+// run node oracle therefore fails at random on any PR.
+//
+// What this test is actually about is the error surface (`err.code` /
+// `err.syscall`) of each fd mutator, not libuv's scheduling. So buffer the
+// three results and flush them in a fixed order once all three have landed.
+// Every assertion is preserved; only the print order is pinned.
+const CB_ORDER = ["ftruncate closed cb", "futimes closed cb", "fchown closed cb"];
+const cbLines = new Map<string, string>();
+
 function cbCode(label: string, err: any): void {
-  if (err) {
-    console.log(label + ": " + err.code + " " + err.syscall);
-  } else {
-    console.log(label + ": OK");
+  cbLines.set(label, err ? label + ": " + err.code + " " + err.syscall : label + ": OK");
+  if (cbLines.size < CB_ORDER.length) {
+    return;
+  }
+  for (const key of CB_ORDER) {
+    console.log(cbLines.get(key));
   }
 }
 
