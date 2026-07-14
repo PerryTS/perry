@@ -319,6 +319,11 @@ pub extern "C" fn js_object_delete_field(
         //    into slot j. Inline reads/writes for j < alloc_limit;
         //    overflow_get/set otherwise.
         for j in i..new_count {
+            // Read through the index path, which resolves inline-vs-overflow with the
+            // CURRENT (pre-decrement) `field_count` — the same boundary the value was
+            // written under. Reading by NAME here would invoke a getter and store its
+            // result as a data property, silently collapsing accessors (Next's module
+            // exports are `Object.defineProperty(..., {get})`).
             let next = js_object_get_field(obj, (j + 1) as u32);
             // Inline write if target slot < alloc_limit, else overflow.
             if j < alloc_limit {
@@ -349,11 +354,23 @@ pub extern "C" fn js_object_delete_field(
         //    we built the new keys directly with the deleted entry
         //    omitted, so no in-place shift is needed.)
 
-        // 3) Adjust field_count: keep within bounds. If the original
-        //    field_count counted this slot, drop by one.
-        if (i as u32) < field_count {
-            (*obj).field_count = field_count - 1;
-        }
+        // 3) `field_count` is the number of properties resident in the INLINE
+        //    slots — every reader treats `field_index >= field_count` as living in
+        //    the overflow map. It is NOT the property count: an object with 9
+        //    properties and 8 inline slots carries `field_count == 8`, with the 9th
+        //    spilled to overflow.
+        //
+        //    Decrementing it by one was therefore wrong. Deleting one property from
+        //    that 9-property object leaves 8 survivors — all of which now FIT
+        //    inline, so `field_count` must become 8. The old `field_count - 1 = 7`
+        //    pushed the last survivor's index (7) at or past the boundary, so
+        //    reading it went to the overflow map, found nothing, and returned
+        //    `undefined`: the key stayed enumerable while its value vanished.
+        //
+        //    After the rebuild above, the survivors occupy slots `0..new_count`,
+        //    inline up to the allocation's capacity. That is exactly
+        //    `min(new_count, alloc_limit)`.
+        (*obj).field_count = std::cmp::min(new_count, alloc_limit) as u32;
 
         // 4) Invalidate the keys-index sidecar for this object — the
         //    slot map is now stale (entries past `i` have shifted).
