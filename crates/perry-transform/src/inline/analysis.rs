@@ -105,10 +105,27 @@ pub fn is_inlinable(func: &Function) -> bool {
         return false;
     }
 
-    // Don't inline functions that return closures capturing parameters
-    // When inlined, the parameter IDs won't exist in the outer context
-    let param_ids: std::collections::HashSet<LocalId> = func.params.iter().map(|p| p.id).collect();
-    if body_contains_closure_capturing(&func.body, &param_ids) {
+    // Don't inline a function whose body builds a closure over one of the
+    // callee's OWN bindings — a parameter or a local. Those ids do not exist in
+    // the caller's scope.
+    //
+    // Parameters were already excluded. Locals are the same hazard, and worse:
+    // a captured-and-mutated local is *boxed*, and the caller has no idea. The
+    // closure body is compiled once, from the original function, and reads its
+    // capture slot as a box pointer (`js_closure_get_capture_bits` ->
+    // `js_box_get_bits`). Cloning the body into a call site re-derives the
+    // local there as a plain slot, so the call site stores the local's *value*
+    // into the capture slot instead of a box. The closure then dereferences
+    // that value as a box pointer: every read comes back `undefined` and every
+    // write from inside the closure is lost.
+    //
+    //     function mk() { let k = 0; return () => { for (const x of [1]) { k = 7; } return k; }; }
+    //     const g = mk();
+    //     g();   // undefined, expected 7
+    let mut callee_bindings: std::collections::HashSet<LocalId> =
+        func.params.iter().map(|p| p.id).collect();
+    collect_declared_local_ids(&func.body, &mut callee_bindings);
+    if body_contains_closure_capturing(&func.body, &callee_bindings) {
         return false;
     }
 
