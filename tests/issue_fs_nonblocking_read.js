@@ -11,29 +11,39 @@ import { openSync, readSync, closeSync, constants } from "fs";
 
 // A FIFO has no writer, so a non-blocking read has nothing to deliver: Node
 // answers EAGAIN. (A blocking descriptor would park here forever.)
-import { mkdtempSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const dir = mkdtempSync(join(tmpdir(), "perry-nonblock-"));
-const fifo = join(dir, "fifo");
-execFileSync("mkfifo", [fifo]);
 
-const fd = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
-
-const buf = Buffer.alloc(16);
-let code = null;
+// The fifo and the descriptor must be released even when an assertion below
+// throws, or a failing run leaves a temp directory (and an open fd) behind on
+// every retry.
 try {
-  readSync(fd, buf, 0, 16, null);
-  throw new Error("readSync resolved instead of raising EAGAIN");
-} catch (err) {
-  code = err.code;
+  const fifo = join(dir, "fifo");
+  execFileSync("mkfifo", [fifo]);
+
+  const fd = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const buf = Buffer.alloc(16);
+    let code = null;
+    try {
+      readSync(fd, buf, 0, 16, null);
+      throw new Error("readSync resolved instead of raising EAGAIN");
+    } catch (err) {
+      code = err.code;
+    }
+
+    if (code !== "EAGAIN") {
+      throw new Error(`readSync on an empty non-blocking FIFO reported ${code}, expected EAGAIN`);
+    }
+  } finally {
+    closeSync(fd);
+  }
+} finally {
+  rmSync(dir, { recursive: true, force: true });
 }
 
-if (code !== "EAGAIN") {
-  throw new Error(`readSync on an empty non-blocking FIFO reported ${code}, expected EAGAIN`);
-}
-
-closeSync(fd);
 console.log("nonblocking-read ok");
