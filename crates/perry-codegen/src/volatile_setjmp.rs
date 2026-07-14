@@ -73,6 +73,26 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
+
+/// `PERRY_SETJMP_VOLATILE=0` / `off` / `false` turns the promotion OFF.
+///
+/// **This produces miscompiled code and exists only to bisect/falsify.** With
+/// the promotion disabled, a value written in a `try` body and read in the
+/// `catch` silently reverts to its pre-`setjmp` value at `-O2`. It is here so
+/// the guarantee this module provides is *testable*: build once, run
+/// `test-files/test_gap_try_setjmp_volatile.ts` with and without the flag —
+/// green with, red without. A test that passes both ways proves nothing.
+///
+/// (Same spirit as `PERRY_WRITE_BARRIERS=0` and `PERRY_GEN_GC=0`: a
+/// deliberately-unsound switch, for A/B only.)
+fn promotion_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("PERRY_SETJMP_VOLATILE") {
+        Ok(v) => !matches!(v.as_str(), "0" | "off" | "false"),
+        Err(_) => true,
+    })
+}
 
 /// Destination pointer operand of a `store` line.
 ///
@@ -133,6 +153,9 @@ fn first_operand(s: &str) -> &str {
 /// (see [`store_dest_ptr`]); most are alloca registers, but the set may also
 /// contain globals and heap pointers, which are filtered out here.
 pub(crate) fn apply_setjmp_volatile(ir: &str, try_stores: &HashSet<String>) -> String {
+    if !promotion_enabled() {
+        return ir.to_string();
+    }
     let lines: Vec<&str> = ir.lines().collect();
 
     // 1. Every alloca defined in this function is its own base.
