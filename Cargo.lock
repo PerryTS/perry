@@ -2685,7 +2685,7 @@ dependencies = [
  "gobject-sys 0.20.10",
  "libc",
  "system-deps",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5382,7 +5382,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "swc_common",
+ "swc_common 23.0.2",
  "swc_ecma_ast",
  "tar",
  "tempfile",
@@ -5941,7 +5941,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stacker",
- "swc_common",
+ "swc_common 23.0.2",
  "swc_ecma_ast",
  "thiserror 1.0.69",
 ]
@@ -5952,7 +5952,7 @@ version = "0.5.1258"
 dependencies = [
  "anyhow",
  "perry-diagnostics",
- "swc_common",
+ "swc_common 23.0.2",
  "swc_ecma_ast",
  "swc_ecma_parser",
  "thiserror 1.0.69",
@@ -8399,6 +8399,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "swc_common"
+version = "23.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "176fb11b1abd0a175e8ac47d4b061c5c8a9ae13b9196f30d44fe5db9cb7dfcbd"
+dependencies = [
+ "anyhow",
+ "ast_node",
+ "better_scoped_tls",
+ "bytes-str",
+ "either",
+ "from_variant",
+ "num-bigint",
+ "once_cell",
+ "rustc-hash 2.1.2",
+ "serde",
+ "siphasher 0.3.11",
+ "swc_atoms",
+ "swc_eq_ignore_macros",
+ "swc_visit",
+ "tracing",
+ "unicode-width",
+ "url",
+]
+
+[[package]]
 name = "swc_ecma_ast"
 version = "19.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8412,7 +8437,7 @@ dependencies = [
  "rustc-hash 2.1.2",
  "string_enum",
  "swc_atoms",
- "swc_common",
+ "swc_common 18.0.1",
  "swc_visit",
  "unicode-id-start",
 ]
@@ -8433,7 +8458,7 @@ dependencies = [
  "smartstring",
  "stacker",
  "swc_atoms",
- "swc_common",
+ "swc_common 18.0.1",
  "swc_ecma_ast",
  "tracing",
 ]
