@@ -191,17 +191,19 @@ unsafe fn define_property_on_handle(
         return obj_value;
     };
 
+    // The property's CURRENT shape, captured before any mutation below.
+    let had_accessor = hx::handle_expando_accessor(hid, &key).is_some();
+    let had_data = hx::handle_expando_data_get(hid, &key).is_some();
     // Spec retention (ValidateAndApplyPropertyDescriptor): redefining an
     // EXISTING own property keeps the attributes the descriptor omits; a brand
     // new one defaults them to `false`.
     let existing: Option<PropertyAttrs> =
-        hx::handle_expando_has(hid, &key).then(|| hx::handle_expando_attrs(hid, &key));
+        (had_accessor || had_data).then(|| hx::handle_expando_attrs(hid, &key));
 
     let has_get = desc_has_field(descriptor_value, b"get");
     let has_set = desc_has_field(descriptor_value, b"set");
     let has_accessor = has_get || has_set;
     let has_value = desc_has_field(descriptor_value, b"value");
-    let has_writable = desc_has_field(descriptor_value, b"writable");
 
     if has_accessor {
         // The descriptor literal's `get()`/`set()` shorthands were lowered with
@@ -228,22 +230,39 @@ unsafe fn define_property_on_handle(
                 set: set_bits,
             },
         );
-    } else if has_value || has_writable {
-        // Data descriptor. Drop any accessor that used to occupy the key so the
-        // store doesn't fire a stale setter, then write the value (defaulting to
-        // `undefined` for a `{ writable }`-only descriptor).
-        crate::object::descriptor_state::ACCESSOR_DESCRIPTORS.with(|m| {
-            m.borrow_mut().remove(&(hid as usize, key.clone()));
-        });
-        let value = if has_value {
-            f64::from_bits(desc_read_field(descriptor_value, b"value").bits())
+    } else {
+        // A data descriptor (`value`/`writable`) OR a generic one
+        // (`{ enumerable: true }` alone). Drop any accessor that used to occupy
+        // the key so the store can't fire a stale setter.
+        if had_accessor {
+            crate::object::descriptor_state::ACCESSOR_DESCRIPTORS.with(|m| {
+                m.borrow_mut().remove(&(hid as usize, key.clone()));
+            });
+        }
+        // [[Value]] is the descriptor's when present; otherwise it defaults to
+        // `undefined` for a BRAND-NEW key or an accessor→data conversion (neither
+        // has a data value to retain). Only a generic redefine of an EXISTING data
+        // property keeps the current value.
+        //
+        // The `undefined` store matters beyond the value itself: it is what makes
+        // the key an own property at all. `Object.defineProperty(h, "g", { enumerable:
+        // true })` creates `g` in Node (`getOwnPropertyDescriptor` → `{value: undefined,
+        // writable: false, enumerable: true, configurable: false}`, `"g" in h` → true);
+        // recording only the attribute bits would leave every own-key probe reporting
+        // it absent.
+        let new_value = if has_value {
+            Some(f64::from_bits(
+                desc_read_field(descriptor_value, b"value").bits(),
+            ))
+        } else if had_accessor || !had_data {
+            Some(f64::from_bits(crate::value::TAG_UNDEFINED))
         } else {
-            f64::from_bits(crate::value::TAG_UNDEFINED)
+            None
         };
-        hx::handle_expando_set(hid, &key, value);
+        if let Some(v) = new_value {
+            hx::handle_expando_set(hid, &key, v);
+        }
     }
-    // else: a generic descriptor (`{ enumerable: true }` alone) adjusts only the
-    // attribute bits below and leaves the current value / accessor in place.
 
     let read_flag = |name: &[u8]| -> Option<bool> {
         desc_has_field(descriptor_value, name).then(|| {
