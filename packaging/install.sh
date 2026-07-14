@@ -43,9 +43,57 @@ case "$ARCH" in
     ;;
 esac
 
-ARTIFACT="perry-${OS}-${ARCH}.tar.gz"
+# Pick the glibc or the fully-static (musl) Linux build.
+#
+# The Linux glibc tarballs are built by .github/workflows/release-packages.yml
+# on ubuntu-24.04 / ubuntu-24.04-arm, whose glibc is 2.39. Their ELF carries
+# GLIBC_2.39 symbol-version references, so the dynamic loader refuses to start
+# them on anything older — Ubuntu 22.04 (2.35), Debian 12 (2.36), RHEL 9 and
+# Amazon Linux 2023 (2.34) all die with "GLIBC_2.39 not found" before Perry runs
+# (#6298). The musl tarball is a fully-static binary with no interpreter and no
+# libc dependency at all, so it runs on every one of them.
+#
+# KEEP IN SYNC with the builder image and with GLIBC_BUILD_FLOOR in
+# npm/perry/bin/detect.cjs.
+GLIBC_FLOOR_MAJOR=2
+GLIBC_FLOOR_MINOR=39
 
-echo "Detecting platform: ${OS}/${ARCH}"
+LIBC="glibc"
+if [ "$OS" = "linux" ]; then
+  if [ -f /etc/alpine-release ] || (ldd --version 2>&1 | head -1 | grep -qi musl); then
+    LIBC="musl"
+    echo "Detected musl libc — using the fully-static build."
+    echo "(Note: the static build cannot build perry/ui GTK4 apps.)"
+  else
+    # getconf: "glibc 2.35". ldd: "ldd (Ubuntu GLIBC 2.35-0ubuntu3) 2.35".
+    GLIBC_VER=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+    if [ -z "$GLIBC_VER" ]; then
+      GLIBC_VER=$(ldd --version 2>/dev/null | head -1 | awk '{print $NF}')
+    fi
+    GLIBC_MAJOR=$(printf '%s' "$GLIBC_VER" | cut -d. -f1 | tr -cd '0-9')
+    GLIBC_MINOR=$(printf '%s' "$GLIBC_VER" | cut -d. -f2 | tr -cd '0-9')
+    # Unparseable (empty / non-numeric) → keep the glibc build. Guessing "too
+    # old" for every host we can't read would push everyone onto the static
+    # build, which cannot build perry/ui (GTK4) apps.
+    if [ -n "$GLIBC_MAJOR" ] && [ -n "$GLIBC_MINOR" ]; then
+      if [ "$GLIBC_MAJOR" -lt "$GLIBC_FLOOR_MAJOR" ] ||
+        { [ "$GLIBC_MAJOR" -eq "$GLIBC_FLOOR_MAJOR" ] && [ "$GLIBC_MINOR" -lt "$GLIBC_FLOOR_MINOR" ]; }; then
+        LIBC="musl"
+        echo "Detected glibc ${GLIBC_VER} — older than the ${GLIBC_FLOOR_MAJOR}.${GLIBC_FLOOR_MINOR} the"
+        echo "prebuilt glibc binary needs. Using the fully-static Linux build instead."
+        echo "(Same compiler; it cannot build perry/ui GTK4 apps. See issue #6298.)"
+      fi
+    fi
+  fi
+fi
+
+if [ "$LIBC" = "musl" ]; then
+  ARTIFACT="perry-${OS}-${ARCH}-musl.tar.gz"
+else
+  ARTIFACT="perry-${OS}-${ARCH}.tar.gz"
+fi
+
+echo "Detecting platform: ${OS}/${ARCH} (${LIBC})"
 
 # Find the most recent release that actually has our platform asset.
 #

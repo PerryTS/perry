@@ -519,15 +519,16 @@ fn default_output_path(args: &CompileArgs) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let stem = crate::commands::sanitize::sanitize_for_linker_argv(raw_stem);
-    if matches!(
+    // Same helper the compile pipeline links with (#5740) — the cache
+    // fingerprints the output file, so a divergence here means it stats a path
+    // the build never wrote (Android used to land on the bare stem `app` while
+    // the link produced `libapp.so`).
+    super::output_path::default_output_path(
+        args.output_type == "dylib",
+        args.output_type == "staticlib",
         args.target.as_deref(),
-        Some("windows") | Some("windows-winui")
-    ) || (args.target.is_none() && cfg!(target_os = "windows"))
-    {
-        PathBuf::from(format!("{stem}.exe"))
-    } else {
-        PathBuf::from(stem)
-    }
+        &stem,
+    )
 }
 
 fn current_env() -> Vec<EnvFingerprint> {

@@ -213,23 +213,34 @@ measure_rss() {
   local tmp_err=$(mktemp)
   local command_status=0
 
-  if [[ -x /usr/bin/time ]]; then
-    if [[ "$(uname)" == "Darwin" ]]; then
-      /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
-    else
-      /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
-    fi
+  if [[ "$(uname)" == "Darwin" ]]; then
+    # `time -l` calls sysctl(kern.clockrate), which fails in otherwise usable
+    # sandboxed macOS environments and masks a successful benchmark exit.
+    # A fresh Python process can obtain the same child peak RSS from wait4.
+    local measurement
+    measurement=$(python3 - "$stdout_file" "$tmp_err" "$binary" "$@" <<'PYTHON'
+import resource
+import subprocess
+import sys
+
+stdout_path, stderr_path, *command = sys.argv[1:]
+with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+    completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+# Darwin reports ru_maxrss in bytes; the artifact schema records KiB.
+print(f"{int(usage.ru_maxrss) // 1024}|{completed.returncode}")
+PYTHON
+    )
+    rss_kb="${measurement%%|*}"
+    command_status="${measurement##*|}"
+  elif [[ -x /usr/bin/time ]]; then
+    /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
   else
     "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || command_status=$?
   fi
 
-  local rss_kb=0
-  if [[ "$(uname)" == "Darwin" ]]; then
-    local rss_bytes
-    rss_bytes=$(awk '/peak memory footprint/ {print $1; exit} /maximum resident set size/ {print $1; exit}' "$tmp_err" 2>/dev/null || true)
-    rss_bytes=${rss_bytes:-0}
-    rss_kb=$((rss_bytes / 1024))
-  else
+  local rss_kb=${rss_kb:-0}
+  if [[ "$(uname)" != "Darwin" ]]; then
     local linux_kb
     linux_kb=$(awk -F': ' '/Maximum resident set size/ {print $2; exit}' "$tmp_err" 2>/dev/null || true)
     linux_kb=${linux_kb:-0}

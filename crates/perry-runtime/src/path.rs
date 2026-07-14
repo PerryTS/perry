@@ -457,51 +457,24 @@ pub(crate) fn resolve_win32_str(path_str: &str) -> String {
     win32_resolve_inner(path_str)
 }
 
-/// Get directory name from path. Per Node spec, the root's dirname is the
-/// root itself (`/` → `/`), not an empty string — Rust's `Path::parent`
-/// returns `None` there, which we treat as "stay at root".
+/// Get directory name from path — Node's `path.posix.dirname`, which is purely
+/// lexical. The previous implementation delegated to Rust's `Path::parent()`,
+/// whose OS path semantics normalize components away and disagree with Node
+/// (`dirname("a/./b")` → `"a"` instead of `"a/."`, `dirname("a//b")` → `"a"`
+/// instead of `"a/"`, `dirname("/.")` → `"."` instead of `"/"`). The root
+/// (`"/"` → `"/"`, `"///"` → `"/"`) and the two-leading-slash case
+/// (`"//foo"` → `"//"`) both fall out of the algorithm.
 #[no_mangle]
 pub extern "C" fn js_path_dirname(path_ptr: *const StringHeader) -> *mut StringHeader {
     let path_str = string_from_header_or_throw(path_ptr);
-
-    if path_str.is_empty() {
-        return string_to_js(".");
-    }
-
-    // POSIX root: dirname("/") = "/", dirname("///") = "/"
-    if path_str.chars().all(|c| c == '/') {
-        return string_to_js("/");
-    }
-    // Node preserves exactly two leading slashes for the dirname of
-    // `//foo` on POSIX.
-    if path_str.starts_with("//") && !path_str.starts_with("///") && !path_str[2..].contains('/') {
-        return string_to_js("//");
-    }
-
-    let path = Path::new(&path_str);
-    match path.parent() {
-        Some(parent) => {
-            let s = parent.to_string_lossy();
-            if s.is_empty() {
-                string_to_js(".")
-            } else {
-                string_to_js(&s)
-            }
-        }
-        None => string_to_js("."),
-    }
+    string_to_js(&posix_dirname_inner(&path_str))
 }
 
 /// Get base name (file name) from path
 #[no_mangle]
 pub extern "C" fn js_path_basename(path_ptr: *const StringHeader) -> *mut StringHeader {
     let path_str = string_from_header_or_throw(path_ptr);
-
-    let path = Path::new(&path_str);
-    match path.file_name() {
-        Some(name) => string_to_js(&name.to_string_lossy()),
-        None => string_to_js(""),
-    }
+    string_to_js(posix_basename_inner(&path_str))
 }
 
 /// Get file extension from path (including the dot)
@@ -572,12 +545,134 @@ fn normalize_str(input: &str) -> String {
     };
     result.push_str(&out.join("/"));
     if result.is_empty() {
-        return ".".to_string();
+        // Node keeps the trailing separator even when everything normalized away:
+        // `normalize("./") === "./"` (only a bare `normalize("") === "."`).
+        return if trailing_slash {
+            "./".to_string()
+        } else {
+            ".".to_string()
+        };
     }
     if trailing_slash && !result.ends_with('/') {
         result.push('/');
     }
     result
+}
+
+/// Node's `path.posix.basename` is a purely LEXICAL string operation: the last
+/// non-empty `/`-delimited segment, with `.` and `..` treated as ordinary segment
+/// names (`basename(".") === "."`, `basename("a/..") === ".."`).
+///
+/// Rust's `Path::file_name()` applies OS path semantics instead and cannot be used
+/// here: it returns `None` for `.`, `..`, and any path whose last component is
+/// `..` (so those yielded `""`), and it silently DROPS a `.` component —
+/// `Path::new("a/.").file_name()` is `Some("a")`, which returned the PARENT.
+/// Mirrors [`win32_basename_inner`], which was already lexical (and correct).
+fn posix_basename_inner(input: &str) -> &str {
+    input.split('/').rfind(|s| !s.is_empty()).unwrap_or("")
+}
+
+/// Node's `path.posix.basename(path, ext)` — ported from `lib/path.js`, QUIRKS
+/// INCLUDED. The ext branch is deliberately not "lexical basename minus the
+/// suffix": Node scans backwards matching `ext` byte-by-byte and, when the match
+/// is abandoned or the component start is reached, falls back to indices that can
+/// span trailing separators. The observable consequence is
+/// `basename("/x/", ".x") === "x/"` — trailing slash and all. A simplified
+/// "strip the suffix" version disagrees with Node here.
+fn posix_basename_ext_inner(path: &str, ext: &str) -> String {
+    let bytes = path.as_bytes();
+    let ext_b = ext.as_bytes();
+    if ext_b.is_empty() || ext_b.len() > bytes.len() {
+        return posix_basename_inner(path).to_string();
+    }
+    if ext == path {
+        return String::new();
+    }
+
+    let mut start: usize = 0;
+    let mut end: isize = -1;
+    let mut matched_slash = true;
+    let mut ext_idx: isize = ext_b.len() as isize - 1;
+    let mut first_non_slash_end: isize = -1;
+
+    for i in (0..bytes.len()).rev() {
+        let code = bytes[i];
+        if code == b'/' {
+            // Only a separator that is NOT part of a trailing run ends the scan.
+            if !matched_slash {
+                start = i + 1;
+                break;
+            }
+        } else {
+            if first_non_slash_end == -1 {
+                matched_slash = false;
+                first_non_slash_end = (i + 1) as isize;
+            }
+            if ext_idx >= 0 {
+                if code == ext_b[ext_idx as usize] {
+                    ext_idx -= 1;
+                    if ext_idx == -1 {
+                        end = i as isize;
+                    }
+                } else {
+                    // Suffix didn't match — the result is the whole component.
+                    ext_idx = -1;
+                    end = first_non_slash_end;
+                }
+            }
+        }
+    }
+
+    if start as isize == end {
+        end = first_non_slash_end;
+    } else if end == -1 {
+        end = bytes.len() as isize;
+    }
+    let end = end.max(0) as usize;
+    // Byte indices land on char boundaries for well-formed input, but never risk a
+    // panic on an odd UTF-8 split: fall back to the plain lexical basename.
+    if start > end || !path.is_char_boundary(start) || !path.is_char_boundary(end) {
+        return posix_basename_inner(path).to_string();
+    }
+    path[start..end].to_string()
+}
+
+/// Node's `path.posix.dirname`, ported from `lib/path.js`. Also purely lexical —
+/// `dirname("a/./b") === "a/."` and `dirname("a//b") === "a/"`, neither of which
+/// Rust's `Path::parent()` produces (it normalizes the `.` and the empty segment
+/// away, giving `"a"` for both).
+fn posix_dirname_inner(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let bytes = path.as_bytes();
+    let has_root = bytes[0] == b'/';
+    let mut end: Option<usize> = None;
+    let mut matched_slash = true;
+    // Scan back to index 1 (never 0 — a leading `/` is the root, not a separator).
+    for i in (1..bytes.len()).rev() {
+        if bytes[i] == b'/' {
+            if !matched_slash {
+                end = Some(i);
+                break;
+            }
+        } else {
+            matched_slash = false;
+        }
+    }
+    match end {
+        None => {
+            if has_root {
+                "/".to_string()
+            } else {
+                ".".to_string()
+            }
+        }
+        // Node preserves exactly two leading slashes: `dirname("//foo") === "//"`.
+        Some(1) if has_root => "//".to_string(),
+        // `end` is the byte index of an ASCII `/`, so this is a char boundary.
+        Some(end) => path[..end].to_string(),
+    }
 }
 
 #[no_mangle]
@@ -666,19 +761,7 @@ pub extern "C" fn js_path_basename_ext(
     if !ext_str.is_empty() && ext_str == path_str {
         return string_to_js("");
     }
-    let path = Path::new(&path_str);
-    let base = match path.file_name() {
-        Some(name) => name.to_string_lossy().to_string(),
-        None => return string_to_js(""),
-    };
-    if !ext_str.is_empty()
-        && base.ends_with(&ext_str)
-        && (base.len() > ext_str.len() || !path_str.contains('/'))
-    {
-        string_to_js(&base[..base.len() - ext_str.len()])
-    } else {
-        string_to_js(&base)
-    }
+    string_to_js(&posix_basename_ext_inner(&path_str, &ext_str))
 }
 
 /// Returns a `{ root, dir, base, ext, name }` object describing the path.

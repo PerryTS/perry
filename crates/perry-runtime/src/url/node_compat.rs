@@ -430,7 +430,7 @@ pub extern "C" fn js_url_path_to_file_url(path_f64: f64, options_f64: f64) -> f6
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
     let input = string_from_header(js_url_coerce_string(input_f64));
-    if input.chars().any(|c| c.is_ascii_whitespace()) {
+    if input.chars().any(|c| c.is_ascii_whitespace()) || domain_has_forbidden_char(&input) {
         return create_string_f64("");
     }
     // `whatwg_canonicalize_host` runs IDNA *and* the WHATWG numeric/IPv4 host
@@ -448,7 +448,7 @@ pub extern "C" fn js_url_domain_to_ascii(input_f64: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
     let input = string_from_header(js_url_coerce_string(input_f64));
-    if input.chars().any(|c| c.is_ascii_whitespace()) {
+    if input.chars().any(|c| c.is_ascii_whitespace()) || domain_has_forbidden_char(&input) {
         return create_string_f64("");
     }
     let out = match whatwg_canonicalize_host(&input) {
@@ -456,14 +456,30 @@ pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
         None => String::new(),
         // Numeric / IPv4-shorthand → canonical IPv4 address (Node yields the IP).
         Some(canon) if is_ipv4_host(&canon) => canon,
-        // Registrable hostname → Unicode IDN form.
+        // Registrable hostname → Unicode IDN form. IDNA must run on the
+        // CANONICALIZED host, not the raw input: `/`, `?`, `#` and `\` terminate
+        // the host, so `domainToUnicode("a/b")` is `"a"`. Feeding the raw input to
+        // `domain_to_unicode` skipped that truncation and echoed `"a/b"` back.
         #[cfg(feature = "url-engine")]
-        Some(_) => idna::domain_to_unicode(&input).0,
-        // URL engine gated off: no IDNA, so return the input host unchanged.
+        Some(canon) => idna::domain_to_unicode(&canon).0,
+        // URL engine gated off: no IDNA, so return the canonical host unchanged.
         #[cfg(not(feature = "url-engine"))]
-        Some(_) => input.clone(),
+        Some(canon) => canon,
     };
     create_string_f64(&out)
+}
+
+/// WHATWG forbidden host code points that make `domainToASCII` /
+/// `domainToUnicode` reject the input outright (Node returns `""`). Note `/`,
+/// `?`, `#` and `\` are NOT here — those merely TERMINATE the host, so the prefix
+/// is returned. A bracketed IPv6 literal legitimately contains `:`/`[`/`]` and is
+/// exempt. Without this, `whatwg_canonicalize_host("a@b")` treated `a@` as
+/// userinfo and yielded `"b"` where Node yields `""`.
+fn domain_has_forbidden_char(input: &str) -> bool {
+    if legacy_is_ipv6_hostname(input) {
+        return false;
+    }
+    input.contains('@')
 }
 
 fn json_to_value(json: serde_json::Value) -> f64 {
@@ -677,7 +693,12 @@ pub extern "C" fn js_url_format(value: f64, options: f64) -> f64 {
         if js_value.is_any_string() {
             let ptr =
                 crate::value::js_get_string_pointer_unified(value) as *mut crate::StringHeader;
-            return create_string_f64(&string_from_header(ptr));
+            // Node's `url.format(str)` is `Url.parse(str).format()` — it NORMALIZES
+            // rather than echoing the input, so `format("http://example.com?")` is
+            // `"http://example.com/?"` (note the added root path).
+            let s = string_from_header(ptr);
+            let parsed = legacy_url_parse_impl(&s, false);
+            return create_string_f64(&legacy_url_format_impl(&parsed));
         }
         throw_url_format_invalid_arg();
     };
@@ -756,107 +777,67 @@ pub extern "C" fn js_url_legacy_parse(
         throw_invalid_legacy_url_arg(input);
     }
     let s = get_string_content(input);
-    let (protocol, mut host, mut hostname, mut port, mut pathname, search, hash) = parse_url(&s);
-    let slashes_host = crate::value::js_is_truthy(slashes_denote_host) != 0;
-    let protocol_is_null = protocol.is_empty() && slashes_host && s.starts_with("//");
-
-    if protocol_is_null {
-        let rest = pathname.strip_prefix("//").unwrap_or(&pathname);
-        let path_idx = rest.find('/').unwrap_or(rest.len());
-        host = rest[..path_idx].to_string();
-        pathname = if path_idx < rest.len() {
-            rest[path_idx..].to_string()
-        } else {
-            "/".to_string()
-        };
-        hostname = host.clone();
-        if let Some(port_idx) = host.rfind(':') {
-            let potential_port = &host[port_idx + 1..];
-            if !potential_port.is_empty() && potential_port.chars().all(|c| c.is_ascii_digit()) {
-                hostname = host[..port_idx].to_string();
-                port = potential_port.to_string();
-            }
-        }
-    }
-
-    let mut invalid_percent_host = false;
-    if let Some(percent_idx) = host.find('%') {
-        invalid_percent_host = true;
-        let invalid_tail = format!("{}{}", &host[percent_idx..], pathname);
-        host.truncate(percent_idx);
-        hostname = host.clone();
-        port.clear();
-        pathname = invalid_tail;
-    }
-
-    let mut auth = String::new();
-    if let Some(at_idx) = host.rfind('@') {
-        auth = host[..at_idx].to_string();
-        let rest = host[at_idx + 1..].to_string();
-        host = rest.clone();
-        hostname = if let Some(port_idx) = rest.rfind(':') {
-            let p = &rest[port_idx + 1..];
-            if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() {
-                rest[..port_idx].to_string()
-            } else {
-                rest
-            }
-        } else {
-            rest
-        };
-    }
     let parse_qs = crate::value::js_is_truthy(parse_query_string) != 0;
-    let raw_query = search.strip_prefix('?').unwrap_or(&search).to_string();
-    let query = if parse_qs {
+    let u = legacy_url_parse_impl(&s, crate::value::js_is_truthy(slashes_denote_host) != 0);
+    let href = legacy_url_format_impl(&u);
+
+    // `query` is the raw string by default; with `parseQueryString` it is ALWAYS
+    // an object (an empty one when there is no search), and `search` is nulled.
+    let (search_value, query_value) = if parse_qs {
         let mut map = serde_json::Map::new();
-        for part in raw_query.split('&').filter(|p| !p.is_empty()) {
-            let (k, v) = part.split_once('=').unwrap_or((part, ""));
-            map.insert(url_decode(k), serde_json::Value::String(url_decode(v)));
+        if let Some(raw) = u.query.as_deref() {
+            for part in raw.split('&').filter(|p| !p.is_empty()) {
+                let (k, v) = part.split_once('=').unwrap_or((part, ""));
+                map.insert(url_decode(k), serde_json::Value::String(url_decode(v)));
+            }
         }
-        json_to_value(serde_json::Value::Object(map))
-    } else if raw_query.is_empty() {
+        let q = json_to_value(serde_json::Value::Object(map));
+        (opt_string_f64(u.search.clone()), q)
+    } else {
+        (
+            opt_string_f64(u.search.clone()),
+            opt_string_f64(u.query.clone()),
+        )
+    };
+
+    // `path` is pathname + search, and is null only when both are absent.
+    let path_value = if u.pathname.is_some() || u.search.is_some() {
+        create_string_f64(&format!(
+            "{}{}",
+            u.pathname.as_deref().unwrap_or(""),
+            u.search.as_deref().unwrap_or("")
+        ))
+    } else {
         null_f64()
-    } else {
-        create_string_f64(&raw_query)
     };
-    let protocol_value = if protocol_is_null || protocol.is_empty() {
-        null_f64()
-    } else {
-        create_string_f64(&protocol)
-    };
-    let slashes = if protocol_null_or_slashes(&s, protocol_is_null, &host) {
-        bool_f64(true)
-    } else {
-        null_f64()
-    };
-    let path = format!("{}{}", pathname, search);
-    let path_value = string_or_null(path);
-    let href_value = create_string_f64(&s);
-    let host_value = if invalid_percent_host {
-        create_string_f64(&host)
-    } else {
-        string_or_null(host)
-    };
-    let hostname_value = if invalid_percent_host {
-        create_string_f64(&hostname)
-    } else {
-        string_or_null(hostname)
-    };
+
     let obj = create_legacy_url_object([
-        protocol_value,
-        slashes,
-        string_or_null(url_decode(&auth)),
-        host_value,
-        string_or_null(port),
-        hostname_value,
-        string_or_null(hash),
-        string_or_null(search),
-        query,
-        string_or_null(pathname),
+        opt_string_f64(u.protocol.clone()),
+        match u.slashes {
+            Some(true) => bool_f64(true),
+            _ => null_f64(),
+        },
+        opt_string_f64(u.auth.clone()),
+        opt_string_f64(u.host.clone()),
+        opt_string_f64(u.port.clone()),
+        opt_string_f64(u.hostname.clone()),
+        opt_string_f64(u.hash.clone()),
+        search_value,
+        query_value,
+        opt_string_f64(u.pathname.clone()),
         path_value,
-        href_value,
+        create_string_f64(&href),
     ]);
     crate::value::js_nanbox_pointer(obj as i64)
+}
+
+/// `Some("")` is a legitimate value (`file:///a` has `host === ""`), so this is
+/// NOT `string_or_null`, which collapses the empty string to null.
+fn opt_string_f64(v: Option<String>) -> f64 {
+    match v {
+        Some(s) => create_string_f64(&s),
+        None => null_f64(),
+    }
 }
 
 fn protocol_null_or_slashes(input: &str, protocol_is_null: bool, host: &str) -> bool {
@@ -905,4 +886,497 @@ pub extern "C" fn js_url_legacy_resolve(from: f64, to: f64) -> f64 {
 pub extern "C" fn js_url_legacy_resolve_object(from: f64, to: f64) -> f64 {
     let resolved = js_url_legacy_resolve(from, to);
     js_url_legacy_parse(resolved, bool_f64(false), bool_f64(false))
+}
+
+// ===========================================================================
+// Legacy `url.parse` / `url.format` — a faithful port of Node's `lib/url.js`
+// (`Url.prototype.parse` / `Url.prototype.format`). See #6375.
+//
+// The previous implementation was a hand-rolled approximation layered on the
+// generic `parse_url()` helper. It computed the wrong thing structurally rather
+// than being a few edge cases off: a plain relative path had its first segment
+// stolen as a hostname (`parse("a/b/c").host === "a"`), there were no
+// hostless/slashed protocol tables (so `mailto:` grew no auth/host and `file:`
+// no empty-string host), IPv6 brackets were never stripped from `hostname`,
+// `pathname` was invented as `"/"` for a bare query/hash, and `href` was just
+// the input string rather than the result of `format()`.
+// ===========================================================================
+
+/// Protocols that never have a hostname.
+fn legacy_is_hostless_protocol(p: &str) -> bool {
+    matches!(p, "javascript" | "javascript:")
+}
+
+/// Protocols that always carry a `//`.
+fn legacy_is_slashed_protocol(p: &str) -> bool {
+    matches!(
+        p,
+        "http"
+            | "http:"
+            | "https"
+            | "https:"
+            | "ftp"
+            | "ftp:"
+            | "gopher"
+            | "gopher:"
+            | "file"
+            | "file:"
+            | "ws"
+            | "ws:"
+            | "wss"
+            | "wss:"
+    )
+}
+
+/// Node's `unsafeProtocol` — these skip `autoEscapeStr`.
+fn legacy_is_unsafe_protocol(p: &str) -> bool {
+    matches!(p, "javascript" | "javascript:")
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct LegacyUrl {
+    pub protocol: Option<String>,
+    pub slashes: Option<bool>,
+    pub auth: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<String>,
+    pub hostname: Option<String>,
+    pub hash: Option<String>,
+    pub search: Option<String>,
+    pub query: Option<String>,
+    pub pathname: Option<String>,
+}
+
+/// `protocolPattern = /^[a-z0-9.+-]+:/i`
+fn legacy_match_protocol(rest: &str) -> Option<String> {
+    let b = rest.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as char;
+        if c.is_ascii_alphanumeric() || c == '.' || c == '+' || c == '-' {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i > 0 && i < b.len() && b[i] == b':' {
+        Some(rest[..=i].to_string())
+    } else {
+        None
+    }
+}
+
+/// `hostPattern = /^\/\/[^@/]+@[^@/]+/` — a PREFIX match, not a full match. It
+/// only requires one or more non-`@`/`/` chars, an `@`, then at least one more
+/// non-`@`/`/` char; anything may follow. (Requiring the tail to be free of `/`
+/// wrongly rejected `//user:pass@example.com:8000/foo`, so its authority was
+/// never parsed.)
+fn legacy_host_pattern(rest: &str) -> bool {
+    let Some(after) = rest.strip_prefix("//") else {
+        return false;
+    };
+    let mut user_len = 0usize;
+    let mut at: Option<usize> = None;
+    for (i, c) in after.char_indices() {
+        if c == '@' {
+            at = Some(i);
+            break;
+        }
+        if c == '/' {
+            return false;
+        }
+        user_len += 1;
+    }
+    let Some(at) = at.filter(|_| user_len > 0) else {
+        return false;
+    };
+    matches!(after[at + 1..].chars().next(), Some(c) if c != '@' && c != '/')
+}
+
+/// `simplePathPattern = /^(\/\/?(?!\/)[^?\s]*)(\?[^\s]*)?$/`
+fn legacy_simple_path(rest: &str) -> Option<(String, Option<String>)> {
+    let b = rest.as_bytes();
+    if b.is_empty() || b[0] != b'/' {
+        return None;
+    }
+    // `\/\/?(?!\/)` — one or two slashes, never three.
+    if b.len() >= 3 && b[1] == b'/' && b[2] == b'/' {
+        return None;
+    }
+    let (p, s) = match rest.find('?') {
+        Some(i) => (&rest[..i], Some(rest[i..].to_string())),
+        None => (rest, None),
+    };
+    if p.chars().any(char::is_whitespace) {
+        return None;
+    }
+    if s.as_deref()
+        .is_some_and(|v| v.chars().any(char::is_whitespace))
+    {
+        return None;
+    }
+    Some((p.to_string(), s))
+}
+
+/// Node's `autoEscapeStr` — percent-escape the chars that are never allowed to
+/// appear literally in the post-host remainder.
+fn legacy_auto_escape(rest: &str) -> String {
+    let mut out = String::with_capacity(rest.len());
+    for c in rest.chars() {
+        match c {
+            '\t' => out.push_str("%09"),
+            '\n' => out.push_str("%0A"),
+            '\r' => out.push_str("%0D"),
+            ' ' => out.push_str("%20"),
+            '"' => out.push_str("%22"),
+            '\'' => out.push_str("%27"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            '\\' => out.push_str("%5C"),
+            '^' => out.push_str("%5E"),
+            '`' => out.push_str("%60"),
+            '{' => out.push_str("%7B"),
+            '|' => out.push_str("%7C"),
+            '}' => out.push_str("%7D"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn legacy_is_ipv6_hostname(h: &str) -> bool {
+    let b = h.as_bytes();
+    b.len() >= 2 && b[0] == b'[' && b[b.len() - 1] == b']'
+}
+
+/// Node's `parseHost()`: split a trailing `:port` off `host`.
+fn legacy_split_port(host: &str) -> (String, Option<String>) {
+    // `portPattern = /:[0-9]*$/`
+    if let Some(idx) = host.rfind(':') {
+        let tail = &host[idx + 1..];
+        if tail.chars().all(|c| c.is_ascii_digit()) {
+            // A `:` inside an unbracketed IPv6 literal is not a port separator,
+            // but Node's regex is applied to `host` as-is; `[::1]:8080` has its
+            // colon after the `]`, so this is safe.
+            if !(legacy_is_ipv6_hostname(host)) {
+                let port = if tail.is_empty() {
+                    None
+                } else {
+                    Some(tail.to_string())
+                };
+                return (host[..idx].to_string(), port);
+            }
+        }
+    }
+    (host.to_string(), None)
+}
+
+/// Node's `Url.prototype.parse`.
+pub(crate) fn legacy_url_parse_impl(url: &str, slashes_denote_host: bool) -> LegacyUrl {
+    let mut u = LegacyUrl::default();
+    let chars: Vec<char> = url.chars().collect();
+
+    // One pass: trim surrounding whitespace, fold backslashes to forward slashes
+    // (only before the first `?`/`#`), and note whether an `@` / `#` appears.
+    let (mut has_hash, mut has_at) = (false, false);
+    let (mut start, mut end): (Option<usize>, Option<usize>) = (None, None);
+    let mut rest = String::new();
+    let mut last_pos = 0usize;
+    let (mut in_ws, mut split) = (false, false);
+    for (i, &c) in chars.iter().enumerate() {
+        let code = c as u32;
+        let is_ws = code < 33 || code == 0x00A0 || code == 0xFEFF;
+        if start.is_none() {
+            if is_ws {
+                continue;
+            }
+            last_pos = i;
+            start = Some(i);
+        } else if in_ws {
+            if !is_ws {
+                end = None;
+                in_ws = false;
+            }
+        } else if is_ws {
+            end = Some(i);
+            in_ws = true;
+        }
+        if !split {
+            match c {
+                '@' => has_at = true,
+                '#' => {
+                    has_hash = true;
+                    split = true;
+                }
+                '?' => split = true,
+                '\\' => {
+                    if i > last_pos {
+                        rest.extend(chars[last_pos..i].iter());
+                    }
+                    rest.push('/');
+                    last_pos = i + 1;
+                }
+                _ => {}
+            }
+        } else if !has_hash && c == '#' {
+            has_hash = true;
+        }
+    }
+    if let Some(s) = start {
+        if last_pos == s {
+            rest = match end {
+                None => chars[s..].iter().collect(),
+                Some(e) => chars[s..e].iter().collect(),
+            };
+        } else {
+            match end {
+                None if last_pos < chars.len() => rest.extend(chars[last_pos..].iter()),
+                Some(e) if last_pos < e => rest.extend(chars[last_pos..e].iter()),
+                _ => {}
+            }
+        }
+    }
+
+    // Fast path: a simple path plus an optional query, no `#` and no `@`.
+    if !slashes_denote_host && !has_hash && !has_at {
+        if let Some((pathname, search)) = legacy_simple_path(&rest) {
+            u.pathname = Some(pathname);
+            if let Some(s) = search {
+                u.query = Some(s[1..].to_string());
+                u.search = Some(s);
+            }
+            return u;
+        }
+    }
+
+    let proto = legacy_match_protocol(&rest);
+    let lower_proto = proto.as_ref().map(|p| p.to_lowercase()).unwrap_or_default();
+    if let Some(p) = &proto {
+        u.protocol = Some(lower_proto.clone());
+        rest = rest[p.len()..].to_string();
+    }
+
+    // `user@server` is ALWAYS a hostname, and `//foo/bar` resolves to host=foo —
+    // but a bare relative path (`a/b/c`) must NOT have its first segment taken as
+    // an authority, which is what the old implementation did.
+    let mut slashes = false;
+    if slashes_denote_host || proto.is_some() || legacy_host_pattern(&rest) {
+        slashes = rest.starts_with("//");
+        if slashes && !legacy_is_hostless_protocol(&lower_proto) {
+            rest = rest[2..].to_string();
+            u.slashes = Some(true);
+        }
+    }
+
+    if !legacy_is_hostless_protocol(&lower_proto)
+        && (slashes || (proto.is_some() && !legacy_is_slashed_protocol(&lower_proto)))
+    {
+        // The first `/`, `?` or `#` ends the host. A `@` moves the auth boundary
+        // (and clears any earlier non-host char), so `http://a@b@c/` is auth=`a@b`.
+        let rb: Vec<char> = rest.chars().collect();
+        let (mut host_end, mut at_sign, mut non_host): (
+            Option<usize>,
+            Option<usize>,
+            Option<usize>,
+        ) = (None, None, None);
+        for (i, &c) in rb.iter().enumerate() {
+            match c {
+                '\t' | '\n' | '\r' | ' ' | '"' | '%' | '\'' | ';' | '<' | '>' | '\\' | '^'
+                | '`' | '{' | '|' | '}' => {
+                    if non_host.is_none() {
+                        non_host = Some(i);
+                    }
+                }
+                '#' | '/' | '?' => {
+                    if non_host.is_none() {
+                        non_host = Some(i);
+                    }
+                    host_end = Some(i);
+                }
+                '@' => {
+                    at_sign = Some(i);
+                    non_host = None;
+                }
+                _ => {}
+            }
+            if host_end.is_some() {
+                break;
+            }
+        }
+        let mut s = 0usize;
+        if let Some(at) = at_sign {
+            let raw: String = rb[..at].iter().collect();
+            u.auth = Some(url_decode(&raw));
+            s = at + 1;
+        }
+        let host_str: String = match non_host {
+            None => {
+                let h: String = rb[s..].iter().collect();
+                rest = String::new();
+                h
+            }
+            Some(nh) => {
+                let h: String = rb[s..nh].iter().collect();
+                rest = rb[nh..].iter().collect();
+                h
+            }
+        };
+
+        let (hostname, port) = legacy_split_port(&host_str);
+        u.port = port;
+        let mut hostname = if hostname.len() > 255 {
+            String::new()
+        } else {
+            // Hostnames are always lower case.
+            hostname.to_lowercase()
+        };
+        let ipv6 = legacy_is_ipv6_hostname(&hostname);
+
+        // `host` retains the brackets and the port; `hostname` keeps neither.
+        let p = u.port.as_ref().map(|p| format!(":{p}")).unwrap_or_default();
+        u.host = Some(format!("{hostname}{p}"));
+        if ipv6 {
+            hostname = hostname[1..hostname.len() - 1].to_string();
+            if !rest.starts_with('/') {
+                rest.insert(0, '/');
+            }
+        }
+        u.hostname = Some(hostname);
+    }
+
+    if !legacy_is_unsafe_protocol(&lower_proto) {
+        rest = legacy_auto_escape(&rest);
+    }
+
+    let rb: Vec<char> = rest.chars().collect();
+    let (mut question, mut hash_idx): (Option<usize>, Option<usize>) = (None, None);
+    for (i, &c) in rb.iter().enumerate() {
+        if c == '#' {
+            u.hash = Some(rb[i..].iter().collect());
+            hash_idx = Some(i);
+            break;
+        } else if c == '?' && question.is_none() {
+            question = Some(i);
+        }
+    }
+    if let Some(q) = question {
+        let e = hash_idx.unwrap_or(rb.len());
+        u.search = Some(rb[q..e].iter().collect());
+        u.query = Some(rb[q + 1..e].iter().collect());
+    }
+    let use_q = question.is_some() && (hash_idx.is_none() || question < hash_idx);
+    match if use_q { question } else { hash_idx } {
+        // No `?`/`#` at all — everything left is the pathname.
+        None => {
+            if !rb.is_empty() {
+                u.pathname = Some(rb.iter().collect());
+            }
+        }
+        // A leading `?`/`#` means there IS no pathname (Node leaves it null).
+        Some(0) => {}
+        Some(f) => u.pathname = Some(rb[..f].iter().collect()),
+    }
+    // Only a slashed protocol with a real host gets an implied root pathname.
+    if legacy_is_slashed_protocol(&lower_proto)
+        && u.hostname.as_deref().is_some_and(|h| !h.is_empty())
+        && u.pathname.is_none()
+    {
+        u.pathname = Some("/".to_string());
+    }
+    u
+}
+
+/// Node's `Url.prototype.format`. `href` is THIS, not the raw input string.
+pub(crate) fn legacy_url_format_impl(u: &LegacyUrl) -> String {
+    let mut auth = u.auth.clone().unwrap_or_default();
+    if !auth.is_empty() {
+        auth = legacy_escape_auth(&auth);
+        auth.push('@');
+    }
+    let mut protocol = u.protocol.clone().unwrap_or_default();
+    let mut pathname = u.pathname.clone().unwrap_or_default();
+    let mut hash = u.hash.clone().unwrap_or_default();
+    let mut search = u.search.clone().unwrap_or_default();
+
+    let mut host = String::new();
+    if let Some(h) = u.host.as_deref().filter(|h| !h.is_empty()) {
+        host = format!("{auth}{h}");
+    } else if let Some(hn) = u.hostname.as_deref().filter(|h| !h.is_empty()) {
+        // A bare IPv6 hostname has to be re-wrapped in brackets.
+        let shown = if hn.contains(':') && !legacy_is_ipv6_hostname(hn) {
+            format!("[{hn}]")
+        } else {
+            hn.to_string()
+        };
+        host = format!("{auth}{shown}");
+        if let Some(p) = &u.port {
+            host.push(':');
+            host.push_str(p);
+        }
+    }
+
+    if !protocol.is_empty() && !protocol.ends_with(':') {
+        protocol.push(':');
+    }
+    pathname = pathname.replace('#', "%23").replace('?', "%3F");
+
+    // Only the slashed protocols get the `//` — not `mailto:`, `xmpp:`, … unless
+    // they had one to begin with.
+    if u.slashes == Some(true) || legacy_is_slashed_protocol(&protocol) {
+        if u.slashes == Some(true) || !host.is_empty() {
+            if !pathname.is_empty() && !pathname.starts_with('/') {
+                pathname.insert(0, '/');
+            }
+            host = format!("//{host}");
+        } else if protocol.starts_with("file") {
+            host = "//".to_string();
+        }
+    }
+
+    search = search.replace('#', "%23");
+    if !hash.is_empty() && !hash.starts_with('#') {
+        hash.insert(0, '#');
+    }
+    if !search.is_empty() && !search.starts_with('?') {
+        search.insert(0, '?');
+    }
+    format!("{protocol}{host}{pathname}{search}{hash}")
+}
+
+/// Node's `noEscapeAuth` set: everything outside it is percent-encoded when the
+/// auth section is formatted. An `@` is NOT in the set, so
+/// `format(parse("http://a@b@c/"))` is `"http://a%40b@c/"` — the auth is `a@b`
+/// but the `@` inside it must be escaped or the href would re-parse differently.
+fn legacy_escape_auth(auth: &str) -> String {
+    let mut out = String::with_capacity(auth.len());
+    for c in auth.chars() {
+        let safe = c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.'
+                    | '_'
+                    | '~'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+                    | '='
+                    | ':'
+            );
+        if safe {
+            out.push(c);
+        } else {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).as_bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    out
 }

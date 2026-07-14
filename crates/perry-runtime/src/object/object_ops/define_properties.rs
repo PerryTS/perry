@@ -15,8 +15,20 @@ use super::*;
 pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> f64 {
     // #2817: target must be an object (or class-ref). Node throws
     // `Object.defineProperties called on non-object` for primitives.
+    //
+    // #6363: a native HANDLE target (a pointer-tagged registry id — zlib stream,
+    // fetch Headers/Request/Response/Blob, crypto hash, …) is an ordinary
+    // extensible object in Node but is not a heap `ObjectHeader`, so it fails
+    // `value_is_object_like` and used to throw here. Let it through: the per-key
+    // `js_object_define_property` below recognises the handle band and routes
+    // each descriptor to the handle's own-property storage.
     let target_is_class_ref = super::super::class_ref_id(target).is_some();
-    if !target_is_class_ref && !unsafe { value_is_object_like(target) } {
+    let target_is_handle = {
+        let jv = crate::value::JSValue::from_bits(target.to_bits());
+        jv.is_pointer()
+            && crate::value::addr_class::is_small_handle(unsafe { jv.as_pointer::<u8>() } as usize)
+    };
+    if !target_is_class_ref && !target_is_handle && !unsafe { value_is_object_like(target) } {
         throw_object_type_error(b"Object.defineProperties called on non-object");
     }
     // #2817: the properties bag must be coercible to an object. Node throws

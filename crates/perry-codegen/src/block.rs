@@ -9,8 +9,8 @@
 //! sorts out the registers. Explicit `phi` nodes are still emitted for
 //! control-flow merges (if/else value context, short-circuit logical ops).
 
-use std::cell::Cell;
-use std::collections::HashMap;
+use std::cell::{Cell, Ref, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::codegen::FpContractMode;
@@ -62,12 +62,28 @@ impl Default for FpFlags {
 #[derive(Default)]
 pub struct RegCounter {
     value: Cell<u32>,
+    /// Nesting depth of the setjmp-protected regions codegen is currently
+    /// inside (a `try` body, or a `catch` body that a `finally` re-protects).
+    /// Tracked by *emission* depth rather than by block index so it covers
+    /// nested blocks, loops, nested `try`s and duplicated `finally` bodies
+    /// automatically — whatever is lowered while the region is open belongs
+    /// to it, no matter which basic block the instruction lands in.
+    try_region_depth: Cell<u32>,
+    /// Destination pointer of every `store` emitted while
+    /// `try_region_depth > 0`. These are the memory locations this function
+    /// can modify between a `setjmp` and its `longjmp`; the allocas among
+    /// them get `volatile` accesses at IR-render time so LLVM cannot promote
+    /// them into registers that `longjmp` would revert. See
+    /// `crate::volatile_setjmp` for the full argument (#6385).
+    try_region_stores: RefCell<HashSet<String>>,
 }
 
 impl RegCounter {
     pub fn new() -> Self {
         Self {
             value: Cell::new(0),
+            try_region_depth: Cell::new(0),
+            try_region_stores: RefCell::new(HashSet::new()),
         }
     }
 
@@ -75,6 +91,36 @@ impl RegCounter {
         let v = self.value.get() + 1;
         self.value.set(v);
         v
+    }
+
+    /// Open a setjmp-protected region: every `store` emitted from here until
+    /// the matching `exit_try_region` is recorded as "modified between the
+    /// setjmp and a possible longjmp".
+    pub fn enter_try_region(&self) {
+        self.try_region_depth.set(self.try_region_depth.get() + 1);
+    }
+
+    pub fn exit_try_region(&self) {
+        self.try_region_depth
+            .set(self.try_region_depth.get().saturating_sub(1));
+    }
+
+    pub fn try_region_stores(&self) -> Ref<'_, HashSet<String>> {
+        self.try_region_stores.borrow()
+    }
+
+    /// Record `line`'s store destination if we are inside a try region.
+    /// Called from [`LlBlock::emit`], the single choke point every emitter
+    /// (including `emit_raw`) funnels through.
+    fn note_emitted(&self, line: &str) {
+        if self.try_region_depth.get() == 0 {
+            return;
+        }
+        if let Some(ptr) = crate::volatile_setjmp::store_dest_ptr(line) {
+            if ptr.starts_with('%') {
+                self.try_region_stores.borrow_mut().insert(ptr.to_string());
+            }
+        }
     }
 }
 
@@ -160,7 +206,11 @@ impl LlBlock {
         if self.terminated {
             return;
         }
-        self.instructions.push(format!("  {}", line.into()));
+        let line = line.into();
+        // #6385: note stores emitted inside a setjmp-protected region so
+        // `LlFunction::to_ir` can make the backing allocas volatile.
+        self.counter.note_emitted(&line);
+        self.instructions.push(format!("  {}", line));
     }
 
     fn reg(&self) -> String {

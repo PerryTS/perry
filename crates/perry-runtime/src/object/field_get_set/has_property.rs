@@ -208,17 +208,45 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
 
     // A Web Fetch / zlib handle-band value (Headers/Request/Response, zlib
     // streams) at or above the fetch band is a registry id, not a heap object —
-    // the pointer paths below would dereference the id and segfault. `key in
-    // <handle>` has no own-property meaning for these, so report `false`.
-    // Common/small handles (below the fetch band) are intentionally NOT caught
-    // here: they fall through to the registered small-handle property path later
-    // in this function. Same family as the string_from_header / inline-`.length`
-    // guards.
+    // the pointer paths below would dereference the id and segfault, so this
+    // arm must resolve `key in <handle>` on its own and return.
+    //
+    // #6363: it used to report a flat `false`. That was a guard, not a route:
+    // a handle DOES have own properties — anything the user attached, via
+    // `handle.foo = v` or `Object.defineProperty(handle, …)` — and it has the
+    // typed native surface (`"status" in response`) on top. `hasOwnProperty`
+    // reports both, so a bare `false` here had `in` contradicting it. Answer
+    // from the expando table first (authoritative for own properties, and it
+    // sees a `{ value: undefined }` define that a [[Get]] probe cannot
+    // distinguish from absent), then fall back to the property dispatcher for
+    // the typed surface — which is exactly what the common/small-handle band
+    // already does further down this function.
     if obj_val.is_pointer() {
         let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
         if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
             && crate::value::addr_class::is_handle_band(addr)
         {
+            if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+                return if unsafe { crate::symbol::js_object_has_own_symbol(obj, key) } {
+                    nanbox_true
+                } else {
+                    nanbox_false
+                };
+            }
+            if let Some(name) = unsafe { crate::object::metadata_key_to_string(key) } {
+                if crate::object::handle_expando::handle_expando_has(addr as i64, &name) {
+                    return nanbox_true;
+                }
+                if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
+                    let found = unsafe {
+                        dispatch(addr as i64, name.as_ptr(), name.len()).to_bits()
+                            != crate::value::TAG_UNDEFINED
+                    };
+                    if found {
+                        return nanbox_true;
+                    }
+                }
+            }
             return nanbox_false;
         }
     }

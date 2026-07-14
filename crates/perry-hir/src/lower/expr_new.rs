@@ -178,14 +178,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             //      param shadows it — and the `resolve_class_alias().is_none()`
             //      guard on the reroute block below would then skip it.
             //
-            // Capturing the binding here (when no real class of this name is in
-            // scope) keeps the reroute stable against both.
-            let callee_local_at_entry: Option<LocalId> = if ctx.lookup_class(&class_name).is_none()
-            {
-                ctx.lookup_local(&class_name)
-            } else {
-                None
-            };
+            // Capturing the binding here keeps the reroute stable against both.
+            //
+            // Snapshotted UNCONDITIONALLY (previously only when no class of
+            // this name existed): a lexical local shadows a same-named
+            // module-scope class for every reference in scope, `new`
+            // included. Minified bundles hit this constantly — mysql2's
+            // chunk has `class e{...}` (PacketParser) at module scope AND
+            // factory-local `let e = E.r(76464)` (PoolConfig); `new e(o)`
+            // must construct the LOCAL's value, not the name-keyed class
+            // (myairank wall 7: the wrong class's ctor ran, silently). A
+            // class-decl name only carries a local slot when the module
+            // reassigns it (#5833), and for a reassigned binding reading the
+            // slot is the spec-correct behavior for `new` too.
+            let callee_local_at_entry: Option<LocalId> = ctx.lookup_local(&class_name);
             // #6233: a user-declared binding — `class Symbol extends Base {}`,
             // a local/param, a `function` declaration, or an imported binding —
             // lexically shadows the same-named global for every reference in
@@ -1141,18 +1147,27 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
             // A local/param binding lexically shadows any same-named outer
-            // `let`/`const` class alias. When `callee_local_at_entry` is set
-            // (a non-class local was in scope at the top of this arm, before
-            // arg lowering could disturb the scope), route the construct
-            // through that VALUE — even if `resolve_class_alias` would
-            // otherwise resolve `class_name` to a stale enclosing-scope alias
-            // (its map is name-keyed, not scope-aware). Without this, the
-            // `resolve_class_alias().is_none()` guard on the local-reroute
-            // block below is false and the construct falls through to an
-            // empty-object `Expr::New { class_name }` placeholder whose
-            // constructor body never runs.
-            if ctx.lookup_class(&class_name).is_none() {
-                if let Some(local_id) = callee_local_at_entry {
+            // `let`/`const` class alias AND any same-named module-scope class
+            // declaration. When `callee_local_at_entry` is set (a local was
+            // in scope at the top of this arm, before arg lowering could
+            // disturb the scope), route the construct through that VALUE —
+            // even if `resolve_class_alias` would otherwise resolve
+            // `class_name` to a stale enclosing-scope alias (its map is
+            // name-keyed, not scope-aware), and even if a class of this name
+            // exists (the local shadows it; constructing the class instead
+            // ran the WRONG constructor for mysql2's bundled factories).
+            if let Some(local_id) = callee_local_at_entry {
+                // …but NOT when the local IS the class's own alias binding
+                // (`const E2 = class extends Event {}` — `let_class_aliases`
+                // maps E2 to its class): the static path carries the exact
+                // builtin-parent construction (#6336's Event/Map native
+                // attach), which the generic dynamic construct does not.
+                // A shadowing local over an UNRELATED same-named class
+                // declaration has no alias entry, so wall 7's reroute keeps
+                // firing.
+                let local_is_class_alias =
+                    ctx.inferred_class_bindings.contains(class_name.as_str());
+                if !local_is_class_alias {
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::LocalGet(local_id)),
                         args,

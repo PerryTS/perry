@@ -564,7 +564,14 @@ pub(super) fn compile_method(
         //     later (after super() in own-body case, after explicit parent
         //     ctor call in no-own-body case).
         //   - no extends: apply all (= just self) here.
-        let init_mode = if class.extends_name.is_some() {
+        // A no-own-ctor class with a PURELY dynamic parent (`extends_expr`,
+        // no `extends_name`) now emits a synthesized dynamic super below —
+        // stage its self fields AFTER that call (tail SelfOnly), like any
+        // other heritage class, instead of applying them twice.
+        let no_ctor_dynamic_parent = class.constructor.is_none()
+            && class.extends_name.is_none()
+            && class.extends_expr.is_some();
+        let init_mode = if class.extends_name.is_some() || no_ctor_dynamic_parent {
             crate::lower_call::FieldInitMode::AncestorsOnly
         } else {
             crate::lower_call::FieldInitMode::All
@@ -585,7 +592,9 @@ pub(super) fn compile_method(
         // call to the parent's standalone ctor symbol here, forwarding all
         // args. The walk skips empty-bodied parents (matching the JS spec
         // chain semantics).
-        if class.constructor.is_none() && class.extends_name.is_some() {
+        if class.constructor.is_none()
+            && (class.extends_name.is_some() || class.extends_expr.is_some())
+        {
             let builtin_parent_runtime = match class.extends_name.as_deref() {
                 Some("Writable") => Some("js_node_stream_writable_subclass_init"),
                 Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
