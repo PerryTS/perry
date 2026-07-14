@@ -32,12 +32,49 @@ pub(crate) fn check_eval_function_call(
     while let ast::Expr::Paren(p) = callee {
         callee = p.expr.as_ref();
     }
-    let ast::Expr::Ident(ident) = callee else {
-        return Ok(None);
+    // `Function.apply(thisArg, argsArray)` / `Function.call(thisArg, …, body)` reach
+    // CreateDynamicFunction indirectly — the same surface as a direct `Function(body)`,
+    // just spelled through the constructor's own `apply`/`call`. Recognize them here so
+    // an unfoldable body is classified. Otherwise the site fell through to the generic
+    // call lowering and evaluated to `undefined`; the caller then invoked `.apply` on
+    // that `undefined` and failed several frames away with a misleading
+    // "Function.prototype.apply was called on a value that is not a function", naming
+    // neither eval nor the real cause. mysql2's row-parser codegen is exactly this
+    // shape: `Function.apply(null, argNames.concat(body)).apply(null, argValues)`.
+    //
+    // A const-foldable spelling never reaches here — `try_eval_function_member_call_fold`
+    // runs first and compiles it.
+    let mut member_apply = false;
+    let ident = match callee {
+        ast::Expr::Ident(id) => id,
+        ast::Expr::Member(m) => {
+            let ast::MemberProp::Ident(prop) = &m.prop else {
+                return Ok(None);
+            };
+            match prop.sym.as_ref() {
+                "apply" => member_apply = true,
+                "call" => {}
+                _ => return Ok(None),
+            }
+            let mut obj = m.obj.as_ref();
+            while let ast::Expr::Paren(p) = obj {
+                obj = p.expr.as_ref();
+            }
+            let ast::Expr::Ident(id) = obj else {
+                return Ok(None);
+            };
+            if id.sym.as_ref() != "Function" {
+                return Ok(None);
+            }
+            id
+        }
+        _ => return Ok(None),
     };
     let name = ident.sym.as_ref();
     let surface = match name {
-        "eval" => crate::eval_classifier::EvalSurface::Eval,
+        "eval" if !member_apply && !matches!(callee, ast::Expr::Member(_)) => {
+            crate::eval_classifier::EvalSurface::Eval
+        }
         "Function" => crate::eval_classifier::EvalSurface::FunctionCall,
         _ => return Ok(None),
     };
@@ -52,11 +89,28 @@ pub(crate) fn check_eval_function_call(
     // Body argument: the only arg for `eval(code)`, the last arg for
     // `Function(p1, p2, body)`. A spread in the body position yields a
     // non-constant inner expr → the classifier buckets it runtime-unknown.
-    let body_arg = match surface {
-        crate::eval_classifier::EvalSurface::Eval => call.args.first(),
-        _ => call.args.last(),
-    }
-    .map(|a| a.expr.as_ref());
+    //
+    // `Function.call(thisArg, p1, …, body)` — CreateDynamicFunction ignores its `this`,
+    // so the body is still the last argument. `Function.apply(thisArg, argsArray)` —
+    // the body is the array's last element when the array is a literal; when the list is
+    // assembled at runtime the array expression itself stands in, which is by
+    // construction non-constant, so the classifier buckets the site runtime-unknown.
+    let body_arg = if member_apply {
+        match call.args.get(1).map(|a| a.expr.as_ref()) {
+            Some(ast::Expr::Array(arr)) => arr
+                .elems
+                .last()
+                .and_then(|e| e.as_ref())
+                .map(|e| e.expr.as_ref()),
+            other => other,
+        }
+    } else {
+        match surface {
+            crate::eval_classifier::EvalSurface::Eval => call.args.first(),
+            _ => call.args.last(),
+        }
+        .map(|a| a.expr.as_ref())
+    };
     match crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)? {
         crate::eval_classifier::EvalDecision::Proceed => Ok(None),
         crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => Ok(Some(
