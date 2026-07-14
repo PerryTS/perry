@@ -74,7 +74,14 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub func_signatures: &'a HashMap<u32, (usize, bool, bool, bool)>,
     pub func_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub module_boxed_vars: &'a std::collections::HashSet<u32>,
+    /// Typed-ABI capture-representation oracle: module-wide `Stmt::Let` types
+    /// MINUS boxed ids (#5869). Only the typed closure clones read this.
     pub module_local_types: &'a HashMap<u32, perry_types::Type>,
+    /// #6369: receiver-type oracle for closure bodies — the same module-wide
+    /// `Stmt::Let` types with no representation filtering, mirroring the
+    /// `module_global_types` seed that `compile_function` / `compile_method`
+    /// already use. Feeds `FnCtx.local_types` only.
+    pub module_receiver_types: &'a HashMap<u32, perry_types::Type>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
     pub closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
     pub closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
@@ -194,6 +201,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         func_synthetic_arguments,
         module_boxed_vars,
         module_local_types,
+        module_receiver_types,
         closure_rest_params,
         closure_synthetic_arguments,
         closure_rest_and_arguments,
@@ -277,7 +285,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             func_synthetic_arguments,
             module_prefix,
             module_boxed_vars,
-            module_local_types,
+            module_receiver_types,
             closure_rest_params,
             cross_module,
         )

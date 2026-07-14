@@ -498,7 +498,11 @@ pub(super) fn compile_closure(
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     module_boxed_vars: &std::collections::HashSet<u32>,
-    module_local_types: &HashMap<u32, perry_types::Type>,
+    // #6369: receiver-type oracle (module-wide `Stmt::Let` types, unfiltered).
+    // Seeds `FnCtx.local_types` so a binding captured from an enclosing scope
+    // keeps its declared type at its read sites. NOT the typed-ABI capture
+    // map — the typed closure clones take `module_local_types` instead.
+    module_receiver_types: &HashMap<u32, perry_types::Type>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
 ) -> Result<()> {
@@ -618,7 +622,7 @@ pub(super) fn compile_closure(
     // typed fast path and return undefined.
     let mut local_types: HashMap<u32, perry_types::Type> =
         params.iter().map(|p| (p.id, p.ty.clone())).collect();
-    for (id, ty) in module_local_types.iter() {
+    for (id, ty) in module_receiver_types.iter() {
         local_types.entry(*id).or_insert_with(|| ty.clone());
     }
 
@@ -736,6 +740,8 @@ pub(super) fn compile_closure(
         &cross_module.clamp3_functions,
         &closure_boxed_vars,
         module_globals,
+        // #6369: declared types of module-scope bindings this closure captures.
+        &local_types,
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,

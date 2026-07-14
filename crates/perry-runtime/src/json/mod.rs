@@ -30,6 +30,7 @@ mod simd;
 mod stringify;
 mod stringify_api;
 mod stringify_buffer;
+mod stringify_scalars;
 mod stringify_tojson_probe;
 
 // Public FFI re-exports — preserve the `crate::json::js_json_*` path used by

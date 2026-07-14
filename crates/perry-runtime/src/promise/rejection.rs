@@ -313,7 +313,7 @@ fn with_listener_uncaught_trap<F: FnOnce()>(f: F) {
     crate::exception::js_try_end();
     if !crate::os::emit_process_event("uncaughtException", &[exc]) {
         crate::exception::print_uncaught(exc);
-        std::process::exit(1);
+        crate::process::exit_after_current_thread_collection_teardown(1);
     }
 }
 
@@ -362,7 +362,7 @@ fn report_unhandled(promise: *mut Promise) {
 
     print_unhandled_diagnostic(reason_handle.get_nanbox_f64());
     // Match Node's unhandled-rejection exit code (1).
-    std::process::exit(1);
+    crate::process::exit_after_current_thread_collection_teardown(1);
 }
 
 /// Surface the rejection reason instead of the bare, opaque

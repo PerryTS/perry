@@ -240,6 +240,24 @@ pub struct LoweringContext {
     /// exactly like a `canvas: Canvas` param or a `const canvas = Canvas(...)`
     /// local. Type-only native specifiers are otherwise dropped at import.
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
+    /// A named import from a node-core module whose name is not a *value* export
+    /// of that module — `local -> (imported, raw_source, span)`.
+    ///
+    /// The overwhelmingly common cause is a TYPE name in a mixed import:
+    /// `import { createCipheriv, BinaryLike } from "crypto"` — `BinaryLike` is a
+    /// TS type, not a runtime export. tsc, esbuild, and Bun all erase such a
+    /// specifier (it is never referenced in a value position); only Node's
+    /// non-type-directed `--experimental-strip-types` rejects it, and it demands
+    /// an explicit `import type`. Rejecting it at import time made every such
+    /// file fail to compile.
+    ///
+    /// So the specifier is neither bound nor rejected here — it is recorded, and
+    /// the error is raised from `lower_ident_expr` if (and only if) the local is
+    /// actually referenced as a VALUE. Type annotations are erased before
+    /// expression lowering, so reaching that point proves a genuine bad import
+    /// (`import { nope } from "crypto"; nope()`), which still gets the original
+    /// `U006` diagnostic and still diverges-from-Node-safely.
+    pub(crate) deferred_unknown_native_imports: HashMap<String, (String, String, swc_common::Span)>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
     /// Source-level inner name of the class currently being lowered — the

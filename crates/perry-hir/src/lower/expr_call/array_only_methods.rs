@@ -693,6 +693,30 @@ pub(super) fn try_array_only_methods(
                         return Ok(Err(args));
                     }
                 }
+                // The guard above only inspects a *bare identifier* receiver. A property
+                // receiver (`this._commands.push(c)`, `h.q.push(c)`) had no gate at all
+                // and committed to the eager `array.push_single` native arm, which threads
+                // the receiver through `js_array_push_f64` — that helper writes
+                // `(*arr).length` and the element slot with no shape check, so a plain
+                // object receiver has its ObjectHeader overwritten as an ArrayHeader: the
+                // user's `push` never runs, the call yields a bogus length, and later field
+                // reads on the object come back `undefined`. denque (mysql2's command
+                // queue) is exactly this shape — `Denque.prototype.push` reached via
+                // `this._commands` — so every queued command was silently dropped.
+                //
+                // Fold only when the receiver is *provably* an array; otherwise defer to
+                // the runtime `js_native_call_method` dispatch, which selects on the
+                // receiver's real shape (real array → dense helper, growth via the #233
+                // forwarding pointer; object → its own method). The rest of the mutator
+                // family already reaches that dispatch for property receivers.
+                if method_name == "push" {
+                    let recv_ty = crate::lower_types::infer_type_from_expr(&member.obj, ctx);
+                    let provably_array = matches!(recv_ty, Type::Array(_))
+                        || matches!(&recv_ty, Type::Generic { base, .. } if base == "Array");
+                    if !provably_array {
+                        return Ok(Err(args));
+                    }
+                }
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;

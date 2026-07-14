@@ -95,6 +95,13 @@ pub extern "C" fn js_process_exit(code: f64) {
     //   * anything else (boolean/object/array) → TypeError.
     let exit_code = validate_exit_code(code).unwrap_or_default();
     js_process_run_finalization_exit();
+    crate::gc::js_gc_release_current_thread_collection_side_allocations();
+    terminate_without_atexit(exit_code)
+}
+
+/// Terminate without running process-wide cleanup after thread-local GC state
+/// has been torn down.
+fn terminate_without_atexit(exit_code: i32) -> ! {
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
@@ -114,6 +121,15 @@ pub extern "C" fn js_process_exit(code: f64) {
     }
     #[cfg(not(any(unix, windows)))]
     std::process::exit(exit_code);
+}
+
+/// Terminate after releasing current-thread collection storage.
+///
+/// This is used by fatal paths that have already completed their reporting
+/// callbacks and would otherwise bypass the generated executable epilogue.
+pub(crate) fn exit_after_current_thread_collection_teardown(code: i32) -> ! {
+    crate::gc::js_gc_release_current_thread_collection_side_allocations();
+    terminate_without_atexit(code)
 }
 
 /// Validate + coerce a `process.exit(code)` argument the way Node's

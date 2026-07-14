@@ -112,7 +112,18 @@ fn lower_async_rejecting_stmts_inner(
 
     ctx.current_block = body_idx;
     ctx.try_depth += 1;
+    // The whole async body runs between the setjmp above and a possible
+    // longjmp into `async.catch`. `async.catch` itself only touches runtime
+    // state (get/clear exception, reject the promise) and never reads a
+    // local, so in principle no alloca needs to survive that longjmp — but we
+    // open the region anyway rather than special-case it. The uniform rule
+    // ("every alloca stored inside a setjmp-protected region is volatile") is
+    // the one that is trivially sound, and this is still strictly better than
+    // the `optnone` it replaces: the arithmetic, compares and branches in an
+    // async body now optimize even though its locals stay frame-resident.
+    ctx.func.enter_try_region();
     lower_stmts_inner(ctx, stmts, emit_shadow_clears)?;
+    ctx.func.exit_try_region();
     ctx.try_depth -= 1;
     if !ctx.block().is_terminated() {
         ctx.block().call_void("js_try_end", &[]);

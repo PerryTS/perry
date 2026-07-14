@@ -539,12 +539,7 @@ fn match_packed_f64_range_loop(
     }
     for access in accesses.values() {
         let arr_id = access.array_id;
-        if !ctx.locals.contains_key(&arr_id)
-            || ctx.boxed_vars.contains(&arr_id)
-            || ctx.module_globals.contains_key(&arr_id)
-            || ctx.scalar_replaced_arrays.contains_key(&arr_id)
-            || ctx.native_facts.has_materialization_hazard(arr_id)
-        {
+        if !packed_loop_array_binding_is_eligible(ctx, arr_id) {
             return None;
         }
         // The guard takes i32 window endpoints; make sure `start + offset`
@@ -1684,12 +1679,7 @@ fn match_packed_f64_versioned_loop(
     {
         return None;
     }
-    if !ctx.locals.contains_key(&hoist.arr_id)
-        || ctx.boxed_vars.contains(&hoist.arr_id)
-        || ctx.module_globals.contains_key(&hoist.arr_id)
-        || ctx.scalar_replaced_arrays.contains_key(&hoist.arr_id)
-        || ctx.native_facts.has_materialization_hazard(hoist.arr_id)
-    {
+    if !packed_loop_array_binding_is_eligible(ctx, hoist.arr_id) {
         return None;
     }
     let store_array_kind =
@@ -1746,6 +1736,50 @@ fn local_array_element_type<'t>(
         }
         _ => None,
     }
+}
+
+/// #6369: which *bindings* a packed-numeric loop may version on.
+///
+/// The lowered fast loop reads the array box out of the binding once per
+/// iteration and then works on raw element slots, so the binding must be one
+/// whose read is a plain load of the array value:
+///
+/// - a stack local (`ctx.locals`) — the original case; or
+/// - a module-scope global (`@perry_global_*`) — the shape a bundle is made of
+///   (`const rows: number[] = […]` at module scope, read from a function or an
+///   arrow closure). Its read is a `load double, ptr @perry_global_*`, and the
+///   matched loop body admits no call / `await` / closure, so nothing can rebind
+///   the global or reshape the array between the entry guard and the last
+///   iteration. Before this, a captured array was rejected here and fell to the
+///   per-element guarded path (or, with no declared type reaching the body at
+///   all, to fully generic `js_dyn_index_get`) — 27× slower than the identical
+///   array passed as a parameter.
+///
+/// Still rejected: a BOXED stack slot (it holds a box pointer, not the array), a
+/// closure-capture slot (its read is a `js_closure_get_capture_*` call, which the
+/// raw-slot fast loop cannot host), a scalar-replaced array, and anything the
+/// fact graph flagged with a materialization hazard.
+///
+/// The storage test mirrors `Expr::LocalGet`'s own precedence (capture slot →
+/// box slot → alloca → module global) exactly, which is what makes the
+/// module-global arm safe from the boxed set: `compile_closure` seeds
+/// `ctx.boxed_vars` with the module-wide boxed UNION, so a module global that is
+/// boxed *in some other scope* shows up as boxed here — while its read in this
+/// body is still a plain `@perry_global_*` load, because the box slot arm needs
+/// an alloca (`ctx.locals`) this body does not have. Reading the flag without
+/// that distinction is what kept a captured `const rows: number[]` off the fast
+/// loop in a closure while the same code in a plain function got it.
+fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
+    let storage_is_addressable = if ctx.closure_captures.contains_key(&arr_id) {
+        false
+    } else if ctx.locals.contains_key(&arr_id) {
+        !ctx.boxed_vars.contains(&arr_id)
+    } else {
+        ctx.module_globals.contains_key(&arr_id)
+    };
+    storage_is_addressable
+        && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
+        && !ctx.native_facts.has_materialization_hazard(arr_id)
 }
 
 fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {

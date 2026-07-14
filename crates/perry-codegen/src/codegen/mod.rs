@@ -1758,7 +1758,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 
     // Module-wide boxed-var union + LocalId→Type map. See `boxed_locals`.
     let module_boxed_vars = boxed_locals::collect_module_boxed_vars(hir);
-    let mut module_local_types = boxed_locals::collect_module_local_types(hir);
+    // #6369: the *receiver-type oracle* for closure bodies — every module-wide
+    // `Stmt::Let` type, with NO representation-driven filtering. `FnCtx.
+    // local_types` is what `static_type_of` / `is_array_expr` /
+    // `receiver_class_name` read to pick a specialized (guarded) access path,
+    // and a binding's declared type is a fact about its VALUE — it holds no
+    // matter whether the slot backing it is a plain alloca, a box cell, or a
+    // module global (every read routes through the matching load, and every
+    // specialized path is a runtime-guarded fast path with the generic
+    // fallback intact). `compile_function` / `compile_method` already seed
+    // `local_types` from the unfiltered `module_global_types`; closures are
+    // the outlier, and the two filters below (both aimed squarely at the
+    // typed-ABI *capture representation*) were silently dropping the type of
+    // every captured binding from the closure oracle too — so a captured
+    // `number[]` reached `arr[i]` as an unknown receiver and fell all the way
+    // to `js_dyn_index_get` (27× slower than the same array passed as a
+    // parameter, and no faster than an untyped array).
+    let module_receiver_types = boxed_locals::collect_module_local_types(hir);
+    let mut module_local_types = module_receiver_types.clone();
     // #5869 residual: a BOXED local's slot holds a BOX POINTER, never the
     // typed value — advertising its declared type to the typed-ABI layer
     // made the typed closure specializations (typed_f64/i1/i32/string
@@ -1772,6 +1789,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // for closures inside labeled blocks.) Removing boxed ids here
     // disqualifies every type-directed unboxed access on a boxed slot in
     // one place; consumers fall back to the generic (box-aware) paths.
+    //
+    // #6369: scoped to the typed-ABI copy (like the module-globals filter
+    // below). The hazard is the unboxed *capture representation*, not the
+    // receiver type — see `module_receiver_types` above.
     module_local_types.retain(|id, _| !module_boxed_vars.contains(id));
     // #5982 (#5466 regression): a MODULE-GLOBAL captured local is read by a
     // closure through `@perry_global_*`, NOT the closure's capture array —
@@ -1796,8 +1817,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `assert.throws(TypeError, () => arr.every())` then saw no exception
     // (24 regressions: Array HOF + symbol-strict [[Set]], all via harness
     // closures). Only the typed-ABI *specialization* decision needs the
-    // module-globals removed, so scope the filter to a dedicated copy and
-    // leave `module_local_types` (the receiver oracle) module-global-inclusive.
+    // module-globals removed, so scope the filter to a dedicated copy — the
+    // receiver oracle is `module_receiver_types` (#6369).
     let typed_abi_local_types: std::collections::HashMap<u32, perry_types::Type> =
         module_local_types
             .iter()
@@ -2258,6 +2279,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         func_synthetic_arguments: &func_synthetic_arguments,
         module_boxed_vars: &module_boxed_vars,
         module_local_types: &module_local_types,
+        module_receiver_types: &module_receiver_types,
         closure_rest_params: &closure_rest_params,
         closure_synthetic_arguments: &closure_synthetic_arguments,
         closure_rest_and_arguments: &closure_rest_and_arguments,

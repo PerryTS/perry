@@ -75,6 +75,7 @@ impl LoweringContext {
             param_native_hints: HashMap::new(),
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
+            deferred_unknown_native_imports: HashMap::new(),
             current_class: None,
             current_class_inner_name: None,
             pending_class_inner_name: None,

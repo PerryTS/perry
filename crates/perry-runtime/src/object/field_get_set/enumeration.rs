@@ -163,28 +163,49 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
         // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
-        // Headers/Blob, …) is not an address. It exposes no own enumerable
-        // properties — its surface lives on the prototype as accessors — so
-        // return empty instead of dereferencing unmapped low memory.
+        // Headers/Blob, …) is not an address — never dereference it. Its TYPED
+        // surface (`blob.size`, `response.status`) lives on the prototype as
+        // accessors, so it contributes no own keys; but anything the USER
+        // attached does (`handle.foo = v`, or an
+        // `Object.defineProperty(handle, …)` with `enumerable: true`). Node
+        // treats these as ordinary extensible objects, so enumerate the
+        // expandos (#6363) plus whatever the stdlib reports as a real own shape
+        // (`StringDecoder.encoding`).
+        //
+        // NB: `is_handle_band` used to return empty BEFORE the `is_small_handle`
+        // arm below, leaving the `handle_own_property_names_dispatch` lookup
+        // unreachable — `Object.keys(new StringDecoder())` was `[]` while
+        // `Object.getOwnPropertyNames` (which does consult it) said
+        // `["encoding"]`. One branch now, so the two agree.
         if crate::value::addr_class::is_handle_band(ptr) {
-            return crate::array::js_array_alloc(0);
-        }
-        if crate::value::addr_class::is_small_handle(ptr) {
+            if !crate::value::addr_class::is_small_handle(ptr) {
+                return crate::array::js_array_alloc(0);
+            }
+            let mut out = crate::array::js_array_alloc(0);
             if let Some(dispatch) =
                 super::super::class_registry::handle_own_property_names_dispatch()
             {
                 let names = unsafe { dispatch(ptr as i64) };
-                if names.to_bits() != crate::value::TAG_UNDEFINED {
-                    let bits = names.to_bits();
-                    if bits >> 48 == 0x7FFD {
-                        let arr = (bits & crate::value::POINTER_MASK) as *mut ArrayHeader;
-                        if !arr.is_null() {
-                            return arr;
+                let bits = names.to_bits();
+                if bits != crate::value::TAG_UNDEFINED && bits >> 48 == 0x7FFD {
+                    let arr = (bits & crate::value::POINTER_MASK) as *mut ArrayHeader;
+                    if !arr.is_null() {
+                        let n = crate::array::js_array_length(arr);
+                        for i in 0..n {
+                            let kv = crate::array::js_array_get(arr, i);
+                            out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
                         }
                     }
                 }
             }
-            return crate::array::js_array_alloc(0);
+            let expandos =
+                unsafe { super::super::descriptors::handle_own_names_raw_array(ptr as i64, true) };
+            let n = crate::array::js_array_length(expandos);
+            for i in 0..n {
+                let kv = crate::array::js_array_get(expandos, i);
+                out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+            }
+            return out;
         }
         if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
@@ -506,12 +527,12 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
-        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
-        // Headers/Blob, …) is not an address. It exposes no own enumerable
-        // properties — its surface lives on the prototype as accessors — so
-        // return empty instead of dereferencing unmapped low memory.
+        // A POINTER_TAG registry handle — see `js_object_keys_value`. Derive the
+        // values from its own enumerable keys so a user expando
+        // (`handle.foo = 1`) shows up here exactly as it does in `Object.keys`
+        // (#6363), instead of dereferencing unmapped low memory.
         if crate::value::addr_class::is_handle_band(ptr) {
-            return crate::array::js_array_alloc(0);
+            return handle_own_entries(value, HandleEnum::Values);
         }
         if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {
@@ -526,6 +547,54 @@ pub extern "C" fn js_object_values_value(value: f64) -> *mut ArrayHeader {
         return js_object_values(ptr as *const ObjectHeader);
     }
     crate::array::js_array_alloc(0)
+}
+
+/// Which projection of a handle's own enumerable properties to build.
+enum HandleEnum {
+    Values,
+    Entries,
+}
+
+/// #6363: `Object.values` / `Object.entries` for a native HANDLE receiver.
+///
+/// Reuses `js_object_keys_value`'s own-key list (so all three agree on what a
+/// handle owns) and reads each value back through the ordinary dynamic property
+/// get — which routes to the handle dispatcher and thus honours both the typed
+/// surface and the expando table, including a `defineProperty` getter.
+fn handle_own_entries(value: f64, what: HandleEnum) -> *mut ArrayHeader {
+    let keys = js_object_keys_value(value);
+    let n = crate::array::js_array_length(keys);
+    let mut out = crate::array::js_array_alloc(n);
+    for i in 0..n {
+        let kv = crate::array::js_array_get(keys, i);
+        let key_f64 = f64::from_bits(kv.bits());
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(name) = (unsafe { crate::string::js_string_key_bytes(kv, &mut scratch) }) else {
+            continue;
+        };
+        let v = unsafe {
+            crate::value::js_dynamic_object_get_property(
+                value,
+                name.as_ptr() as *const i8,
+                name.len(),
+            )
+        };
+        match what {
+            HandleEnum::Values => {
+                out = crate::array::js_array_push_f64(out, v);
+            }
+            HandleEnum::Entries => {
+                let mut pair = crate::array::js_array_alloc(2);
+                pair = crate::array::js_array_push_f64(pair, key_f64);
+                pair = crate::array::js_array_push_f64(pair, v);
+                out = crate::array::js_array_push_f64(
+                    out,
+                    f64::from_bits(JSValue::pointer(pair as *const u8).bits()),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// Tag-dispatching `Object.entries(value)` — see [`js_object_keys_value`].
@@ -570,12 +639,10 @@ pub extern "C" fn js_object_entries_value(value: f64) -> *mut ArrayHeader {
     }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<u8>() as usize;
-        // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
-        // Headers/Blob, …) is not an address. It exposes no own enumerable
-        // properties — its surface lives on the prototype as accessors — so
-        // return empty instead of dereferencing unmapped low memory.
+        // A POINTER_TAG registry handle — see `js_object_keys_value` / the
+        // `Object.values` twin above (#6363).
         if crate::value::addr_class::is_handle_band(ptr) {
-            return crate::array::js_array_alloc(0);
+            return handle_own_entries(value, HandleEnum::Entries);
         }
         if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
             return unsafe {

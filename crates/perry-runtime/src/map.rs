@@ -92,12 +92,79 @@ fn maybe_force_helper_gc_for_test() {
 #[inline(always)]
 fn maybe_force_helper_gc_for_test() {}
 
-thread_local! {
-    static MAP_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+#[cfg(test)]
+static TEST_MAP_SIDE_DEALLOCATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+static TEST_MAP_SIDE_DEALLOCATED_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn note_test_map_side_deallocation(bytes: usize) {
+    use std::sync::atomic::Ordering;
+
+    TEST_MAP_SIDE_DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    TEST_MAP_SIDE_DEALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
 }
 
-fn register_map(ptr: *mut MapHeader) {
-    MAP_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
+#[cfg(not(test))]
+#[inline]
+fn note_test_map_side_deallocation(_bytes: usize) {}
+
+#[cfg(test)]
+pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+
+    (
+        TEST_MAP_SIDE_DEALLOCATIONS.load(Ordering::Relaxed),
+        TEST_MAP_SIDE_DEALLOCATED_BYTES.load(Ordering::Relaxed),
+    )
+}
+
+struct MapSideAllocation {
+    entries: *mut f64,
+    capacity: usize,
+}
+
+impl MapSideAllocation {
+    fn new(entries: *mut f64, capacity: usize) -> Self {
+        Self { entries, capacity }
+    }
+
+    fn byte_len(&self) -> usize {
+        entries_layout(self.capacity).size()
+    }
+}
+
+impl Drop for MapSideAllocation {
+    fn drop(&mut self) {
+        if self.entries.is_null() || self.capacity == 0 {
+            return;
+        }
+        let layout = entries_layout(self.capacity);
+        unsafe {
+            dealloc(self.entries as *mut u8, layout);
+        }
+        note_test_map_side_deallocation(layout.size());
+        self.entries = std::ptr::null_mut();
+        self.capacity = 0;
+    }
+}
+
+thread_local! {
+    static MAP_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, MapSideAllocation>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
+    MAP_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        assert!(
+            !registry.contains_key(&(ptr as usize)),
+            "Map side allocation registered twice for the same header"
+        );
+        registry.insert(ptr as usize, MapSideAllocation::new(entries, capacity));
+    });
 }
 
 pub fn is_registered_map(addr: usize) -> bool {
@@ -117,7 +184,7 @@ pub fn is_registered_map(addr: usize) -> bool {
     // them, hiding the bug). The pre-filter's perf rationale (a ~5.7%-sample
     // SipHash `HashSet::contains`) predates MAP_REGISTRY moving to the
     // Fibonacci-hash `PtrHashSet`, which is what set.rs ships with today.
-    if !MAP_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+    if !MAP_REGISTRY.with(|r| r.borrow().contains_key(&addr)) {
         return false;
     }
     // A registered address is a live arena Map; the header read is safe and
@@ -392,9 +459,10 @@ pub fn drop_map_index(addr: usize) {
     MAP_PTR_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
-    MAP_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
+    if let Some(allocation) = MAP_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
+        crate::gc::gc_note_external_side_free(allocation.byte_len());
+        drop(allocation);
+    }
 }
 
 pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
@@ -403,9 +471,14 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     }
     MAP_REGISTRY.with(|r| {
         let mut registry = r.borrow_mut();
-        if registry.remove(&old_addr) {
-            registry.insert(new_addr);
+        let Some(allocation) = registry.remove(&old_addr) else {
+            return;
+        };
+        if registry.contains_key(&new_addr) {
+            registry.insert(old_addr, allocation);
+            panic!("Map move destination already owns a side allocation");
         }
+        registry.insert(new_addr, allocation);
     });
     MAP_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
@@ -435,7 +508,7 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
         return;
     }
     let addr = map as usize;
-    let was_registered = MAP_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
+    let allocation = MAP_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
     MAP_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
@@ -445,16 +518,12 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
     MAP_PTR_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
-    if !was_registered {
+    let Some(allocation) = allocation else {
         return;
-    }
+    };
 
-    let entries = (*map).entries;
-    let capacity = (*map).capacity as usize;
-    if !entries.is_null() && capacity > 0 {
-        dealloc(entries as *mut u8, entries_layout(capacity));
-        crate::gc::gc_note_external_side_free(entries_layout(capacity).size());
-    }
+    crate::gc::gc_note_external_side_free(allocation.byte_len());
+    drop(allocation);
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external entries side-allocation pointer after deregistration/deallocation.
     (*map).entries = std::ptr::null_mut();
     (*map).capacity = 0;
@@ -501,7 +570,7 @@ fn is_dead_copied_minor_from_space_map(addr: usize) -> bool {
 pub(crate) fn collect_dead_registered_maps_post_trace(full_trace: bool) -> Vec<usize> {
     MAP_REGISTRY.with(|r| {
         r.borrow()
-            .iter()
+            .keys()
             .copied()
             .filter(|&addr| unsafe { registered_map_is_dead_post_trace(addr, full_trace) })
             .collect()
@@ -544,7 +613,7 @@ unsafe fn registered_map_is_dead_post_trace(addr: usize, full_trace: bool) -> bo
 pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
     let maps = MAP_REGISTRY.with(|r| {
         r.borrow()
-            .iter()
+            .keys()
             .copied()
             .filter(|&addr| is_dead_copied_minor_from_space_map(addr))
             .collect::<Vec<_>>()
@@ -570,6 +639,32 @@ pub(crate) fn test_map_numeric_index_contains(map: *const MapHeader, key: f64) -
             .get(&(map as usize))
             .is_some_and(|slot| slot.contains_key(&NumericKey(bits)))
     })
+}
+
+#[cfg(test)]
+pub(crate) fn test_map_side_allocation(addr: usize) -> Option<(usize, usize)> {
+    MAP_REGISTRY.with(|r| {
+        r.borrow()
+            .get(&addr)
+            .map(|allocation| (allocation.entries as usize, allocation.capacity))
+    })
+}
+
+pub(crate) fn release_current_thread_map_side_allocations() {
+    let allocations = MAP_REGISTRY.with(|registry| {
+        registry
+            .borrow_mut()
+            .drain()
+            .map(|(_, allocation)| allocation)
+            .collect::<Vec<_>>()
+    });
+    for allocation in allocations {
+        crate::gc::gc_note_external_side_free(allocation.byte_len());
+        drop(allocation);
+    }
+    MAP_INDEX.with(|idx| idx.borrow_mut().clear());
+    MAP_STRING_INDEX.with(|idx| idx.borrow_mut().clear());
+    MAP_PTR_INDEX.with(|idx| idx.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -861,7 +956,7 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         (*ptr).entries = entries;
 
         // Register in map registry for runtime type detection
-        register_map(ptr);
+        register_map(ptr, entries, cap as usize);
 
         // Initialize / reset the O(1) lookup side-table for this address.
         // Arena reuse may recycle a freed Map's GC slot, so a stale index
@@ -1107,6 +1202,14 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
     (*map).entries = new_entries;
     (*map).capacity = new_capacity;
+    MAP_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let allocation = registry
+            .get_mut(&(map as usize))
+            .expect("grown Map must retain its side-allocation owner record");
+        allocation.entries = new_entries;
+        allocation.capacity = new_capacity as usize;
+    });
     // #6010: growth delta counts as external churn (see js_map_alloc). The
     // header is consistent again, and a triggered cycle is conservative +
     // non-moving, so the caller's raw `map`/entries pointers stay valid.

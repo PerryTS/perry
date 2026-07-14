@@ -99,6 +99,193 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
     );
 }
 
+/// #6363: `[[DefineOwnProperty]]` for a native HANDLE receiver — a pointer-tagged
+/// small registry id (zlib stream, fetch Request/Response/Headers/Blob, crypto
+/// hash, …), not a heap `ObjectHeader`.
+///
+/// Handles get their arbitrary own-property storage from the
+/// `handle_expando` side table — the same one a plain `handle.foo = v` write
+/// lands in (perry-stdlib's `js_handle_property_set_dispatch` falls back to it
+/// once every typed setter has passed). This ROUTES the descriptor there rather
+/// than merely tolerating the call: the value round-trips through `handle.key`,
+/// the `writable`/`enumerable`/`configurable` bits and any `get`/`set` pair are
+/// recorded in the ordinary descriptor side tables (keyed by the handle id), and
+/// `getOwnPropertyDescriptor` / `Object.keys` / `delete` read them back. A
+/// define that returned `true` and dropped the property would be the same silent
+/// no-op the throw replaced.
+///
+/// The caller has already established that `hid` is in the handle band and that
+/// the receiver is not a Proxy (proxies are handle-band ids too, and are routed
+/// to their `[[DefineOwnProperty]]` trap earlier).
+unsafe fn define_property_on_handle(
+    obj_value: f64,
+    hid: i64,
+    key_value: f64,
+    descriptor_value: f64,
+) -> f64 {
+    use crate::object::descriptor_state::{
+        set_accessor_descriptor, set_property_attrs, AccessorDescriptor,
+    };
+    use crate::object::handle_expando as hx;
+
+    // A handle IS an object in Node, so the ordinary descriptor validation
+    // applies: the descriptor must be an object, data and accessor fields can't
+    // be mixed, and a present `get`/`set` must be callable.
+    if !value_is_object_like(descriptor_value) || crate::symbol::js_is_symbol(descriptor_value) != 0
+    {
+        let desc = describe_value_for_type_error(descriptor_value);
+        throw_object_type_error_with_suffix("Property description must be an object: ", &desc);
+    }
+    validate_property_descriptor(descriptor_value);
+
+    // A Symbol key goes to the symbol side table (`SYMBOL_PROPERTIES`), which is
+    // keyed by the NaN-box payload — a handle id works there unchanged, and it's
+    // the table `handle[sym]` reads back from. String-coercing the symbol would
+    // file the value under a `"Symbol(x)"` STRING name, unreachable by the
+    // symbol-keyed reader. (This is the Next.js `PATCHED_SET_HEADER` shape.)
+    if crate::symbol::js_is_symbol(key_value) != 0 {
+        let has_get = desc_has_field(descriptor_value, b"get");
+        let has_set = desc_has_field(descriptor_value, b"set");
+        if has_get || has_set {
+            let get_field = desc_read_field(descriptor_value, b"get");
+            let set_field = desc_read_field(descriptor_value, b"set");
+            let get_bits = if !has_get || get_field.is_undefined() {
+                0
+            } else {
+                crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+            };
+            let set_bits = if !has_set || set_field.is_undefined() {
+                0
+            } else {
+                crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+            };
+            crate::symbol::set_symbol_accessor_property(obj_value, key_value, get_bits, set_bits);
+        } else if desc_has_field(descriptor_value, b"value") {
+            let value_field = desc_read_field(descriptor_value, b"value");
+            crate::symbol::js_object_set_symbol_property(
+                obj_value,
+                key_value,
+                f64::from_bits(value_field.bits()),
+            );
+        }
+        let read_flag = |name: &[u8]| -> Option<bool> {
+            desc_has_field(descriptor_value, name).then(|| {
+                crate::value::js_is_truthy(f64::from_bits(
+                    desc_read_field(descriptor_value, name).bits(),
+                )) != 0
+            })
+        };
+        crate::symbol::set_symbol_property_attrs(
+            crate::symbol::obj_key_from_f64(obj_value),
+            crate::symbol::sym_key_from_f64(key_value),
+            PropertyAttrs::new(
+                read_flag(b"writable").unwrap_or(has_get || has_set),
+                read_flag(b"enumerable").unwrap_or(false),
+                read_flag(b"configurable").unwrap_or(false),
+            ),
+        );
+        return obj_value;
+    }
+
+    let Some(key) = super::super::metadata_key_to_string(key_value) else {
+        return obj_value;
+    };
+
+    // The property's CURRENT shape, captured before any mutation below.
+    let had_accessor = hx::handle_expando_accessor(hid, &key).is_some();
+    let had_data = hx::handle_expando_data_get(hid, &key).is_some();
+    // Spec retention (ValidateAndApplyPropertyDescriptor): redefining an
+    // EXISTING own property keeps the attributes the descriptor omits; a brand
+    // new one defaults them to `false`.
+    let existing: Option<PropertyAttrs> =
+        (had_accessor || had_data).then(|| hx::handle_expando_attrs(hid, &key));
+
+    let has_get = desc_has_field(descriptor_value, b"get");
+    let has_set = desc_has_field(descriptor_value, b"set");
+    let has_accessor = has_get || has_set;
+    let has_value = desc_has_field(descriptor_value, b"value");
+
+    if has_accessor {
+        // The descriptor literal's `get()`/`set()` shorthands were lowered with
+        // their reserved `this` slot pointing at the DESCRIPTOR object; rebind to
+        // the handle so the accessor sees the right receiver — same clone the
+        // ordinary object path does.
+        let get_field = desc_read_field(descriptor_value, b"get");
+        let set_field = desc_read_field(descriptor_value, b"set");
+        let get_bits = if !has_get || get_field.is_undefined() {
+            0
+        } else {
+            crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+        };
+        let set_bits = if !has_set || set_field.is_undefined() {
+            0
+        } else {
+            crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+        };
+        set_accessor_descriptor(
+            hid as usize,
+            key.clone(),
+            AccessorDescriptor {
+                get: get_bits,
+                set: set_bits,
+            },
+        );
+    } else {
+        // A data descriptor (`value`/`writable`) OR a generic one
+        // (`{ enumerable: true }` alone). Drop any accessor that used to occupy
+        // the key so the store can't fire a stale setter.
+        if had_accessor {
+            crate::object::descriptor_state::ACCESSOR_DESCRIPTORS.with(|m| {
+                m.borrow_mut().remove(&(hid as usize, key.clone()));
+            });
+        }
+        // [[Value]] is the descriptor's when present; otherwise it defaults to
+        // `undefined` for a BRAND-NEW key or an accessor→data conversion (neither
+        // has a data value to retain). Only a generic redefine of an EXISTING data
+        // property keeps the current value.
+        //
+        // The `undefined` store matters beyond the value itself: it is what makes
+        // the key an own property at all. `Object.defineProperty(h, "g", { enumerable:
+        // true })` creates `g` in Node (`getOwnPropertyDescriptor` → `{value: undefined,
+        // writable: false, enumerable: true, configurable: false}`, `"g" in h` → true);
+        // recording only the attribute bits would leave every own-key probe reporting
+        // it absent.
+        let new_value = if has_value {
+            Some(f64::from_bits(
+                desc_read_field(descriptor_value, b"value").bits(),
+            ))
+        } else if had_accessor || !had_data {
+            Some(f64::from_bits(crate::value::TAG_UNDEFINED))
+        } else {
+            None
+        };
+        if let Some(v) = new_value {
+            hx::handle_expando_set(hid, &key, v);
+        }
+    }
+
+    let read_flag = |name: &[u8]| -> Option<bool> {
+        desc_has_field(descriptor_value, name).then(|| {
+            crate::value::js_is_truthy(f64::from_bits(
+                desc_read_field(descriptor_value, name).bits(),
+            )) != 0
+        })
+    };
+    set_property_attrs(
+        hid as usize,
+        key,
+        PropertyAttrs::new(
+            read_flag(b"writable")
+                .unwrap_or_else(|| existing.map(|a| a.writable()).unwrap_or(has_accessor)),
+            read_flag(b"enumerable")
+                .unwrap_or_else(|| existing.map(|a| a.enumerable()).unwrap_or(false)),
+            read_flag(b"configurable")
+                .unwrap_or_else(|| existing.map(|a| a.configurable()).unwrap_or(false)),
+        ),
+    );
+    obj_value
+}
+
 /// Object.defineProperty(obj, key, descriptor) — set the value AND record the
 /// `writable` / `enumerable` / `configurable` attribute flags in the side table.
 /// Returns the object (NaN-boxed pointer).
@@ -171,55 +358,36 @@ pub extern "C" fn js_object_define_property(
         //   4. Present `get`/`set` must be callable.
         let target_is_class_ref = super::super::class_ref_id(obj_value).is_some();
         if !target_is_class_ref && !value_is_object_like(obj_value) {
-            // A native HANDLE target (a small pointer-tagged id — e.g. an http
-            // ServerResponse, Headers, a timer) is not a heap object, so Perry
-            // can't attach an arbitrary own property to it the way V8 can. Node
-            // framework code nonetheless calls `Object.defineProperty(handle, …)`:
-            // Next.js `patchSetHeaderWithCookieSupport` marks `res` with a Symbol
-            // (`Object.defineProperty(res, PATCHED_SET_HEADER, { value: true })`).
-            // Throwing here aborts the whole request (HTTP 500). Instead treat the
-            // define as a best-effort success: for a string key with a data
-            // descriptor, route the value through the handle property-set so
-            // `res[key]` round-trips; symbol keys / accessor descriptors degrade
-            // to a no-op (the framework's patch is idempotent, so re-running is
-            // harmless). Matches how `js_object_set_field_by_name` already tolerates
-            // small-handle receivers.
+            // A native HANDLE target (a pointer-tagged registry id — a zlib
+            // stream, a fetch Request/Response/Headers/Blob, a crypto hash, an
+            // http ServerResponse, a timer) is not a heap `ObjectHeader`, so it
+            // fails `value_is_object_like`. In Node these are ORDINARY,
+            // extensible objects and `Object.defineProperty(handle, …)` is
+            // everyday code (Next.js `patchSetHeaderWithCookieSupport` marks
+            // `res` with a Symbol; libraries add non-enumerable metadata all the
+            // time). Route the define to the handle's own-property storage
+            // instead of throwing — see `define_property_on_handle`.
+            //
+            // #6363: the band test here was a hand-typed `p < 0x10000` — one zero
+            // short of `HANDLE_BAND_MAX` (0x100000), so only the LOW common
+            // registry (crypto, timers, sockets) was recognised. The fetch band
+            // (0x40000..0xE0000) and the zlib band (0xE0000..0xF0000) fell past it
+            // and hit the `throw` below: `Object.defineProperty(gzipStream, …)` /
+            // `(headers, …)` raised a bogus TypeError. Use the centralized
+            // predicate — the same correction `js_object_set_field_by_name` and
+            // `js_delete_property` already carry.
             let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
-            let handle_id = if jv.is_pointer() {
-                let p = jv.as_pointer::<u8>() as usize;
-                if p >= 1 && p < 0x10000 {
-                    Some(p)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let handle_id = jv
+                .is_pointer()
+                .then(|| jv.as_pointer::<u8>() as usize)
+                .filter(|p| crate::value::addr_class::is_small_handle(*p));
             if let Some(hid) = handle_id {
-                // Best-effort: store a string-keyed data-descriptor value on the
-                // handle via the same dispatch `obj.key = value` uses.
-                let ks = crate::value::js_get_string_pointer_unified(key_value)
-                    as *const crate::StringHeader;
-                if !ks.is_null() {
-                    if let Some(dispatch) =
-                        super::super::class_handles::handle_property_set_dispatch()
-                    {
-                        let dval = if desc_has_field(descriptor_value, b"value") {
-                            Some(f64::from_bits(
-                                desc_read_field(descriptor_value, b"value").bits(),
-                            ))
-                        } else {
-                            None
-                        };
-                        if let Some(v) = dval {
-                            let name_ptr =
-                                (ks as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                            let name_len = (*ks).byte_len as usize;
-                            dispatch(hid as i64, name_ptr, name_len, v);
-                        }
-                    }
-                }
-                return obj_value;
+                return define_property_on_handle(
+                    obj_value,
+                    hid as i64,
+                    key_value,
+                    descriptor_value,
+                );
             }
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }

@@ -442,7 +442,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Boxed local in enclosing function: load the slot (box
             // pointer), deref via js_box_get_bits.
-            if ctx.boxed_vars.contains(id) {
+            //
+            // #6369: never for a MODULE GLOBAL. Its storage is the
+            // `@perry_global_*` cell, which holds the VALUE — `Stmt::Let`
+            // stores it there directly and never allocates a box — so a
+            // box deref here would reinterpret e.g. an array pointer as a
+            // box pointer. `LocalSet` and `Update` (below) already carry
+            // this exclusion; the read path was the odd one out, and it
+            // only stayed latent because a module global normally has no
+            // `ctx.locals` slot to find. The packed-loop invariant-global
+            // read cache installs exactly such a slot (`loops.rs` aliases
+            // the global into `ctx.locals` for the duration of the loop),
+            // so any module global that landed in the module-wide boxed
+            // union — which every closure inherits wholesale — was read
+            // back as garbage (`NaN`) there.
+            if ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id) {
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);

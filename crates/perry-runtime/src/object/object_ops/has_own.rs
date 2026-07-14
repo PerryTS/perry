@@ -74,16 +74,29 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         }
 
         // A POINTER_TAG registry handle (zlib stream, fetch Request/Response/
-        // Headers/Blob, …) is not an address and must never be dereferenced. It
-        // carries no own properties, so report false. Proxies also live in the
-        // handle band but are served by the trap branch below (which runs before
-        // any deref), so leave their sub-band alone.
+        // Headers/Blob, …) is not an address and must never be dereferenced. Its
+        // TYPED surface is prototype accessors (not own properties), but a
+        // user-attached expando IS an own property (#6363) — `handle.foo = v` or
+        // `Object.defineProperty(handle, …)`. Consult the expando table rather
+        // than reporting a flat false. Proxies also live in the handle band but
+        // are served by the trap branch below (which runs before any deref), so
+        // leave their sub-band alone.
         if obj_js.is_pointer() {
             let addr = obj_js.as_pointer::<u8>() as usize;
             if crate::value::addr_class::is_handle_band(addr)
                 && !crate::value::addr_class::is_proxy_id_band(addr)
             {
-                return f64::from_bits(TAG_FALSE);
+                let key_value = super::super::js_to_property_key(key_value);
+                if crate::symbol::js_is_symbol(key_value) != 0 {
+                    let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
+                    return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+                }
+                let present = super::super::metadata_key_to_string(key_value)
+                    .map(|name| {
+                        super::super::handle_expando::handle_expando_has(addr as i64, &name)
+                    })
+                    .unwrap_or(false);
+                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
         }
 

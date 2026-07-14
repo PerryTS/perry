@@ -96,8 +96,10 @@ fn build_and_run_android_impl(
         for entry in entries.flatten() {
             let path = entry.path();
             // Only sibling `.so` files; the main output was already copied as
-            // libperry_app.so above (and it carries no `.so` extension itself,
-            // so it can't match here and won't be double-copied).
+            // libperry_app.so above, and the `path == *so_path` guard below
+            // keeps it from being copied a second time under its own name
+            // (#5740 made the default output `lib<stem>.so`, so it now does
+            // carry a `.so` extension and would otherwise match here).
             let is_so = path
                 .extension()
                 .and_then(|e| e.to_str())
