@@ -30,14 +30,28 @@ pub(crate) use super::stringify_scalars::{
 /// `current_heap_header_for_user_ptr` Unknown→malloc rule.
 #[inline]
 pub(super) unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
-    if crate::value::addr_class::is_handle_band(ptr as usize) {
+    let addr = ptr as usize;
+    if crate::value::addr_class::is_handle_band(addr) {
         return false;
     }
-    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    !matches!(
-        crate::arena::classify_heap_generation(ptr as usize),
+    // Arena-resident (nursery/old/longlived) is decided by the page map alone —
+    // no header read at all.
+    if !matches!(
+        crate::arena::classify_heap_generation(addr),
         crate::arena::HeapGeneration::Unknown
-    ) || crate::gc::gc_malloc_header_is_tracked(gc_header)
+    ) {
+        return true;
+    }
+    // Otherwise the only way to be tracked is a registered malloc object, which
+    // requires a real GcHeader at `addr - GC_HEADER_SIZE`. Route through
+    // `addr_class::try_read_gc_header` rather than re-casting: it layers the
+    // magnitude guard AND the small-buffer-slab guard on top of the handle-band
+    // check. A slab address is heap-plausible but carries NO header, so a raw
+    // cast would read the previous slab entry's data bytes as a fake header.
+    match crate::value::addr_class::try_read_gc_header(addr) {
+        Some(header) => crate::gc::gc_malloc_header_is_tracked(header),
+        None => false,
+    }
 }
 
 pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
