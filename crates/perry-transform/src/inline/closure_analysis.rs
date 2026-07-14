@@ -934,10 +934,7 @@ mod tests {
 /// These are exactly the ids that do not exist in a caller's scope, so a
 /// closure capturing one of them cannot survive having the body cloned into a
 /// call site — see the closure guard in [`super::analysis::is_inlinable`].
-pub fn collect_declared_local_ids(
-    stmts: &[Stmt],
-    out: &mut std::collections::HashSet<LocalId>,
-) {
+pub fn collect_declared_local_ids(stmts: &[Stmt], out: &mut std::collections::HashSet<LocalId>) {
     for s in stmts {
         match s {
             Stmt::Let { id, .. } => {
