@@ -861,24 +861,11 @@ pub(crate) fn build_and_run_link(
         )
         .ok();
         let ndk_home = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();
-        // #1508: see platform_cmd.rs — same host-tag bug.
-        let host_tag = if cfg!(target_os = "macos") {
-            "darwin-x86_64"
-        } else if cfg!(target_os = "windows") {
-            "windows-x86_64"
-        } else {
-            "linux-x86_64"
-        };
-        let ndk_clang = format!(
-            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
-            ndk_home,
-            host_tag,
-            if cfg!(target_os = "windows") {
-                ".cmd"
-            } else {
-                ""
-            }
-        );
+        // #1508 (host toolchain tag) + #5740 (no `.cmd` wrapper on Windows —
+        // this stub compile hit the same defect as the link driver, and a failed
+        // spawn here is silent: `stub_ok` goes false and the link then dies on an
+        // undefined `JNI_GetCreatedJavaVMs`). `-target` is passed below.
+        let ndk_clang = ndk_clang_path(&ndk_home);
         let stub_ok = Command::new(&ndk_clang)
             .args(["-c", "-fPIC", "-target", "aarch64-linux-android24"])
             .arg("-o")

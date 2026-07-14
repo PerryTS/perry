@@ -392,15 +392,34 @@ fn resolve_optional_framework_dir(env_name: &str, args_input: &Path) -> Option<P
 /// Quote one linker argument for a response file. `msvc` selects `link.exe` /
 /// `lld-link` rules (a `"` toggles a quoted run; backslashes are literal Windows
 /// path separators, so they are NOT escaped — only an embedded `"` is escaped as
-/// `\"`); otherwise GNU/clang rules (inside double quotes `\` and `"` escape, so
-/// both are backslash-escaped). An argument with no whitespace/quote needs no
-/// quoting in either dialect — the common case (long object/lib paths).
+/// `\"`); otherwise GNU/clang rules (`\` and `"` escape the next character, both
+/// inside and outside double quotes, so both are backslash-escaped). An argument
+/// with no whitespace/quote and no backslash needs no quoting in either dialect —
+/// the common case (long object/lib paths).
 pub(super) fn quote_response_arg(arg: &str, msvc: bool) -> String {
     let needs_quote = arg.is_empty()
         || arg
             .bytes()
             .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'"'));
     if !needs_quote {
+        // #5740 / #6333 — GNU-style tokenizers (clang, gcc, ld: everything
+        // reached through a non-MSVC driver) treat `\` as an escape character
+        // *outside* quotes too, not just inside them. A plain Windows object
+        // path has no spaces, so it took this early return verbatim and the
+        // driver ate every separator: `C:\Users\me\AppData\...\app_ts.o` came
+        // back out of the tokenizer as `C:UsersmeAppData...app_ts.o` ("it seems
+        // the dir replace the \ split"). This bites the Windows-host →
+        // Android/HarmonyOS/Linux cross-links, which use the NDK/SDK clang
+        // driver (GNU rules) while the response-file path itself is taken on
+        // every Windows host.
+        //
+        // Escape rather than rewrite to `/`: doubling the backslash round-trips
+        // the argument byte-for-byte through the tokenizer on *any* host, so a
+        // POSIX file whose name legitimately contains a backslash still links
+        // (a blanket `\` → `/` substitution would corrupt it).
+        if !msvc && arg.contains('\\') {
+            return arg.replace('\\', "\\\\");
+        }
         return arg.to_string();
     }
     let mut out = String::with_capacity(arg.len() + 2);
@@ -428,6 +447,59 @@ pub(super) fn response_file_contents(args: &[String], msvc: bool) -> String {
     s
 }
 
+/// Path to the Android NDK's `clang` driver for the current build host.
+///
+/// #1508 — the host tag names the *build* machine's prebuilt toolchain, not the
+/// target; a Windows host used to fall through to `linux-x86_64` and point at a
+/// path the NDK doesn't ship.
+///
+/// #5740 — this drives `clang` itself rather than the NDK's per-target wrapper
+/// (`aarch64-linux-android24-clang`), which is a two-line shim that execs
+/// `clang --target=aarch64-linux-android24 "$@"`. Every caller here already
+/// passes `-target aarch64-linux-android24` explicitly, so the two are
+/// equivalent — except on Windows, where the wrapper is a `.cmd` batch file:
+/// Rust's `Command` can only spawn a batch file through `cmd.exe`, which layers
+/// a second round of command-line quoting (plus the batch-escaping restrictions
+/// from the CVE-2024-24576 fix) over an already-long link line.
+pub(super) fn ndk_clang_path(ndk_home: &str) -> String {
+    let host_tag = if cfg!(target_os = "macos") {
+        "darwin-x86_64"
+    } else if cfg!(target_os = "windows") {
+        "windows-x86_64"
+    } else {
+        "linux-x86_64"
+    };
+    format!(
+        "{}/toolchains/llvm/prebuilt/{}/bin/clang{}",
+        ndk_home,
+        host_tag,
+        if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Render the `@<file>` argument that points the linker at the response file.
+///
+/// This one is passed on the *command line*, so it is not subject to the
+/// response-file tokenizer — but on a Windows host it may still travel through
+/// a `cmd.exe`-mediated driver wrapper (the NDK ships `.cmd` shims, and Rust
+/// spawns those via `cmd.exe`). Every non-MSVC driver we hand it to (clang,
+/// gcc, ld) accepts `/` as a path separator on Windows, so normalizing the
+/// separators there sidesteps that whole layer of quoting (#5740).
+///
+/// `windows_host` gates the rewrite: on POSIX a backslash is a legal filename
+/// character, so the path is passed through untouched.
+pub(super) fn response_file_arg(rsp_display: &str, msvc: bool, windows_host: bool) -> String {
+    if !msvc && windows_host {
+        format!("@{}", rsp_display.replace('\\', "/"))
+    } else {
+        format!("@{}", rsp_display)
+    }
+}
+
 /// Rewrite a linker invocation to pass its arguments via a response file
 /// (`<linker> @<file>`) instead of inline, dodging the Windows `CreateProcess`
 /// command-line length cap (os error 206) on links with many object files.
@@ -449,7 +521,11 @@ fn rewrite_link_with_response_file(cmd: &Command, msvc: bool) -> Option<(Command
     fs::write(&rsp, contents).ok()?;
 
     let mut new_cmd = Command::new(cmd.get_program());
-    new_cmd.arg(format!("@{}", rsp.display()));
+    new_cmd.arg(response_file_arg(
+        &rsp.display().to_string(),
+        msvc,
+        cfg!(target_os = "windows"),
+    ));
     // Preserve env overrides (e.g. MSVC LIB/PATH set by select_linker_command)
     // and the working directory the original command was configured with.
     for (key, val) in cmd.get_envs() {
@@ -473,7 +549,7 @@ mod optional_framework_dir_tests;
 
 #[cfg(test)]
 mod response_file_tests {
-    use super::{quote_response_arg, response_file_contents};
+    use super::{quote_response_arg, response_file_arg, response_file_contents};
 
     #[test]
     fn plain_paths_are_unquoted_in_both_dialects() {
@@ -484,6 +560,60 @@ mod response_file_tests {
         );
         // /OPT:REF etc. — no whitespace, untouched.
         assert_eq!(quote_response_arg("/OPT:REF", true), "/OPT:REF");
+    }
+
+    /// #5740 / #6333 — the regression this PR fixes. A Windows object path has
+    /// no spaces, so it used to take the "no quoting needed" early return
+    /// verbatim; the GNU tokenizer in clang/gcc/ld then consumed each `\` as an
+    /// escape and the path collapsed to `C:Usersme...`. Every separator must
+    /// come out the other side, so each one is doubled.
+    #[test]
+    fn gnu_escapes_backslashes_in_unquoted_windows_paths() {
+        assert_eq!(
+            quote_response_arg(r"C:\Users\me\AppData\Local\Temp\app_ts.o", false),
+            r"C:\\Users\\me\\AppData\\Local\\Temp\\app_ts.o"
+        );
+        // Same for flags that embed a path (`-Wl,-rpath,C:\lib`).
+        assert_eq!(
+            quote_response_arg(r"-Wl,--out-implib,C:\build\app.lib", false),
+            r"-Wl,--out-implib,C:\\build\\app.lib"
+        );
+        // MSVC keeps backslashes literal — link.exe/lld-link do not escape.
+        assert_eq!(
+            quote_response_arg(r"C:\Users\me\app_ts.o", true),
+            r"C:\Users\me\app_ts.o"
+        );
+        // Unix paths have no backslash to escape: byte-identical passthrough.
+        assert_eq!(
+            quote_response_arg("/tmp/perry/app_ts.o", false),
+            "/tmp/perry/app_ts.o"
+        );
+    }
+
+    /// The `@<file>` arg rides the command line, not the response file. On a
+    /// Windows host with a non-MSVC driver it is normalized to `/` separators
+    /// (clang/gcc accept them, and it survives any `cmd.exe` wrapper); on POSIX
+    /// a backslash is a legal filename character and must survive untouched.
+    #[test]
+    fn response_file_arg_normalizes_only_on_windows_host_gnu_driver() {
+        assert_eq!(
+            response_file_arg(r"C:\Temp\perry-link-1.rsp", false, true),
+            "@C:/Temp/perry-link-1.rsp"
+        );
+        // MSVC driver on Windows: backslashes are the native separator.
+        assert_eq!(
+            response_file_arg(r"C:\Temp\perry-link-1.rsp", true, true),
+            r"@C:\Temp\perry-link-1.rsp"
+        );
+        // POSIX host: never rewrite (a `\` here is part of the filename).
+        assert_eq!(
+            response_file_arg(r"/tmp/we\ird/perry-link-1.rsp", false, false),
+            r"@/tmp/we\ird/perry-link-1.rsp"
+        );
+        assert_eq!(
+            response_file_arg("/tmp/perry-link-1.rsp", false, false),
+            "@/tmp/perry-link-1.rsp"
+        );
     }
 
     #[test]
@@ -508,6 +638,28 @@ mod response_file_tests {
     fn embedded_quote_is_escaped() {
         assert_eq!(quote_response_arg("a\"b", true), "\"a\\\"b\"");
         assert_eq!(quote_response_arg("a\"b", false), "\"a\\\"b\"");
+    }
+
+    /// #5740 — the Android link and the JNI-stub compile must both drive the
+    /// NDK's `clang` driver, never the per-target wrapper: on Windows that
+    /// wrapper is a `.cmd` batch file, which Rust can only spawn through
+    /// `cmd.exe`. (The `--target` the wrapper would have added is passed
+    /// explicitly by both call sites.)
+    #[test]
+    fn ndk_clang_path_bypasses_the_per_target_wrapper() {
+        let p = super::ndk_clang_path("/ndk");
+        assert!(!p.contains("aarch64-linux-android24-clang"), "{p}");
+        assert!(!p.ends_with(".cmd"), "{p}");
+        assert!(p.starts_with("/ndk/toolchains/llvm/prebuilt/"), "{p}");
+        #[cfg(target_os = "macos")]
+        assert_eq!(p, "/ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang");
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            p,
+            "/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+        );
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        assert_eq!(p, "/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang");
     }
 
     #[test]
