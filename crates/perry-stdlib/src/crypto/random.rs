@@ -70,9 +70,16 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
 
 /// `crypto.randomBytes(size, callback)` — callback form.
 ///
-/// Perry executes the callback synchronously, but preserves Node's
-/// observable callback shape `(err, buffer)` for parity tests and common
-/// compatibility paths.
+/// Node runs `randomBytes` on the libuv threadpool, so the `(err, buffer)`
+/// callback fires on a LATER event-loop iteration (one macrotask hop), never
+/// synchronously. Perry generates the bytes synchronously but must preserve
+/// that timing: schedule the callback via `setImmediate` instead of calling it
+/// inline. Resolving it synchronously let an `await`ing caller continue a
+/// macrotask early — e.g. Auth.js generates its CSRF token with async
+/// `randomBytes`, so a Next.js Server Component's `await auth()` completed one
+/// event-loop iteration ahead of Node, reordering the React Flight (RSC) rows
+/// of the streamed response. The bytes are still produced eagerly; only the
+/// callback dispatch is deferred.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: f64) -> f64 {
     let buf = js_crypto_random_bytes_buffer(size);
@@ -81,7 +88,15 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    // Closure pointer (lower 48 bits of the NaN-boxed callback), matching
+    // `call_node_style_callback2`'s extraction and the i64 the timer queue
+    // reinterprets as `*const ClosureHeader`.
+    let cb_ptr = (callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    if cb_ptr >= 0x1000 {
+        let err = f64::from_bits(JSValue::null().bits());
+        let args = [err, value];
+        perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
+    }
     f64::from_bits(JSValue::undefined().bits())
 }
 
