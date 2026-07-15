@@ -47,8 +47,8 @@
       "total": 242
     },
     "dgram": {
-      "pass": 4,
-      "total": 4
+      "pass": 12,
+      "total": 15
     },
     "diagnostics_channel": {
       "pass": 66,
