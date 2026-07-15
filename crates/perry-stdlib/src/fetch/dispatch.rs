@@ -72,30 +72,15 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         }
     }
     // #5437: a Node `IncomingMessage` body — the request-body bridge Next.js's
-    // `NextRequestAdapter.fromNodeNextRequest` relies on. It sets the web
-    // `Request` body to the `NodeNextRequest`'s `.body`, which is the underlying
-    // `IncomingMessage` (a native handle: `POINTER_TAG | small id`, not bytes).
-    // Stringifying it below yielded `"[object Object]"`, so `req.json()` /
-    // `req.text()` saw garbage and POST bodies were silently lost. Read the
-    // request's buffered bytes through the handle-property dispatch — the node
-    // http impl exposes them as a Buffer under `rawBody` (`js_node_http_im_raw_body`)
-    // — and materialize a lossless StringHeader from them. Only a small-handle
-    // POINTER value is probed, so string / heap-object / buffer bodies above are
-    // untouched. A handle without a buffered `rawBody` falls through to ToString.
+    // `NextRequestAdapter.fromNodeNextRequest` relies on (it sets the web
+    // `Request`/`Response` body to the underlying `IncomingMessage`).
     {
         let jsval = JSValue::from_bits(value.to_bits());
         if jsval.is_pointer() {
-            let raw = jsval.as_pointer::<u8>() as usize;
-            if raw != 0 && raw < 0x10000 {
-                let key = unsafe { js_string_from_bytes(b"rawBody".as_ptr(), 7) };
-                let raw_body = perry_runtime::object::js_object_get_field_by_name_f64(
-                    raw as *const perry_runtime::object::ObjectHeader,
-                    key,
-                );
-                if let Some(bytes) = unsafe { body_value_buffer_bytes(raw_body) } {
-                    return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) }
-                        as i64;
-                }
+            if let Some(bytes) =
+                unsafe { incoming_message_raw_body_bytes(jsval.as_pointer::<u8>() as usize) }
+            {
+                return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
             }
         }
     }
@@ -123,6 +108,34 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         }
     }
     js_get_string_pointer_unified(value)
+}
+
+/// A Node `IncomingMessage` used as a fetch body: Next.js's
+/// `NextRequestAdapter.fromNodeNextRequest` hands the raw `req` to
+/// `new Request(url, { body: req })` (and the `Response` twin). It is a small
+/// native handle (`POINTER_TAG | small id`, `addr < 0x10000`), not bytes;
+/// stringifying it yields `"[object Object]"` and the POST body is silently
+/// lost. It exposes its buffered request body as a Buffer under `rawBody`
+/// (`js_node_http_im_raw_body`, surfaced through the handle-property dispatch),
+/// so read that. Returns `None` when `addr` is not a small handle or has no
+/// buffered `rawBody`, leaving string / buffer / heap-object bodies untouched.
+/// Shared by `js_response_body_init_ptr` (#5437) and the `Request` constructor
+/// (#6432 — the Request path never got this reader, so `new Request(url,
+/// { body: req })` dropped the body and Auth.js rejected logins with
+/// `MissingCSRF`).
+///
+/// # Safety
+/// FFI-adjacent: reads a runtime object field through a raw address.
+pub(crate) unsafe fn incoming_message_raw_body_bytes(addr: usize) -> Option<Vec<u8>> {
+    if !perry_runtime::value::addr_class::is_small_handle(addr) {
+        return None;
+    }
+    let key = js_string_from_bytes(b"rawBody".as_ptr(), 7);
+    let raw_body = perry_runtime::object::js_object_get_field_by_name_f64(
+        addr as *const perry_runtime::object::ObjectHeader,
+        key,
+    );
+    body_value_buffer_bytes(raw_body)
 }
 
 /// Read a body `*const StringHeader` losslessly as raw bytes (no UTF-8
