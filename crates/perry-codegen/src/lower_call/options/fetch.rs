@@ -86,9 +86,14 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                         // `NextResponse.json`, so every authenticated route's 401 became
                         // a 200. Mirror the `new Response(body, init)` runtime path and
                         // read the fields at runtime.
+                        // `init` is a runtime value that need not be an object:
+                        // `Response.json(x, 3.14)` is legal TS. Unboxing it to a
+                        // raw pointer and dereferencing would SIGSEGV (a
+                        // non-integer double's bits land in the heap-pointer
+                        // magnitude window). Read each field through the boxed
+                        // helper, which validates the receiver and returns
+                        // `undefined` for a non-object instead of derefing.
                         let opts_val = lower_expr(ctx, &args[1])?;
-                        let blk = ctx.block();
-                        let opts_handle = crate::expr::unbox_to_i64(blk, &opts_val);
                         let get_field = |ctx_inner: &mut FnCtx<'_>, key: &str| -> Result<String> {
                             let key_idx = ctx_inner.strings.intern(key);
                             let key_global =
@@ -97,11 +102,11 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                             let key_box = blk.load(DOUBLE, &key_global);
                             let key_bits = blk.bitcast_double_to_i64(&key_box);
                             let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                            let opts_handle_local = opts_handle.clone();
+                            let opts_val_local = opts_val.clone();
                             Ok(blk.call(
                                 DOUBLE,
-                                "js_object_get_field_by_name_f64",
-                                &[(I64, &opts_handle_local), (I64, &key_raw)],
+                                "js_object_get_field_by_name_boxed",
+                                &[(DOUBLE, &opts_val_local), (I64, &key_raw)],
                             ))
                         };
                         status_val = get_field(ctx, "status")?;

@@ -46,6 +46,46 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     f64::from_bits(value.bits())
 }
 
+/// Read a field by name from a *boxed* receiver, returning `undefined` when the
+/// receiver is not an object.
+///
+/// `js_object_get_field_by_name_f64` takes an already-unboxed `*const
+/// ObjectHeader` and dereferences it on faith. That is fine when codegen has
+/// proven the receiver is an object, but `Response.json(data, init)` reads its
+/// fields off a *runtime* `init` value that can be anything — a number, a
+/// string, a symbol. A non-integer double like `3.14` unboxes to a bit pattern
+/// squarely inside the heap-pointer magnitude window, so the raw read SIGSEGVs
+/// (observed on `Response.json(x, 3.14)`).
+///
+/// This wrapper applies the same handle-band / `is_valid_obj_ptr` guard the
+/// runtime fetch-option reader uses, so a non-object `init` yields `undefined`
+/// fields instead of dereferencing a forged pointer. Codegen calls this with
+/// the boxed value rather than re-implementing the pointer checks in IR.
+#[no_mangle]
+pub extern "C" fn js_object_get_field_by_name_boxed(
+    receiver: f64,
+    key: *const crate::StringHeader,
+) -> f64 {
+    let value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if !value.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(receiver);
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // A handle-band id (a `Response`/`Request` forwarded as init) is not a heap
+    // ObjectHeader; `js_object_get_field_by_name_f64` routes it through the
+    // handle property dispatch, so hand it over directly.
+    if crate::value::addr_class::is_handle_band(raw as usize) {
+        return js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    }
+    if raw < 0x10000 || !crate::value::addr_class::is_valid_obj_ptr(raw as *const u8) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
+}
+
 /// #2058: the universal `Object.prototype` methods inherited by every value,
 /// including primitive numbers. Read as a property *value* (e.g.
 /// `const f = n.toString`, `typeof n.isPrototypeOf`), these resolve to real
