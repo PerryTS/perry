@@ -12,7 +12,7 @@ use perry_hir::Expr;
 use super::get_raw_string_ptr;
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I64};
+use crate::types::{DOUBLE, I1, I64};
 
 /// Dispatch for the Web Fetch API family: Response/Headers/Request
 /// methods and property getters. Called before the generic
@@ -221,8 +221,22 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                     "js_headers_get",
                     &[(DOUBLE, &h_handle), (I64, &key_ptr)],
                 );
+                // `js_headers_get` returns a NULL string pointer for an absent
+                // header. Per WHATWG `Headers.get` must yield `null` — NaN-boxing
+                // the null pointer as a STRING made `typeof h.get(x) === "string"`
+                // and `h.get(x) !== null`, so `h.get("x-forwarded-host") ??
+                // h.get("host")` never fell through (Auth.js v5's trustHost URL
+                // builder then did `new URL("://")` → "Invalid URL", 500 on every
+                // authenticated page). Mirror `UrlSearchParamsGet`: box null as
+                // TAG_NULL. (Same pattern as searchParams.get.)
                 let blk = ctx.block();
-                return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
+                let is_null = blk.icmp_eq(I64, &str_ptr, "0");
+                let as_string = nanbox_string_inline(blk, &str_ptr);
+                let str_bits = ctx.block().bitcast_double_to_i64(&as_string);
+                let selected =
+                    ctx.block()
+                        .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &str_bits);
+                return Ok(Some(ctx.block().bitcast_i64_to_double(&selected)));
             }
             "getSetCookie" => {
                 let arr =
