@@ -5,7 +5,7 @@
     "zod": "^4.3.5"
   },
   "dependencies": {
-    "ethers": "^6.16.0",
+    "ethers": "^6.17.0",
     "node-cron": "^4.2.1"
   }
 }
