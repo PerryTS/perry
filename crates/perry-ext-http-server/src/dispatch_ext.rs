@@ -125,6 +125,7 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "_addHeaderLine"
             | "__set_socket"
             | "__set_connection"
+            | "@@asyncIterator"
     ) || matches!(
         name,
         "method"

@@ -51,11 +51,25 @@ pub unsafe extern "C" fn js_request_new(
     // StringHeader/Buffer pointer, so it must be resolved via the blob registry
     // first: reading it through `body_bytes_from_header` would dereference the
     // synthetic id → SIGSEGV (#6231, the Request-constructor twin).
+    // #6432: a Node `IncomingMessage` body (Next.js's `fromNodeNextRequest` hands
+    // the raw `req` to `new Request(url, { body: req })`) is a small native handle
+    // (`body_ptr` in the handle band, e.g. `0x3`) exposing its buffered bytes under
+    // `rawBody`. It must be probed in BOTH the handle-band and the pointer arm —
+    // `is_handle_band` is true for it, so a plain `if handle_band { blob } else`
+    // routed it to the Blob reader (→ `None`) and dropped the body. The
+    // `incoming_message_raw_body_bytes` probe self-gates on `addr < 0x10000`, so a
+    // real Blob / buffer / string body is untouched. Mirrors the #5437 fix already
+    // in `js_response_body_init_ptr` (the Response twin), which falls through via
+    // `or_else` rather than if/else.
     let body: Option<Vec<u8>> =
         if perry_runtime::value::addr_class::is_handle_band(body_ptr as usize) {
             crate::fetch::blob_bytes_clone(body_ptr as usize)
+                .or_else(|| dispatch::incoming_message_raw_body_bytes(body_ptr as usize))
         } else {
             dispatch::body_addr_buffer_bytes(body_ptr as usize)
+                // Probe the IM before the StringHeader read below, which would
+                // misread the handle id as a string pointer.
+                .or_else(|| dispatch::incoming_message_raw_body_bytes(body_ptr as usize))
                 .or_else(|| dispatch::body_bytes_from_header(body_ptr))
         };
     // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.

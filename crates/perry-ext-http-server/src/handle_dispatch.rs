@@ -117,6 +117,8 @@ extern "C" {
     fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader;
     fn js_node_http_im_remote_port(handle: i64) -> f64;
     fn js_node_http_im_raw_body(handle: i64) -> f64;
+    // #6432: perry-runtime helper — an async iterator that yields `value` once.
+    fn js_make_single_value_async_iterator(value: f64) -> f64;
     fn js_node_http_im_pause(handle: i64);
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
@@ -548,6 +550,12 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             js_node_http_im_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        // #6432: `for await (const chunk of req)` — reads the buffered request
+        // body. Perry delivers the whole body as one buffer (its `.on('data')`
+        // emits `body_bytes` in a single shot), so a one-shot async iterator over
+        // `req.rawBody` reproduces Node's observable result (same total bytes)
+        // for Next.js's `requestToBodyStream` / any `for await` body reader.
+        "@@asyncIterator" => js_make_single_value_async_iterator(js_node_http_im_raw_body(handle)),
         "setEncoding" if !args.is_empty() => {
             let encoding_ptr = string_value_arg(args[0]);
             if !encoding_ptr.is_null() {
@@ -1154,6 +1162,9 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
         // #4904: internal-by-convention header-merge API, exercised
         // directly by Node's own tests on standalone IncomingMessages.
         "_addHeaderLine" => Some(b"_addHeaderLine"),
+        // #6432: `req[Symbol.asyncIterator]()` — makes `for await…of req` read
+        // the buffered request body (Next.js `requestToBodyStream`).
+        "@@asyncIterator" => Some(b"@@asyncIterator"),
         _ => None,
     }
 }
