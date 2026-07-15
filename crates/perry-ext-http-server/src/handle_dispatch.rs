@@ -162,6 +162,11 @@ extern "C" {
     fn js_node_http_res_write_continue(handle: i64);
     fn js_node_http_res_write_processing(handle: i64);
     fn js_node_http_res_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
+    fn js_node_http_res_once(
+        handle: i64,
+        event_name_ptr: *const StringHeader,
+        callback: i64,
+    ) -> f64;
 }
 
 /// Probe: is `handle` a live `HttpServer`?
@@ -796,6 +801,14 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_method(
             js_node_http_res_on(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
+        "once" | "prependOnceListener" if args.len() >= 2 => {
+            let event_ptr = string_arg(args[0]);
+            if event_ptr.is_null() {
+                return self_ref;
+            }
+            js_node_http_res_once(handle, event_ptr, closure_arg(Some(args[1])));
+            self_ref
+        }
         "setStatus" | "__set_statusCode" if !args.is_empty() => {
             js_node_http_res_set_status(handle, number_arg(Some(args[0]), 200.0));
             undef
@@ -879,6 +892,20 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         // and `@Body()` resolved to `undefined`.
         "readable" => bool_value(js_node_http_im_readable(handle) != 0),
         "readableEnded" => bool_value(js_node_http_im_complete(handle) != 0),
+        // `req.writable` — Node's real `req.socket` is the Duplex TCP socket,
+        // whose `writable` is true while the RESPONSE side of the connection is
+        // still open. `res.socket` aliases the request handle (see
+        // `response_socket_value`), so `on-finished`'s `isFinished(res)` —
+        // `Boolean(res.finished || (socket && !socket.writable))` — reads
+        // `socket.writable` HERE. Without it `writable` was `undefined`, so
+        // `!socket.writable` was true → on-finished reported the response
+        // finished the instant a stream was piped → `send` (Next.js static
+        // serving via `serve-static`) destroyed the read stream after the first
+        // high-water-mark (64 KB) chunk, truncating every static file past that
+        // size. Symmetric with the `readable` accessor above (request-body side).
+        "writable" => bool_value(
+            js_node_http_im_destroyed(handle) == 0 && js_node_http_im_aborted(handle) == 0,
+        ),
         "socket" | "connection" => crate::request::incoming_socket_override(handle)
             .unwrap_or_else(|| handle_to_pointer_f64(handle)),
         "signal" => js_node_http_im_signal(handle),
@@ -1186,6 +1213,8 @@ fn server_response_method_bytes(name: &str) -> Option<&'static [u8]> {
         "pipe" => Some(b"pipe"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
         _ => None,
     }
 }

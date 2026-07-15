@@ -144,6 +144,7 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "destroyed"
             | "readable"
             | "readableEnded"
+            | "writable"
             | "socket"
             | "connection"
             | "signal"
@@ -200,6 +201,8 @@ fn is_server_response_member(name: &str) -> bool {
             | "detachSocket"
             | "on"
             | "addListener"
+            | "once"
+            | "prependOnceListener"
             | "setStatus"
             | "getStatus"
     ) || matches!(
