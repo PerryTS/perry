@@ -1077,8 +1077,22 @@ pub(super) fn lower_builtin_new(
 
         "Request" => {
             // new Request(url, init?) — init = Fetch RequestInit subset.
+            // The spec runs ToString on `input` when it isn't already a Request,
+            // so a URL object must stringify to its href. `get_raw_string_ptr`
+            // (js_get_string_pointer_unified) only unwraps an actual string value
+            // — handed a URL object (a heap ObjectHeader) it read the object
+            // pointer as a string and produced "", so `new Request(new URL(u)).url`
+            // was empty. Auth.js v5 builds its session request as `new
+            // Request(fu("session", …))` where `fu` returns a URL object, so the
+            // session lookup got an empty URL, returned 400 "Bad request.", and
+            // `auth()` yielded that string instead of null — the authenticated-page
+            // guard then never redirected and fell through to a DB-pool init that
+            // threw. Route through `js_jsvalue_to_string`, which invokes `toString`
+            // on an object (URL → href) and passes a real string straight through.
             let url_ptr = if !args.is_empty() {
-                get_raw_string_ptr(ctx, &args[0])?
+                let v = lower_expr(ctx, &args[0])?;
+                ctx.block()
+                    .call(I64, "js_request_input_to_url", &[(DOUBLE, &v)])
             } else {
                 "0".to_string()
             };
