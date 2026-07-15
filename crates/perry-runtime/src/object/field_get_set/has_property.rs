@@ -544,14 +544,25 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     // prototype members (`subarray`, `map`, `join`, `toString`, …)
                     // count. `typed_array_prototype_chain_has` builds the shared
                     // prototype intrinsic on demand, so this is order-independent
-                    // (#6164). Buffer-specific `Buffer.prototype` methods
-                    // (`readUInt8`, …) are not covered here.
+                    // (#6164).
                     if unsafe {
                         crate::typedarray_props::typed_array_prototype_chain_has(
                             obj_addr as usize,
                             name,
                         )
                     } {
+                        return nanbox_true;
+                    }
+                    // #6406: the Buffer-specific surface the %TypedArray% chain
+                    // above does NOT cover — a user own-property (`buf.foo = v`)
+                    // and the `Buffer.prototype` methods (`readUInt8`,
+                    // `writeInt8`, …). Perry keeps buffers outside the object
+                    // model, so both live in the buffer side tables, not on a
+                    // prototype the chain scan can reach. Without this,
+                    // `"writeInt8" in buf` and `"foo" in buf` reported false.
+                    if crate::buffer::buffer_get_own_prop(obj_addr as usize, name).is_some()
+                        || crate::object::buffer_dispatch::is_buffer_method_name(name)
+                    {
                         return nanbox_true;
                     }
                 }
