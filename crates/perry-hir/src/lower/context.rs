@@ -160,6 +160,7 @@ impl LoweringContext {
             current_class_super_ident: None,
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
+            anon_shape_fields: HashMap::new(),
             forward_class_names: std::collections::HashSet::new(),
             forward_class_decl_depth: std::collections::HashMap::new(),
             class_renames: std::collections::HashMap::new(),
@@ -946,7 +947,14 @@ impl LoweringContext {
             shape_key.push(',');
         }
 
+        // Field names in source order, so a call-site can recover a config
+        // object's keys after the literal is lowered to `New { class_name }`.
+        let field_names: Vec<String> = field_shapes.iter().map(|(name, _)| name.clone()).collect();
+
         if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
+            self.anon_shape_fields
+                .entry(existing.clone())
+                .or_insert(field_names);
             return existing.clone();
         }
 
@@ -1065,6 +1073,8 @@ impl LoweringContext {
 
         self.anon_shape_classes
             .insert(shape_key, class_name.clone());
+        self.anon_shape_fields
+            .insert(class_name.clone(), field_names);
         class_name
     }
 
