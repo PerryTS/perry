@@ -96,9 +96,11 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     // pass it and be miscast as a closure, then dereferenced when the timer
     // fires. Gate on `is_closure_ptr` (the CLOSURE_MAGIC + heap-range probe used
     // by every other node-style-callback site) so a non-callable argument is a
-    // safe no-op instead. A non-pointer primitive fails the `>= 0x10000` floor.
+    // safe no-op instead. `is_closure_ptr` self-rejects the whole handle band
+    // and any non-heap address, so a primitive/undefined callback is covered
+    // without a separate magnitude floor.
     let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_bits);
-    if cb_ptr >= 0x10000 && perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
+    if perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
         let err = f64::from_bits(JSValue::null().bits());
         let args = [err, value];
         perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
