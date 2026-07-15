@@ -420,6 +420,33 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
+    // Generic small-handle `Symbol.asyncIterator` support — lets a handle-backed
+    // readable drive `for await (const chunk of x)`. Mirrors the
+    // `Symbol.asyncDispose` block above: resolve the bound `@@asyncIterator`
+    // method through the handle property dispatcher, so a subsystem that owns the
+    // method (perry's http `IncomingMessage`) can expose it without a
+    // runtime-specific special case. #6432 — `for await…of req` used to throw
+    // `is not iterable`, so Next.js read an empty POST body → Auth.js MissingCSRF.
+    if (bits >> 48) == 0x7FFD {
+        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        if crate::value::addr_class::is_small_handle(id as usize) {
+            let async_iterator = well_known_symbol("asyncIterator");
+            if !async_iterator.is_null() {
+                let async_iterator_f64 = f64::from_bits(
+                    crate::value::JSValue::pointer(async_iterator as *const u8).bits(),
+                );
+                if sym_key_from_f64(sym_f64) == sym_key_from_f64(async_iterator_f64) {
+                    if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                        let method = b"@@asyncIterator";
+                        let v = dispatch(id, method.as_ptr(), method.len());
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Web Fetch and other stdlib handle-backed values are small ids
     // NaN-boxed as POINTER. A computed `handle[Symbol.iterator]` reaches the
     // symbol resolver directly, bypassing the normal string-key handle

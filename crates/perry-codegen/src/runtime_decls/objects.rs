@@ -216,6 +216,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("js_object_get_index_polymorphic", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_object_get_field_by_name_f64", DOUBLE, &[I64, I64]);
+    // Boxed receiver: validates it is an object and returns undefined for a
+    // non-object instead of dereferencing (Response.json(x, <non-object>)).
+    module.declare_function("js_object_get_field_by_name_boxed", DOUBLE, &[DOUBLE, I64]);
     module.declare_function(
         "js_object_get_field_by_property_id_f64",
         DOUBLE,

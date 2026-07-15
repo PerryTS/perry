@@ -156,6 +156,22 @@ fn global_this_fetch_option(init: f64, name: &[u8]) -> f64 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let raw = crate::value::js_nanbox_get_pointer(init);
+    // A handle-backed init object — `new Response(body, otherResponse)`, which is
+    // how `NextResponse.json(data, {status})` forwards its init through
+    // `super(body, response)` — is a fetch-band handle id, not a heap
+    // `ObjectHeader`. `is_valid_obj_ptr` rejects it, so `status` / `statusText` /
+    // `headers` all read `undefined` and the new Response silently defaulted to
+    // 200: every `NextResponse.json(x, {status:401})` route returned 200.
+    // `js_object_get_field_by_name_f64` routes a handle through the handle
+    // property dispatch (where Response `.status` etc. resolve), so hand it the
+    // handle directly instead of bailing.
+    if crate::value::addr_class::is_handle_band(raw as usize) {
+        if raw == 0 {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        return js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+    }
     if raw < 0x10000 || !is_valid_obj_ptr(raw as *const u8) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

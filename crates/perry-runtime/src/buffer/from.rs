@@ -525,6 +525,19 @@ pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
     let buf = buffer_alloc(length);
     unsafe {
         (*buf).length = length;
+        // `buffer_alloc` hands back old-arena memory that is NOT guaranteed
+        // zeroed: the old generation reclaims and re-hands dirty blocks, and
+        // only pristine mmap pages read as zero. `new Uint8Array(n)` (and the
+        // bool / string / numeric-length sources that funnel here) is
+        // spec-mandated zero-filled, so clear the payload explicitly instead of
+        // relying on incidental zeroing. The sibling `js_buffer_alloc`
+        // (Buffer.alloc) already does this; this path was the lone gap. Latent
+        // on macOS (fresh pages read zero); leaked stale bytes on Linux once an
+        // unrelated codegen change shifted these allocations onto reclaimed
+        // blocks.
+        if length > 0 {
+            ptr::write_bytes(buffer_data_mut(buf), 0, length as usize);
+        }
     }
     mark_as_uint8array(buf as usize);
     buf

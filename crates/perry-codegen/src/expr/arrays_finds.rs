@@ -113,6 +113,29 @@ pub(crate) fn lower_uint8array_get_i32(
         return Ok(value);
     }
 
+    // An UNPROVEN key may be a string at runtime: a Buffer is an ordinary
+    // object in Node, so `buf[k]` with a non-numeric `k` reads a property (an
+    // own expando, else the prototype method), not a byte. Coercing it to i32
+    // read byte 0 and yielded `undefined`, which broke the ubiquitous
+    // feature-probe `typeof obj[k] === "function"` — mysql2's `MockBuffer`
+    // relies on it to neutralize a zero-length Buffer's write methods while
+    // sizing each outgoing packet, so the MySQL handshake died with RangeError
+    // [ERR_OUT_OF_RANGE]. Route to the polymorphic helper (it dispatches
+    // numeric keys to the byte read and string keys to the property path); the
+    // proven-numeric fast paths above are untouched.
+    if !is_numeric_expr(ctx, index) {
+        let a = lower_expr(ctx, array)?;
+        let key = lower_expr(ctx, index)?;
+        let blk = ctx.block();
+        let handle = unbox_to_i64(blk, &a);
+        let result = blk.call(
+            DOUBLE,
+            "js_object_get_index_polymorphic",
+            &[(I64, &handle), (DOUBLE, &key)],
+        );
+        return Ok(LoweredValue::js_value(result));
+    }
+
     let idx_i32 = lower_index_i32(ctx, index)?;
     let a = lower_expr(ctx, array)?;
     let blk = ctx.block();
@@ -825,16 +848,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
+                // A non-numeric key stores an OWN property (Node's Buffer is an
+                // ordinary object, and an own key shadows the same-named
+                // prototype method — mysql2's `MockBuffer` overwrites the write
+                // methods of a zero-length Buffer to size a packet). The
+                // typed-array helper coerces the key to a number and dropped the
+                // store; the polymorphic setter dispatches numeric keys to the
+                // byte write and string keys to the own-prop table.
+                let key_maybe_string = !is_numeric_expr(ctx, index);
                 let a = lower_expr(ctx, array)?;
                 let key = lower_expr(ctx, index)?;
                 let val = lower_expr(ctx, value)?;
                 let blk = ctx.block();
                 let handle = unbox_to_i64(blk, &a);
-                let result = blk.call(
-                    DOUBLE,
-                    "js_typed_array_index_set_dynamic",
-                    &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
-                );
+                let result = if key_maybe_string {
+                    blk.call_void(
+                        "js_object_set_index_polymorphic",
+                        &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                    );
+                    val.clone()
+                } else {
+                    blk.call(
+                        DOUBLE,
+                        "js_typed_array_index_set_dynamic",
+                        &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                    )
+                };
                 if ctx.discard_expr_value {
                     return Ok(double_literal(0.0));
                 }

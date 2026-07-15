@@ -190,6 +190,27 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     let nanbox_true = f64::from_bits(0x7FFC_0000_0000_0004u64); // TAG_TRUE
 
     let obj_val = JSValue::from_bits(obj.to_bits());
+
+    // `in` runs ToPropertyKey on the key. Object property names are strings, so a
+    // NUMBER key must be coerced to its string form before the lookup — `307 in
+    // {307: …}` is `"307" in {…}` and must be true. Without this the string-only
+    // lookup below never matched a numeric key against a numeric-string property,
+    // so `307 in obj` was false while `"307" in obj` was true. Next.js's
+    // `isRedirectError` does `Number(digest.at(-2)) in RedirectStatusCode` (a
+    // `{307: …, 308: …}` map), so a `redirect()` thrown from a Server Component
+    // was not recognized as a redirect — Next treated it as a real error and a
+    // concurrently-rendered sibling's `session.user` read (guarded by that same
+    // redirect on the happy path) surfaced as a fatal 500 instead of a 307.
+    // (Symbols and strings pass through unchanged; a proxy/handle receiver is
+    // handled below with the coerced key.)
+    let key = {
+        let kv = JSValue::from_bits(key.to_bits());
+        if kv.is_number() {
+            unsafe { crate::object::js_to_property_key(key) }
+        } else {
+            key
+        }
+    };
     let key_val = JSValue::from_bits(key.to_bits());
 
     // A Proxy is a small registered id (POINTER_TAG with a tiny pointer), not a
@@ -223,6 +244,30 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // already does further down this function.
     if obj_val.is_pointer() {
         let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
+        // A Buffer is an ordinary Uint8Array in Node, so `"k" in buf` must see both
+        // the own properties user code hangs on it and the inherited
+        // `Buffer.prototype` methods. Perry keeps buffers outside the object model
+        // (a raw `BufferHeader`), so the generic pointer path below reads the header
+        // as an `ObjectHeader` and reported `false` for both.
+        if crate::buffer::is_registered_buffer(addr) {
+            if let Some(name) = unsafe { crate::object::metadata_key_to_string(key) } {
+                if crate::buffer::buffer_get_own_prop(addr, &name).is_some()
+                    || crate::object::buffer_dispatch::is_buffer_method_name(&name)
+                {
+                    return nanbox_true;
+                }
+                // A numeric key is an index into the bytes: present iff in range.
+                if let Ok(idx) = name.parse::<usize>() {
+                    let len = unsafe { (*(addr as *const crate::buffer::BufferHeader)).length };
+                    return if idx < len as usize {
+                        nanbox_true
+                    } else {
+                        nanbox_false
+                    };
+                }
+                return nanbox_false;
+            }
+        }
         if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
             && crate::value::addr_class::is_handle_band(addr)
         {

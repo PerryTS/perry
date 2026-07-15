@@ -787,7 +787,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                 .lookup_index_in_scope(&name, outer_locals_len)
                                 .is_some();
                             if !already_in_scope {
-                                let id = ctx.define_local(name, Type::Any);
+                                let id = ctx.define_local(name.clone(), Type::Any);
                                 // Mark as hoisted so closures created
                                 // before the var's init expression see
                                 // it through a box (mutable capture),
@@ -814,6 +814,32 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                 // sibling-capture symptom, extended to
                                 // forward-var captures).
                                 hoisted_id_set.insert(id);
+                                // Emit an undefined-initialised entry slot,
+                                // exactly like the nested-`var` pre-pass
+                                // below (and `predefine_var_bindings_in_
+                                // function_body` on the fn-decl/arrow path).
+                                // The `hoisted_id_set` box above only covers
+                                // the forward-CAPTURE case (a closure created
+                                // before the decl reads the box). A `var`
+                                // merely READ/WRITTEN before its own textual
+                                // declaration but NOT captured by any closure
+                                // gets no prealloc box, so without this Let
+                                // its slot first materialises at the late
+                                // `var <name> = …` and every earlier read/
+                                // write folds to `undefined`. React's
+                                // cloneElement/createElement do exactly this:
+                                //   for (propName in o) …;  var propName = …;
+                                // one hoisted `propName` used by the for-in
+                                // loop, then redeclared as a number — so the
+                                // loop body's `hasOwnProperty.call(o, propName)`
+                                // saw `undefined` and dropped every prop.
+                                nested_var_prologue.push(Stmt::Let {
+                                    id,
+                                    name,
+                                    ty: Type::Any,
+                                    mutable: true,
+                                    init: Some(Expr::Undefined),
+                                });
                             }
                         }
                     }

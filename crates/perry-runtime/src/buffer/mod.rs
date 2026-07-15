@@ -21,6 +21,7 @@ mod header;
 mod iter;
 mod mutate;
 mod numeric;
+mod own_props;
 mod query;
 mod transcode;
 mod u8_codec;
@@ -53,6 +54,10 @@ pub(crate) use header::{test_data_view_registry_len, test_shared_array_buffer_re
 // part of the public surface.
 pub use detach::is_detached_buffer;
 pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
+pub use own_props::{
+    buffer_get_own_prop, buffer_has_own_prop, buffer_set_own_prop, clear_buffer_own_props,
+    scan_buffer_own_props_roots_mut,
+};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{

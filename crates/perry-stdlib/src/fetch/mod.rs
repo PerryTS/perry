@@ -1767,6 +1767,23 @@ pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
     }
 }
 
+/// Coerce the first argument of `new Request(input, init)` to its URL string.
+/// The spec runs `ToString(input)` unless `input` is already a `Request`, in
+/// which case the constructor clones it and keeps its url. A `Request` handle
+/// has no custom `toString` (`String(request)` is `"[object Request]"`), so
+/// running ToString on it would store that literal as the url — this returns the
+/// cloned request's real url instead. Any other value (a URL object, a string)
+/// falls through to `js_jsvalue_to_string`, which invokes `toString` (URL → href)
+/// or passes a string straight through.
+#[no_mangle]
+pub extern "C" fn js_request_input_to_url(value: f64) -> *mut StringHeader {
+    let id = handle_id(value);
+    if let Some(req) = REQUEST_REGISTRY.lock().unwrap().get(&id) {
+        return js_string_from_bytes(req.url.as_ptr(), req.url.len() as u32);
+    }
+    perry_runtime::value::js_jsvalue_to_string(value) as *mut StringHeader
+}
+
 #[no_mangle]
 pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
     let id = handle_id(handle);

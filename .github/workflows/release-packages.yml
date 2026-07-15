@@ -1697,7 +1697,7 @@ jobs:
       # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
       # *publishing* toolchain (npm registry auth), not a test oracle — it never
       # runs a parity diff, so the gap suite's Node version is irrelevant here.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"

@@ -982,13 +982,21 @@ pub extern "C" fn js_fs_read_callback(
         crate::closure::js_closure_call3(cb, err_val, 0.0, buffer_value);
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let bytes = js_fs_read_sync(
+    let bytes = match crate::fs::read_sync_result(
         fd_value,
         buffer_value,
         offset_value,
         length_value,
         position_value,
-    );
+    ) {
+        Ok(bytes) => bytes,
+        // The callback form reports the syscall error, it does not throw.
+        Err(err) => {
+            let err_val = unsafe { build_fs_error_value_no_path(&err, "read") };
+            crate::closure::js_closure_call3(cb, err_val, 0.0, buffer_value);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call3(cb, f64::from_bits(TAG_NULL), bytes, buffer_value);
     }
@@ -1017,7 +1025,16 @@ pub extern "C" fn js_fs_read_callback_options(
         .unwrap_or_else(|| (buffer_len - offset).max(0.0));
     let position = unsafe { options_number_field(options_value, b"position") }
         .unwrap_or(f64::from_bits(crate::value::TAG_NULL));
-    let bytes = js_fs_read_sync(fd_value, buffer_value, offset, length, position);
+    let bytes = match crate::fs::read_sync_result(fd_value, buffer_value, offset, length, position)
+    {
+        Ok(bytes) => bytes,
+        // The callback form reports the syscall error, it does not throw.
+        Err(err) => {
+            let err_val = unsafe { build_fs_error_value_no_path(&err, "read") };
+            crate::closure::js_closure_call3(cb, err_val, 0.0, buffer_value);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call3(cb, f64::from_bits(TAG_NULL), bytes, buffer_value);
     }
@@ -1035,7 +1052,18 @@ pub extern "C" fn js_fs_write_callback(fd_value: f64, data_value: f64, callback:
         crate::closure::js_closure_call3(cb, err_val, 0.0, data_value);
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let bytes = js_fs_write_sync(fd_value, data_value);
+    let bytes = match crate::fs::write_string_sync_result(
+        fd_value as i32,
+        data_value,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let err_val = unsafe { build_fs_error_value_no_path(&err, "write") };
+            crate::closure::js_closure_call3(cb, err_val, 0.0, data_value);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call3(cb, f64::from_bits(TAG_NULL), bytes, data_value);
     }
@@ -1064,7 +1092,20 @@ pub extern "C" fn js_fs_write_buffer_callback_options(
         .unwrap_or_else(|| (buffer_len - offset).max(0.0));
     let position = unsafe { options_number_field(options_value, b"position") }
         .unwrap_or(f64::from_bits(crate::value::TAG_NULL));
-    let bytes = js_fs_write_buffer_sync(fd_value, buffer_value, offset, length, position);
+    let bytes = match crate::fs::write_buffer_sync_result(
+        fd_value as i32,
+        buffer_value,
+        offset,
+        length,
+        position,
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let err_val = unsafe { build_fs_error_value_no_path(&err, "write") };
+            crate::closure::js_closure_call3(cb, err_val, 0.0, buffer_value);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call3(cb, f64::from_bits(TAG_NULL), bytes, buffer_value);
     }
@@ -1089,13 +1130,20 @@ pub extern "C" fn js_fs_write_buffer_callback(
         crate::closure::js_closure_call3(cb, err_val, 0.0, buffer_value);
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let bytes = js_fs_write_buffer_sync(
-        fd_value,
+    let bytes = match crate::fs::write_buffer_sync_result(
+        fd_value as i32,
         buffer_value,
         offset_value,
         length_value,
         position_value,
-    );
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let err_val = unsafe { build_fs_error_value_no_path(&err, "write") };
+            crate::closure::js_closure_call3(cb, err_val, 0.0, buffer_value);
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+    };
     if !cb.is_null() {
         crate::closure::js_closure_call3(cb, f64::from_bits(TAG_NULL), bytes, buffer_value);
     }

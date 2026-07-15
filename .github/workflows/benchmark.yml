@@ -55,7 +55,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Setup Node.js (for perf comparison)
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Single source of truth: .node-version at the repo root. Node here is
           # an informational peer (the hard regression gate is perry-vs-perry

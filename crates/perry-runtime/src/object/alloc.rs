@@ -1000,6 +1000,22 @@ unsafe fn object_assign_set_string_key(
     key_ptr: *const crate::StringHeader,
     value_f64: f64,
 ) {
+    // `Object.assign(process.env, parsed)` — how `@next/env` loads `.env` files.
+    // `process.env.X` READS lower to `js_getenv` (the real environment), so a
+    // field stored on the cached env object leaves every read `undefined`: a
+    // Next.js standalone server saw NONE of its `.env` config (myairank's
+    // `DATABASE_URL` vanished, mysql2 then connected with an empty user and the
+    // MySQL handshake timed out). Route the write through the env setter so it
+    // lands where the reads look.
+    //
+    // This hook lives at the single write funnel rather than as an early exit in
+    // `js_object_assign_one`, so every source shape still flows through the
+    // decoding below: a primitive/array/proxy source is enumerated correctly,
+    // and a nullish source is skipped per spec instead of throwing.
+    if !target_is_array && crate::process::is_process_env_ptr(target as usize) {
+        crate::process::js_setenv(key_ptr, value_f64);
+        return;
+    }
     if target_is_array {
         // Routes integer-index keys to array element-set (extending length);
         // non-numeric keys fall back to the object setter.
@@ -1112,6 +1128,13 @@ unsafe fn object_assign_proxy_source(
 pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) -> f64 {
     let target_f64 = js_object_assign_validate_target(target_f64);
 
+    // NOTE: a `process.env` target is handled in `object_assign_set_string_key`
+    // (the single write funnel) rather than here. An early exit at this point
+    // would have to re-implement source decoding, and the version that did got
+    // all three edge cases wrong: it cast any source pointer to `ObjectHeader`
+    // (type confusion on a string/array source) and it enumerated the source
+    // with `js_object_keys_value`, which *throws* on `null`/`undefined` instead
+    // of skipping it as the spec requires.
     let target_value = JSValue::from_bits(target_f64.to_bits());
     if !target_value.is_pointer() {
         return target_f64;

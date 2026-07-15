@@ -493,6 +493,18 @@ fn reflect_value_is_object(value: f64) -> bool {
     let top16 = bits >> 48;
     if top16 == (POINTER_TAG >> 48) {
         let lower48 = bits & POINTER_MASK;
+        // A handle-backed native object — Request / Response / Headers, sockets,
+        // streams — is a POINTER_TAG'd small id, not a heap `ObjectHeader`. It is
+        // still an OBJECT to JS, so `Reflect.get(request, k)` must not be refused:
+        // the sub-4GB cutoff below classified every one of them as a non-object and
+        // threw `TypeError: Reflect.get called on non-object`. Next's app-route
+        // runtime wraps the request in a Proxy whose `get` trap forwards through
+        // `Reflect.get(target, …)`, so every authenticated route 500'd.
+        if crate::value::addr_class::is_handle_band(lower48 as usize)
+            || crate::value::addr_class::is_stream_id_band(lower48 as usize)
+        {
+            return lower48 != 0;
+        }
         if lower48 < 0x1_0000_0000 {
             return false;
         }

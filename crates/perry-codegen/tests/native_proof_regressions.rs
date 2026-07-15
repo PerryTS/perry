@@ -1317,7 +1317,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
 }
 
 #[test]
-fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
+fn pod_field_read_after_dynamic_materialization_uses_dynamic_numeric_sub() {
     let packet_ty = pod_type(&[
         ("tag", Type::Named("PerryU32".to_string())),
         ("gain", Type::Named("PerryF32".to_string())),
@@ -1346,8 +1346,16 @@ fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
 
     let ir = compile_ir("pod_dynamic_materialized_read_coerce.ts", body);
     assert!(
-        ir.contains("call double @js_number_coerce"),
-        "POD field reads after dynamic materialization must not feed boxed JSValue fallbacks into raw numeric arithmetic:\n{ir}"
+        ir.contains("call double @js_object_get_field_by_name_f64"),
+        "materialized POD field reads must preserve boxed JSValue bits:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_dynamic_sub"),
+        "materialized POD field reads must use coercing dynamic arithmetic:\n{ir}"
+    );
+    assert!(
+        !ir.contains("fsub double"),
+        "materialized POD field reads must not feed boxed JSValue bits into raw arithmetic:\n{ir}"
     );
 }
 
@@ -13379,3 +13387,6 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
 
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;
+
+#[path = "native_proof_regressions/integer_modulo.rs"]
+mod integer_modulo;

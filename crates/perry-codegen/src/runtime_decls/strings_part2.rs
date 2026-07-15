@@ -977,6 +977,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // object at runtime instead of silently dropping them.
     module.declare_function("js_request_new_from_init", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
+    module.declare_function("js_request_input_to_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
     module.declare_function("js_request_body_used", DOUBLE, &[DOUBLE]);

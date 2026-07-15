@@ -582,33 +582,31 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => f(e),
         Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => f(e),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            f(condition);
-            for s in then_branch {
-                walk_stmt_exprs(s, f);
-            }
-            if let Some(eb) = else_branch {
-                for s in eb {
-                    walk_stmt_exprs(s, f);
-                }
-            }
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            f(condition);
-            for s in body {
-                walk_stmt_exprs(s, f);
-            }
-        }
+        // Only the statement's OWN operand expressions. Descending into a nested
+        // statement list here would visit its closures a SECOND time, because
+        // `process_stmts` recurses into every one of these bodies itself and calls
+        // `walk_stmt_exprs` on each statement it finds. A closure nested N blocks
+        // deep therefore had `process_expr_closure_bodies` run on it N+1 times, and
+        // each run inlined another copy of its `finally` before the `return` — so
+        // an `async () => { try { return await f() } finally { g() } }` sitting
+        // inside an `if` ran `g()` twice (three times at two levels deep):
+        //
+        //   let __ret1 = await f(); g(); let __ret2 = __ret1; g(); return __ret2;
+        //
+        // The chained `__finally_ret_*` temps are the tell. Next.js closes a
+        // per-request CloseController in exactly such a finally, so every page
+        // render threw "Cannot close a CloseController multiple times" and streamed
+        // an empty body.
+        Stmt::If { condition, .. } => f(condition),
+        Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => f(condition),
         Stmt::For {
             init,
             condition,
             update,
-            body,
+            ..
         } => {
+            // `init` is a leaf `Let`/`Expr` statement, not a nested list, and
+            // `process_stmts` does not visit it — take its operand here.
             if let Some(i) = init {
                 walk_stmt_exprs(i, f);
             }
@@ -618,29 +616,12 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             if let Some(u) = update {
                 f(u);
             }
-            for s in body {
-                walk_stmt_exprs(s, f);
-            }
         }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            for s in body {
-                walk_stmt_exprs(s, f);
-            }
-            if let Some(c) = catch {
-                for s in &mut c.body {
-                    walk_stmt_exprs(s, f);
-                }
-            }
-            if let Some(fin) = finally {
-                for s in fin {
-                    walk_stmt_exprs(s, f);
-                }
-            }
-        }
+        // `try` / `catch` / `finally` bodies, `switch` case bodies and a labeled
+        // statement's body are all statement lists that `process_stmts` recurses
+        // into — leave them to it. Only the `switch` discriminant and case tests
+        // are operands.
+        Stmt::Try { .. } => {}
         Stmt::Switch {
             discriminant,
             cases,
@@ -650,12 +631,9 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
                 if let Some(t) = &mut c.test {
                     f(t);
                 }
-                for s in &mut c.body {
-                    walk_stmt_exprs(s, f);
-                }
             }
         }
-        Stmt::Labeled { body, .. } => walk_stmt_exprs(body, f),
+        Stmt::Labeled { .. } => {}
         _ => {}
     }
 }
