@@ -88,11 +88,12 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    // Closure pointer (lower 48 bits of the NaN-boxed callback), matching
-    // `call_node_style_callback2`'s extraction and the i64 the timer queue
-    // reinterprets as `*const ClosureHeader`.
-    let cb_ptr = (callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-    if cb_ptr >= 0x1000 {
+    // Only a genuine closure (POINTER_TAG) is a schedulable callback; a bare
+    // `undefined`/primitive is a no-op. The timer queue reinterprets the i64 as
+    // a `*const ClosureHeader`, so hand it the unboxed pointer.
+    let cb_val = JSValue::from_bits(callback_bits.to_bits());
+    if cb_val.is_pointer() {
+        let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_bits) as i64;
         let err = f64::from_bits(JSValue::null().bits());
         let args = [err, value];
         perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
