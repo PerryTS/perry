@@ -28,6 +28,9 @@ pub mod rich_text;
 pub mod rich_tooltip;
 pub mod scrollview;
 pub mod securefield;
+/// Experimental Servo web-engine backend (off by default; `PERRY_WEBVIEW=servo`).
+#[cfg(feature = "servo-webview")]
+pub mod servo_webview;
 pub mod sheet;
 pub mod slider;
 pub mod spacer;

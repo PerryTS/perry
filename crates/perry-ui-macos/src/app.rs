@@ -621,6 +621,131 @@ pub fn app_run(_app_handle: i64) {
     app.run();
 }
 
+/// Body-less event loop for the Electron-compat shell (`app.whenReady()`).
+///
+/// Unlike `app_run`, this does not expect any pre-built `App({...})` window.
+/// It sets up `NSApplication`, the menu bar, the app delegate and the ~8ms
+/// timer pump, then — once everything is in place — invokes the `on_ready` TS
+/// closure (which resolves the shim's `app.whenReady()` promise) and blocks in
+/// `NSApplication.run()`. The `.then(createWindow)` chain runs on the first pump
+/// tick, so `new BrowserWindow()` / `Window()` create real windows while the
+/// loop is live. Windows are created dynamically via the multi-window FFI
+/// (`window_create` / `window_set_body` / `window_show`).
+pub fn app_run_loop(on_ready: f64) {
+    crate::crash_log::install_crash_hooks();
+    register_cross_platform_text_handlers();
+
+    let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
+
+    let policy = PENDING_ACTIVATION_POLICY.with(|p| p.borrow().clone());
+    let activation_policy = match policy.as_deref() {
+        Some("accessory") => NSApplicationActivationPolicy::Accessory,
+        Some("background") => NSApplicationActivationPolicy::Prohibited,
+        _ => NSApplicationActivationPolicy::Regular,
+    };
+    app.setActivationPolicy(activation_policy);
+
+    PENDING_ICON_PATH.with(|p| {
+        if let Some(path) = p.borrow().as_ref() {
+            unsafe {
+                let ns_path = NSString::from_str(path);
+                let image: Option<Retained<NSImage>> =
+                    msg_send![NSImage::alloc(), initWithContentsOfFile: &*ns_path];
+                if let Some(img) = image {
+                    let _: () = msg_send![&*app, setApplicationIconImage: &*img];
+                }
+            }
+        }
+    });
+
+    setup_menu_bar(&app, mtm);
+    flush_pending_shortcuts(mtm);
+
+    unsafe {
+        let delegate = PerryAppDelegate::new();
+        let _: () = msg_send![&*app, setDelegate: &*delegate];
+        crate::deeplinks::install_apple_event_handler(&*delegate as *const _ as *const AnyObject);
+        std::mem::forget(delegate);
+    }
+
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+
+    // ~8ms (120Hz) timer pump drives setTimeout/setInterval/microtasks/stdlib.
+    unsafe {
+        let target = PerryPumpTarget::new();
+        let sel = Sel::register(c"pump:");
+        let _: Retained<AnyObject> = msg_send![
+            objc2::class!(NSTimer),
+            scheduledTimerWithTimeInterval: 0.008f64,
+            target: &*target,
+            selector: sel,
+            userInfo: std::ptr::null::<AnyObject>(),
+            repeats: true
+        ];
+        std::mem::forget(target);
+    }
+
+    install_test_mode_exit_timer();
+
+    // Resolve `app.whenReady()`. This only enqueues the `.then` microtask; it
+    // runs on the first pump tick once `app.run()` is spinning below.
+    if on_ready != 0.0 {
+        extern "C" {
+            fn js_nanbox_get_pointer(value: f64) -> i64;
+            fn js_closure_call0(closure: *const u8) -> f64;
+        }
+        crate::catch_callback_panic(
+            "app whenReady",
+            std::panic::AssertUnwindSafe(|| unsafe {
+                let ptr = js_nanbox_get_pointer(on_ready) as *const u8;
+                if !ptr.is_null() {
+                    js_closure_call0(ptr);
+                }
+            }),
+        );
+    }
+
+    app.run();
+}
+
+thread_local! {
+    /// `on_ready` closure for the deferred top-level UI loop (Electron-compat).
+    static PENDING_APP_LOOP_ON_READY: std::cell::Cell<f64> = std::cell::Cell::new(0.0);
+}
+
+/// Request the Electron-compat UI event loop be entered at the TOP LEVEL after
+/// `main` (not from a microtask). The shim calls this during module init; it
+/// stores `on_ready` and registers `ui_loop_entry` with the runtime so the
+/// generated `main`'s `js_ui_loop_take_over()` hands control to `app_run_loop`
+/// at the top level. Entering `[NSApp run]` from a microtask leaves windows
+/// off-screen, so this top-level entry is required for windows to composite.
+pub fn request_app_loop(on_ready: f64) {
+    extern "C" {
+        fn perry_runtime_register_ui_loop(f: extern "C" fn());
+    }
+    PENDING_APP_LOOP_ON_READY.with(|c| c.set(on_ready));
+    unsafe {
+        perry_runtime_register_ui_loop(ui_loop_entry);
+    }
+}
+
+extern "C" fn ui_loop_entry() {
+    let on_ready = PENDING_APP_LOOP_ON_READY.with(|c| c.get());
+    app_run_loop(on_ready);
+}
+
+/// `app.quit()` — terminate the application (Electron-compat).
+pub fn app_quit() {
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        unsafe {
+            let _: () = msg_send![&*app, terminate: std::ptr::null::<AnyObject>()];
+        }
+    }
+}
+
 /// If `PERRY_UI_TEST_MODE=1`, schedule an NSTimer that captures a screenshot
 /// (when `PERRY_UI_SCREENSHOT_PATH` is set) and exits the process cleanly.
 /// This lets doc-example programs be verified in CI without a human.
@@ -791,224 +916,8 @@ impl PerryShortcutTarget {
     }
 }
 
-/// Set the application dock icon from a file path.
-/// Stores the path; the icon is applied in app_run after activation policy is set.
-pub fn app_set_icon(path_ptr: *const u8) {
-    let path = str_from_header(path_ptr);
-    if !path.is_empty() {
-        PENDING_ICON_PATH.with(|p| {
-            *p.borrow_mut() = Some(path.to_string());
-        });
-    }
-}
-
-/// Set frameless window mode (no titlebar).
-/// `value` is a NaN-boxed boolean — TAG_TRUE = 0x7FFC_0000_0000_0004.
-pub fn app_set_frameless(app_handle: i64, value: f64) {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    if value.to_bits() != TAG_TRUE {
-        return;
-    }
-    APPS.with(|a| {
-        let apps = a.borrow();
-        let idx = (app_handle - 1) as usize;
-        if idx < apps.len() {
-            let window = &apps[idx].window;
-            unsafe {
-                // Remove all style masks for a borderless window
-                let _: () = msg_send![window, setStyleMask: NSWindowStyleMask::Borderless.0];
-                // Allow dragging by the window background
-                let _: () = msg_send![window, setMovableByWindowBackground: true];
-                // Borderless NSWindows don't become key by default.
-                // Force the window to accept key status so text fields work.
-                // Use raw ObjC runtime C calls to create a subclass.
-                extern "C" {
-                    fn objc_allocateClassPair(
-                        superclass: *const std::ffi::c_void,
-                        name: *const i8,
-                        extra: usize,
-                    ) -> *mut std::ffi::c_void;
-                    fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-                    fn class_addMethod(
-                        cls: *mut std::ffi::c_void,
-                        sel: *const std::ffi::c_void,
-                        imp: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i8,
-                        types: *const i8,
-                    ) -> i8;
-                    fn object_setClass(
-                        obj: *mut std::ffi::c_void,
-                        cls: *mut std::ffi::c_void,
-                    ) -> *mut std::ffi::c_void;
-                    fn sel_registerName(name: *const i8) -> *mut std::ffi::c_void;
-                    fn object_getClass(obj: *const std::ffi::c_void) -> *mut std::ffi::c_void;
-                }
-                extern "C" fn can_become_key(
-                    _this: *mut std::ffi::c_void,
-                    _sel: *mut std::ffi::c_void,
-                ) -> i8 {
-                    1
-                }
-                let window_ptr = &**window as *const NSWindow as *mut std::ffi::c_void;
-                let parent_class = object_getClass(window_ptr);
-                let subclass_name =
-                    std::ffi::CString::new(format!("PerryKeyableWindow_{}", app_handle)).unwrap();
-                let existing = objc2::runtime::AnyClass::get(&subclass_name);
-                let new_class = if existing.is_some() {
-                    existing.unwrap() as *const _ as *mut std::ffi::c_void
-                } else {
-                    let cls = objc_allocateClassPair(parent_class, subclass_name.as_ptr(), 0);
-                    if !cls.is_null() {
-                        let sel = sel_registerName(c"canBecomeKeyWindow".as_ptr());
-                        class_addMethod(cls, sel, can_become_key, c"B@:".as_ptr());
-                        objc_registerClassPair(cls);
-                    }
-                    cls
-                };
-                if !new_class.is_null() {
-                    object_setClass(window_ptr, new_class);
-                    let _: () =
-                        msg_send![window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
-                }
-                // Make window transparent so rounded corners show through
-                let _: () = msg_send![window, setOpaque: false];
-                let clear_color: *const AnyObject = msg_send![objc2::class!(NSColor), clearColor];
-                let _: () = msg_send![window, setBackgroundColor: clear_color];
-                let _: () = msg_send![window, setHasShadow: true];
-                // Defer rounded corners to app_run, after vibrancy/body are set up
-                PENDING_ROUNDED_CORNERS.with(|c| c.set(true));
-            }
-        }
-    });
-}
-
-/// Set window level: "floating", "statusBar", "modal", or "normal".
-pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
-    let level_str = str_from_header(value_ptr);
-    if level_str.is_empty() {
-        return;
-    }
-    APPS.with(|a| {
-        let apps = a.borrow();
-        let idx = (app_handle - 1) as usize;
-        if idx < apps.len() {
-            let window = &apps[idx].window;
-            unsafe {
-                // NSWindowLevel values:
-                // normal = 0, floating = 3, statusBar = 25, modalPanel = 8
-                let level: isize = match level_str {
-                    "floating" => 3,   // NSFloatingWindowLevel
-                    "statusBar" => 25, // NSStatusWindowLevel
-                    "modal" => 8,      // NSModalPanelWindowLevel
-                    _ => 0,            // NSNormalWindowLevel
-                };
-                let _: () = msg_send![window, setLevel: level];
-            }
-        }
-    });
-}
-
-/// Set window transparency (clear background).
-/// `value` is a NaN-boxed boolean.
-pub fn app_set_transparent(app_handle: i64, value: f64) {
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    if value.to_bits() != TAG_TRUE {
-        return;
-    }
-    APPS.with(|a| {
-        let apps = a.borrow();
-        let idx = (app_handle - 1) as usize;
-        if idx < apps.len() {
-            let window = &apps[idx].window;
-            unsafe {
-                let _: () = msg_send![window, setOpaque: false];
-                // NSColor.clearColor
-                let clear_color: *const objc2::runtime::AnyObject =
-                    msg_send![objc2::class!(NSColor), clearColor];
-                let _: () = msg_send![window, setBackgroundColor: clear_color];
-            }
-        }
-    });
-}
-
-/// Set vibrancy material: "sidebar", "headerView", "sheet", "titlebar",
-/// "tooltip", "underWindowBackground", "contentBackground", "behindWindow",
-/// "menu", "popover", "selection".
-///
-/// Called BEFORE app_set_body: sets an NSVisualEffectView as the window's
-/// content view. app_set_body then adds the body widget as a subview of it.
-pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
-    let material_str = str_from_header(value_ptr);
-    if material_str.is_empty() {
-        return;
-    }
-    APPS.with(|a| {
-        let apps = a.borrow();
-        let idx = (app_handle - 1) as usize;
-        if idx < apps.len() {
-            let window = &apps[idx].window;
-            unsafe {
-                // NSVisualEffectMaterial values
-                let material: isize = match material_str {
-                    "titlebar" => 3,
-                    "selection" => 4,
-                    "menu" => 5,
-                    "popover" => 6,
-                    "sidebar" => 7,
-                    "headerView" => 10,
-                    "sheet" => 11,
-                    "windowBackground" => 12,
-                    "hudWindow" => 13,
-                    "fullScreenUI" => 15,
-                    "tooltip" => 17,
-                    "contentBackground" => 18,
-                    "underWindowBackground" => 21,
-                    "underPageBackground" => 22,
-                    _ => 7, // default to sidebar
-                };
-
-                // Make window transparent so vibrancy shows through
-                let _: () = msg_send![window, setOpaque: false];
-                let clear_color: *const objc2::runtime::AnyObject =
-                    msg_send![objc2::class!(NSColor), clearColor];
-                let _: () = msg_send![window, setBackgroundColor: clear_color];
-
-                // Create NSVisualEffectView sized to the window
-                let effect_cls = objc2::runtime::AnyClass::get(c"NSVisualEffectView").unwrap();
-                let effect_view: *mut objc2::runtime::AnyObject = msg_send![effect_cls, alloc];
-                let frame = CGRect::new(
-                    CGPoint::new(0.0, 0.0),
-                    CGSize::new(window.frame().size.width, window.frame().size.height),
-                );
-                let effect_view: *mut objc2::runtime::AnyObject = msg_send![
-                    effect_view, initWithFrame: frame
-                ];
-                let _: () = msg_send![effect_view, setMaterial: material];
-                // NSVisualEffectBlendingMode.behindWindow = 0
-                let _: () = msg_send![effect_view, setBlendingMode: 0isize];
-                // NSVisualEffectState.active = 1 (always show vibrancy)
-                let _: () = msg_send![effect_view, setState: 1isize];
-                // Auto-resize with window
-                // NSViewWidthSizable | NSViewHeightSizable = 0x12 = 18
-                let _: () = msg_send![effect_view, setAutoresizingMask: 18u64];
-
-                // Set the effect view as the window's content view.
-                // app_set_body (called next) will add the body widget as a subview of this.
-                let _: () = msg_send![window, setContentView: effect_view];
-            }
-        }
-    });
-}
-
-/// Set the activation policy: "regular", "accessory", or "background".
-/// Stored and applied in app_run() since NSApp policy must be set before the event loop starts.
-pub fn app_set_activation_policy(_app_handle: i64, value_ptr: *const u8) {
-    let policy_str = str_from_header(value_ptr);
-    if !policy_str.is_empty() {
-        PENDING_ACTIVATION_POLICY.with(|p| {
-            *p.borrow_mut() = Some(policy_str.to_string());
-        });
-    }
-}
+mod chrome;
+pub use chrome::*;
 
 /// Register a system-wide global hotkey that fires even when the app is in the background.
 /// Also registers a local event monitor for when the app is focused.
@@ -1620,14 +1529,43 @@ pub fn window_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     }
 }
 
-/// Set the root widget of a window.
+/// Set the root widget of a window, pinned to fill it.
+///
+/// Unlike the bare `setContentView`, this pins the body to the window's
+/// `contentLayoutGuide` with Auto Layout so a full-window webview (an Electron
+/// `BrowserWindow` whose entire content is the page) fills and resizes with the
+/// window. Mirrors the pinning `app_set_body` does for the main window.
 pub fn window_set_body(window_handle: i64, widget_handle: i64) {
     WINDOWS.with(|w| {
         let windows = w.borrow();
         let idx = (window_handle - 1) as usize;
         if idx < windows.len() {
             if let Some(view) = crate::widgets::get_widget(widget_handle) {
-                windows[idx].window.setContentView(Some(&view));
+                let window = &windows[idx].window;
+                window.setContentView(Some(&view));
+                unsafe {
+                    let _: () = objc2::msg_send![&*view, setTranslatesAutoresizingMaskIntoConstraints: false];
+                    let guide: Retained<AnyObject> = msg_send![&**window, contentLayoutGuide];
+                    let guide_top: Retained<AnyObject> = msg_send![&*guide, topAnchor];
+                    let guide_bottom: Retained<AnyObject> = msg_send![&*guide, bottomAnchor];
+                    let guide_leading: Retained<AnyObject> = msg_send![&*guide, leadingAnchor];
+                    let guide_trailing: Retained<AnyObject> = msg_send![&*guide, trailingAnchor];
+
+                    let top_anchor = view.topAnchor();
+                    let bottom_anchor = view.bottomAnchor();
+                    let leading_anchor = view.leadingAnchor();
+                    let trailing_anchor = view.trailingAnchor();
+
+                    let c_top: Retained<AnyObject> = msg_send![&*top_anchor, constraintEqualToAnchor: &*guide_top];
+                    let c_bottom: Retained<AnyObject> = msg_send![&*bottom_anchor, constraintEqualToAnchor: &*guide_bottom];
+                    let c_leading: Retained<AnyObject> = msg_send![&*leading_anchor, constraintEqualToAnchor: &*guide_leading];
+                    let c_trailing: Retained<AnyObject> = msg_send![&*trailing_anchor, constraintEqualToAnchor: &*guide_trailing];
+
+                    let _: () = msg_send![&*c_top, setActive: true];
+                    let _: () = msg_send![&*c_bottom, setActive: true];
+                    let _: () = msg_send![&*c_leading, setActive: true];
+                    let _: () = msg_send![&*c_trailing, setActive: true];
+                }
             }
         }
     });
@@ -1639,8 +1577,27 @@ pub fn window_show(window_handle: i64) {
         let windows = w.borrow();
         let idx = (window_handle - 1) as usize;
         if idx < windows.len() {
-            windows[idx].window.center();
-            windows[idx].window.makeKeyAndOrderFront(None);
+            let window = &windows[idx].window;
+            // Activate the app first. In the Electron-compat loop, windows are
+            // created dynamically from a microtask *during* app_run_loop's
+            // `[NSApp run]` (via whenReady().then(createWindow)), after the
+            // initial activate(). Without re-activating + orderFrontRegardless
+            // the window is created but never composited on-screen
+            // (CGWindow `onscreen=None`) and `makeKeyAndOrderFront` alone is a
+            // no-op for a non-active app.
+            if let Some(mtm) = MainThreadMarker::new() {
+                let app = NSApplication::sharedApplication(mtm);
+                #[allow(deprecated)]
+                app.activateIgnoringOtherApps(true);
+            }
+            window.center();
+            window.makeKeyAndOrderFront(None);
+            unsafe {
+                // Force the window on-screen regardless of app-active state —
+                // this is the piece that actually composites a window created
+                // mid-run-loop.
+                let _: () = msg_send![&**window, orderFrontRegardless];
+            }
         }
     });
 }

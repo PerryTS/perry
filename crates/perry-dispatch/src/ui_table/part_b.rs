@@ -999,4 +999,35 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::Closure],
         ret: ReturnKind::Void,
     },
+    // ---- Electron-compat shim (#5797): renderer→main IPC + body-less loop ----
+    MethodRow {
+        method: "webviewSetOnMessage",
+        runtime: "perry_ui_webview_set_on_message",
+        args: &[ArgKind::Widget, ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "webviewAddUserScript",
+        runtime: "perry_ui_webview_add_user_script",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "appRunLoop",
+        runtime: "perry_ui_app_run_loop",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "appRequestLoop",
+        runtime: "perry_ui_app_request_loop",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "appQuit",
+        runtime: "perry_ui_app_quit",
+        args: &[],
+        ret: ReturnKind::Void,
+    },
 ];

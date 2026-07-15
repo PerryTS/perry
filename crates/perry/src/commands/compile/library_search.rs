@@ -1037,7 +1037,47 @@ pub(super) fn find_wasm_host_library(target: Option<&str>) -> Option<PathBuf> {
 /// branch in `compile.rs` unconditionally clears `ctx.needs_ui` for that
 /// target so this lookup is never reached with `Some("harmonyos*")`
 /// (#400).
+thread_local! {
+    /// Set from `--webview servo`: link the Servo-enabled macOS UI lib variant
+    /// instead of the default WKWebView one. Thread-local (like the other
+    /// cross-cutting compile flags) so we don't thread a param through every
+    /// `find_ui_library` call site.
+    static WEBVIEW_SERVO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Record whether the compile requested the Servo web engine (`--webview servo`).
+pub(crate) fn set_webview_servo(on: bool) {
+    WEBVIEW_SERVO.with(|c| c.set(on));
+}
+
+/// True when this compile asked for the Servo web engine.
+pub(crate) fn webview_servo() -> bool {
+    WEBVIEW_SERVO.with(|c| c.get())
+}
+
 pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
+    // Servo backend (macOS only): link the Servo-enabled variant. cargo emits
+    // the same `libperry_ui_macos.a` name regardless of features, so the variant
+    // is distinguished by filename — built via
+    // `cargo build --release -p perry-ui-macos --features servo-webview` and
+    // placed as `libperry_ui_macos_servo.a`. See docs/servo/README.md.
+    let macos_servo = webview_servo()
+        && matches!(
+            target,
+            Some("macos") | None if cfg!(target_os = "macos")
+        );
+    if macos_servo {
+        if let Some(p) = find_library("libperry_ui_macos_servo.a", target) {
+            return Some(p);
+        }
+        eprintln!(
+            "warning: --webview servo requested but libperry_ui_macos_servo.a not found; \
+             falling back to the system WKWebView library. Build it with \
+             `cargo build --release -p perry-ui-macos --features servo-webview` and place it \
+             alongside libperry_ui_macos.a (see docs/servo/README.md)."
+        );
+    }
+
     let lib_name = match target {
         Some("ios-simulator") | Some("ios") => "libperry_ui_ios.a",
         Some("visionos-simulator") | Some("visionos") => "libperry_ui_visionos.a",

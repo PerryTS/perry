@@ -290,6 +290,7 @@ fn build_once(
         enable_wasm_runtime: false,
         target: None,
         libc: None,
+        webview: "system".to_string(),
         march: None,
         app_bundle_id: None,
         output_type: "executable".to_string(),

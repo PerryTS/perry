@@ -739,6 +739,17 @@ export function webviewCanGoBack(handle: Widget): number;
 export function webviewEvaluateJs(handle: Widget, js: string, callback: (result: string) => void): void;
 /** Wipe the WebView's cookies / local storage / IndexedDB. Use after auth. */
 export function webviewClearCookies(handle: Widget): void;
+/**
+ * Electron-compat IPC (renderer → main). Register a closure invoked with the
+ * JSON string the page posts via `window.webkit.messageHandlers.perry.postMessage(...)`.
+ * Reply with `webviewEvaluateJs(...)` (main → renderer). Backs `ipcMain`.
+ */
+export function webviewSetOnMessage(handle: Widget, onMessage: (json: string) => void): void;
+/**
+ * Inject a document-start user script into all frames (the IPC bridge runtime +
+ * the app's preload). Call before `webviewLoadUrl` so it applies to that load.
+ */
+export function webviewAddUserScript(handle: Widget, source: string): void;
 
 /** VStack with built-in edge insets. */
 export function VStackWithInsets(spacing: number, top: number, left: number, bottom: number, right: number): Widget;
@@ -1818,6 +1829,24 @@ export function registerGlobalHotkey(
  * connections, write preferences.
  */
 export function onTerminate(callback: () => void): void;
+
+/**
+ * Electron-compat body-less event loop. Sets up NSApplication + the timer pump,
+ * invokes `onReady` (which resolves `app.whenReady()`), then blocks. Windows are
+ * created dynamically afterward via `Window(...)`. Backs `electron`'s app loop.
+ */
+export function appRunLoop(onReady: () => void): void;
+
+/** Electron-compat `app.quit()` — terminate the application. */
+export function appQuit(): void;
+
+/**
+ * Electron-compat: register the top-level UI event loop without blocking. The
+ * generated `main` enters it (via the runtime's loop-takeover hook) AFTER the
+ * user's top-level code runs, so windows created from `app.whenReady().then(...)`
+ * composite correctly. Prefer this over `appRunLoop` for the `app` shell.
+ */
+export function appRequestLoop(onReady: () => void): void;
 
 /**
  * Register a callback to run when the app becomes the frontmost app

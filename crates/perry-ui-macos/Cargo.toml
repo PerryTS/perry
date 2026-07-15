@@ -10,9 +10,13 @@ crate-type = ["rlib", "staticlib"]
 default = []
 plugins = []
 geisterhand = []
+servo-webview = ["dep:servo", "dep:url", "dep:dpi"]
 
 [dependencies]
 perry-ui = { path = "../perry-ui" }
+servo = { version = "0.1", optional = true }
+url = { version = "2", optional = true }
+dpi = { version = "0.1", optional = true }
 perry-ui-testkit = { workspace = true }
 base64 = "0.22"
 block2 = "0.6"

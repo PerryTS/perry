@@ -23,6 +23,26 @@ pub extern "C" fn perry_ui_app_run(app_handle: i64) {
     app::app_run(app_handle);
 }
 
+/// Electron-compat body-less event loop. Fires `on_ready` (resolves
+/// `app.whenReady()`) then blocks. Windows are created dynamically afterward.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_run_loop(on_ready: f64) {
+    app::app_run_loop(on_ready);
+}
+
+/// `app.quit()` — terminate the application.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_quit() {
+    app::app_quit();
+}
+
+/// Request the top-level Electron-compat UI loop (non-blocking; the generated
+/// `main` enters it via `js_ui_loop_take_over` after the user's top-level code).
+#[no_mangle]
+pub extern "C" fn perry_ui_app_request_loop(on_ready: f64) {
+    app::request_app_loop(on_ready);
+}
+
 /// Set the application dock icon from a file path.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_icon(path_ptr: i64) {

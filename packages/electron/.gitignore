@@ -1,0 +1,7 @@
+node_modules/
+*.o
+.cache/
+# compiled example binaries (built via `perry compile`)
+examples/*/system-explorer
+examples/*/*-electron
+dist/

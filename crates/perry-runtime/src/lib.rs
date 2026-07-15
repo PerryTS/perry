@@ -124,6 +124,7 @@ pub mod typedarray;
 pub mod typedarray_half;
 pub(crate) mod typedarray_props;
 pub mod typedarray_view;
+pub mod ui_loop;
 pub mod url;
 pub mod v8;
 pub mod validators;

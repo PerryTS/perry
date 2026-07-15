@@ -121,6 +121,14 @@ pub struct CompileArgs {
     #[arg(long)]
     pub libc: Option<String>,
 
+    /// Web engine for the WebView widget on macOS: `system` (default,
+    /// WKWebView) or `servo` (experimental in-process Servo engine). `servo`
+    /// links the Servo-enabled UI library variant (`libperry_ui_macos_servo.a`,
+    /// built with `--features servo-webview`); the app then defaults to Servo
+    /// and can still be overridden at runtime via `PERRY_WEBVIEW`. Ignored on
+    /// non-macOS targets.
+    #[arg(long, default_value = "system")]
+    pub webview: String,
     /// CPU baseline for the generated machine code (#6125). Accepts an LLVM
     /// CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native`
     /// (tune to this machine's full instruction set — the default for host

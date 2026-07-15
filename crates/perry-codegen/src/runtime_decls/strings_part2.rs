@@ -697,6 +697,10 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // perry-runtime as a thin function-pointer trampoline so it's
     // safe to call even when perry-stdlib is not linked (no-op).
     module.declare_function("js_run_stdlib_pump", VOID, &[]);
+    // Top-level UI event-loop takeover (Electron-compat / windowed apps). If a
+    // native UI backend registered a blocking loop, this blocks here at the true
+    // top level; otherwise it's a no-op and the async event loop proceeds.
+    module.declare_function("js_ui_loop_take_over", VOID, &[]);
     module.declare_function("js_sleep_ms", VOID, &[DOUBLE]);
     // Issue #84: condvar-backed wait for the event loop / await busy-wait.
     // Replaces fixed-quantum `js_sleep_ms(10.0)` / `js_sleep_ms(1.0)`.

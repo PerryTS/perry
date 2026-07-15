@@ -1,4 +1,8 @@
 {
+  "name": "perry",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Perry — native TypeScript compiler. This root manifest carries name+version so the repo is installable straight from git (npm's arborist throws \"Cannot read properties of undefined (reading 'spec')\" without them); the publishable packages live under packages/*.",
   "type": "module",
   "devDependencies": {
     "mongodb": "^7.0.0",

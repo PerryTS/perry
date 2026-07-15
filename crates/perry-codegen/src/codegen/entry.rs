@@ -873,6 +873,16 @@ pub(super) fn compile_module_entry(
                     let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
+
+                // Top-level UI loop takeover. If a windowed app requested a
+                // native UI event loop (e.g. the Electron-compat `app` shell),
+                // hand control to it HERE — at the true top level of `main`,
+                // before the async event loop. This is what lets a window
+                // created from `app.whenReady().then(...)` actually composite;
+                // entering `[NSApp run]` from a microtask leaves windows
+                // off-screen. No-op when no UI loop is registered.
+                ctx.block().call_void("js_ui_loop_take_over", &[]);
+
                 ctx.block().br(&header_label);
 
                 // loop_header: host-driven shells (watchOS SwiftUI tree

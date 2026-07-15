@@ -111,6 +111,11 @@ pub fn run_with_parse_cache(
     let mut args = args;
     args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
 
+    // `--webview servo` selects the Servo-enabled macOS UI library variant.
+    // Record it here (single-threaded, before `find_ui_library` runs) via a
+    // thread-local, mirroring the other cross-cutting compile flags.
+    super::library_search::set_webview_servo(args.webview == "servo");
+
     // #835 + #846: clear the codegen-side FFI provenance set up-front
     // so any leftover entries from a prior `perry dev` rebuild (or a
     // failed-build early-return that skipped our drain below) don't
