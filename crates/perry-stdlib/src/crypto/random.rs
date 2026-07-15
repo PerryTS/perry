@@ -88,12 +88,17 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    // Only a genuine closure (POINTER_TAG) is a schedulable callback; a bare
-    // `undefined`/primitive is a no-op. The timer queue reinterprets the i64 as
-    // a `*const ClosureHeader`, so hand it the unboxed pointer.
-    let cb_val = JSValue::from_bits(callback_bits.to_bits());
-    if cb_val.is_pointer() {
-        let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_bits) as i64;
+    // Only a genuine closure is a schedulable callback. The timer queue
+    // reinterprets the i64 as `*const ClosureHeader` and calls it with no
+    // validation, so a bare `is_pointer()` check is not enough: a non-function
+    // POINTER value (a plain object or array passed as the callback —
+    // `randomBytes(n, {})`, which Node rejects with ERR_INVALID_CALLBACK) would
+    // pass it and be miscast as a closure, then dereferenced when the timer
+    // fires. Gate on `is_closure_ptr` (the CLOSURE_MAGIC + heap-range probe used
+    // by every other node-style-callback site) so a non-callable argument is a
+    // safe no-op instead. A non-pointer primitive fails the `>= 0x10000` floor.
+    let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_bits);
+    if cb_ptr >= 0x10000 && perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
         let err = f64::from_bits(JSValue::null().bits());
         let args = [err, value];
         perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
