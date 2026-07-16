@@ -1492,6 +1492,12 @@ impl GcCycleState {
                 trace.old_young_edge_verifier = old_young_edge_verifier;
             }
         }
+        // Diagnostic (PERRY_GC_VERIFY_MARK): marks are final for this minor and
+        // sweep has not yet run — report any OLD parent whose young/malloc child
+        // is UNMARKED (about to be swept live = dropped remembered-set edge).
+        if std::env::var_os("PERRY_GC_VERIFY_MARK").is_some() {
+            super::verify::verify_minor_unmarked_young_children_report("minor-prelude");
+        }
 
         let active_elapsed_us = self.active_elapsed_us();
         let progress_kind = self.progress_kind;
@@ -1607,6 +1613,10 @@ impl GcCycleState {
                     reclaim_dead_old_blocks,
                     targeted_old_blocks,
                     sweep_malloc,
+                    // Minor sweeps must retain every forwarding stub: old-gen
+                    // parents are black leaves, so an unmarked stub can still
+                    // be referenced (see ArenaSweepObjectsState docs).
+                    !full_trace,
                 )
                 // #6010: dead Maps'/Sets' external side buffers are freed as
                 // the first sweep subphase, budget-chunked — no ordinary
