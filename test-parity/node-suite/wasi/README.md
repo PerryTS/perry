@@ -74,8 +74,10 @@ Coverage was compared against primary sources at these revisions:
   memory-brand, and not-started validation, but validates entrypoints before
   consuming lifecycle state, snapshots `instance.exports` once per entry method,
   keeps `finalizeBindings()` idempotent, and exposes `wasiImport` as a getter.
-  Its `finalizeBindings()` also treats null memory or options as absent instead
-  of rejecting them; its constructor does match Node's eager args/env snapshots,
+  The instance descriptor fixture reports that inherited accessor separately
+  from Node's own writable data property instead of assuming either shape. Its
+  `finalizeBindings()` also treats null memory or options as absent instead of
+  rejecting them; its constructor does match Node's eager args/env snapshots,
   but stringifies undefined env values instead of omitting them. No separate
   checked-in `node:wasi` compatibility selection was present at that revision.
   Its getter-only `wasiImport` rejects replacement while `getImportObject()`
@@ -90,12 +92,14 @@ Coverage was compared against primary sources at these revisions:
   its implementation retains legacy `getImports()`/optional-memory behavior,
   lacks Node's initialize/finalize helpers, and uses realm-sensitive memory
   branding. Its `wasiImport` property can be replaced, but it lacks Node's
-  `getImportObject()` method. It also accepts `args: null` instead of applying
-  Node's non-array validation, retains the caller's args array and env object so
-  mutations after construction remain visible, does not omit undefined env
-  values, and retains payload bytes after embedded NULs like Deno; Node 26.5.0
-  truncates each native argument/environment string at its first NUL and remains
-  the oracle. Bun does support ordinary WASI subclass construction.
+  `getImportObject()` method; the identity and wrapper-descriptor fixtures
+  normalize that absence instead of terminating before reporting it. It also
+  accepts `args: null` instead of applying Node's non-array validation, retains
+  the caller's args array and env object so mutations after construction remain
+  visible, does not omit undefined env values, and retains payload bytes after
+  embedded NULs like Deno; Node 26.5.0 truncates each native
+  argument/environment string at its first NUL and remains the oracle. Bun does
+  support ordinary WASI subclass construction.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
