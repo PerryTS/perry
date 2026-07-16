@@ -18,19 +18,23 @@ that oracle.
 ## Coverage added
 
 - `structured-clone/`: ArrayBuffer cloning, typed-array backing identity,
-  transfer detachment, MessagePort ownership transfer, and transfer-list
-  validation/rollback.
+  built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
+  transfer detachment, MessagePort ownership, overloads, and atomic rollback.
 - `message-port/`: synchronous FIFO receives, invalid-port validation,
-  explicit `start()`, listener deduplication, close ordering, queued-message
-  delivery, and `ref`/`unref`/`hasRef` state.
+  explicit `start()`, event fields/ports, listener deduplication, close callback
+  ordering, transfer-state validation, queued delivery, overload validation,
+  and `ref`/`unref`/`hasRef` state.
 - `worker-lifecycle/`: constructor transfer validation, structured `workerData`,
-  environment-data snapshots, `online`/`message`/`error`/`exit` ordering, and
-  deterministic termination settlement.
+  default and built-in workerData, MessagePort/ArrayBuffer transfer, environment
+  snapshots, `online`/`message`/`error`/`exit` ordering, ref return values,
+  natural exit, and deterministic termination settlement.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, and retained ownership after rejection.
 - `broadcast-channel/`: same-name fanout/FIFO isolation, sender exclusion,
-  typed-array cloning, untransferable-value rejection, and closed-channel
-  validation.
+  listener management, typed-array and SharedArrayBuffer cloning,
+  untransferable-value rejection, and closed-channel validation.
+- `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
+  the existing surface, option, query, and shared/exclusive ordering cases.
 
 Every asynchronous fixture uses a message, close, exit, or promise-settlement
 barrier. No added fixture uses a sleep as a completion condition.
@@ -49,39 +53,39 @@ the cases above or belong to a separate slow/risky runtime feature:
 - Nested-worker stress, GC/finalization of unreachable ports, shared native
   handles, large message loops, and termination races are scheduler-sensitive
   and need dedicated stress infrastructure.
-- SharedArrayBuffer/Atomics cross-agent behavior is a separate runtime feature.
-  Single-thread Atomics invariants are not worker-specific, so adding them here
-  would duplicate existing language/runtime coverage.
-- The four existing `web-locks/` fixtures already cover deterministic surface,
-  validation, shared/exclusive ordering, `ifAvailable`, and query snapshots.
-  Abort/steal races and cross-agent lock ownership remain scheduler-sensitive.
+- SharedArrayBuffer aliasing is now covered deterministically through both a
+  MessagePort and BroadcastChannel. Cross-agent wait/notify coordination stays
+  separate because it requires scheduler-aware runtime infrastructure.
+- Web Locks now cover deterministic pre-abort and steal behavior in addition to
+  surface, validation, shared/exclusive ordering, `ifAvailable`, and query
+  snapshots. In-flight abort races and cross-agent ownership remain excluded.
 - The existing `direct-message/` fixtures already cover deterministic
   `postMessageToThread` delivery, rejection, and timeout behavior.
 
-The measured focused result is `20/34`: all 17 pre-existing cases remain green,
-three new cases pass, and 14 new cases expose stable diagnostic differences.
+The measured focused result is `24/55`: all 17 pre-existing cases remain green,
+seven new cases pass, and 31 new cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
-`message-port/start-and-listeners.ts`, and
-`worker-lifecycle/termination-ordering.ts`. The diagnostic differences are:
+`broadcast-channel/listener-management.ts`,
+`message-port/start-and-listeners.ts`,
+`worker-lifecycle/termination-ordering.ts`,
+`worker-lifecycle/worker-ref-state.ts`, `web-locks/web-locks-abort.ts`, and
+`web-locks/web-locks-steal.ts`. The diagnostic differences are:
 
-- All four `structured-clone/` fixtures: Perry preserves indexed values but
-  loses ArrayBuffer/typed-array brands, does not detach transferred buffers or
-  move MessagePort ownership, and accepts invalid transfer lists.
-- `message-port/close-ordering.ts`, `receive-fifo-validation.ts`, and
-  `ref-state.ts`: closing drops a queued message, invalid receivers return
-  `undefined` instead of throwing, and `hasRef()` does not track listener or
-  explicit ref state.
-- `worker-lifecycle/constructor-validation.ts`, `data-and-environment.ts`, and
-  `error-ordering.ts`: invalid constructor payloads are accepted, transferred
-  workerData is not detached or type-preserving and environment data is not
-  snapshotted, while a worker throw escapes instead of producing ordered
-  `error` then `exit` events.
+- All nine `structured-clone/` fixtures: Perry preserves some indexed values but
+  loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
+  cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
+- Nine `message-port/` diagnostics: closing drops queued data and callbacks,
+  invalid receivers/options/transfers do not throw, event `ports` are missing,
+  transferred ownership is not enforced, and `hasRef()` does not track state.
+- Eight `worker-lifecycle/` diagnostics: invalid constructor payloads are
+  accepted; transfers, omitted workerData, Map cloning, environment snapshots,
+  post-exit terminate values, and worker error routing differ.
 - All three `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection and ArrayBuffer exceptions differ, and marked
   transferables are still accepted.
-- `broadcast-channel/close-and-clone.ts`: typed-array branding is lost and
-  MessagePort/closed-channel posts are accepted.
+- Two `broadcast-channel/` diagnostics: typed-array/SharedArrayBuffer branding
+  and sharing are lost, while MessagePort and closed-channel posts are accepted.
 
 The clean measurement used:
 
@@ -92,8 +96,9 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `20/34 (58.8%), diff=14`, with no compile failures or timeouts.
-The SharedArrayBuffer/Atomics stopping decision is backed by the existing
+It reported `24/55 (43.6%), diff=31`, with no compile failures or timeouts.
+The SharedArrayBuffer/Atomics boundary is backed by the added same-process
+channel cases plus the existing
 granular `globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
 `util/types/arraybuffer-sharedarraybuffer.ts` cases; cross-agent fixtures such
 as Node's `test-worker-message-channel-sharedarraybuffer.js` and Deno's
