@@ -25,7 +25,10 @@ console.log(
   sandbox.y,
   typeof (globalThis as any).y,
 );
-errorShape("run plain object validation", () => vm.runInContext("1", {} as any));
+errorShape(
+  "run plain object validation",
+  () => vm.runInContext("1", {} as any),
+);
 
 try {
   (vm as any).Script("1");
@@ -51,5 +54,13 @@ console.log(
   typeof (globalThis as any).result,
 );
 
-console.log("runInContext:", vm.runInContext("x = x + 1; x", context), sandbox.x);
-console.log("createScript:", vm.createScript("x = x + 1; x").runInContext(context), sandbox.x);
+console.log(
+  "runInContext:",
+  vm.runInContext("x = x + 1; x", context),
+  sandbox.x,
+);
+console.log(
+  "createScript:",
+  vm.createScript("x = x + 1; x").runInContext(context),
+  sandbox.x,
+);

@@ -1,7 +1,6 @@
 // node:vm no-flag ESM import surface.
 import vmDefault, * as vm from "node:vm";
 import {
-  Script,
   compileFunction,
   constants,
   createContext,
@@ -11,19 +10,22 @@ import {
   runInContext,
   runInNewContext,
   runInThisContext,
+  Script,
 } from "node:vm";
 
-for (const [name, value] of [
-  ["Script", Script],
-  ["createContext", createContext],
-  ["createScript", createScript],
-  ["runInContext", runInContext],
-  ["runInNewContext", runInNewContext],
-  ["runInThisContext", runInThisContext],
-  ["isContext", isContext],
-  ["compileFunction", compileFunction],
-  ["measureMemory", measureMemory],
-] as const) {
+for (
+  const [name, value] of [
+    ["Script", Script],
+    ["createContext", createContext],
+    ["createScript", createScript],
+    ["runInContext", runInContext],
+    ["runInNewContext", runInNewContext],
+    ["runInThisContext", runInThisContext],
+    ["isContext", isContext],
+    ["compileFunction", compileFunction],
+    ["measureMemory", measureMemory],
+  ] as const
+) {
   console.log(
     name,
     typeof value,

@@ -15,8 +15,15 @@ const script: any = new vm.Script(source);
 const cachedData = script.createCachedData();
 
 console.log("source map:", script.sourceMapURL);
-console.log("script cache shape:", Buffer.isBuffer(cachedData), cachedData.length > 0);
-console.log("script no cache rejected:", script.cachedDataRejected === undefined);
+console.log(
+  "script cache shape:",
+  Buffer.isBuffer(cachedData),
+  cachedData.length > 0,
+);
+console.log(
+  "script no cache rejected:",
+  script.cachedDataRejected === undefined,
+);
 
 const accepted: any = new vm.Script(source, { cachedData });
 console.log("script cache accepted:", accepted.cachedDataRejected);

@@ -5,19 +5,25 @@ const vmBare = require("vm");
 console.log("node prefix identity:", vm === vmBare);
 console.log("require keys:", Object.keys(vm).join(","));
 
-for (const name of [
-  "Script",
-  "createContext",
-  "createScript",
-  "runInContext",
-  "runInNewContext",
-  "runInThisContext",
-  "isContext",
-  "compileFunction",
-  "measureMemory",
-] as const) {
+for (
+  const name of [
+    "Script",
+    "createContext",
+    "createScript",
+    "runInContext",
+    "runInNewContext",
+    "runInThisContext",
+    "isContext",
+    "compileFunction",
+    "measureMemory",
+  ] as const
+) {
   const value = vm[name];
-  console.log(name, typeof value, typeof value === "function" ? value.length : "-");
+  console.log(
+    name,
+    typeof value,
+    typeof value === "function" ? value.length : "-",
+  );
 }
 
 const builtin = process.getBuiltinModule("vm");

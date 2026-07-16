@@ -2,9 +2,9 @@
 
 This directory tests Perry's documented `node:vm` surface with independent,
 print-and-diff fixtures. Node 26.5.0 is the oracle. Every executable source
-passed to `Script`, `runIn*Context`, or `compileFunction` is a literal in the
-fixture, so failures in the core groups are not hidden dependencies on runtime
-source discovery.
+passed to `Script`, `runIn*Context`, or `compileFunction` is statically declared
+in the fixture, so failures in the core groups are not hidden dependencies on
+runtime source discovery.
 
 ## Coverage
 
@@ -14,7 +14,9 @@ source discovery.
 - `context/` and `validation/`: `createContext()`/`isContext()`, object and
   array sandboxes, `DONT_CONTEXTIFY`, name/origin and code-generation
   validation, string-code generation policy, and deterministic `microtaskMode`
-  draining.
+  draining. The `context/properties/` group covers accessor forwarding,
+  descriptors, writable/configurable behavior, deletion, inheritance, circular
+  references, symbol keys, and own-key enumeration.
 - `execution/`: main-context bindings, isolated new contexts, persistent context
   mutation/lexicals, receiver identity, repeated Script execution, and
   `createScript()` construction.
@@ -53,9 +55,10 @@ object inspection order.
 
 Perry documents a V8-free, narrowed constant-source VM evaluator. Consequently:
 
-- `code-generation-strings.ts` records `eval`/`new Function` policy behavior,
-  but a Perry mismatch there is a deliberate runtime-generated-code AOT
-  exclusion. It is kept separate from literal-source context behavior.
+- `code-generation-strings.ts` and `run-new-code-generation.ts` record
+  `eval`/`new Function` policy behavior, but Perry mismatches there are
+  deliberate runtime-generated-code AOT exclusions. They are kept separate from
+  literal-source context behavior.
 - Literal-source mutation, isolation, receiver, lexical, option-validation,
   error, compile-function, and cross-context failures are genuine gaps in the
   currently claimed VM subset, not dynamic-source discovery failures.
@@ -73,6 +76,10 @@ Perry documents a V8-free, narrowed constant-source VM evaluator. Consequently:
 - WebAssembly code-generation execution, code-cache corruption fuzzing, exact
   syntax/stack strings, and source-map path formatting remain separate risky
   categories.
+- Proxy-backed sandboxes were evaluated from Node/Bun's selection. Node 26.5.0
+  completes deterministically, but Perry currently exits with `SIGSEGV`; the
+  crashing probe is excluded from this print-and-diff suite and requires
+  separate runtime crash coverage.
 - Node 26.5.0 aborts the process for the invalid `compileFunction()` parameter
   name `"a-b"` on the tested macOS build, so that unsafe oracle case is
   excluded; type validation around it remains covered.

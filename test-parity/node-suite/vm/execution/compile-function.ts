@@ -16,15 +16,24 @@ const fn: any = vm.compileFunction("return a + b + globalThis.z", ["a", "b"], {
   parsingContext: context,
 });
 
-console.log("compile bound:", fn.length, fn(3, 4), typeof (globalThis as any).z);
+console.log(
+  "compile bound:",
+  fn.length,
+  fn(3, 4),
+  typeof (globalThis as any).z,
+);
 
 const mainFn: any = vm.compileFunction("return a + b", ["a", "b"]);
 console.log("compile main:", mainFn.length, mainFn(10, 20));
 
 errorShape("compile code validation", () => vm.compileFunction(1 as any));
-errorShape("compile params validation", () => vm.compileFunction("return 1", "x" as any));
-errorShape("compile context validation", () =>
-  vm.compileFunction("return 1", [], { parsingContext: {} as any }),
+errorShape(
+  "compile params validation",
+  () => vm.compileFunction("return 1", "x" as any),
+);
+errorShape(
+  "compile context validation",
+  () => vm.compileFunction("return 1", [], { parsingContext: {} as any }),
 );
 
 console.log(

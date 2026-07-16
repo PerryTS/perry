@@ -21,7 +21,11 @@ function entryShape(label: string, entry: any) {
   );
 }
 
-console.log("measure function:", typeof vm.measureMemory, vm.measureMemory.length);
+console.log(
+  "measure function:",
+  typeof vm.measureMemory,
+  vm.measureMemory.length,
+);
 console.log("measure promise:", typeof vm.measureMemory().then);
 
 const summary: any = await vm.measureMemory({ execution: "eager" });
@@ -34,11 +38,18 @@ console.log(
   typeof summary.WebAssembly.metadata,
 );
 
-const detailed: any = await vm.measureMemory({ mode: "detailed", execution: "eager" });
+const detailed: any = await vm.measureMemory({
+  mode: "detailed",
+  execution: "eager",
+});
 console.log("detailed keys:", Object.keys(detailed).join(","));
 entryShape("detailed total", detailed.total);
 entryShape("detailed current", detailed.current);
-console.log("detailed other:", Array.isArray(detailed.other), detailed.other.length);
+console.log(
+  "detailed other:",
+  Array.isArray(detailed.other),
+  detailed.other.length,
+);
 
 errorShape("mode validation", () => {
   vm.measureMemory({ mode: "bad" as any });
