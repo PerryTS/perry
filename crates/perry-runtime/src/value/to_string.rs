@@ -1207,7 +1207,15 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 }
             }
         }
-        crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15)
+        // An object with no `toString` override inherits
+        // `Object.prototype.toString`, which brands Map / Set / WeakMap /
+        // WeakSet / Promise (and any `Symbol.toStringTag`) as "[object Map]"
+        // etc. — not the bare "[object Object]". `String(new Map())` reached
+        // here after finding no override, so reuse that brand detection instead
+        // of hardcoding the generic tag. Ordinary objects still come back
+        // "[object Object]".
+        let branded = unsafe { crate::object::js_object_to_string(value) };
+        (branded.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::StringHeader
     } else {
         // Regular number - use js_number_to_string
         crate::string::js_number_to_string(value)
