@@ -41,7 +41,11 @@ The latest deterministic audit also selected Node's filename and constructor
 validation, MessagePort prototype/Event brands, and resource-limit metadata;
 Deno's same-reference listener deduplication, pending synchronous receives, and
 `process.env` option regression; and Bun's queued peer-close and orphaned
-transferred-port regressions.
+transferred-port regressions. The next audit selected Node's deterministic
+FileHandle clone/transfer ownership and process restrictions, plus Bun's
+FileHandle construction rollback and workerData alias regressions.
+Resource-consuming in-use-handle races remain separate; these cases use small
+controlled read-only files and explicit message/exit barriers.
 
 The inventory review covered all 148 current `test-worker-*` files across Node's
 parallel and sequential directories, all 48 cases in Deno's unit selection plus
@@ -68,7 +72,8 @@ that oracle.
   built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
   multiple SharedArrayBuffers, transfer detachment, detached-buffer retransfer
   rejection, MessagePort ownership, unsupported URL rejection, overloads, and
-  atomic rollback.
+  atomic rollback, and FileHandle clone rejection, transfer detachment,
+  received-handle readability, and parent ownership loss.
 - `message-port/`: synchronous FIFO receives, invalid-port validation, explicit
   `start()`, event fields/ports, listener deduplication, close callback
   ordering, listener removal/`once`, `onmessage` replacement, method receiver
@@ -114,7 +119,9 @@ that oracle.
   construction-time transfer rollback, default environment isolation, and the
   base file/eval `process.argv` shape, complete invalid filename types,
   `process.env` as an explicit environment option, and deterministic
-  `resourceLimits` snapshots/reset without memory-pressure enforcement.
+  `resourceLimits` snapshots/reset without memory-pressure enforcement,
+  FileHandle construction rollback and workerData alias identity, default/falsy
+  thread names, and the complete worker-disabled process stub/getter surface.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -152,8 +159,13 @@ cases above or belong to a separate slow/risky runtime feature:
   variants, and source maps remain separate loader, CLI, or process-subsystem
   work.
 - One controlled nested worker now covers environment-data inheritance. Deeper
-  nesting stress, GC/finalization of unreachable ports, shared native handles,
-  large message loops, and termination races remain scheduler-sensitive.
+  nesting stress, GC/finalization of unreachable ports, shared native-handle
+  races, large message loops, and termination races remain scheduler-sensitive.
+- Basic FileHandle clone rejection, transfer ownership, construction rollback,
+  and workerData graph aliasing are covered with controlled read-only handles.
+  Pending read/close transfer races, descriptor recycling/leak detection, and
+  cross-context disposal remain shared-handle stress rather than granular parity
+  cases.
 - SharedArrayBuffer aliasing is covered through same-thread MessagePort and
   BroadcastChannel paths plus cross-agent workerData and postMessage. Atomics
   wait/notify coordination remains separate scheduler-aware infrastructure.
@@ -197,13 +209,19 @@ cases above or belong to a separate slow/risky runtime feature:
   exercises the already covered unresolved-path fallback and leaves the buffer
   untouched vacuously.
 
-The measured focused result is `36/180`: all 17 pre-existing cases remain green,
-19 added cases pass, and 144 added cases expose stable diagnostic differences.
-The latest ten cases were each repeated three times under Node 26.5.0 and Perry
-with stable output and exit status. Deno 2.9.2 was stable across the same matrix.
-Bun 1.2.18 was stable for nine cases; its older orphaned-transfer implementation
-did not emit the peer close and hit the external three-second comparison timeout
-in three runs, while current Bun upstream carries that exact regression test.
+The measured focused result is `36/184`: all 17 pre-existing cases remain green,
+19 added cases pass, and 148 added cases expose stable diagnostic differences.
+The prior ten cases were each repeated three times under Node 26.5.0 and Perry
+with stable output and exit status. Deno 2.9.2 was stable across the same
+matrix. Bun 1.2.18 was stable for nine cases; its older orphaned-transfer
+implementation did not emit the peer close and hit the external three-second
+comparison timeout in three runs, while current Bun upstream carries that exact
+regression test. The latest four additions plus the two strengthened
+path/process cases were also stable in three runs per runtime under Node, Perry,
+Deno, and Bun. Bun 1.2.18 still rejects FileHandle workerData transfer selected
+by current Bun upstream, and its bare-relative Worker path exits before the
+remaining path matrix; both behaviors were stable and are recorded as
+old-runtime comparison gaps.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -226,24 +244,26 @@ also proven not to reappear through the event listener in
 Worker environment option is also covered by
 `worker-lifecycle/process-env-option.ts`. The diagnostic differences are:
 
-- All twelve `structured-clone/` fixtures: Perry preserves some indexed values
+- All thirteen `structured-clone/` fixtures: Perry preserves some indexed values
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
-  rejects cycles/BigInt, does not detach or move ownership, and accepts invalid
-  lists.
+  rejects cycles/BigInt, does not detach or move ownership, accepts invalid
+  lists, and treats FileHandles as cloneable plain objects.
 - Forty-four `message-port/` diagnostics: closing and dispatch flushing, queued
   data/callbacks, NodeEventTarget surface, listener counts and validation,
   receiver/options/iterables/transfers, MessageEvent construction and `ports`,
   duplicate/self/closed rollback, moved ownership, and `hasRef()` state and
   custom inspection differ, as do `.on()` deduplication, pending synchronous
   receives, queued peer-close ordering, orphaned transfers, and Event brands.
-- Fifty-five `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Fifty-eight `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
   sharing, queued port receive, rollback, post-exit values, error routing,
   Worker asynchronous disposal, default environment isolation, process argv
   shape, constructor rollback, invalid filename types, and resource-limit reset
-  differ. Basic eval with CJS require and explicit `process.env` both pass.
+  differ. FileHandle rollback/aliasing, default/falsy thread names, and the full
+  disabled process surface also differ. Basic eval with CJS require and explicit
+  `process.env` both pass.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
@@ -264,7 +284,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `36/180 (20.0%), diff=144`, with no compile failures or timeouts.
+It reported `36/184 (19.6%), diff=148`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. Cyclic `workerData` construction also consistently exits by
