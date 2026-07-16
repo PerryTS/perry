@@ -28,24 +28,30 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 
 The correctness oracle remains the repository-pinned Node 26.5.0.
 
-The final focused run is **13/17**. The four stable diagnostic differences are
-custom AsyncResource `init`, `before`/`after`, and `destroy` hook delivery, plus
-the callback receiver used by AsyncLocalStorage.snapshot. All other new cases
-match the pinned oracle.
+The final focused run is **30/37**. The seven stable diagnostic differences are
+custom AsyncResource `init`, `before`/`after`, and `destroy` hook delivery;
+AsyncLocalStorage.snapshot callback receiver handling; top-level
+executionAsyncResource restoration after nested custom scopes; disable cleanup
+for already-scheduled callbacks; and empty AsyncResource type validation while
+hooks are enabled. All other cases match the pinned oracle.
 
 ## Coverage
 
 - `resource/`: construction/type and ID invariants, scope/receiver/arguments,
   instance bind, deterministic hook scope callbacks, and explicit destroy.
 - `storage/`: run nesting and restoration, independent instances, enterWith,
-  exit, disable, and re-entry.
+  exit and its async descendants, multiple store value types, disable/re-entry,
+  repeated disable, and promise-boundary behavior.
 - `static/`: AsyncLocalStorage bind/snapshot and AsyncResource.bind context,
-  receiver, argument, return-value, and restoration behavior.
-- `propagation/`: Promise/await, queueMicrotask, nextTick, and timer propagation
-  with awaited or callback-driven completion barriers.
+  empty and populated captures, receiver, argument, return-value, re-entry, and
+  restoration behavior.
+- `propagation/`: controlled concurrent promises, catch/finally, thenables,
+  async iterators, queueMicrotask, nextTick, immediate, interval, and timer
+  propagation with awaited or callback-driven completion barriers.
 - `validation/`: synchronous throw propagation and cleanup of storage and
-  execution-resource state. The pre-existing root fixtures retain detailed
-  callback, constructor, and hook-option argument validation.
+  execution-resource state, plus hook-sensitive empty resource type behavior.
+  The pre-existing root fixtures retain detailed callback, constructor, and
+  hook-option argument validation.
 
 ## Stopping judgment and exclusions
 
