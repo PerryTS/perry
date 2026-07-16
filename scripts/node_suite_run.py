@@ -69,7 +69,7 @@ NODE = os.environ.get("NODE_BIN", "node")
 # Modules that must run one-at-a-time (port binding / process spawn / event-loop
 # or timer ordering). Parallelism corrupts their results.
 SLOW_MODULES = {
-    "http", "http2", "https", "net", "dgram", "tls", "cluster", "dns",
+    "http", "http2", "https", "net", "dgram", "tls", "cluster", "dns", "async_hooks",
     "stream", "child_process", "worker_threads", "inspector",
     "inspector-promises", "repl", "diagnostics_channel", "timers", "fetch",
 }

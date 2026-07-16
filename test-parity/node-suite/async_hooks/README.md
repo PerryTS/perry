@@ -28,12 +28,14 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 
 The correctness oracle remains the repository-pinned Node 26.5.0.
 
-The current focused run is **47/61**. Fourteen stable diagnostic fixtures cover
+The current focused run is **51/77**. Twenty-six stable diagnostic fixtures cover
 custom AsyncResource lifecycle delivery, snapshot receiver handling,
 execution-resource restoration, disable cleanup, hook-sensitive type
 validation, zlib callback propagation, stream.finished completion, simultaneous
 hooks, init resource arguments, throwing scope lifecycle, and caught async exit
-rejections. The other 47 fixtures match the pinned oracle.
+rejections. They also identify context loss across subprocess, HTTP, net, dgram
+event, worker event, readline, and events.on provider boundaries. The other 51
+fixtures match the pinned oracle.
 
 ## Coverage
 
@@ -53,6 +55,9 @@ rejections. The other 47 fixtures match the pinned oracle.
   EventEmitter propagation selected from Bun's Node comparison matrix.
 - `hooks/`: enable/disable/re-enable, simultaneous observers, init resource
   arguments, and lifecycle behavior when a scoped callback throws.
+- `providers/`: DNS, child processes, HTTP, net, dgram, workers, readline,
+  events.on, and stream async iterators with ephemeral ports and explicit
+  close/exit barriers. This directory runs in the sequential lane.
 - `validation/`: synchronous throw propagation and cleanup of storage and
   execution-resource state, plus hook-sensitive empty resource type behavior.
   The pre-existing root fixtures retain detailed callback, constructor, and
@@ -63,9 +68,8 @@ rejections. The other 47 fixtures match the pinned oracle.
 The remaining upstream cases are intentionally not copied into this fast,
 granular module suite:
 
-- Network, DNS, subprocess, and worker provider propagation require sequential
-  execution and dedicated cleanup barriers; they remain the next expansion
-  batch rather than being mixed into the parallel lane prematurely.
+- HTTPS/TLS provider propagation requires certificate fixtures and remains a
+  separate batch so certificate setup does not obscure context assertions.
 - Exact numeric async IDs are runtime-specific; only relationships and
   restoration invariants are asserted here.
 - GC-driven destroy delivery, weak-reference collection, destroy-vs-scheduler
