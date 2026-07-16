@@ -89,7 +89,8 @@ that oracle.
 - `broadcast-channel/`: same-name fanout/FIFO isolation, sender exclusion,
   listener management/`once`, `onmessage` replacement, name coercion, close/ref
   idempotence, typed-array and SharedArrayBuffer cloning, untransferable-value
-  rejection, and closed-channel and method-receiver validation.
+  rejection, clone-versus-closed error precedence, and closed-channel and
+  method-receiver validation.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
   the existing surface, option, query, callback settlement/cleanup,
   independent-name concurrency, and shared/exclusive ordering cases.
@@ -131,8 +132,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `32/142`: all 17 pre-existing cases remain green,
-15 added cases pass, and 110 added cases expose stable diagnostic differences.
+The measured focused result is `32/144`: all 17 pre-existing cases remain green,
+15 added cases pass, and 112 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -166,7 +167,7 @@ also pass. The diagnostic differences are:
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
-- Seven `broadcast-channel/` diagnostics: name coercion, once listeners,
+- Nine `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
   MessagePort validation, and closed-channel posts differ.
 - Thirteen additional diagnostics cover namespace/prototype completeness,
@@ -183,7 +184,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `32/142 (22.5%), diff=110`, with no compile failures or timeouts.
+It reported `32/144 (22.2%), diff=112`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. The SharedArrayBuffer/Atomics boundary is backed by the
