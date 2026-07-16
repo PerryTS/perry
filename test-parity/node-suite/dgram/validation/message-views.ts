@@ -30,6 +30,9 @@ let finishScatter: (value: string) => void = () => {};
 const scatterCallback = new Promise<string>((resolve) => {
   finishScatter = resolve;
 });
+const scatterReceived = new Promise<string>((resolve) => {
+  receiver.once("message", (message) => resolve(message.toString()));
+});
 const scatterResult = codeOf(() => {
   sender.send([Buffer.from("a"), "b"], receiver.address().port, "127.0.0.1", (error, bytes) => {
     finishScatter(`${error === null}:${bytes}`);
@@ -37,7 +40,7 @@ const scatterResult = codeOf(() => {
 });
 console.log("scatter accepted:", scatterResult);
 if (scatterResult === "none") {
-  console.log("scatter callback:", await scatterCallback);
+  console.log("scatter delivery:", await scatterReceived, await scatterCallback);
 }
 
 await Promise.all([
