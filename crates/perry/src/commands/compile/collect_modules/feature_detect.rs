@@ -224,6 +224,22 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_intl_locale = true;
         }
+        // `Intl.DateTimeFormat` / `Date.prototype.toLocale{,Date,Time}String`
+        // gate `perry-runtime/intl-datetime` (icu4x `icu_datetime` + CLDR
+        // date-time patterns). `toLocaleString` is ambiguous (Number also has
+        // one) but including the feature for a number-only program only costs a
+        // little size, whereas MISSING it on a date-formatting program drops
+        // byte-parity — so we err toward enabling.
+        if hir_debug.contains("property: \"DateTimeFormat\"")
+            || hir_debug.contains("property: \"toLocaleString\"")
+            || hir_debug.contains("property: \"toLocaleDateString\"")
+            || hir_debug.contains("property: \"toLocaleTimeString\"")
+            || hir_debug.contains("method: \"toLocaleString\"")
+            || hir_debug.contains("method: \"toLocaleDateString\"")
+            || hir_debug.contains("method: \"toLocaleTimeString\"")
+        {
+            ctx.uses_intl_datetime = true;
+        }
     }
 
     // Detect heap-snapshot / `process.report` usage, the only user-facing APIs

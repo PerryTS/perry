@@ -19,7 +19,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "diagnostics", "mod-dgram"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -84,6 +84,8 @@ intl-segmenter = ["dep:unicode-segmentation"]
 # usage). Already pulled transitively by `temporal`, so default/shipped builds
 # carry no extra weight. A hand-rolled structural fallback covers the off case.
 intl-locale = ["dep:icu_locale_core"]
+# CLDR-accurate Intl.DateTimeFormat / toLocaleString date-time patterns.
+intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -153,6 +155,14 @@ unicode-segmentation = { version = "1", optional = true }
 # `Intl.getCanonicalLocales` / `*.supportedLocalesOf`. The data-free structural
 # parser only (no CLDR alias tables); already in our lock graph via temporal_rs.
 icu_locale_core = { version = "2", optional = true }
+# CLDR date/time formatting for Intl.DateTimeFormat / Date.prototype.toLocale*
+# (icu4x 2.x, matching the icu_calendar/icu_locale_core already in the graph).
+# `compiled_data` vendors the CLDR dataset, so byte-for-byte-with-Node locale
+# patterns need no runtime data loading. Gated behind `intl-datetime` so only
+# programs that actually format localized dates link the data.
+icu_datetime = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+icu_time = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+icu_calendar = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
 idna = { version = "1", optional = true }
 url = { version = "2", optional = true }
 # #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format

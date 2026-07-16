@@ -878,6 +878,62 @@ fn era_string(year: i32, style: &str) -> &'static str {
     }
 }
 
+/// Format a `dateStyle`/`timeStyle` combination via icu4x (CLDR patterns).
+/// Returns `None` when the icu feature is off, the caller opted out (`enabled`
+/// = false, e.g. a Temporal partial), or the option combination is unmapped
+/// (notably a `long`/`full` timeStyle, which carries a localized time-zone
+/// name) — the caller then falls back to the bespoke formatters below.
+#[cfg(feature = "intl-datetime")]
+#[allow(clippy::too_many_arguments)]
+fn icu_style(
+    enabled: bool,
+    locale: &str,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    date_style: Option<&str>,
+    time_style: Option<&str>,
+    explicit_h24: Option<bool>,
+) -> Option<String> {
+    use super::icu_dtf::{self, Len, Req};
+    if !enabled {
+        return None;
+    }
+    icu_dtf::format(&Req {
+        locale,
+        year,
+        month: month as u8,
+        day: day as u8,
+        hour: hour as u8,
+        minute: minute as u8,
+        second: second as u8,
+        date_style: date_style.and_then(Len::parse),
+        time_style: time_style.and_then(Len::parse),
+        hour24: explicit_h24,
+    })
+}
+
+#[cfg(not(feature = "intl-datetime"))]
+#[allow(clippy::too_many_arguments)]
+fn icu_style(
+    _enabled: bool,
+    _locale: &str,
+    _year: i32,
+    _month: u32,
+    _day: u32,
+    _hour: u32,
+    _minute: u32,
+    _second: u32,
+    _date_style: Option<&str>,
+    _time_style: Option<&str>,
+    _explicit_h24: Option<bool>,
+) -> Option<String> {
+    None
+}
+
 fn format_date_style(year: i32, month: u32, day: u32, secs: i64, style: &str) -> String {
     let mi = month.saturating_sub(1).min(11) as usize;
     match style {
@@ -1176,6 +1232,19 @@ fn format_ms_with_dtf_obj(
     };
     let hour_cycle = get_string_field(obj, KEY_HOUR_CYCLE);
     let use_24h = resolve_24h(hour12_v, hour_cycle.as_deref());
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    // For the icu path, only override the hour cycle when the caller explicitly
+    // asked (hour12 / hourCycle); otherwise `None` lets icu apply its own CLDR
+    // locale default — which is what matches Node.
+    let explicit_h24: Option<bool> = if hour12_v.is_some() || hour_cycle.is_some() {
+        Some(use_24h)
+    } else {
+        None
+    };
+    // Route ordinary `Date`/`DateTime` styling through icu4x (byte-parity CLDR
+    // patterns + locale-correct date⇄time separators). Temporal partials
+    // (PlainYearMonth/MonthDay/Time) keep the bespoke formatters below.
+    let use_icu = matches!(temporal_kind, None | Some(PlainDate) | Some(PlainDateTime));
 
     // When both dateStyle and timeStyle are set for a date-only or time-only
     // Temporal value, the spec says the inapplicable style is silently ignored.
@@ -1200,17 +1269,58 @@ fn format_ms_with_dtf_obj(
     };
 
     match (eff_date_style, eff_time_style) {
-        (Some(ds), Some(ts)) => format!(
-            "{}, {}",
-            format_date_style(year, month, day, secs, ds),
-            format_time_style(hour, minute, second, ts, use_24h),
-        ),
+        (Some(ds), Some(ts)) => icu_style(
+            use_icu,
+            &locale,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            Some(ds),
+            Some(ts),
+            explicit_h24,
+        )
+        .unwrap_or_else(|| {
+            format!(
+                "{}, {}",
+                format_date_style(year, month, day, secs, ds),
+                format_time_style(hour, minute, second, ts, use_24h),
+            )
+        }),
         (Some(ds), None) => match temporal_kind {
             Some(PlainYearMonth) => format_year_month_style(year, month, ds),
             Some(PlainMonthDay) => format_month_day_style(month, day, ds),
-            _ => format_date_style(year, month, day, secs, ds),
+            _ => icu_style(
+                use_icu,
+                &locale,
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                Some(ds),
+                None,
+                explicit_h24,
+            )
+            .unwrap_or_else(|| format_date_style(year, month, day, secs, ds)),
         },
-        (None, Some(ts)) => format_time_style(hour, minute, second, ts, use_24h),
+        (None, Some(ts)) => icu_style(
+            use_icu,
+            &locale,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            None,
+            Some(ts),
+            explicit_h24,
+        )
+        .unwrap_or_else(|| format_time_style(hour, minute, second, ts, use_24h)),
         (None, None) => {
             let is_default = get_field(obj, KEY_DT_IS_DEFAULT).to_bits() == crate::value::TAG_TRUE;
             // Also treat DTFs that only have supplementary options (era, timeZoneName)

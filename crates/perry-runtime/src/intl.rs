@@ -26,6 +26,8 @@ mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 mod date_collator;
 mod date_names;
+#[cfg(feature = "intl-datetime")]
+pub(crate) mod icu_dtf;
 mod time_zone;
 pub(crate) use time_zone::{canonicalize_named_time_zone, resolved_date_time_zone};
 mod install;
