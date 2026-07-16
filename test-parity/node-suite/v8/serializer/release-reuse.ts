@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { Serializer } from "node:v8";
 
 const serializer = new Serializer();

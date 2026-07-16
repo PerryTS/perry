@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { Deserializer, Serializer } from "node:v8";
 
 for (
