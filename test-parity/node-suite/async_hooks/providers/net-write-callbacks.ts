@@ -9,25 +9,29 @@ const address = server.address();
 if (!address || typeof address === "string")
   throw new Error("missing server address");
 
-await storage.run(
-  "net-write",
-  () =>
-    new Promise<void>((resolve, reject) => {
-      const client = connect(address.port, "127.0.0.1");
-      client.on("connect", () => {
-        client.write("payload", () => {
-          console.log("net write callback store:", storage.getStore());
+let client: ReturnType<typeof connect> | undefined;
+try {
+  await storage.run(
+    "net-write",
+    () =>
+      new Promise<void>((resolve, reject) => {
+        client = connect(address.port, "127.0.0.1");
+        client.on("connect", () => {
+          client!.write("payload", () => {
+            console.log("net write callback store:", storage.getStore());
+          });
+          client!.end(() => {
+            console.log("net end callback store:", storage.getStore());
+          });
         });
-        client.end(() => {
-          console.log("net end callback store:", storage.getStore());
-        });
-      });
-      client.on("error", reject);
-      client.on("close", resolve);
-    }),
-);
-
-await new Promise<void>((resolve, reject) =>
-  server.close((error) => (error ? reject(error) : resolve())),
-);
+        client.on("error", reject);
+        client.on("close", resolve);
+      }),
+  );
+} finally {
+  client?.destroy();
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+}
 console.log("net write outside:", String(storage.getStore()));

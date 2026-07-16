@@ -12,32 +12,36 @@ const address = server.address();
 if (!address || typeof address === "string")
   throw new Error("missing server address");
 
-await storage.run(
-  "http-client-events",
-  () =>
-    new Promise<void>((resolve, reject) => {
-      const req = request({
-        host: "127.0.0.1",
-        port: address.port,
-        method: "POST",
-      });
-      req.on("response", (response) => {
-        console.log("client response event store:", storage.getStore());
-        response.resume();
-      });
-      req.on("finish", () => {
-        console.log("client finish event store:", storage.getStore());
-      });
-      req.on("close", () => {
-        console.log("client close event store:", storage.getStore());
-        resolve();
-      });
-      req.on("error", reject);
-      req.end("request-body");
-    }),
-);
-
-await new Promise<void>((resolve, reject) =>
-  server.close((error) => (error ? reject(error) : resolve())),
-);
+let requestHandle: ReturnType<typeof request> | undefined;
+try {
+  await storage.run(
+    "http-client-events",
+    () =>
+      new Promise<void>((resolve, reject) => {
+        requestHandle = request({
+          host: "127.0.0.1",
+          port: address.port,
+          method: "POST",
+        });
+        requestHandle.on("response", (response) => {
+          console.log("client response event store:", storage.getStore());
+          response.resume();
+        });
+        requestHandle.on("finish", () => {
+          console.log("client finish event store:", storage.getStore());
+        });
+        requestHandle.on("close", () => {
+          console.log("client close event store:", storage.getStore());
+          resolve();
+        });
+        requestHandle.on("error", reject);
+        requestHandle.end("request-body");
+      }),
+  );
+} finally {
+  requestHandle?.destroy();
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+}
 console.log("http client outside:", String(storage.getStore()));

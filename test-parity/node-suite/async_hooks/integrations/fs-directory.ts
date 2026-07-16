@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdir, readdir, realpath, rmdir, rmSync } from "node:fs";
+import { mkdir, readdir, realpath, realpathSync, rmdir, rmSync } from "node:fs";
 const storage = new AsyncLocalStorage<string>();
-const path = "/tmp/perry-async-hooks-fs-directory";
+const path = `${realpathSync("/tmp")}/perry-async-hooks-fs-directory`;
 rmSync(path, { recursive: true, force: true });
 await storage.run(
   "fs-directory",
