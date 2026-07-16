@@ -62,8 +62,8 @@ that oracle.
   state, non-function `onmessage` clearing, peer-close ref behavior, throwing
   and malformed transfer iterators, accepted empty transfer forms, custom-event
   EventTarget/EventEmitter bridging, max-listener controls, scoped
-  `removeAllListeners`, transfer rejection during close flushing, transfer
-  targets, and `ref`/`unref`/`hasRef` state.
+  `removeAllListeners`, missing-message validation, transfer rejection during
+  close flushing, transfer targets, and `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement with closed-port and argument validation.
@@ -80,8 +80,8 @@ that oracle.
   natural exit, and deterministic repeated termination settlement, transferred
   workerData port methods, sequential `SHARE_ENV` sibling visibility, post-exit
   method safety, indexed `SHARE_ENV` keys, eval syntax-error routing, URL
-  postMessage rejection, exit-listener exception routing, and custom-stack and
-  non-Error serialization.
+  postMessage rejection, missing postMessage validation, exit-listener exception
+  routing, and custom-stack and non-Error serialization.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -89,8 +89,8 @@ that oracle.
 - `broadcast-channel/`: same-name fanout/FIFO isolation, sender exclusion,
   listener management/`once`, `onmessage` replacement, name coercion, close/ref
   idempotence, typed-array and SharedArrayBuffer cloning, untransferable-value
-  rejection, clone-versus-closed error precedence, and closed-channel and
-  method-receiver validation.
+  rejection, missing-message validation, clone-versus-closed error precedence,
+  and closed-channel and method-receiver validation.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
   the existing surface, option, query, callback settlement/cleanup,
   independent-name concurrency, and shared/exclusive ordering cases.
@@ -132,8 +132,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `32/144`: all 17 pre-existing cases remain green,
-15 added cases pass, and 112 added cases expose stable diagnostic differences.
+The measured focused result is `32/147`: all 17 pre-existing cases remain green,
+15 added cases pass, and 115 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -154,22 +154,22 @@ also pass. The diagnostic differences are:
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
   rejects cycles/BigInt, does not detach or move ownership, and accepts invalid
   lists.
-- Thirty-four `message-port/` diagnostics: closing and dispatch flushing, queued
+- Thirty-five `message-port/` diagnostics: closing and dispatch flushing, queued
   data/callbacks, NodeEventTarget surface, listener counts and validation,
   receiver/options/iterables/transfers, MessageEvent construction and `ports`,
   duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
-- Forty `worker-lifecycle/` diagnostics: invalid constructor payloads and paths,
-  execArgv, captured stdio, process restrictions/exit codes, shared environments
-  and nested messages, worker/parentPort EventEmitter behavior, metadata/unique
-  ids, repeated termination, workerData and postMessage SAB sharing, queued port
-  receive, rollback, post-exit values, and error routing differ. Basic eval with
-  CJS require passes.
+- Forty-one `worker-lifecycle/` diagnostics: invalid constructor payloads and
+  paths, execArgv, captured stdio, process restrictions/exit codes, shared
+  environments and nested messages, worker/parentPort EventEmitter behavior,
+  metadata/unique ids, repeated termination, workerData and postMessage SAB
+  sharing, queued port receive, rollback, post-exit values, and error routing
+  differ. Basic eval with CJS require passes.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
-- Nine `broadcast-channel/` diagnostics: name coercion, once listeners,
-  close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
-  MessagePort validation, and closed-channel posts differ.
+- Ten `broadcast-channel/` diagnostics: name coercion, once listeners, close/ref
+  behavior, typed-array/SharedArrayBuffer branding and sharing, MessagePort
+  validation, and closed-channel posts differ.
 - Thirteen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
   construction, direct-message argument validation, and Web Locks callback
@@ -184,7 +184,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `32/144 (22.2%), diff=112`, with no compile failures or timeouts.
+It reported `32/147 (21.8%), diff=115`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. The SharedArrayBuffer/Atomics boundary is backed by the
