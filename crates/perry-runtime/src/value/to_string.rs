@@ -12,6 +12,18 @@ thread_local! {
     /// the depth and fall back to `[object Object]` instead of overflowing
     /// the Rust stack (which would SIGSEGV the whole process).
     static TO_PRIMITIVE_DEPTH: Cell<u32> = const { Cell::new(0) };
+
+    /// One-shot request to skip the `[Symbol.toPrimitive]` shortcut inside
+    /// `js_jsvalue_to_string` for the very next top-level call. Set by the
+    /// explicit `x.toString()` path (`js_jsvalue_to_string_method`): a
+    /// `.toString()` call resolves `Object.prototype.toString` (or an own
+    /// `toString`) and must NOT consult `[Symbol.toPrimitive]` — only the
+    /// coercion paths (`String(x)`, `x + ""`, `` `${x}` ``, and the ToString
+    /// argument coercion in `js_jsvalue_to_string_coerce`) do ToPrimitive.
+    /// Consumed (read + cleared) at the top of `js_jsvalue_to_string` so it
+    /// applies to a single top-level object and never leaks into recursion or
+    /// the next unrelated conversion. (#6373)
+    static SKIP_TO_PRIMITIVE_ONESHOT: Cell<bool> = const { Cell::new(false) };
 }
 
 /// `OrdinaryToPrimitive(O, "string")` (ES2024 §7.1.1.1) — the fallback
@@ -888,6 +900,12 @@ unsafe fn object_field_to_owned_string(
 /// Handles all value types: strings (extract pointer), numbers (convert), JS handles, etc.
 #[no_mangle]
 pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::StringHeader {
+    // Consume the one-shot "explicit `.toString()`" request (#6373). Read +
+    // clear it immediately, before any branch, so it governs only this single
+    // top-level object and cannot leak into a recursive stringify or the next
+    // conversion. When set, the `[Symbol.toPrimitive]` shortcut below is
+    // skipped — `x.toString()` must never invoke `[Symbol.toPrimitive]`.
+    let skip_to_primitive = SKIP_TO_PRIMITIVE_ONESHOT.with(|c| c.replace(false));
     // Check for JS handle first - these come from the JS runtime (e.g., process.env values)
     if is_js_handle(value) {
         let func_ptr = JS_HANDLE_TO_STRING.load(Ordering::SeqCst);
@@ -1010,10 +1028,15 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // custom toPrimitive method registered in the symbol side-table.
             // A changed result means the user-defined method produced a
             // string-hint primitive — recurse so strings pass through as-is
-            // and numbers get js_number_to_string.
-            let primitive = unsafe { crate::symbol::js_to_primitive(value, 2) };
-            if primitive.to_bits() != value.to_bits() {
-                return js_jsvalue_to_string(primitive);
+            // and numbers get js_number_to_string. Skipped on the explicit
+            // `x.toString()` path (#6373): a `.toString()` call resolves
+            // `Object.prototype.toString` / an own `toString`, never
+            // `[Symbol.toPrimitive]`.
+            if !skip_to_primitive {
+                let primitive = unsafe { crate::symbol::js_to_primitive(value, 2) };
+                if primitive.to_bits() != value.to_bits() {
+                    return js_jsvalue_to_string(primitive);
+                }
             }
             // Buffers: BufferHeader has no GC header, so we must detect via
             // BUFFER_REGISTRY before any GC-header probe (which would read
@@ -1303,6 +1326,21 @@ pub(crate) unsafe fn coerce_validate_radix(radix_value: f64) -> Option<i32> {
 /// unchanged.
 #[no_mangle]
 pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string::StringHeader {
+    // Explicit `x.toString()`: resolve `Object.prototype.toString` / an own
+    // `toString`, never `[Symbol.toPrimitive]`. (#6373)
+    to_string_method_impl(value, /* skip_to_primitive */ true)
+}
+
+/// Shared body of the `.toString()` method / ToString-coercion paths.
+///
+/// `skip_to_primitive` distinguishes the two callers that reach the object
+/// dispatch below:
+/// - `js_jsvalue_to_string_method` (explicit `x.toString()`) passes `true`:
+///   `.toString()` must not consult `[Symbol.toPrimitive]`.
+/// - `js_jsvalue_to_string_coerce` (spec `ToString(argument)`) passes `false`:
+///   `ToString` of an object does `ToPrimitive(argument, string)` first, so
+///   `[Symbol.toPrimitive]` is honored.
+fn to_string_method_impl(value: f64, skip_to_primitive: bool) -> *mut crate::string::StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_undefined() || jsval.is_null() {
         let is_null = if jsval.is_null() { 1u32 } else { 0u32 };
@@ -1370,6 +1408,11 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
             }
         }
     }
+    // Arm the one-shot skip so the object dispatch inside `js_jsvalue_to_string`
+    // bypasses `[Symbol.toPrimitive]` for the explicit `.toString()` caller.
+    if skip_to_primitive {
+        SKIP_TO_PRIMITIVE_ONESHOT.with(|c| c.set(true));
+    }
     js_jsvalue_to_string(value)
 }
 
@@ -1389,7 +1432,10 @@ pub extern "C" fn js_jsvalue_to_string_coerce(value: f64) -> *mut crate::string:
     if jsval.is_null() {
         return crate::string::js_string_from_bytes(b"null".as_ptr(), 4);
     }
-    js_jsvalue_to_string_method(value)
+    // Spec `ToString(argument)` does `ToPrimitive(argument, string)` for an
+    // object receiver, so `[Symbol.toPrimitive]` IS consulted here (unlike the
+    // explicit `x.toString()` path). (#6373)
+    to_string_method_impl(value, /* skip_to_primitive */ false)
 }
 
 fn throw_radix_range_error() -> ! {
