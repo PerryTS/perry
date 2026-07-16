@@ -811,42 +811,13 @@ fn validate_temporal_dtf_overlap(kind: crate::temporal::TemporalKind, obj: *cons
 }
 
 // ---- Locale-aware date/time formatting (DTF and Temporal.toLocaleString) ---
-
-const MONTH_FULL: &[&str] = &[
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-const MONTH_ABBR: &[&str] = &[
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const WEEKDAY_FULL: &[&str] = &[
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
+use super::date_names::{MONTH_ABBR, MONTH_FULL, WEEKDAY_ABBR, WEEKDAY_FULL, WEEKDAY_NARROW};
 
 /// Weekday index (0=Sunday…6=Saturday) from a UTC epoch-seconds value.
 /// 1970-01-01 was Thursday = index 4.
 fn weekday_index(secs: i64) -> usize {
     ((secs.div_euclid(86400) + 4).rem_euclid(7)) as usize
 }
-
-const WEEKDAY_ABBR: &[&str] = &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WEEKDAY_NARROW: &[&str] = &["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 fn weekday_name(secs: i64, style: &str) -> String {
     let wi = weekday_index(secs);

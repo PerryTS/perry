@@ -25,6 +25,9 @@ mod locale;
 mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 mod date_collator;
+mod date_names;
+mod time_zone;
+pub(crate) use time_zone::{canonicalize_named_time_zone, resolved_date_time_zone};
 mod install;
 use install::install_constructor;
 mod subclass;
@@ -313,26 +316,6 @@ fn coerce_option_string(value: f64) -> Option<String> {
 
 fn get_option_string(options: f64, key: &str) -> Option<String> {
     coerce_option_string(get_option_value(options, key))
-}
-
-/// Resolve the effective time zone for a `toLocaleString`-style call: the
-/// `timeZone` option if present, otherwise the host zone (ECMA-402
-/// DefaultTimeZone). Canonicalized the same way the `Intl.DateTimeFormat`
-/// constructor does. Used to shift a `Date`'s UTC instant into wall-clock time
-/// before formatting (a `Date` is an instant, so `toLocaleString` renders it in
-/// the resolved zone — unlike a zone-agnostic `Temporal.PlainDateTime`).
-pub(crate) fn resolved_date_time_zone(options: f64) -> String {
-    let tz = get_option_string(options, "timeZone")
-        .unwrap_or_else(|| crate::date::host_time_zone_name().to_string());
-    if matches!(tz.as_bytes().first(), Some(b'+') | Some(b'-')) {
-        if is_valid_offset_time_zone(&tz) {
-            canonicalize_offset_time_zone(&tz)
-        } else {
-            tz
-        }
-    } else {
-        canonicalize_named_time_zone(&tz).unwrap_or(tz)
-    }
 }
 
 /// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,
@@ -960,71 +943,6 @@ fn dt_component_option(
 /// IANA zone identifiers pass; the malformed names ECMA-402 rejects
 /// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
 /// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
-fn canonicalize_named_time_zone(tz: &str) -> Option<String> {
-    if tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("Etc/UTC") {
-        return Some("UTC".to_string());
-    }
-    if !tz.is_ascii() {
-        return None;
-    }
-    // Legacy single-component IANA zones / links that carry no '/'.
-    const SINGLE_WORD_ZONES: &[&str] = &[
-        "GMT",
-        "GMT0",
-        "Zulu",
-        "Universal",
-        "UCT",
-        "Greenwich",
-        "Navajo",
-        "Eire",
-        "Iceland",
-        "Cuba",
-        "Egypt",
-        "Hongkong",
-        "Iran",
-        "Israel",
-        "Japan",
-        "Jamaica",
-        "Libya",
-        "Poland",
-        "Portugal",
-        "PRC",
-        "Singapore",
-        "Turkey",
-        "ROC",
-        "ROK",
-        "W-SU",
-        "Factory",
-        "EST",
-        "MST",
-        "HST",
-        "EST5EDT",
-        "CST6CDT",
-        "MST7MDT",
-        "PST8PDT",
-    ];
-    if SINGLE_WORD_ZONES.iter().any(|z| z.eq_ignore_ascii_case(tz)) {
-        return Some(tz.to_string());
-    }
-    let segments: Vec<&str> = tz.split('/').collect();
-    if segments.len() < 2 {
-        return None;
-    }
-    let mut has_alpha = false;
-    for seg in &segments {
-        if seg.is_empty() {
-            return None;
-        }
-        for b in seg.bytes() {
-            if b.is_ascii_alphabetic() {
-                has_alpha = true;
-            } else if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'+' || b == b'-') {
-                return None;
-            }
-        }
-    }
-    has_alpha.then(|| tz.to_string())
-}
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
     let locale = locale_or_default(locales);
     let obj = js_object_alloc(0, 8);
@@ -1154,25 +1072,13 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 set_internal_field(obj, KEY_HOUR_CYCLE, string_value(&hc));
             }
             // ECMA-402 DefaultTimeZone(): when no `timeZone` option is given, use
-            // the HOST time zone (Node returns e.g. "Europe/Berlin"), not UTC.
-            let mut time_zone = get_option_string(options, "timeZone")
-                .unwrap_or_else(|| crate::date::host_time_zone_name().to_string());
-            // A timeZone that begins with a sign is an offset identifier: it must
-            // be syntactically valid (ECMA-402 rejects malformed offsets with a
-            // RangeError), and is then canonicalized to `±HH:mm` so
-            // `resolvedOptions().timeZone` matches FormatOffsetTimeZoneIdentifier.
-            // Named zones are validated structurally (Perry has no tz database).
-            if matches!(time_zone.as_bytes().first(), Some(b'+') | Some(b'-')) {
-                if !is_valid_offset_time_zone(&time_zone) {
-                    throw_range_error(&format!("Invalid time zone specified: {time_zone}"));
-                }
-                time_zone = canonicalize_offset_time_zone(&time_zone);
-            } else {
-                match canonicalize_named_time_zone(&time_zone) {
-                    Some(canonical) => time_zone = canonical,
-                    None => throw_range_error(&format!("Invalid time zone specified: {time_zone}")),
-                }
-            }
+            // the HOST time zone (Node returns e.g. "Europe/Berlin"), not UTC —
+            // and an explicit invalid zone is a RangeError while an unrecognized
+            // host default falls back to UTC. `resolved_date_time_zone` is the
+            // single source of that logic (it canonicalizes offsets to `±HH:mm`
+            // for FormatOffsetTimeZoneIdentifier and validates named zones
+            // structurally, Perry having no tz database).
+            let time_zone = resolved_date_time_zone(options);
             set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
             // Date/time component options (ECMA-402 Table 7), read in order. Each
             // out-of-range value is a RangeError.
