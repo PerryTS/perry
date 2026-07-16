@@ -69,24 +69,32 @@ Coverage was compared against primary sources at these revisions:
   memory/options validation and shared lifecycle state, return-on-exit, eager
   args/env snapshots, and bounded clock/random contracts are represented here.
 - Deno (`803a3c933e1e23e0972445293ec0b34b8da96ccc`):
-  [`ext/node/polyfills/wasi.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/ext/node/polyfills/wasi.ts).
-  Its current preview1 implementation follows most Node constructor, import,
-  memory-brand, and not-started validation, but validates entrypoints before
-  consuming lifecycle state, snapshots `instance.exports` once per entry method,
-  keeps `finalizeBindings()` idempotent, and exposes `wasiImport` as a getter.
-  The instance descriptor fixture reports that inherited accessor separately
-  from Node's own writable data property instead of assuming either shape. Its
-  `finalizeBindings()` also treats null memory or options as absent instead of
-  rejecting them; its constructor does match Node's eager args/env snapshots,
-  but stringifies undefined env values instead of omitting them. No separate
-  checked-in `node:wasi` compatibility selection was present at that revision.
-  Its getter-only `wasiImport` rejects replacement while `getImportObject()`
-  continues to expose the original object. Its JavaScript wrappers check memory
-  before syscall arguments and otherwise defer to op coercion, unlike Node's
-  native arity/type-first validation.
+  [`ext/node/polyfills/wasi.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/ext/node/polyfills/wasi.ts)
+  and its 14-case
+  [`tests/unit_node/wasi_test.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/tests/unit_node/wasi_test.ts)
+  selection. Its current preview1 implementation follows most Node constructor,
+  import, memory-brand, and not-started validation, but validates entrypoints
+  before consuming lifecycle state, snapshots `instance.exports` once per entry
+  method, keeps `finalizeBindings()` idempotent, and exposes `wasiImport` as a
+  getter. The instance descriptor fixture reports that inherited accessor
+  separately from Node's own writable data property instead of assuming either
+  shape. Its `finalizeBindings()` also treats null memory or options as absent
+  instead of rejecting them; its constructor does match Node's eager args/env
+  snapshots, but stringifies undefined env values instead of omitting them. The
+  portable version, namespace, lifecycle, args/env, import-surface,
+  finalization, and warning cases selected by Deno are represented here. Its
+  mixed coercion case is split deliberately: its args/env assertions are
+  represented, but its non-empty preopen object coercion is not. That preopen
+  portion, the standalone preopen case, and hello-world `fd_write` cross the
+  host-fd boundary. Its getter-only `wasiImport` rejects replacement while
+  `getImportObject()` continues to expose the original object. Its JavaScript
+  wrappers check memory before syscall arguments and otherwise defer to op
+  coercion, unlike Node's native arity/type-first validation.
 - Bun (`aca54d5c2b874ac304a3bbe1d67630e4daf17b43`):
   [`src/js/node/wasi.ts`](https://github.com/oven-sh/bun/blob/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/src/js/node/wasi.ts)
-  and the
+  plus its four-case
+  [`test/js/bun/wasm/wasi.test.js`](https://github.com/oven-sh/bun/blob/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/test/js/bun/wasm/wasi.test.js)
+  selection and the
   [preview1 fixture harness](https://github.com/oven-sh/bun/blob/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/test/js/node/test/fixtures/wasi-preview-1.js).
   Bun's selected fixture exercises preview1 imports and start behavior, while
   its implementation retains legacy `getImports()`/optional-memory behavior,
@@ -110,7 +118,9 @@ Coverage was compared against primary sources at these revisions:
   `clock_res_get` calls throw while time calls succeed. Its zero-length
   `random_get` returns success but changes the guarded eight-byte range, unlike
   Node and Deno; the thrown outcomes are normalized by name/code rather than
-  engine text.
+  engine text. Bun's selected standalone hello-world runner is an external
+  runtime case, while its descriptor-rights, failed-open errno, and path-escape
+  cases all require non-empty preopens and host filesystem operations.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
@@ -216,11 +226,15 @@ excludes sockets, threads, preview2/component model, external runtimes,
 platform-specific errno or error text, actual entropy/time values, large or
 concurrent modules, permissions/locking, symlink escape, signals,
 GC/finalization, worker termination, and stress. Those require separate
-WASI/runtime/compiler work and would be redundant or less diagnostic here.
-All 26 JavaScript entrypoints in Node 26.5.0's `test/wasi` directory were
-enumerated during the final audit: each is mapped above, represented by a more
-focused local case, or named in the exclusions below.
-Concretely, the remaining Node 26 files `test-wasi-cant_dotdot.js`,
+WASI/runtime/compiler work and would be redundant or less diagnostic here. All
+26 JavaScript entrypoints in Node 26.5.0's `test/wasi` directory were enumerated
+during the final audit: each is mapped above, represented by a more focused
+local case, or named in the exclusions below. The same recursive pinned-tree
+audit accounts for every Deno and Bun selection: Deno's hello-world fd-write
+case, standalone preopen case, and preopen portion of its mixed coercion case,
+plus all four Bun cases, remain in the corresponding fd/preopen,
+external-runtime, errno, rights, or path-escape exclusions. Concretely, the
+remaining Node 26 files `test-wasi-cant_dotdot.js`,
 `test-wasi-fd_prestat_get_refresh.js`, `test-wasi-ftruncate.js`,
 `test-wasi-io.js`, `test-wasi-notdir.js`, `test-wasi-preopen_populates.js`,
 `test-wasi-readdir.js`, `test-wasi-stat.js`, `test-wasi-stdio.js`,
