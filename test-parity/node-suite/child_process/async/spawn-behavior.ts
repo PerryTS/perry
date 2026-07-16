@@ -93,3 +93,59 @@ for (const [label, args] of [
     options.windowsHide === before.windowsHide,
   );
 }
+
+{
+  const events: string[] = [];
+  let errorErrno: unknown;
+  const child = spawn("__perry_missing_child_process_command__", [
+    "first",
+    "second",
+  ]);
+
+  console.log(
+    "missing pid:",
+    child.pid === undefined ? "undefined" : String(child.pid),
+  );
+  console.log("missing spawnfile:", child.spawnfile);
+  console.log("missing spawnargs:", child.spawnargs.join("|"));
+  console.log(
+    "missing stdio:",
+    child.stdin !== null,
+    child.stdout !== null,
+    child.stderr !== null,
+  );
+
+  child.on("spawn", () => events.push("spawn"));
+  child.on("error", (error: any) => {
+    events.push("error");
+    errorErrno = error.errno;
+    console.log("missing error name:", error.name);
+    console.log("missing error code:", error.code);
+    console.log("missing error errno type:", typeof error.errno);
+    console.log("missing error syscall:", error.syscall);
+    console.log("missing error path:", error.path);
+    console.log("missing error spawnargs:", error.spawnargs.join("|"));
+  });
+  child.on("exit", () => events.push("exit"));
+
+  await new Promise<void>((resolve) => {
+    child.on("close", (code, signal) => {
+      events.push("close");
+      console.log(
+        "missing close matches errno:",
+        code === errorErrno,
+        signal === null ? "null" : signal,
+      );
+      console.log(
+        "missing exitCode matches errno:",
+        child.exitCode === errorErrno,
+      );
+      console.log(
+        "missing signalCode:",
+        child.signalCode === null ? "null" : child.signalCode,
+      );
+      console.log("missing events:", events.join(">"));
+      resolve();
+    });
+  });
+}

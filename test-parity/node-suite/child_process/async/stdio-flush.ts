@@ -44,3 +44,21 @@ const result = await consumed;
 console.log("consumer status:", result.code);
 console.log("consumer received:", result.stdout);
 console.log("consumer stderr:", JSON.stringify(result.stderr));
+
+const chunks = 6;
+const chunkSize = 50 * 1024;
+const multiChunk = spawn("node", [
+  "-e",
+  `for (let i = 0; i < ${chunks}; i++) process.stdout.write(String(i).repeat(${chunkSize}));`,
+]);
+const chunked = await collect(multiChunk);
+console.log("multi status:", chunked.code);
+console.log("multi length:", chunked.stdout.length);
+console.log(
+  "multi boundaries:",
+  Array.from(
+    { length: chunks },
+    (_, index) => chunked.stdout[index * chunkSize],
+  ).join(""),
+);
+console.log("multi stderr:", JSON.stringify(chunked.stderr));

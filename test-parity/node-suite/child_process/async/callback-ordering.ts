@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { exec, execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 const events: string[] = [];
 let finishCallback!: () => void;
@@ -43,4 +44,50 @@ if (child) {
 } else {
   await callbackDone;
   console.log("order:", events.join(">"));
+}
+
+const execPromise = promisify(exec);
+const execFilePromise = promisify(execFile);
+const execResult = execPromise(
+  "node -e \"process.stdout.write('exec-out'); process.stderr.write('exec-err')\"",
+  { encoding: "utf8" },
+);
+console.log(
+  "promise exec child:",
+  typeof execResult.child?.pid,
+  execResult.child?.spawnfile,
+);
+console.log("promise exec result:", JSON.stringify(await execResult));
+
+const fileResult = execFilePromise(
+  "node",
+  ["-e", "process.stdout.write(process.argv[1])", "file-out"],
+  { encoding: "utf8" },
+);
+console.log(
+  "promise file child:",
+  typeof fileResult.child?.pid,
+  fileResult.child?.spawnfile,
+);
+console.log("promise file result:", JSON.stringify(await fileResult));
+
+try {
+  await execFilePromise(
+    "node",
+    [
+      "-e",
+      "process.stdout.write('partial'); process.stderr.write('problem'); process.exit(7)",
+    ],
+    { encoding: "utf8" },
+  );
+  console.log("promise failure: no rejection");
+} catch (error: any) {
+  console.log(
+    "promise failure:",
+    error.name,
+    error.code,
+    error.killed,
+    error.signal,
+  );
+  console.log("promise failure output:", error.stdout, error.stderr);
 }

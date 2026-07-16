@@ -1,4 +1,4 @@
-import { fork, spawn, spawnSync } from "node:child_process";
+import { ChildProcess, fork, spawn, spawnSync } from "node:child_process";
 
 function report(label: string, action: () => unknown) {
   try {
@@ -15,6 +15,46 @@ function report(label: string, action: () => unknown) {
 }
 
 report("spawn options number", () => spawn("node", [], 1 as any));
+
+console.log("constructor type:", typeof ChildProcess);
+const directChild = new ChildProcess();
+console.log("constructor instance:", directChild instanceof ChildProcess);
+console.log(
+  "constructor initial:",
+  directChild.pid === undefined,
+  directChild.connected,
+  directChild.killed,
+  directChild.exitCode,
+  directChild.signalCode,
+);
+for (const [label, options] of [
+  ["undefined options", undefined],
+  ["null options", null],
+  ["string options", "options"],
+  ["number options", 1],
+] as const) {
+  report(`constructor ${label}`, () => directChild.spawn(options as any));
+}
+for (const [label, file] of [
+  ["undefined file", undefined],
+  ["null file", null],
+  ["number file", 1],
+  ["object file", {}],
+] as const) {
+  report(`constructor ${label}`, () =>
+    new ChildProcess().spawn({ file } as any),
+  );
+}
+for (const [label, args] of [
+  ["null args", null],
+  ["number args", 1],
+  ["string args", "args"],
+  ["object args", {}],
+] as const) {
+  report(`constructor ${label}`, () =>
+    new ChildProcess().spawn({ file: "node", args } as any),
+  );
+}
 report("spawn cwd number", () => spawn("node", [], { cwd: 1 as any }));
 report("spawn timeout negative", () => spawn("node", [], { timeout: -1 }));
 report("spawn killSignal unknown", () =>

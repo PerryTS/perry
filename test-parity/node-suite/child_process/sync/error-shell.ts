@@ -41,3 +41,25 @@ reportShell(
   "shell failure",
   `node -e "process.stderr.write('shell-err');process.exit(7)"`,
 );
+
+function reportUnicodeMaxBuffer(label: string, maxBuffer: number) {
+  try {
+    const stdout = execFileSync(
+      "node",
+      ["-e", "process.stdout.write('中文测试')"],
+      { encoding: "utf8", maxBuffer },
+    );
+    console.log(`${label} result:`, JSON.stringify(stdout));
+  } catch (error: any) {
+    console.log(`${label} error:`, error.name, error.code);
+    console.log(`${label} status:`, error.status);
+    console.log(`${label} signal:`, error.signal);
+    console.log(`${label} stdout:`, JSON.stringify(String(error.stdout)));
+    console.log(`${label} stderr:`, JSON.stringify(String(error.stderr)));
+  }
+}
+
+reportUnicodeMaxBuffer("unicode exact bytes", 12);
+reportUnicodeMaxBuffer("unicode one byte short", 11);
+reportUnicodeMaxBuffer("unicode one character", 3);
+reportUnicodeMaxBuffer("unicode zero", 0);

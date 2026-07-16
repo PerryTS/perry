@@ -21,6 +21,8 @@ writeFileSync(
     "date: message.date instanceof Date ? message.date.toISOString() : '',",
     "regexp: message.regexp instanceof RegExp ? message.regexp.toString() : '',",
     "uint16: message.uint16 instanceof Uint16Array ? Array.from(message.uint16).join('|') : '',",
+    "emptyBuffer: Buffer.isBuffer(message.emptyBuffer) ? String(message.emptyBuffer.length) : '',",
+    "emptyUint8: message.emptyUint8 instanceof Uint8Array ? String(message.emptyUint8.length) : '',",
     "bigint: typeof message.bigint === 'bigint' ? String(message.bigint) : '',",
     "error: message.error instanceof TypeError ? message.error.message : '',",
     "};",
@@ -62,6 +64,8 @@ try {
     date: new Date("2020-01-02T03:04:05.000Z"),
     regexp: /child-process/gi,
     uint16: new Uint16Array([1, 256, 65535]),
+    emptyBuffer: Buffer.alloc(0),
+    emptyUint8: new Uint8Array(0),
     bigint: 9007199254740993n,
     error: new TypeError("advanced-error"),
   });
