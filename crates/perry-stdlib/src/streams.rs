@@ -686,13 +686,27 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
             }
         };
         if should_pull {
-            if pull_returns_byte_chunk {
-                pull_deferred_byte_chunk(stream_id, cb);
-            } else {
-                js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
-            }
+            // A Web Streams `pull()` that throws must ERROR the stream (its
+            // pending reads reject with the exception) — it must NOT `longjmp`
+            // past this Rust microtask frame. Without the local trap the throw
+            // unwinds to the microtask loop, skipping the `pulling = false`
+            // reset (and any live frames), leaving the stream wedged and, under
+            // concurrency, crashing the process. Catch it here and route to the
+            // spec error path so `reader.read()` rejects and the consumer's own
+            // handler surfaces the error, exactly as Node does.
+            let pull_outcome = perry_runtime::exception::js_call_catching(|| {
+                if pull_returns_byte_chunk {
+                    pull_deferred_byte_chunk(stream_id, cb);
+                } else {
+                    js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
+                }
+                f64::from_bits(TAG_UNDEFINED)
+            });
             if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
                 s.pulling = false;
+            }
+            if let Err(exc) = pull_outcome {
+                error_readable_stream(stream_id, exc.to_bits());
             }
         }
     }

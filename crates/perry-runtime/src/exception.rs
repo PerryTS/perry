@@ -144,6 +144,32 @@ pub(crate) fn current_try_depth() -> usize {
     with_exception_state(|s| unsafe { (*s).try_depth })
 }
 
+/// Invoke `f` — which may call into user JS and `js_throw` — inside a `try`
+/// trap, catching any JS exception. Returns `Ok(value)` on a normal return,
+/// or `Err(exception_bits)` if `f` threw. The `setjmp` lives in THIS frame,
+/// which stays alive while `f` runs, so the `longjmp` target is valid, and the
+/// throw unwinds only up to here — NOT past the Rust caller's frame.
+///
+/// Runtime helpers that drive user JS from a Rust-owned microtask/timer
+/// context (e.g. a Web Streams `pull` callback) use this so a throwing
+/// callback errors the relevant object per spec instead of `longjmp`-ing past
+/// their frames — skipping cleanup and corrupting state. Mirrors
+/// `combinators::combinator_catch_js`.
+pub fn js_call_catching(f: impl FnOnce() -> f64) -> Result<f64, f64> {
+    let env = js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut std::os::raw::c_int) };
+    if jumped == 0 {
+        let result = f();
+        js_try_end();
+        Ok(result)
+    } else {
+        js_try_end();
+        let err = js_get_exception();
+        js_clear_exception();
+        Err(err)
+    }
+}
+
 /// Throw an exception with the given value
 #[no_mangle]
 pub extern "C" fn js_throw(value: f64) -> ! {
