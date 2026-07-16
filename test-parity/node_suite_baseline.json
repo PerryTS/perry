@@ -182,8 +182,8 @@
       "total": 100
     },
     "trace_events": {
-      "pass": 6,
-      "total": 6
+      "pass": 14,
+      "total": 24
     },
     "tty": {
       "pass": 32,

@@ -82,6 +82,7 @@ SLOW_MODULES = {
     "http", "http2", "https", "net", "dgram", "tls", "cluster", "dns", "async_hooks",
     "stream", "child_process", "worker_threads", "inspector",
     "inspector-promises", "repl", "diagnostics_channel", "timers", "perf_hooks", "fetch",
+    "trace_events",
 }
 
 tests = []
