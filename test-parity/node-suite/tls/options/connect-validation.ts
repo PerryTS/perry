@@ -3,6 +3,7 @@ import tls from "node:tls";
 function probe(label: string, options: any) {
   try {
     const socket = tls.connect(options);
+    socket.on("error", () => {});
     socket.destroy();
     console.log(label + ": no throw");
   } catch (err: any) {

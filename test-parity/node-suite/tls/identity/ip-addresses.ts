@@ -1,7 +1,7 @@
 import tls from "node:tls";
 
 function result(host: string, san?: string, cn?: string) {
-  const err = tls.checkServerIdentity(host, { subjectaltname: san, subject: cn ? { CN: cn } : {} });
+  const err = tls.checkServerIdentity(host, { subjectaltname: san, subject: cn ? { CN: cn } : {} } as any);
   return err ? [err.code, err.host, typeof err.reason].join("/") : "ok";
 }
 console.log("ipv4 san:", result("127.0.0.1", "IP Address:127.0.0.1"));

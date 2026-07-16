@@ -1,6 +1,6 @@
 import tls from "node:tls";
 
-const cert = { subjectaltname: "DNS:good.example", subject: { CN: "fallback.example" } };
+const cert: any = { subjectaltname: "DNS:good.example", subject: { CN: "fallback.example" } };
 const err: any = tls.checkServerIdentity("bad.example", cert);
 console.log("class:", err instanceof Error, err.name);
 console.log("code:", err.code);
