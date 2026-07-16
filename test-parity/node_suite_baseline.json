@@ -2,12 +2,12 @@
   "_schema": {
     "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
     "oracle": "node v26.5.0 (pinned by .node-version)",
-    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. Floors were originally refreshed from a clean node-26 run at 2810/2863 (98.1%); before this expansion, subsequent separately measured module ratchets had brought the aggregate to 2881/3027 (95.2%). The async_hooks floor was previously recorded at 76/169; a fresh compiler/runtime rebuild reproduces that tree at 75/169, and this expansion adds one measured matching import-identity fixture plus 11 stable diagnostics, producing a clean Node 26.5.0 sequential result of 76/181. The floor therefore remains 76 while the module total advances to 181 and the current aggregate becomes 2881/3039 (94.8%). Coverage now includes deterministic public API, provider/isolation and lifecycle, trigger ancestry, Promise transitions/hook shapes, execution resources, hook mutation, native-class/receiver behavior, module identity/branding, provider-table invariants, and storage isolation."
+    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. Floors were originally refreshed from a clean node-26 run at 2810/2863 (98.1%); before this expansion, subsequent separately measured module ratchets had brought the aggregate to 2881/3027 (95.2%). The async_hooks floor was previously recorded at 76/169; a fresh compiler/runtime rebuild reproduces that tree at 75/169. The first expansion batch added one measured matching import-identity fixture plus 11 stable diagnostics for 76/181. The current batch adds two measured matches and ten stable diagnostics, producing a clean Node 26.5.0 sequential result of 78/193. The current aggregate is therefore 2883/3051 (94.5%). Coverage now includes deterministic public API metadata/descriptors, provider/isolation and lifecycle, trigger ancestry, Promise transitions/hook shapes, execution resources, hook mutation, native-class/receiver/options behavior, module identity/branding, provider-table invariants, Web Locks, and storage isolation."
   },
   "overall": {
-    "pass": 2881,
-    "total": 3039,
-    "pct": 94.8
+    "pass": 2883,
+    "total": 3051,
+    "pct": 94.5
   },
   "modules": {
     "assert": {
@@ -15,8 +15,8 @@
       "total": 70
     },
     "async_hooks": {
-      "pass": 76,
-      "total": 181
+      "pass": 78,
+      "total": 193
     },
     "bigint": {
       "pass": 3,
