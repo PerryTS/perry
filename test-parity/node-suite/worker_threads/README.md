@@ -26,11 +26,12 @@ The expansion was compared against these primary-source snapshots:
   and
   [`worker-transfer-list.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker-transfer-list.test.ts).
 
-The inventory review covered all 141 `test-worker-*` files in that Node
-snapshot, all 48 cases in Deno's unit selection plus its directory fixtures, and
-the 72 declarations in Bun's two central worker test files. Cases are
-represented here by observable contract rather than copied one-for-one when
-several upstream files exercise the same behavior.
+The inventory review covered all 143 `test-worker-*` files across the parallel
+and sequential directories in that Node snapshot, all 48 cases in Deno's unit
+selection plus its directory fixtures, and the 72 declarations in Bun's two
+central worker test files. Cases are represented here by observable contract
+rather than copied one-for-one when several upstream files exercise the same
+behavior.
 
 Node `26.5.0`, pinned by this repository, remains the executable differential
 oracle. The upstream snapshots above guide case selection rather than changing
@@ -40,7 +41,8 @@ that oracle.
 
 - `main-thread/`: complete namespace export availability and types, main-thread
   values, Worker and MessagePort prototype descriptors, constructor brands, and
-  the process-level `worker` event.
+  the process-level `worker` event, including asynchronous late `process.emit`
+  lookup.
 - `environment-data/`: key identity, live main-thread values, deletion, worker
   snapshot cloning, built-in Map/Set/Date values, nested-worker inheritance,
   non-cloneable construction rejection, and parent/worker mutation isolation.
@@ -55,7 +57,8 @@ that oracle.
   duplicate/self/closed transfers, atomic clone rollback, transfer-state
   validation, queued delivery, overload validation, first-listener registration,
   pending `once` removal, per-event listener scope, close-callback registration
-  order, tamper-resistant listener bookkeeping, transfer targets, and
+  order, tamper-resistant listener bookkeeping, post-dispatch `once` registry
+  state, throwing transfer iterators, transfer targets, and
   `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
@@ -72,7 +75,8 @@ that oracle.
   `online`/`message`/`error`/`exit` ordering, ref return values, natural exit,
   and deterministic repeated termination settlement, transferred workerData port
   methods, sequential `SHARE_ENV` sibling visibility, post-exit method safety,
-  and custom-stack and non-Error serialization.
+  indexed `SHARE_ENV` keys, eval syntax-error routing, and custom-stack and
+  non-Error serialization.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -121,8 +125,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `30/122`: all 17 pre-existing cases remain green,
-13 added cases pass, and 92 added cases expose stable diagnostic differences.
+The measured focused result is `31/127`: all 17 pre-existing cases remain green,
+14 added cases pass, and 96 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -135,16 +139,18 @@ for `environment-data/value-identity.ts`,
 `worker-lifecycle/method-receivers.ts`, and
 `web-locks/web-locks-independent-names.ts`. Sequential sibling `SHARE_ENV`
 visibility in `worker-lifecycle/share-env-siblings.ts` also passes. The
+indexed-key variant in `worker-lifecycle/share-env-indexed.ts` passes too. The
 diagnostic differences are:
 
 - All nine `structured-clone/` fixtures: Perry preserves some indexed values but
   loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
   cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
-- Twenty-six `message-port/` diagnostics: closing and dispatch flushing, queued
-  data/callbacks, NodeEventTarget surface, listener counts and validation,
-  receiver/options/iterables/transfers, MessageEvent construction and `ports`,
-  duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
-- Thirty-six `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Twenty-eight `message-port/` diagnostics: closing and dispatch flushing,
+  queued data/callbacks, NodeEventTarget surface, listener counts and
+  validation, receiver/options/iterables/transfers, MessageEvent construction
+  and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
+  state differ.
+- Thirty-seven `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
@@ -156,7 +162,7 @@ diagnostic differences are:
 - Five `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
   MessagePort validation, and closed-channel posts differ.
-- Eleven additional diagnostics cover namespace/prototype completeness,
+- Twelve additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
   construction, direct-message argument validation, and Web Locks callback
   rejection cleanup.
@@ -170,7 +176,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `30/122 (24.6%), diff=92`, with no compile failures or timeouts. The
+It reported `31/127 (24.4%), diff=96`, with no compile failures or timeouts. The
 SharedArrayBuffer/Atomics boundary is backed by the added same-process channel
 and cross-worker clone/alias cases plus the existing granular
 `globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
