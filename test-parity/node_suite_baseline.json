@@ -155,8 +155,8 @@
       "total": 1
     },
     "sqlite": {
-      "pass": 1,
-      "total": 1
+      "pass": 24,
+      "total": 40
     },
     "stream": {
       "pass": 770,
