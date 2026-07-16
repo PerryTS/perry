@@ -49,9 +49,13 @@ pub(crate) struct Req<'a> {
     pub second: u8,
     pub date_style: Option<Len>,
     pub time_style: Option<Len>,
-    /// `Some(true)` = force 24-hour, `Some(false)` = force 12-hour, `None` =
+    /// Explicit `hourCycle` option (`h11`/`h12`/`h23`/`h24`) if present; takes
+    /// precedence over `hour12` and pins the exact clock family.
+    pub hour_cycle: Option<&'a str>,
+    /// Explicit `hour12` option (`Some(true)` = 12-hour, `Some(false)` =
+    /// 24-hour); consulted only when `hour_cycle` is absent. Both `None` =
     /// the locale's CLDR default.
-    pub hour24: Option<bool>,
+    pub hour12: Option<bool>,
 }
 
 /// icu4x's bundled CLDR still emits the narrow no-break space (U+202F) before
@@ -66,11 +70,31 @@ fn normalize(s: &str) -> String {
     }
 }
 
-fn prefs(locale: &str, hour24: Option<bool>) -> Option<DateTimeFormatterPreferences> {
+fn prefs(
+    locale: &str,
+    hour_cycle: Option<&str>,
+    hour12: Option<bool>,
+) -> Option<DateTimeFormatterPreferences> {
     let loc: Locale = locale.parse().ok()?;
     let mut prefs: DateTimeFormatterPreferences = (&loc).into();
-    if let Some(h24) = hour24 {
-        prefs.hour_cycle = Some(if h24 { HourCycle::H23 } else { HourCycle::H12 });
+    // An explicit `hourCycle` pins the exact clock family — collapsing it to a
+    // 12h/24h bool would turn `h11`→`h12` (`0:07 AM` vs `12:07 AM`) and
+    // `h24`→`h23`. Only fall back to `hour12` (→ h12 / h23, matching Node) when
+    // no `hourCycle` was given; absent both, leave the locale default in place.
+    let hc = match hour_cycle {
+        Some("h11") => Some(HourCycle::H11),
+        Some("h12") => Some(HourCycle::H12),
+        // icu4x models no `h24` (24:00) variant; fold it to the practical
+        // 24-hour clock (differs from Node only at the midnight `24` vs `0`).
+        Some("h23") | Some("h24") => Some(HourCycle::H23),
+        _ => match hour12 {
+            Some(true) => Some(HourCycle::H12),
+            Some(false) => Some(HourCycle::H23),
+            None => None,
+        },
+    };
+    if hc.is_some() {
+        prefs.hour_cycle = hc;
     }
     Some(prefs)
 }
@@ -87,7 +111,7 @@ pub(crate) fn format(req: &Req) -> Option<String> {
     if matches!(req.time_style, Some(Len::Long) | Some(Len::Full)) {
         return None;
     }
-    let prefs = prefs(req.locale, req.hour24)?;
+    let prefs = prefs(req.locale, req.hour_cycle, req.hour12)?;
     let date = Date::try_new_iso(req.year, req.month.into(), req.day.into()).ok()?;
     let time = Time::try_new(req.hour, req.minute, req.second, 0).ok()?;
     let dt = DateTime { date, time };
@@ -161,7 +185,8 @@ pub(crate) struct CompReq<'a> {
     pub has_hour: bool,
     pub has_minute: bool,
     pub has_second: bool,
-    pub hour24: Option<bool>,
+    pub hour_cycle: Option<&'a str>,
+    pub hour12: Option<bool>,
 }
 
 /// Format an explicit-component request via icu4x's dynamic `FieldSetBuilder`.
@@ -234,7 +259,7 @@ pub(crate) fn format_components(req: &CompReq) -> Option<String> {
         return None;
     }
 
-    let prefs = prefs(req.locale, req.hour24)?;
+    let prefs = prefs(req.locale, req.hour_cycle, req.hour12)?;
     let mut builder = FieldSetBuilder::default();
     builder.date_fields = date_fields;
     // A spelled month wins the length; else the weekday's; else Medium.
@@ -267,7 +292,8 @@ mod tests {
             second: 0,
             date_style: Some(Len::Short),
             time_style: Some(Len::Short),
-            hour24: None,
+            hour_cycle: None,
+            hour12: None,
         })
     }
 
@@ -312,7 +338,8 @@ mod tests {
             second: 3,
             date_style: ds,
             time_style: ts,
-            hour24: None,
+            hour_cycle: None,
+            hour12: None,
         })
     }
 
@@ -382,7 +409,8 @@ mod tests {
             has_hour: false,
             has_minute: false,
             has_second: false,
-            hour24: None,
+            hour_cycle: None,
+            hour12: None,
         })
     }
 
@@ -441,6 +469,31 @@ mod tests {
             comp("en-US", None, Some("narrow"), Some("numeric"), None),
             None
         );
+    }
+
+    #[test]
+    fn explicit_hour_cycle_family_honored() {
+        // timeStyle:short at 00:07 with an explicit hourCycle — each family
+        // renders midnight differently (Node baselines). Regression guard for
+        // collapsing h11→h12 / h24→h23 through a 12h/24h bool.
+        let hc = |loc: &str, cyc: &str| -> Option<String> {
+            format(&Req {
+                locale: loc,
+                year: 2026,
+                month: 1,
+                day: 5,
+                hour: 0,
+                minute: 7,
+                second: 0,
+                date_style: None,
+                time_style: Some(Len::Short),
+                hour_cycle: Some(cyc),
+                hour12: None,
+            })
+        };
+        assert_eq!(hc("en-US", "h11").as_deref(), Some("0:07 AM"));
+        assert_eq!(hc("en-US", "h12").as_deref(), Some("12:07 AM"));
+        assert_eq!(hc("en-US", "h23").as_deref(), Some("00:07"));
     }
 
     #[test]

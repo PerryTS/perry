@@ -896,7 +896,8 @@ fn icu_style(
     second: u32,
     date_style: Option<&str>,
     time_style: Option<&str>,
-    explicit_h24: Option<bool>,
+    hour_cycle: Option<&str>,
+    hour12: Option<bool>,
 ) -> Option<String> {
     use super::icu_dtf::{self, Len, Req};
     if !enabled {
@@ -912,7 +913,8 @@ fn icu_style(
         second: second as u8,
         date_style: date_style.and_then(Len::parse),
         time_style: time_style.and_then(Len::parse),
-        hour24: explicit_h24,
+        hour_cycle,
+        hour12,
     })
 }
 
@@ -929,7 +931,8 @@ fn icu_style(
     _second: u32,
     _date_style: Option<&str>,
     _time_style: Option<&str>,
-    _explicit_h24: Option<bool>,
+    _hour_cycle: Option<&str>,
+    _hour12: Option<bool>,
 ) -> Option<String> {
     None
 }
@@ -966,7 +969,8 @@ fn icu_components(
         has_hour: false,
         has_minute: false,
         has_second: false,
-        hour24: None,
+        hour_cycle: None,
+        hour12: None,
     })
 }
 
@@ -1308,14 +1312,10 @@ fn format_ms_with_dtf_obj(
     let hour_cycle = get_string_field(obj, KEY_HOUR_CYCLE);
     let use_24h = resolve_24h(hour12_v, hour_cycle.as_deref());
     let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    // For the icu path, only override the hour cycle when the caller explicitly
-    // asked (hour12 / hourCycle); otherwise `None` lets icu apply its own CLDR
-    // locale default — which is what matches Node.
-    let explicit_h24: Option<bool> = if hour12_v.is_some() || hour_cycle.is_some() {
-        Some(use_24h)
-    } else {
-        None
-    };
+    // The icu path receives the caller's explicit `hourCycle` / `hour12` verbatim
+    // (both absent → icu applies its own CLDR locale default, matching Node);
+    // it maps an explicit hourCycle to the exact clock family rather than
+    // collapsing it through `use_24h`.
     // Route ordinary `Date`/`DateTime` styling through icu4x (byte-parity CLDR
     // patterns + locale-correct date⇄time separators). Temporal partials
     // (PlainYearMonth/MonthDay/Time) keep the bespoke formatters below.
@@ -1355,7 +1355,8 @@ fn format_ms_with_dtf_obj(
             second,
             Some(ds),
             Some(ts),
-            explicit_h24,
+            hour_cycle.as_deref(),
+            hour12_v,
         )
         .unwrap_or_else(|| {
             format!(
@@ -1378,7 +1379,8 @@ fn format_ms_with_dtf_obj(
                 second,
                 Some(ds),
                 None,
-                explicit_h24,
+                hour_cycle.as_deref(),
+                hour12_v,
             )
             .unwrap_or_else(|| format_date_style(year, month, day, secs, ds)),
         },
@@ -1393,7 +1395,8 @@ fn format_ms_with_dtf_obj(
             second,
             None,
             Some(ts),
-            explicit_h24,
+            hour_cycle.as_deref(),
+            hour12_v,
         )
         .unwrap_or_else(|| format_time_style(hour, minute, second, ts, use_24h)),
         (None, None) => {
