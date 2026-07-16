@@ -54,6 +54,7 @@ pub use get::js_object_get_symbol_property;
 pub(crate) use get::{inherited_symbol_property, own_symbol_property};
 
 // Iterator protocol, getOwnPropertySymbols, ToPrimitive.
+pub(crate) use iterator::class_ref_resolves_iterator;
 pub use iterator::{
     js_get_iterator, js_iterator_result_validate, js_object_get_own_property_symbols,
     js_to_primitive,

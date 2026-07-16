@@ -81,6 +81,17 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     if bits == TAG_NULL {
         throw_not_iterable("object null");
     }
+    // #6454: `Array.from(SomeClass)` where the class DECLARATION (an
+    // INT32-tagged ClassRef) carries a — possibly inherited, #36/#321 —
+    // `[Symbol.iterator]`: drive it. A class WITHOUT one falls through to the
+    // non-iterable branch below (node: `Array.from(class C {})` → `[]` via the
+    // array-like path, not a throw — unlike spread/for-of).
+    if crate::object::class_ref_id(boxed).is_some()
+        && crate::symbol::class_ref_resolves_iterator(boxed)
+    {
+        let iter = crate::symbol::js_get_iterator(boxed);
+        return crate::array::js_iterator_to_array(iter);
+    }
     // Numbers / booleans / strings handled inside js_array_clone:
     //  - numbers/booleans aren't pointers → empty array.
     //  - strings → per-codepoint materialization.
