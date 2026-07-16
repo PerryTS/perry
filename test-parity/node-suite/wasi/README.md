@@ -1,7 +1,7 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 46 focused fixtures in five groups:
+layer. The suite has 47 focused fixtures in five groups:
 
 - `classes/` (5): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, call-without-`new`, and a warning-event assertion that normalizes
@@ -19,9 +19,10 @@ layer. The suite has 46 focused fixtures in five groups:
   linking, failure-state transitions (including finalization exclusivity),
   explicit-memory override and option validation, and cross-realm memory
   acceptance.
-- `semantics/` (4): UTF-8 argument/environment encoding, constructor-time
-  snapshots, and empty defaults, plus predicate-only clock and zero-length
-  random behavior. No random bytes or wall-clock values are compared.
+- `semantics/` (5): UTF-8 argument/environment encoding, embedded-NUL
+  termination, constructor-time snapshots, and empty defaults, plus
+  predicate-only clock and zero-length random behavior. No random bytes or
+  wall-clock values are compared.
 
 The fixtures use `const W: any = WASI; new W(...)` intentionally. Perry's typed
 `new WASI(...)` path currently bypasses the native WASI constructor, which is a
@@ -57,9 +58,10 @@ separately observable.
 Coverage was compared against primary sources at these revisions:
 
 - Node.js 26.5.0 (`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`):
-  [`lib/wasi.js`](https://github.com/nodejs/node/blob/v26.5.0/lib/wasi.js) and
-  [`test/wasi`](https://github.com/nodejs/node/tree/v26.5.0/test/wasi), plus the
-  documented
+  [`lib/wasi.js`](https://github.com/nodejs/node/blob/v26.5.0/lib/wasi.js),
+  [`src/node_wasi.cc`](https://github.com/nodejs/node/blob/v26.5.0/src/node_wasi.cc),
+  and [`test/wasi`](https://github.com/nodejs/node/tree/v26.5.0/test/wasi), plus
+  the documented
   [`finalizeBindings()` contract](https://github.com/nodejs/node/blob/v26.5.0/doc/api/wasi.md#wasifinalizebindingsinstance-options).
   The constructor and start/initialize validation, `finalizeBindings()`
   memory/options validation and shared lifecycle state, return-on-exit, eager
@@ -83,8 +85,9 @@ Coverage was compared against primary sources at these revisions:
   lacks Node's initialize/finalize helpers, and uses realm-sensitive memory
   branding. It also accepts `args: null` instead of applying Node's non-array
   validation, retains the caller's args array and env object so mutations after
-  construction remain visible, and does not omit undefined env values; Node
-  26.5.0 remains the oracle.
+  construction remain visible, does not omit undefined env values, and retains
+  payload bytes after embedded NULs like Deno; Node 26.5.0 truncates each native
+  argument/environment string at its first NUL and remains the oracle.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
@@ -113,15 +116,18 @@ fixture verifies that omitted args/env report zero count and byte size through
 the two `*_sizes_get` calls. It intentionally skips `*_get` for empty lists:
 Node 26 passes an empty native vector to uvwasi and returns `EINVAL`, while Deno
 and Bun return success, an implementation-specific errno edge rather than the
-portable documented default.
+portable documented default. `semantics/nul-termination.ts` separately covers
+the preview1 C-string boundary: it compares reported sizes and a tail-payload
+predicate rather than raw bytes. Node truncates at the first NUL, while Deno and
+Bun retain bytes after the first guest-visible terminator.
 
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, focused runs were stable at **16/46**, with **30 behavioral
+host archive, focused runs were stable at **16/47**, with **31 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **128/166** (`globals` 112/120 and `wasi`
-16/46), also without compile failures or timeouts. The stable mismatch families
+`globals,wasi` run completed at **128/167** (`globals` 112/120 and `wasi`
+16/47), also without compile failures or timeouts. The stable mismatch families
 are:
 
 - module namespace and descriptor/enumerability differences plus no normalized
