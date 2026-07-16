@@ -493,13 +493,18 @@ date_setter_thunk!(date_set_utc_milliseconds, 1, 6);
 /// `this`, then delegate to `temporal_locale_string` with `PlainDateTime`
 /// defaults ({year, month, day, hour, minute, second}) and no type-specific
 /// restrictions — `Date` accepts `timeZone`, `timeStyle`, `dateStyle`, etc.
-extern "C" fn date_to_locale_string_opts(
-    _closure: *const crate::closure::ClosureHeader,
-    rest: f64,
-) -> f64 {
+/// Shared body for `Date.prototype.toLocale{,Date,Time}String` when called with
+/// locale/options. `ctx` selects the ECMA-402 "required/defaults" class — the
+/// whole point of the three-method split: `toLocaleDateString` defaults to the
+/// date fields, `toLocaleTimeString` to the time fields, `toLocaleString` to
+/// both. A `Date` is a specific INSTANT, so we shift its epoch into the resolved
+/// zone's wall clock (the `timeZone` option, else the host zone) before
+/// formatting it as the now-zone-agnostic date-time.
+fn date_to_locale_opts_impl(rest: f64, ctx: crate::intl::TemporalLocaleCtx) -> f64 {
     let this = require_date_this();
     let epoch_ms = crate::date::date_cell_timestamp(this);
     if epoch_ms.is_nan() {
+        // Invalid Date → "Invalid Date" for all three methods.
         let s = crate::date::js_date_to_locale_string(this);
         return crate::value::js_nanbox_string(s as i64);
     }
@@ -507,21 +512,32 @@ extern "C" fn date_to_locale_string_opts(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let locale = args.get(0).copied().unwrap_or(undef);
     let opts = args.get(1).copied().unwrap_or(undef);
-    // A `Date` is a specific INSTANT; `toLocaleString` renders it in the resolved
-    // time zone (the `timeZone` option, else the host zone) — not UTC. Shift the
-    // epoch into that zone's wall clock, then format it as the zone-agnostic
-    // date-time it now represents. (Perry formatted it in UTC before, so
-    // `new Date().toLocaleString()` was off by the host offset.)
     let tz = crate::intl::resolved_date_time_zone(opts);
     let secs = (epoch_ms as i64).div_euclid(1000);
     let frac_ms = epoch_ms - (secs as f64) * 1000.0;
     let shifted_ms = (secs + crate::date::zone_offset_seconds(&tz, secs)) as f64 * 1000.0 + frac_ms;
-    crate::intl::temporal_locale_string(
-        shifted_ms,
-        locale,
-        opts,
-        crate::intl::TemporalLocaleCtx::PlainDateTime,
-    )
+    crate::intl::temporal_locale_string(shifted_ms, locale, opts, ctx)
+}
+
+extern "C" fn date_to_locale_string_opts(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainDateTime)
+}
+
+extern "C" fn date_to_locale_date_string_opts(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainDate)
+}
+
+extern "C" fn date_to_locale_time_string_opts(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainTime)
 }
 
 /// Install the brand-checked `Date.prototype` setter thunks. Called from
@@ -575,6 +591,24 @@ pub(crate) fn install_date_proto_to_locale_string(proto_obj: *mut ObjectHeader) 
         proto_obj,
         "toLocaleString",
         date_to_locale_string_opts as *const u8,
+        0,
+        0,
+    );
+    // #5800 follow-up: `toLocaleDateString` / `toLocaleTimeString` with
+    // locale/options must honor them too (the HIR only folds the zero-arg fast
+    // path; arg'd calls fall through to these prototype thunks). Date-only /
+    // time-only default classes respectively.
+    super::global_this::install_proto_method_rest_with_length(
+        proto_obj,
+        "toLocaleDateString",
+        date_to_locale_date_string_opts as *const u8,
+        0,
+        0,
+    );
+    super::global_this::install_proto_method_rest_with_length(
+        proto_obj,
+        "toLocaleTimeString",
+        date_to_locale_time_string_opts as *const u8,
         0,
         0,
     );
