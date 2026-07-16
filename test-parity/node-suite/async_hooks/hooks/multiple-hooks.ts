@@ -4,34 +4,25 @@ const firstEvents: string[] = [];
 const secondEvents: string[] = [];
 let targetId = -1;
 
-const first = createHook({
-  init(asyncId, type) {
-    if (type === "ParityMultipleHooks") {
-      targetId = asyncId;
-      firstEvents.push("init");
-    }
-  },
-  before(asyncId) {
-    if (asyncId === targetId) firstEvents.push("before");
-  },
-  after(asyncId) {
-    if (asyncId === targetId) firstEvents.push("after");
-  },
-}).enable();
-const second = createHook({
-  init(asyncId, type) {
-    if (type === "ParityMultipleHooks") {
-      targetId = asyncId;
-      secondEvents.push("init");
-    }
-  },
-  before(asyncId) {
-    if (asyncId === targetId) secondEvents.push("before");
-  },
-  after(asyncId) {
-    if (asyncId === targetId) secondEvents.push("after");
-  },
-}).enable();
+function createTrackingHook(events: string[]) {
+  return createHook({
+    init(asyncId, type) {
+      if (type === "ParityMultipleHooks") {
+        targetId = asyncId;
+        events.push("init");
+      }
+    },
+    before(asyncId) {
+      if (asyncId === targetId) events.push("before");
+    },
+    after(asyncId) {
+      if (asyncId === targetId) events.push("after");
+    },
+  }).enable();
+}
+
+const first = createTrackingHook(firstEvents);
+const second = createTrackingHook(secondEvents);
 const resource = new AsyncResource("ParityMultipleHooks");
 
 resource.runInAsyncScope(() => {

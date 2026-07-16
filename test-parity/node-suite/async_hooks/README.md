@@ -28,14 +28,26 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 
 The correctness oracle remains the repository-pinned Node 26.5.0.
 
-The current focused run is **51/77**. Twenty-six stable diagnostic fixtures cover
-custom AsyncResource lifecycle delivery, snapshot receiver handling,
-execution-resource restoration, disable cleanup, hook-sensitive type
-validation, zlib callback propagation, stream.finished completion, simultaneous
-hooks, init resource arguments, throwing scope lifecycle, and caught async exit
-rejections. They also identify context loss across subprocess, HTTP, net, dgram
-event, worker event, readline, and events.on provider boundaries. The other 51
-fixtures match the pinned oracle.
+The current focused result is **67/119** and is recorded in `node_suite_baseline.json`. The suite
+keeps every stable mismatch as a diagnostic rather than removing unsupported
+cases: failures identify context loss, missing hook callbacks/resources,
+lifecycle differences, validation gaps, or a compile/runtime boundary for the
+specific provider named by the fixture.
+
+The 52 non-matching diagnostics are stable and grouped as follows:
+
+- hook delivery/configuration: custom and built-in provider lifecycle callbacks,
+  cancelled resource destruction, simultaneous hooks, `promiseResolve`, resource
+  arguments, and `trackPromises` behavior/validation;
+- scheduling/context: zlib, HTTP/HTTPS keep-alive reuse, net, dgram, subprocess,
+  worker, VM, dynamic import, readline, events.on, and stream.finished boundaries;
+- callback contract: several async crypto APIs invoke their callback before the
+  call returns, while prime callbacks do not settle;
+- resource/storage semantics: snapshot receiver handling, top execution-resource
+  restoration, disable cleanup, and caught async `exit()` rejection routing; and
+- compilation: direct `node:tls` activation currently builds rustls without its
+  `ring` provider and then cannot find a fallback runtime archive. The local
+  certificate fixture itself passes the pinned Node oracle.
 
 ## Coverage
 
@@ -48,37 +60,52 @@ fixtures match the pinned oracle.
   empty and populated captures, receiver, argument, return-value, re-entry, and
   restoration behavior.
 - `propagation/`: controlled concurrent promises, catch/finally, thenables,
-  async iterators, queueMicrotask, nextTick, immediate, interval, and timer
-  propagation with awaited or callback-driven completion barriers.
-- `integrations/`: fs callbacks/promises/streams, crypto callbacks, zlib,
-  Readable/Writable/Transform/finished, timers/promises, util.promisify, and
-  EventEmitter propagation selected from Bun's Node comparison matrix.
-- `hooks/`: enable/disable/re-enable, simultaneous observers, init resource
-  arguments, and lifecycle behavior when a scoped callback throws.
-- `providers/`: DNS, child processes, HTTP, net, dgram, workers, readline,
-  events.on, and stream async iterators with ephemeral ports and explicit
-  close/exit barriers. This directory runs in the sequential lane.
+  async iterators, dynamic import, VM scheduling, queueMicrotask, nested
+  nextTick, immediate, ref/unref, interval, and timer propagation with awaited
+  or callback-driven completion barriers.
+- `integrations/`: individual fs access, mutation, metadata, descriptor,
+  directory, watch, promises, and stream callbacks; crypto random, KDF, key,
+  key-pair, and prime callbacks; all major zlib callback/stream families;
+  Readable/Writable/Transform/finished, timers/promises, util.promisify,
+  EventEmitter, and EventEmitterAsyncResource behavior selected from Bun's
+  async-context matrix and Node's provider tests.
+- `hooks/`: enable/disable/re-enable, simultaneous observers, enabling and
+  disabling observers from `init`, `trackPromises`, `promiseResolve`, resource
+  arguments, cancelled timer/immediate destruction, deterministic
+  timer/microtask/nextTick/fs/crypto lifecycles, and throwing scoped callbacks.
+- `providers/`: DNS, child processes, HTTP and HTTPS including keep-alive agent
+  isolation, TLS, net, dgram, workers, readline, events.on, and stream async
+  iterators with local endpoints, ephemeral ports, and explicit close/exit
+  barriers. This directory runs in the sequential lane.
 - `validation/`: synchronous throw propagation and cleanup of storage and
   execution-resource state, plus hook-sensitive empty resource type behavior.
   The pre-existing root fixtures retain detailed callback, constructor, and
   hook-option argument validation.
 
-## Stopping judgment and exclusions
+## Remaining slow, redundant, or environment-sensitive categories
 
-The remaining upstream cases are intentionally not copied into this fast,
-granular module suite:
+The following current upstream selections are not counted as coverage. Each is
+kept out for a concrete reason rather than to cap the suite size:
 
-- HTTPS/TLS provider propagation requires certificate fixtures and remains a
-  separate batch so certificate setup does not obscure context assertions.
 - Exact numeric async IDs are runtime-specific; only relationships and
   restoration invariants are asserted here.
 - GC-driven destroy delivery, weak-reference collection, destroy-vs-scheduler
   priority, recursive hooks, deep stacks, stress/leak probes, and process
   shutdown require slow or timing-sensitive runners.
-- Worker/thread propagation requires the worker suite and is not a
-  single-thread AsyncLocalStorage contract.
+- Cross-worker storage inheritance is not a Node contract; the retained worker
+  cases instead check the parent-side `online`, `message`, and `exit` provider
+  callbacks with an explicitly terminated local worker.
 - Uncaught exception and unhandled rejection routing mutates process-global
   handlers and belongs in a dedicated isolation fixture.
+- Bun's DNS CNAME/MX/TXT/reverse cases depend on external resolver state. Local
+  `lookup`, `resolve4`, and the Node lifecycle selections cover the stable DNS
+  provider boundary without making network availability an oracle input.
+- Bun's crypto cipher/hash/sign/randomUUID selections perform their work
+  synchronously and only check a following `setImmediate`; that scheduling
+  behavior is already isolated by the immediate propagation and hook fixtures.
+- Node's HTTP parser/socket reuse graphs, provider enum internals, signals,
+  pipes, TTY, process-shutdown, and inspector/trace-event cases assert native
+  implementation topology rather than portable public async-context behavior.
 - Node 26.5.0 supports AsyncLocalStorage `defaultValue` and `name`, but Perry's
   API manifest does not claim those constructor/name surfaces, so they are not
   counted here.

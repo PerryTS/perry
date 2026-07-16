@@ -12,7 +12,7 @@ const pending = first.run("first", () =>
           console.log(
             "pending isolated stores:",
             String(first.getStore()),
-            second.getStore(),
+            String(second.getStore()),
           );
           resolve();
         });
