@@ -7,13 +7,28 @@ through its Node-compat stdlib shim.
 
 The expansion was compared against these primary-source snapshots:
 
-- Node.js [`34c28d5`](https://github.com/nodejs/node/tree/34c28d5a69f4f00cd599adcbe57834435d3a683b/test/parallel), especially the `test-worker-message-port-*`, `test-worker-message-channel*`, `test-worker-message-mark-as-uncloneable`, `test-worker-invalid-workerdata`, `test-worker-environmentdata`, `test-worker-event`, and `test-worker-broadcastchannel` cases.
-- Deno [`f8a17c8`](https://github.com/denoland/deno/tree/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/specs/node/worker_threads) and its [`worker_threads_test.ts`](https://github.com/denoland/deno/blob/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/unit_node/worker_threads_test.ts) selection, including port transfer, listener removal/deduplication, `unref`, auto-exit, and broadcast coverage.
-- Bun [`0bffb47`](https://github.com/oven-sh/bun/tree/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads), especially [`worker_threads.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker_threads.test.ts) and [`worker-transfer-list.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker-transfer-list.test.ts).
+- Node.js
+  [`34c28d5`](https://github.com/nodejs/node/tree/34c28d5a69f4f00cd599adcbe57834435d3a683b/test/parallel),
+  especially the `test-worker-message-port-*`, `test-worker-message-channel*`,
+  `test-worker-message-mark-as-uncloneable`, `test-worker-invalid-workerdata`,
+  `test-worker-environmentdata`, `test-worker-event`, and
+  `test-worker-broadcastchannel` cases.
+- Deno
+  [`f8a17c8`](https://github.com/denoland/deno/tree/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/specs/node/worker_threads)
+  and its
+  [`worker_threads_test.ts`](https://github.com/denoland/deno/blob/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/unit_node/worker_threads_test.ts)
+  selection, including port transfer, listener removal/deduplication, `unref`,
+  auto-exit, and broadcast coverage.
+- Bun
+  [`0bffb47`](https://github.com/oven-sh/bun/tree/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads),
+  especially
+  [`worker_threads.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker_threads.test.ts)
+  and
+  [`worker-transfer-list.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker-transfer-list.test.ts).
 
 The inventory review covered all 141 `test-worker-*` files in that Node
-snapshot, all 48 cases in Deno's unit selection plus its directory fixtures,
-and the 72 declarations in Bun's two central worker test files. Cases are
+snapshot, all 48 cases in Deno's unit selection plus its directory fixtures, and
+the 72 declarations in Bun's two central worker test files. Cases are
 represented here by observable contract rather than copied one-for-one when
 several upstream files exercise the same behavior.
 
@@ -24,20 +39,23 @@ that oracle.
 ## Coverage added
 
 - `main-thread/`: complete namespace export availability and types, main-thread
-  values, Worker and MessagePort prototype descriptors, and constructor brands.
+  values, Worker and MessagePort prototype descriptors, constructor brands, and
+  the process-level `worker` event.
 - `environment-data/`: key identity, live main-thread values, deletion, worker
   snapshot cloning, built-in Map/Set/Date values, nested-worker inheritance,
   non-cloneable construction rejection, and parent/worker mutation isolation.
 - `structured-clone/`: ArrayBuffer cloning, typed-array backing identity,
   built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
   transfer detachment, MessagePort ownership, overloads, and atomic rollback.
-- `message-port/`: synchronous FIFO receives, invalid-port validation,
-  explicit `start()`, event fields/ports, listener deduplication, close callback
+- `message-port/`: synchronous FIFO receives, invalid-port validation, explicit
+  `start()`, event fields/ports, listener deduplication, close callback
   ordering, listener removal/`once`, `onmessage` replacement, method receiver
   validation, NodeEventTarget surface/listener validation, iterable MessageEvent
   ports and transfer options, dispatch-time close flushing,
   duplicate/self/closed transfers, atomic clone rollback, transfer-state
-  validation, queued delivery, overload validation, and
+  validation, queued delivery, overload validation, first-listener registration,
+  pending `once` removal, per-event listener scope, close-callback registration
+  order, tamper-resistant listener bookkeeping, transfer targets, and
   `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
@@ -50,9 +68,11 @@ that oracle.
   id/name uniqueness and lifecycle, parentPort `onmessage`/ref state, Worker
   EventEmitter surface and listener validation, process restrictions, captured
   stdout/stderr, explicit and `process.exitCode` exits, unsupported paths,
-  method receivers, postMessage clone rollback, `online`/`message`/`error`/`exit`
-  ordering, ref return values, natural exit, and deterministic repeated
-  termination settlement.
+  method receivers, postMessage clone rollback,
+  `online`/`message`/`error`/`exit` ordering, ref return values, natural exit,
+  and deterministic repeated termination settlement, transferred workerData port
+  methods, sequential `SHARE_ENV` sibling visibility, post-exit method safety,
+  and custom-stack and non-Error serialization.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -64,8 +84,8 @@ that oracle.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
   the existing surface, option, query, callback settlement/cleanup,
   independent-name concurrency, and shared/exclusive ordering cases.
-- `direct-message/`: delivery, no-listener and timeout rejection, plus thread id
-  and timeout argument validation.
+- `direct-message/`: delivery, no-listener, timeout, and handler-failure
+  rejection, plus thread id and timeout argument validation.
 
 Every asynchronous fixture uses a message, close, exit, stream-EOF, or
 promise-settlement barrier. No added fixture uses a sleep as a completion
@@ -73,8 +93,8 @@ condition.
 
 ## Stopping judgment
 
-The remaining upstream cases were not copied because they are redundant with
-the cases above or belong to a separate slow/risky runtime feature:
+The remaining upstream cases were not copied because they are redundant with the
+cases above or belong to a separate slow/risky runtime feature:
 
 - Resource-limit enforcement, stdio backpressure/large-write timing, heap
   snapshots, and CPU/heap profiling are resource- and platform-sensitive. Basic
@@ -98,11 +118,11 @@ the cases above or belong to a separate slow/risky runtime feature:
   surface, validation, shared/exclusive ordering, `ifAvailable`, and query
   snapshots. In-flight abort races and cross-agent ownership remain excluded.
 - The existing `direct-message/` fixtures already cover deterministic
-  `postMessageToThread` delivery, rejection, and timeout behavior.
+  `postMessageToThread` delivery, rejection, handler failures, and timeout
+  behavior.
 
-The measured focused result is `29/109`: all 17 pre-existing cases remain
-green, 12 added cases pass, and 80 added cases expose stable diagnostic
-differences.
+The measured focused result is `30/122`: all 17 pre-existing cases remain green,
+13 added cases pass, and 92 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -111,19 +131,20 @@ The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `worker-lifecycle/worker-ref-state.ts`, `web-locks/web-locks-abort.ts`, and
 `web-locks/web-locks-steal.ts`. The latest broad pass also adds green coverage
 for `environment-data/value-identity.ts`,
-`message-port/onmessage-replacement.ts`,
-`worker-lifecycle/eval-basic.ts`,
+`message-port/onmessage-replacement.ts`, `worker-lifecycle/eval-basic.ts`,
 `worker-lifecycle/method-receivers.ts`, and
-`web-locks/web-locks-independent-names.ts`. The diagnostic differences are:
+`web-locks/web-locks-independent-names.ts`. Sequential sibling `SHARE_ENV`
+visibility in `worker-lifecycle/share-env-siblings.ts` also passes. The
+diagnostic differences are:
 
 - All nine `structured-clone/` fixtures: Perry preserves some indexed values but
   loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
   cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
-- Twenty `message-port/` diagnostics: closing and dispatch flushing, queued
+- Twenty-six `message-port/` diagnostics: closing and dispatch flushing, queued
   data/callbacks, NodeEventTarget surface, listener counts and validation,
   receiver/options/iterables/transfers, MessageEvent construction and `ports`,
   duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
-- Thirty-two `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Thirty-six `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
@@ -135,7 +156,7 @@ for `environment-data/value-identity.ts`,
 - Five `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
   MessagePort validation, and closed-channel posts differ.
-- Nine additional diagnostics cover namespace/prototype completeness,
+- Eleven additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
   construction, direct-message argument validation, and Web Locks callback
   rejection cleanup.
@@ -149,10 +170,10 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `29/109 (26.6%), diff=80`, with no compile failures or timeouts.
-The SharedArrayBuffer/Atomics boundary is backed by the added same-process
-channel and cross-worker clone/alias cases plus the existing
-granular `globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
+It reported `30/122 (24.6%), diff=92`, with no compile failures or timeouts. The
+SharedArrayBuffer/Atomics boundary is backed by the added same-process channel
+and cross-worker clone/alias cases plus the existing granular
+`globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
 `util/types/arraybuffer-sharedarraybuffer.ts` cases; cross-agent fixtures such
 as Node's `test-worker-message-channel-sharedarraybuffer.js` and Deno's
 `broadcast_channel_sab.mjs` remain outside this messaging-focused batch. A

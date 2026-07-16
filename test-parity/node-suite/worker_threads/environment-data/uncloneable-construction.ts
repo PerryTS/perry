@@ -2,8 +2,8 @@ import { setEnvironmentData, Worker } from "node:worker_threads";
 
 process.chdir("test-parity/node-suite/worker_threads/environment-data");
 
-setEnvironmentData("uncloneable", () => "value");
 try {
+  setEnvironmentData("uncloneable", () => "value");
   new Worker("./worker-snapshot-worker.cjs");
   console.log("construct: ok");
 } catch (error: any) {
