@@ -40,31 +40,34 @@ Node's `test-async-hooks-disable-during-promise.js`,
 `test-async-hooks-close-during-destroy.js`,
 `test-async-hooks-execution-async-resource-await.js`,
 `test-async-local-storage-http-multiclients.js`,
-`test-async-local-storage-socket.js`, and
+`test-async-local-storage-socket.js`,
 `test-eventemitter-asyncresource.js`, `test-async-wrap-trigger-id.js`,
 `test-timers.setInterval.js`, `test-fsreqcallback-readFile.js`,
 `test-getaddrinforeqwrap.js`, `test-getnameinforeqwrap.js`,
 `test-querywrap.js`, `test-crypto-randomBytes.js`, and
-`test-zlib.zlib-binding.deflate.js`. Deno's selected bind/snapshot, nesting,
-enterWith, resource-scope, and propagation contracts and Bun's async-context
-provider matrix are represented by smaller single-boundary fixtures rather
+`test-zlib.zlib-binding.deflate.js`, `test-immediate.js`,
+`test-fseventwrap.js`, `test-statwatcher.js`, `test-udpwrap.js`,
+`test-tcpwrap.js`, and `test-shutdownwrap.js`. Deno's selected
+bind/snapshot, nesting, enterWith, resource-scope, and propagation contracts and
+Bun's async-context provider matrix are represented by smaller single-boundary fixtures rather
 than copied monolithic tests.
 
-The current focused result is **76/163** and is recorded in `node_suite_baseline.json`. The suite
-keeps every stable mismatch as a diagnostic rather than removing unsupported
-cases: failures identify context loss, missing hook callbacks/resources,
+The current focused result is **76/169** and is recorded in
+`node_suite_baseline.json`. The suite keeps every stable mismatch as a diagnostic
+rather than removing unsupported cases: failures identify context loss, missing hook callbacks/resources,
 lifecycle differences, validation gaps, or a compile/runtime boundary for the
 specific provider named by the fixture.
 
-The 87 non-matching diagnostics are stable and grouped as follows:
+The 93 non-matching diagnostics are stable and grouped as follows:
 
 - hook delivery/configuration: custom and built-in provider lifecycle callbacks,
   cancelled resource destruction and identity, simultaneous hooks, late
   activation during timers/immediates/next ticks and Promise chains,
   pre-created Promise relationships, mixed Promise hook shapes, destroy work
   queued from a destroy callback, repeated interval and sibling-nextTick
-  resources, fs.readFile and DNS trigger/lifecycle resources, randomBytes and
-  zlib resources, `promiseResolve`, resource arguments, execution-resource
+  resources, fs.readFile/fs-promises and DNS trigger/lifecycle resources,
+  filesystem watcher, UDP/TCP/shutdown, crypto-request, randomBytes, and zlib
+  resources, `promiseResolve`, resource arguments, execution-resource
   mapping/metadata, static-bind resource types, and `trackPromises`
   behavior/validation;
 - scheduling/context: zlib, HTTP/HTTPS keep-alive reuse and concurrent clients,
@@ -82,8 +85,8 @@ The 87 non-matching diagnostics are stable and grouped as follows:
 ## Coverage
 
 - `resource/`: construction/type and ID invariants, scope/receiver/arguments,
-  instance/static bind including inferred resource types, deterministic hook
-  scope callbacks, and explicit destroy.
+  instance/static bind including inferred resource types and explicit receiver,
+  deterministic hook scope callbacks, and explicit destroy.
 - `storage/`: run nesting and restoration, independent instances, enterWith,
   exit and its async descendants, EventEmitter listener bleed/isolation,
   multiple store value types, cross-instance exit isolation, disable/re-entry,
@@ -101,16 +104,18 @@ The 87 non-matching diagnostics are stable and grouped as follows:
   key-pair, and prime callbacks; all major zlib callback/stream families;
   Readable/Writable/Transform/finished, timers/promises, util.promisify,
   util.promisify.custom, EventEmitter, and EventEmitterAsyncResource lifecycle
-  plus prototype-brand behavior selected from Bun's async-context matrix and Node's provider tests.
+  plus prototype-brand behavior selected from Bun's async-context matrix and
+  Node's provider tests.
 - `hooks/`: enable/disable/re-enable, simultaneous observers, enabling and
   disabling observers from `init`, `before`, and `after` or while callbacks and
   Promise chains are active, mixed Promise hook shapes, pre-created and
-  async/await Promise trigger chains, execution-resource identity and writable metadata propagation,
-  default next-tick triggers, re-entrant destroy queuing, `trackPromises`,
+  async/await Promise trigger chains, execution-resource identity and writable
+  metadata propagation, default next-tick triggers, re-entrant destroy queuing, `trackPromises`,
   `promiseResolve`, resource arguments, cancelled timer/immediate destruction,
-  deterministic timer/interval/microtask/nextTick/fs/crypto/PBKDF2/randomBytes/
-  zlib/DNS lifecycles, sibling and fs.readFile trigger ancestry, and throwing
-  scoped callbacks.
+  deterministic timer/interval/immediate/microtask/nextTick, callback and
+  promise fs, filesystem watcher, crypto request/PBKDF2/randomBytes, zlib, DNS,
+  UDP, and local TCP lifecycles; sibling, fs.readFile, and provider trigger
+  ancestry; and throwing scoped callbacks.
 - `providers/`: DNS, child processes, HTTP and HTTPS including keep-alive agent
   and concurrent-client isolation, HTTP execution-resource mapping, TLS, net
   including concurrent data, dual accept/connect context isolation, and
@@ -144,9 +149,11 @@ kept out for a concrete reason rather than to cap the suite size:
 - Bun's crypto cipher/hash/sign/randomUUID selections perform their work
   synchronously and only check a following `setImmediate`; that scheduling
   behavior is already isolated by the immediate propagation and hook fixtures.
-- Node's HTTP parser/socket reuse graphs, provider enum internals, signals,
-  pipes, TTY, process-shutdown, and inspector/trace-event cases assert native
-  implementation topology rather than portable public async-context behavior.
+- Node's HTTP parser/socket reuse graphs, exhaustive provider topology,
+  signals, pipes, TTY, process-shutdown, and inspector/trace-event cases assert
+  native implementation details rather than portable public async-context
+  behavior. The retained TCP matrix is limited to the stable loopback lifecycle
+  relationships selected by Node's own TCP/shutdown tests.
 - Node's HTTP/2 ALS selection cannot yet reach an async-context callback in
   Perry because its local plaintext client never emits `connect`; it belongs
   after the underlying `node:http2` provider can complete a loopback session.
@@ -159,6 +166,10 @@ kept out for a concrete reason rather than to cap the suite size:
   assertions because Perry's base `createCipheriv` stream never emits data/end
   and exits with unsettled top-level await; it belongs after crypto stream event
   support is functional.
+- Node's `UDPSENDWRAP` selection requires the internal
+  `--test-udp-no-try-send` flag to disable the synchronous fast path. Without
+  that non-public runner flag Node 26.5.0 emits no send resource, so the portable
+  suite retains UDP socket lifecycle and dgram callback-context coverage only.
 - A current Node-main test expects the removed `AsyncResource.domain` getter,
   but the pinned Node 26.5.0 oracle has no such prototype getter; that
   post-oracle surface is not counted.
@@ -170,6 +181,7 @@ Raw hook coverage remains deliberately bounded. User-created AsyncResource
 cases control init/before/callback/after/destroy directly. Selected built-in
 provider cases are retained only where the pinned Node suite supplies a stable
 contract and the operation is local and deterministic: interval and nextTick,
-fs.readFile, DNS lookup/lookupService/localhost query, randomBytes, and zlib.
-All use explicit completion barriers and assert relationships rather than raw
-IDs; GC timing and native topology graphs remain excluded.
+fs.readFile and fs promises/watchers, DNS lookup/lookupService/localhost query,
+randomBytes and other crypto requests, zlib, UDP socket, and a bounded loopback
+TCP matrix. All use explicit completion barriers and assert relationships
+rather than raw IDs; GC timing and native topology graphs remain excluded.
