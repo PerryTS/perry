@@ -2,11 +2,11 @@
 
 ## Upstream evidence
 
-This expansion was assessed against primary repositories captured on 2026-07-15:
+This expansion was reassessed against primary repositories on 2026-07-16:
 
-- Node.js [`34c28d5a`](https://github.com/nodejs/node/tree/34c28d5a69f4f00cd599adcbe57834435d3a683b/test): 82 `test-dgram*` files in `test/parallel` and `test/sequential`.
-- Deno [`34f9f47f`](https://github.com/denoland/deno/blob/34f9f47f42d2a316efb8245aadc343f8d7cdf5c4/tests/node_compat/config.jsonc): 69 selected `parallel/test-dgram*` or `sequential/test-dgram*` entries.
-- Bun [`da08a6b8`](https://github.com/oven-sh/bun/tree/da08a6b8da3fdde3da8aa7e1453584aa681e9c04/test/js/node): 68 copied upstream `test-dgram*` files plus Bun's focused `node-dgram.test.js`.
+- Node.js [`608112af`](https://github.com/nodejs/node/tree/608112affae2cf44d2f8a0a6bfe7967193b459c8/test): 82 `test-dgram*` files in `test/parallel` and `test/sequential`.
+- Deno [`f8a17c81`](https://github.com/denoland/deno/blob/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/node_compat/config.jsonc): 69 selected `parallel/test-dgram*` or `sequential/test-dgram*` entries.
+- Bun [`c4fad462`](https://github.com/oven-sh/bun/tree/c4fad462e7dc20e5e9780f848db42e1e2f52186d/test/js/node): 68 copied upstream `test-dgram*` files plus Bun's focused `node-dgram.test.js`.
 
 The Perry fixtures are diagnostic adaptations, not verbatim copies. They use ephemeral ports, loopback addresses, sequential round trips, and deterministic summaries rather than upstream harness helpers or fixed ports.
 
@@ -21,57 +21,55 @@ The Perry fixtures are diagnostic adaptations, not verbatim copies. They use eph
 | empty and multiple sends | `test-dgram-send-empty-buffer.js`, `test-dgram-implicit-bind.js` | both (empty buffer is Darwin-disabled/flaky) | both |
 | callback timing | `test-dgram-send-callback-recursive.js` | selected | copied |
 | queue and reference state | `test-dgram-send-queue-info.js`, `test-dgram-ref.js`, `test-dgram-unref.js` | ref/unref (2/3) | ref/unref (2/3) |
+| address and connected-send validation | `test-dgram-send-address-types.js`, `test-dgram-send-bad-arguments.js` | both | both |
+| legacy and advanced send forms | `test-dgram-sendto.js`, `test-dgram-send-callback-buffer-length.js`, `test-dgram-send-callback-multi-buffer.js` | all 3 | all 3 |
+| lookup, errors, and blocking | `test-dgram-custom-lookup.js`, `test-dgram-send-error.js`, `test-dgram-send-cb-quelches-error.js`, `test-dgram-blocklist.js` | lookup/error cases (3/4) | lookup/error cases (3/4) |
+| close, bind conflict, and disposal | `test-dgram-close-is-not-callback.js`, `test-dgram-bind-error-repeat.js`, `test-dgram-async-dispose.mjs` | all 3 | all 3 |
+| controls and buffer metrics | `test-dgram-setTTL.js`, `test-dgram-multicast-setTTL.js`, `test-dgram-socket-buffer-size.js` | TTL cases (2/3) | TTL cases (2/3) |
+| constructor message listener | `test-dgram-udp4.js` | selected | copied |
 
 ## Current coverage
 
-The directory contains 15 fixtures: the original 4 broad cases and 11 granular cases added in this expansion.
+The directory contains 31 fixtures: the original 4 broad cases and 27 granular cases added in this expansion.
 
-- `validation/`: socket-type matrices, message/list validation, and port errors.
-- `lifecycle/`: default/port/options bind overloads with deterministic close, plus AbortSignal validation and post-close abort behavior.
+- `validation/`: socket-type/options matrices, message/list/address validation, connected-send guards, DataView/scatter-gather acceptance, legacy `sendto()`, and port errors.
+- `lifecycle/`: default/port/options bind overloads, bind conflicts, custom lookup, close arguments, async-dispose shape, AbortSignal validation, and post-close abort behavior.
 - `connection/`: invalid ports, pending/connected state guards, disconnect errors, and reconnect state.
-- `send/`: unconnected and connected string/typed-array overloads, omitted-host behavior, empty datagrams, multiple implicit-bind sends, callback byte counts, and callback asynchrony.
-- `metrics/`: queue metrics and `ref()`/`unref()` identity before bind, after bind, and after close.
+- `send/`: unconnected and connected overloads, constructor listeners, default address/host behavior, empty and multiple sends, buffer ranges, block lists, DNS error routing, callback byte counts, and callback asynchrony.
+- `metrics/`: buffer-size validation, queue metrics, and `ref()`/`unref()` identity before bind, after bind, and after close.
+- `control/`: deterministic TTL boundary validation.
 - Existing broad cases retain unicast loopback, import/API shape, socket controls, and multicast membership coverage.
 
-The measured Node 26.5.0 focused run is 12/15 parity passes, with no compile failures, crashes, or skipped fixtures. The three stable mismatches intentionally diagnose Perry behavior:
+The clean Node 26.5.0 focused baseline run is 16/31 parity passes with 15 stable output differences and no compile failures, runtime errors, or skipped fixtures. The differences diagnose:
 
-1. A second `connect()` while pending or connected is accepted instead of throwing `ERR_SOCKET_DGRAM_IS_CONNECTED`.
-2. A non-AbortSignal `signal` option is accepted instead of throwing `ERR_INVALID_ARG_TYPE`.
-3. A successful `send()` callback runs synchronously instead of asynchronously.
+1. Repeated `connect()` calls and connected range/destination overloads miss `ERR_SOCKET_DGRAM_IS_CONNECTED` guards.
+2. Invalid `signal`, `lookup`, buffer-size, and address options/arguments are accepted.
+3. Successful `send()` callbacks run synchronously.
+4. `sendto()` lacks Node-coded argument errors, scatter-gather arrays are rejected, and buffer offset/length ranges are ignored.
+5. `Symbol.asyncDispose`, custom lookup dispatch, and send block lists are not implemented.
+6. `close()` does not return the socket, an empty address is treated as a DNS name, and multicast TTL handles `Infinity` differently.
 
-The work was exercised in coherent batches. Validation/lifecycle probes first exposed unsupported buffer-size validation, repeated bind/close semantics, and active/pre-aborted signal closure. Connection/send probes then separated supported string, typed-array, empty-buffer, default-host, and multiple-send behavior from unsupported offset/length and scatter-gather overloads. The final batch added stable callback-ordering and queue/ref diagnostics before the complete focused rerun.
+The work was exercised in coherent batches. The first pass covered core validation, bind/connect lifecycle, basic overloads, callbacks, queue/ref metrics, and AbortSignal. The follow-up added 16 cases selected from the larger Node/Deno/Bun corpora: address and advanced-option validation, legacy and connected send forms, custom lookup, close/dispose behavior, bind conflicts, block lists, DNS error routing, buffer metrics, TTL boundaries, constructor listeners, and message-view/scatter-gather behavior.
 
 ## Stopping judgment and exclusions
 
 Further upstream ports were stopped where they would duplicate the cases above or cross into a separate runtime/platform feature:
 
-- **Separate runtime work:** Node's new `bindSync()`/`connectSync()`, `Symbol.asyncDispose`, block lists, custom DNS lookup, descriptor/handle binding, send buffer offset/length bounds, scatter-gather arrays, active/pre-aborted signal closure, and exact repeated bind/close return/error semantics.
-- **Platform/slow assessment:** `reusePort`, shared ports, cluster/child-process handle transfer, interface-specific IPv6 and link-local addresses, multicast interface/loopback variants, and source-specific multicast beyond the existing smoke fixture.
+- **Separate runtime work:** Node's new `bindSync()`/`connectSync()`, descriptor/handle binding, active/pre-aborted signal closure, and exact repeated bind/close error semantics. Surface diagnostics for async disposal, block lists, custom lookup, ranges, and scatter-gather now remain in the suite.
+- **Platform/slow assessment:** `reusePort`, shared ports, cluster/child-process handle transfer, IPv6 loopback/link-local/interface-specific cases without a capability guard, multicast interface/loopback variants, and source-specific multicast beyond the existing smoke fixture.
 - **Kernel-sensitive errors:** message-size, out-of-band buffer, receive errors, implicit-bind failure, and address-specific OS error text.
 - **Scheduler-sensitive races:** close during bind/lookup/listening, recursive send callbacks, error-quelching races, burst close behavior, ping-pong stress, and unref/cluster process-liveness tests.
 - **Redundant upstream variants:** the many connected/unconnected callback, empty-packet, default-host, buffer, typed-array, and multiple-send files are represented by smaller grouped fixtures here.
 
-These exclusions keep the default granular lane deterministic on loopback while preserving the three actionable Perry mismatches as focused regression targets.
+These exclusions keep the default granular lane deterministic on loopback while preserving the 15 actionable Perry differences as focused regression targets.
 
 ## Verification
 
 ```text
 NODE_BIN=/tmp/node-v26.5.0/bin/node \
-PERRY_NO_AUTO_OPTIMIZE=1 \
-CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
-./run_parity_tests.sh --suite node-suite --module dgram
-
-Parity Pass: 12
-Parity Fail: 3
-Compile Fail: 0
-Crashed: 0
-Skipped: 0
-Parity Rate: 80.0%
-
-NODE_BIN=/tmp/node-v26.5.0/bin/node \
 python3 scripts/node_suite_run.py "$PWD/target/release/perry" "$PWD" dgram
 
-dgram  12  15  80.0  diff=3
+dgram  16  31  51.6  diff=15
 
 cargo fmt --all -- --check
 ./scripts/check_file_size.sh
@@ -79,4 +77,4 @@ python3 -m json.tool test-parity/node_suite_baseline.json
 git diff --check
 ```
 
-No wider module run is required for this baseline ratchet: the executable changes are confined to `node-suite/dgram`, and the baseline runner was measured directly against all 15 dgram fixtures.
+No wider module run is required for this module floor: the executable changes are confined to `node-suite/dgram`, and the baseline runner was measured directly against all 31 dgram fixtures. Aggregate metadata remains the last clean full-suite snapshot.
