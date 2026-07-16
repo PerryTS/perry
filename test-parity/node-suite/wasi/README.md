@@ -147,7 +147,12 @@ the replaced `proc_exit` wrapper for this check because Node's bound exit helper
 throws its private exit sentinel when invoked.
 `lifecycle/exports-access-order.ts` makes that observable ordering explicit:
 Node reads it for default memory, validation, and entrypoint lookup, while Deno,
-Bun, and Perry snapshot at most once per implemented entry method.
+Bun, and Perry snapshot at most once per implemented entry method. Its export
+member accessors separately show Node reading `memory`, `_start`, and
+`_initialize` exactly once in that order for both entry methods. Deno and Bun
+re-read members around validation and invocation; Perry matches the Node member
+order for `start()` but does not invoke it, while `initialize()` stops after
+reading `memory` and `_start` without reading or invoking `_initialize`.
 
 ## Measured result and stopping evidence
 
@@ -168,10 +173,11 @@ are:
   `ERR_WASI_NOT_STARTED`;
 - `WebAssembly.Memory` construction/branding and standard async instance shape
   differ, while the optional wasm host uses Perry's synchronous opaque handle;
-- lifecycle methods validate but do not invoke `_start`/`_initialize`, do not
-  consume state after post-bind validation failures, do not implement exit-code
-  flow, do not bind or honor explicitly overridden syscall memory, and do not
-  validate `finalizeBindings()` memory/options;
+- lifecycle methods validate but do not invoke `_start`/`_initialize`, and
+  `initialize()` does not even read the latter; they do not consume state after
+  post-bind validation failures, implement exit-code flow, bind or honor
+  explicitly overridden syscall memory, or validate `finalizeBindings()`
+  memory/options;
 - args/env encoding and constructor snapshots plus clock/random semantics remain
   unavailable behind those memory/syscall gaps.
 
