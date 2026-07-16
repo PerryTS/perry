@@ -78,11 +78,13 @@ that oracle.
   EventTarget/EventEmitter bridging, max-listener controls, scoped
   `removeAllListeners`, missing-message validation, transfer rejection during
   close flushing, frozen EventTarget prototype resilience, MessageEvent
-  defaults/coercion, transfer targets, `ref`/`unref`/`hasRef` state, and custom
-  inspection of active/refed state.
+  defaults/coercion, transfer targets, `ref`/`unref`/`hasRef` state, custom
+  inspection of active/refed state, and proof that synchronous draining
+  suppresses later event delivery.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
-  and VM-context port movement with closed-port and argument validation.
+  and VM-context port movement with cross-realm branding, closed-port, and
+  argument validation.
 - `worker-lifecycle/`: constructor transfer validation, structured `workerData`,
   default and built-in workerData, MessagePort/ArrayBuffer transfer, environment
   snapshots, eval/CJS require, file URLs with Unicode names, argv and execArgv
@@ -100,7 +102,9 @@ that oracle.
   routing, global `postMessage` replacement, workerData alias/view/cycle
   cloning, multiple and aliased MessagePorts, MessagePorts nested in Map/Set,
   broader filename, falsy execArgv, and disallowed `NODE_OPTIONS` validation,
-  custom-stack and non-Error serialization, and Worker asynchronous disposal.
+  custom-stack and non-Error serialization, Worker asynchronous disposal,
+  construction-time transfer rollback, default environment isolation, and the
+  base file/eval `process.argv` shape.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -170,9 +174,21 @@ cases above or belong to a separate slow/risky runtime feature:
   the pinned Node 26.5.0 oracle exits fatally from `process._fatalException`
   before an `uncaughtException` handler can establish the recovery contract that
   Bun asserts. It is therefore not a Node parity case.
+- A main-to-grandchild `postMessageToThread` candidate completed under Node and
+  Deno, but Perry's nested worker never reached the explicit ready/inspection
+  barrier and retained the event loop beyond 30 seconds. It needs nested-worker
+  readiness/shutdown infrastructure rather than a granular timeout.
+- Operating on the original MessagePort after `moveMessagePortToContext` was
+  rejected because Node 26.5.0 itself exited by signal 11. The retained
+  cross-realm-brand case observes the moved port without probing undefined
+  moved-from behavior.
+- Invalid-path transfer rollback was not retained: a literal nonexistent Worker
+  target fails Perry compilation, while hiding it behind a dynamic path only
+  exercises the already covered unresolved-path fallback and leaves the buffer
+  untouched vacuously.
 
-The measured focused result is `34/165`: all 17 pre-existing cases remain green,
-17 added cases pass, and 131 added cases expose stable diagnostic differences.
+The measured focused result is `35/170`: all 17 pre-existing cases remain green,
+18 added cases pass, and 135 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -189,7 +205,9 @@ indexed-key variant in `worker-lifecycle/share-env-indexed.ts` passes too. The
 accepted optional transfer forms in `message-port/transfer-optional-forms.ts`
 also pass. The latest refresh adds passing dispatch-time coverage in
 `broadcast-channel/create-during-dispatch.ts` and
-`broadcast-channel/close-queued-delivery.ts`. The diagnostic differences are:
+`broadcast-channel/close-queued-delivery.ts`. Synchronously drained messages are
+also proven not to reappear through the event listener in
+`message-port/receive-consumes-event.ts`. The diagnostic differences are:
 
 - All twelve `structured-clone/` fixtures: Perry preserves some indexed values
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
@@ -200,22 +218,23 @@ also pass. The latest refresh adds passing dispatch-time coverage in
   validation, receiver/options/iterables/transfers, MessageEvent construction
   and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
   state and custom inspection differ.
-- Fifty `worker-lifecycle/` diagnostics: invalid constructor payloads and paths,
-  execArgv, captured stdio, process restrictions/exit codes, shared environments
-  and nested messages, worker/parentPort EventEmitter behavior, metadata/unique
-  ids, repeated termination, workerData and postMessage SAB sharing, queued port
-  receive, rollback, post-exit values, error routing, and Worker asynchronous
-  disposal differ. Basic eval with CJS require passes.
+- Fifty-three `worker-lifecycle/` diagnostics: invalid constructor payloads and
+  paths, execArgv, captured stdio, process restrictions/exit codes, shared
+  environments and nested messages, worker/parentPort EventEmitter behavior,
+  metadata/unique ids, repeated termination, workerData and postMessage SAB
+  sharing, queued port receive, rollback, post-exit values, error routing,
+  Worker asynchronous disposal, default environment isolation, process argv
+  shape, and constructor rollback differ. Basic eval with CJS require passes.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
 - Eleven `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
   MessagePort validation, closed-channel posts, and custom inspection differ.
-- Fifteen additional diagnostics cover namespace/prototype completeness,
+- Sixteen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
-  construction, direct-message argument validation/transfer ownership, and Web
-  Locks callback rejection cleanup.
+  construction and VM-context branding, direct-message argument
+  validation/transfer ownership, and Web Locks callback rejection cleanup.
 
 The clean measurement used:
 
@@ -226,7 +245,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `34/165 (20.6%), diff=131`, with no compile failures or timeouts.
+It reported `35/170 (20.6%), diff=135`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. Cyclic `workerData` construction also consistently exits by
