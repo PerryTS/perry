@@ -1,8 +1,6 @@
 import wasiDefault, * as wasiNamespace from "node:wasi";
 import { WASI } from "node:wasi";
 
-const W: any = WASI;
-
 console.log("namespace keys:", Object.keys(wasiNamespace).sort().join(","));
 console.log("default keys:", Object.keys(wasiDefault).sort().join(","));
 console.log("default distinct:", wasiDefault !== wasiNamespace);

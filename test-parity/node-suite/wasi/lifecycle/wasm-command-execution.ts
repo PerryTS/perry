@@ -13,5 +13,5 @@ if (exportsObject && typeof exportsObject === "object") {
   const wasi = new W({ version: "preview1" });
   console.log("before:", memory[0]);
   console.log("return:", wasi.start(instance));
-  console.log("after:", memory[0]);
+  console.log("after:", new Uint8Array(exportsObject.memory.buffer)[0]);
 }

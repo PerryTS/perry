@@ -27,3 +27,9 @@ try {
 } catch (error: any) {
   console.log("start: throw", error?.name, error?.message);
 }
+try {
+  wasi.start(instance);
+  console.log("retry: ok");
+} catch (error: any) {
+  console.log("retry: throw", error?.name, error?.code || "no-code");
+}

@@ -15,6 +15,7 @@ const instance = {
     memory: createMemory(),
     _start() {
       calls++;
+      return 99;
     },
   },
 };

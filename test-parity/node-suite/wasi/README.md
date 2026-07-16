@@ -1,7 +1,7 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 35 focused fixtures in five groups:
+layer. The suite has 43 focused fixtures in five groups:
 
 - `classes/` (5): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, call-without-`new`, and a warning-event assertion that normalizes
@@ -9,13 +9,14 @@ layer. The suite has 35 focused fixtures in five groups:
 - `constructor/` (6): options/version, args, env, preopens, stdio descriptors,
   and `returnOnExit` validation. Preopens stop at type/empty-object validation;
   no host path is opened.
-- `imports/` (5): the complete 46-function preview1 surface, function metadata,
-  preview1/unstable namespace identity, method receivers, and pre-start syscall
-  validation.
-- `lifecycle/` (16): input/export validation, memory binding, single-start
+- `imports/` (7): the complete 46-function preview1 surface, function metadata,
+  preview1/unstable namespace identity, ordinary wrapper descriptors,
+  replacement behavior, method receivers, and pre-start syscall validation.
+- `lifecycle/` (22): input/export validation, memory binding, single-start
   rules, start/initialize exclusivity, entrypoint invocation, return-on-exit
-  behavior, patched-import errors, real wasm instance shape, and
-  imported-function linking.
+  behavior, patched-import errors, real wasm instance shape, imported-function
+  linking, failure-state transitions, explicit-memory override, and cross-realm
+  memory acceptance.
 - `semantics/` (3): argument/environment encoding plus predicate-only clock and
   zero-length random behavior. No random bytes or wall-clock values are
   compared.
@@ -59,17 +60,19 @@ Coverage was compared against primary sources at these revisions:
   clock/random contracts are represented here.
 - Deno (`803a3c933e1e23e0972445293ec0b34b8da96ccc`):
   [`ext/node/polyfills/wasi.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/ext/node/polyfills/wasi.ts).
-  Its current preview1 implementation follows Node's constructor, import,
-  lifecycle, memory-brand, and not-started validation; no separate checked-in
-  `node:wasi` compatibility selection was present at that revision.
+  Its current preview1 implementation follows most Node constructor, import,
+  memory-brand, and not-started validation, but validates entrypoints before
+  consuming lifecycle state, keeps `finalizeBindings()` idempotent, and exposes
+  `wasiImport` as a getter; no separate checked-in `node:wasi` compatibility
+  selection was present at that revision.
 - Bun (`0ecd508247c7e99477717389a6cad44552cac023`):
   [`src/js/node/wasi.ts`](https://github.com/oven-sh/bun/blob/0ecd508247c7e99477717389a6cad44552cac023/src/js/node/wasi.ts)
   and the
   [preview1 fixture harness](https://github.com/oven-sh/bun/blob/0ecd508247c7e99477717389a6cad44552cac023/test/js/node/test/fixtures/wasi-preview-1.js).
   Bun's selected fixture exercises preview1 imports and start behavior, while
-  its implementation retains legacy `getImports()`/optional-memory behavior
-  rather than Node's complete current class contract; Node 26.5.0 remains the
-  oracle.
+  its implementation retains legacy `getImports()`/optional-memory behavior,
+  lacks Node's initialize/finalize helpers, and uses realm-sensitive memory
+  branding; Node 26.5.0 remains the oracle.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
@@ -82,9 +85,11 @@ patched-import rethrow; `test-wasi-not-started.js` to
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, two focused runs were stable at **13/35**, with **22 behavioral
-diffs**, no compile failures, no timeouts, and no harness errors. The stable
-mismatch families are:
+host archive, two focused runs were stable at **16/43**, with **27 behavioral
+diffs**, no compile failures, no timeouts, and no harness errors. A related
+`globals,wasi` run completed at **128/163** (`globals` 112/120 and `wasi`
+16/43), also without compile failures or timeouts. The stable mismatch families
+are:
 
 - module namespace and descriptor/enumerability differences plus no normalized
   experimental warning;
@@ -94,7 +99,8 @@ mismatch families are:
 - `WebAssembly.Memory` construction/branding and standard async instance shape
   differ, while the optional wasm host uses Perry's synchronous opaque handle;
 - lifecycle methods validate but do not invoke `_start`/`_initialize`, do not
-  implement exit-code flow, and do not bind syscall memory;
+  consume state after post-bind validation failures, do not implement exit-code
+  flow, and do not bind or honor explicitly overridden syscall memory;
 - args/env/clock/random semantics remain unavailable behind those memory/syscall
   gaps.
 

@@ -1,7 +1,5 @@
 import { WASI } from "node:wasi";
 
-const W: any = WASI;
-
 function flags(object: object, key: PropertyKey) {
   const descriptor = Object.getOwnPropertyDescriptor(object, key)!;
   return [descriptor.enumerable, descriptor.configurable, descriptor.writable]
