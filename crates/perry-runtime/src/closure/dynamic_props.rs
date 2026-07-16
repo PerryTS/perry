@@ -994,8 +994,46 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
     if !is_closure_ptr(ptr) {
         return closure_bits;
     }
+    // #6475: a CANONICAL bound class method — a BOUND_METHOD closure whose
+    // receiver slot holds the class PROTOTYPE-REF marker (the shape
+    // `class_prototype_method_value_for_name` caches per `(class_id, name)`)
+    // rather than a real instance. It reaches a rebind site whenever a method
+    // resolved through a prototype WALK is invoked method-shaped — effect's
+    // `TagClass.pipe(...)`, where `pipe` is a class instance method reached
+    // via `Object.setPrototypeOf(TagClass, Object.getPrototypeOf(tagInstance))`.
+    // The CAPTURES_THIS machinery below can't touch it (a bound method carries
+    // its receiver in capture slot 0, not a `this` slot), so the canonical
+    // proto-ref leaked through as the callee's `this` — an INT32 the method
+    // body then read fields off (`typeof this === "number"`), losing the
+    // receiver entirely. Rebuild the binding onto the caller's receiver.
+    // An explicit `.bind(x)` product carries a real value in slot 0 (not a
+    // proto-ref) and is left untouched, matching spec bound-function
+    // semantics. Symbol-keyed bound methods carry the sentinel name and their
+    // dispatch data in extra slots — skip them here (their builder binds the
+    // true receiver at materialization).
     unsafe {
         let header = ptr as *const ClosureHeader;
+        if (*header).func_ptr == crate::closure::BOUND_METHOD_FUNC_PTR {
+            let recv0 = crate::closure::js_closure_get_capture_f64(header, 0);
+            if crate::object::class_prototype_ref_id(recv0).is_some() {
+                let name_ptr = crate::closure::js_closure_get_capture_ptr(header, 1) as *const u8;
+                let name_len = crate::closure::js_closure_get_capture_ptr(header, 2) as usize;
+                let is_symbol_sentinel = name_ptr
+                    == crate::object::SYMBOL_BOUND_METHOD_NAME.as_ptr()
+                    && name_len == crate::object::SYMBOL_BOUND_METHOD_NAME.len();
+                if !name_ptr.is_null() && name_len > 0 && !is_symbol_sentinel {
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let recv_handle = scope.root_nanbox_f64(recv_box);
+                    let rebuilt = crate::object::build_bound_method_closure(
+                        recv_handle.get_nanbox_f64(),
+                        name_ptr,
+                        name_len,
+                    );
+                    return rebuilt.to_bits();
+                }
+            }
+            return closure_bits;
+        }
         // Arrow functions bind `this` lexically: their `this` capture slot holds
         // the enclosing instance and must NEVER be overwritten with a call-time
         // receiver (proxy handler, getter receiver, method-call object, …).

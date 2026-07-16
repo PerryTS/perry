@@ -209,6 +209,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `TypeError: value is not a function` instead of masking a
     // non-pointer value's low 48 bits into a wild closure pointer.
     module.declare_function("js_closure_unbox_callee_checked", I64, &[DOUBLE]);
+    // #6475: receiver-aware variant for member-shaped fused calls — rebinds an
+    // object-literal method's baked `this` slot to the receiver before unboxing.
+    module.declare_function(
+        "js_closure_unbox_callee_checked_rebind",
+        I64,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);

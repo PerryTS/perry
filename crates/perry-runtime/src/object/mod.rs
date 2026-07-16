@@ -54,6 +54,9 @@ mod native_module;
 pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
+pub(crate) use native_module::{
+    build_bound_method_closure, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+};
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
