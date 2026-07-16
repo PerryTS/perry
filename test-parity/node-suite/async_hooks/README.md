@@ -46,13 +46,13 @@ enterWith, resource-scope, and propagation contracts and Bun's async-context
 provider matrix are represented by smaller single-boundary fixtures rather
 than copied monolithic tests.
 
-The current focused result is **72/147** and is recorded in `node_suite_baseline.json`. The suite
+The current focused result is **74/151** and is recorded in `node_suite_baseline.json`. The suite
 keeps every stable mismatch as a diagnostic rather than removing unsupported
 cases: failures identify context loss, missing hook callbacks/resources,
 lifecycle differences, validation gaps, or a compile/runtime boundary for the
 specific provider named by the fixture.
 
-The 75 non-matching diagnostics are stable and grouped as follows:
+The 77 non-matching diagnostics are stable and grouped as follows:
 
 - hook delivery/configuration: custom and built-in provider lifecycle callbacks,
   cancelled resource destruction and identity, simultaneous hooks, late
@@ -92,8 +92,8 @@ The 75 non-matching diagnostics are stable and grouped as follows:
   directory, watch, promises, and stream callbacks; crypto random, KDF, key,
   key-pair, and prime callbacks; all major zlib callback/stream families;
   Readable/Writable/Transform/finished, timers/promises, util.promisify,
-  EventEmitter, and EventEmitterAsyncResource behavior selected from Bun's
-  async-context matrix and Node's provider tests.
+  util.promisify.custom, EventEmitter, and EventEmitterAsyncResource behavior
+  selected from Bun's async-context matrix and Node's provider tests.
 - `hooks/`: enable/disable/re-enable, simultaneous observers, enabling and
   disabling observers from `init` or while callbacks and Promise chains are
   active, mixed Promise hook shapes, pre-created and async/await Promise trigger
@@ -104,10 +104,11 @@ The 75 non-matching diagnostics are stable and grouped as follows:
   throwing scoped callbacks.
 - `providers/`: DNS, child processes, HTTP and HTTPS including keep-alive agent
   and concurrent-client isolation, HTTP execution-resource mapping, TLS, net
-  including concurrent data isolation and `getConnections`, dgram, workers,
-  readline, events.on, and stream async iterators with local endpoints,
-  ephemeral ports, and explicit close/exit barriers. This directory runs in the
-  sequential lane.
+  including concurrent data, dual accept/connect context isolation, and
+  `getConnections`; dgram including dual send/receive context isolation; DNS
+  `lookupService`; workers, readline, events.on, and stream async iterators with
+  local endpoints, ephemeral ports, and explicit close/exit barriers. This
+  directory runs in the sequential lane.
 - `validation/`: synchronous throw propagation and cleanup of storage and
   execution-resource state, plus hook-sensitive empty resource type behavior.
   The pre-existing root fixtures retain detailed callback, constructor, and
@@ -145,6 +146,10 @@ kept out for a concrete reason rather than to cap the suite size:
   separate Web Streams feature whose cold Perry build exceeds the granular
   runner's compile budget; both belong with Web Streams compatibility rather
   than this Node module suite.
+- Bun's cipher-stream context selection cannot currently reach its ALS
+  assertions because Perry's base `createCipheriv` stream never emits data/end
+  and exits with unsettled top-level await; it belongs after crypto stream event
+  support is functional.
 - Node 26.5.0 supports AsyncLocalStorage `defaultValue` and `name`, but Perry's
   API manifest does not claim those constructor/name surfaces, so they are not
   counted here.
