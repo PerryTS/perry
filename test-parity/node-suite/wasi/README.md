@@ -1,7 +1,7 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 48 focused fixtures in five groups:
+layer. The suite has 49 focused fixtures in five groups:
 
 - `classes/` (5): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, call-without-`new`, and a warning-event assertion that normalizes
@@ -14,12 +14,12 @@ layer. The suite has 48 focused fixtures in five groups:
   replacement behavior that preserves the selected namespace, method receivers,
   pre-start syscall validation, and representative arity/type validation before
   and after memory binding.
-- `lifecycle/` (24): input/export validation, memory binding, single-start
+- `lifecycle/` (25): input/export validation, memory binding, single-start
   rules, start/initialize exclusivity, entrypoint invocation, return-on-exit
   behavior, patched-import errors, real wasm instance shape, imported-function
-  linking, failure-state transitions (including finalization exclusivity),
-  explicit-memory override and option validation, and cross-realm memory
-  acceptance.
+  linking, exports-accessor ordering, failure-state transitions (including
+  finalization exclusivity), explicit-memory override and option validation, and
+  cross-realm memory acceptance.
 - `semantics/` (5): UTF-8 argument/environment encoding, embedded-NUL
   termination, constructor-time snapshots, and empty defaults, plus
   predicate-only clock and zero-length random behavior. No random bytes or
@@ -71,14 +71,14 @@ Coverage was compared against primary sources at these revisions:
   [`ext/node/polyfills/wasi.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/ext/node/polyfills/wasi.ts).
   Its current preview1 implementation follows most Node constructor, import,
   memory-brand, and not-started validation, but validates entrypoints before
-  consuming lifecycle state, keeps `finalizeBindings()` idempotent, and exposes
-  `wasiImport` as a getter. Its `finalizeBindings()` also treats null memory or
-  options as absent instead of rejecting them; its constructor does match Node's
-  eager args/env snapshots, but stringifies undefined env values instead of
-  omitting them. No separate checked-in `node:wasi` compatibility selection was
-  present at that revision. Its JavaScript wrappers check memory before syscall
-  arguments and otherwise defer to op coercion, unlike Node's native
-  arity/type-first validation.
+  consuming lifecycle state, snapshots `instance.exports` once per entry method,
+  keeps `finalizeBindings()` idempotent, and exposes `wasiImport` as a getter.
+  Its `finalizeBindings()` also treats null memory or options as absent instead
+  of rejecting them; its constructor does match Node's eager args/env snapshots,
+  but stringifies undefined env values instead of omitting them. No separate
+  checked-in `node:wasi` compatibility selection was present at that revision.
+  Its JavaScript wrappers check memory before syscall arguments and otherwise
+  defer to op coercion, unlike Node's native arity/type-first validation.
 - Bun (`aca54d5c2b874ac304a3bbe1d67630e4daf17b43`):
   [`src/js/node/wasi.ts`](https://github.com/oven-sh/bun/blob/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/src/js/node/wasi.ts)
   and the
@@ -126,15 +126,19 @@ Bun retain bytes after the first guest-visible terminator. The native
 `SlowCallback` arity/type checks in `src/node_wasi.cc` map to
 `imports/syscall-arguments.ts`. It samples both uint32 and BigInt signatures
 before and after binding; exhaustive repetition across all 46 wrappers would be
-redundant because they share the same callback template.
+redundant because they share the same callback template. The upstream lifecycle
+validation tests override `instance.exports` with a getter.
+`lifecycle/exports-access-order.ts` makes that observable ordering explicit:
+Node reads it for default memory, validation, and entrypoint lookup, while Deno,
+Bun, and Perry snapshot at most once per implemented entry method.
 
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, focused runs were stable at **17/48**, with **31 behavioral
+host archive, focused runs were stable at **17/49**, with **32 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **129/168** (`globals` 112/120 and `wasi`
-17/48), also without compile failures or timeouts. The stable mismatch families
+`globals,wasi` run completed at **129/169** (`globals` 112/120 and `wasi`
+17/49), also without compile failures or timeouts. The stable mismatch families
 are:
 
 - module namespace and descriptor/enumerability differences plus no normalized
