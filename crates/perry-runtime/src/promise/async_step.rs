@@ -5,6 +5,65 @@
 
 use super::*;
 
+// ── PERRY_TRACE_ASYNC: lost-continuation diagnostics ──────────────────────
+// Opt-in (`PERRY_TRACE_ASYNC=1`). Logs each `await`-SUSPEND on a *pending*
+// promise (with a backtrace of the await site) and each SETTLE of a
+// suspended-on promise. A SUSPEND with no matching SETTLE is a LOST
+// continuation: the awaited promise never settled, so the async fn never
+// resumes — the "the async request handler never returns / the response
+// evaporates" signature. Find it by diffing the unmatched-await backtraces of
+// a working run against a hanging one; the SUSPEND line carries the site.
+// A no-op (one cached bool check) when the env var is unset.
+thread_local! {
+    static TRACE_ASYNC_ON: std::cell::Cell<i8> = const { std::cell::Cell::new(-1) };
+    static TRACE_ASYNC_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TRACE_ASYNC_AWAITED: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+#[inline]
+fn trace_async_enabled() -> bool {
+    TRACE_ASYNC_ON.with(|c| {
+        let v = c.get();
+        if v >= 0 {
+            v == 1
+        } else {
+            let e = std::env::var("PERRY_TRACE_ASYNC").as_deref() == Ok("1");
+            c.set(if e { 1 } else { 0 });
+            e
+        }
+    })
+}
+
+/// An async fn is suspending, awaiting `inner` (a pending promise). Record it
+/// and log the await site so a never-settled `inner` can be identified.
+pub(crate) fn trace_async_suspend(inner: *const Promise) {
+    if inner.is_null() || !trace_async_enabled() {
+        return;
+    }
+    let id = TRACE_ASYNC_SEQ.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n
+    });
+    TRACE_ASYNC_AWAITED.with(|s| s.borrow_mut().insert(inner as usize));
+    eprintln!(
+        "[ASYNC-SUSP #{id} P={inner:p}]\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
+}
+
+/// A promise settled. If an async fn was suspended awaiting it, note the resume.
+pub(crate) fn trace_async_settle(promise: *const Promise, how: &str) {
+    if promise.is_null() || !trace_async_enabled() {
+        return;
+    }
+    let was = TRACE_ASYNC_AWAITED.with(|s| s.borrow_mut().remove(&(promise as usize)));
+    if was {
+        eprintln!("[ASYNC-SETTLE {how} P={promise:p}]");
+    }
+}
+
 /// Inverse of `then::arg_to_closure` — reboxes an already-unboxed
 /// `ClosurePtr` handler arg back into a boxed `f64` JS value so it can be
 /// forwarded to `js_promise_then_checked`. Null (the "no handler" sentinel)
@@ -332,6 +391,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // the inner settles; install fulfill/reject thunks
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
+                    trace_async_suspend(inner);
                     let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
                     return then_backpatch_result(inner, fulfill, reject, trap_next);
                 }

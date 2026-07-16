@@ -179,6 +179,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         if (*promise).state != PromiseState::Pending {
             return; // Already settled
         }
+        super::async_step::trace_async_settle(promise, "fulfill");
         (*promise).state = PromiseState::Fulfilled;
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
         crate::async_hooks::promise_resolve((*promise).async_id);
@@ -389,6 +390,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         if (*promise).state != PromiseState::Pending {
             return; // Already settled
         }
+        super::async_step::trace_async_settle(promise, "reject");
         (*promise).state = PromiseState::Rejected;
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
         crate::async_hooks::promise_resolve((*promise).async_id);
