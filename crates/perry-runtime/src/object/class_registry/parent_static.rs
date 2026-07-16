@@ -269,7 +269,14 @@ pub(crate) fn class_object_own_field_bytes(
     want: &[u8],
 ) -> Option<f64> {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    if obj.is_null() || !crate::object::is_valid_obj_ptr(obj as *const u8) {
+    // `is_valid_obj_ptr` alone does not reject the fetch/zlib/proxy handle
+    // bands, and dereferencing a handle id as an ObjectHeader segfaults on Linux
+    // (macOS hides it). Gate on `is_above_handle_band` first — a real class
+    // object is always a heap allocation above the band.
+    if obj.is_null()
+        || !crate::value::addr_class::is_above_handle_band(obj as usize)
+        || !crate::object::is_valid_obj_ptr(obj as *const u8)
+    {
         return None;
     }
     unsafe {
