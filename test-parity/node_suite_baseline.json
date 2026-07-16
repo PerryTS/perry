@@ -212,7 +212,7 @@
     },
     "wasi": {
       "pass": 17,
-      "total": 50
+      "total": 51
     },
     "worker_threads": {
       "pass": 17,

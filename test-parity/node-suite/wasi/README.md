@@ -1,15 +1,15 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 50 focused fixtures in five groups:
+layer. The suite has 51 focused fixtures in five groups:
 
 - `classes/` (6): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, ordinary subclass construction, call-without-`new`, and a
   warning-event assertion that normalizes the experimental warning to a count
   rather than comparing PID or stderr text.
-- `constructor/` (6): options/version, args, env, preopens, stdio descriptors,
-  and `returnOnExit` validation. Preopens stop at type/empty-object validation;
-  no host path is opened.
+- `constructor/` (7): options/version, args, env, preopens, stdio descriptors,
+  `returnOnExit` validation, and observable option-property access order.
+  Preopens stop at type/empty-object validation; no host path is opened.
 - `imports/` (8): the complete 46-function preview1 surface, function metadata,
   preview1/unstable namespace identity, ordinary wrapper descriptors,
   replacement behavior that preserves the selected namespace, method receivers,
@@ -170,17 +170,23 @@ member accessors separately show Node reading `memory`, `_start`, and
 re-read members around validation and invocation; Perry matches the Node member
 order for `start()` but does not invoke it, while `initialize()` stops after
 reading `memory` and `_start` without reading or invoking `_initialize`.
+`constructor/options-access-order.ts` applies the same accessor-based method to
+the constructor's complete option surface. Node's `lib/wasi.js` reads version
+twice, args/env/preopens and `returnOnExit` three times, and each stdio property
+once in a stable sequence. Deno performs additional validation/default reads,
+Bun reads only its legacy preopens/env/args inputs, and Perry reads every option
+once in a different order.
 
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, focused runs were stable at **17/50**, with **33 behavioral
+host archive, focused runs were stable at **17/51**, with **34 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **129/170** (`globals` 112/120 and `wasi`
-17/50), also without compile failures or timeouts.
+`globals,wasi` run completed at **129/171** (`globals` 112/120 and `wasi`
+17/51), also without compile failures or timeouts.
 
-An independent bounded sweep of all fixtures completed under Deno with 49
-status-0 results and the one intentional status-7 exit, and under Bun with 47
+An independent bounded sweep of all fixtures completed under Deno with 50
+status-0 results and the one intentional status-7 exit, and under Bun with 48
 status-0 results and the three intentional status-7 exits. Neither sweep had a
 timeout or another nonzero result.
 
@@ -211,6 +217,9 @@ platform-specific errno or error text, actual entropy/time values, large or
 concurrent modules, permissions/locking, symlink escape, signals,
 GC/finalization, worker termination, and stress. Those require separate
 WASI/runtime/compiler work and would be redundant or less diagnostic here.
+All 26 JavaScript entrypoints in Node 26.5.0's `test/wasi` directory were
+enumerated during the final audit: each is mapped above, represented by a more
+focused local case, or named in the exclusions below.
 Concretely, the remaining Node 26 files `test-wasi-cant_dotdot.js`,
 `test-wasi-fd_prestat_get_refresh.js`, `test-wasi-ftruncate.js`,
 `test-wasi-io.js`, `test-wasi-notdir.js`, `test-wasi-preopen_populates.js`,
