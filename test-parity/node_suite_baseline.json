@@ -6,8 +6,8 @@
   },
   "overall": {
     "pass": 2816,
-    "total": 2945,
-    "pct": 95.6
+    "total": 2960,
+    "pct": 95.1
   },
   "modules": {
     "assert": {
@@ -184,7 +184,7 @@
     },
     "tls": {
       "pass": 9,
-      "total": 85
+      "total": 100
     },
     "trace_events": {
       "pass": 6,
