@@ -2148,6 +2148,36 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
+                // Drop init-call back-edges (#6463). `topo_sort_non_entry_modules`
+                // breaks import cycles at the back-edge and the eager main
+                // sequence runs inits in that order — but the wrapper's nested
+                // dep-init calls re-derive the order dynamically at runtime.
+                // When the cycle member the sort placed FIRST runs, its broken
+                // edge to the member placed second pulled that module's BODY in
+                // early, before this module's own body had populated anything.
+                // Effect's web.ts died on this: find-my-way-ts
+                // internal/router.ts has `import * as Router from "../index.js"`
+                // used only in type positions (no `type` keyword, so it is a
+                // value edge), forming a cycle index ⇄ internal. The sort
+                // correctly placed internal first — matching node's ESM
+                // evaluation order from the entry — but internal's wrapper then
+                // called index's init, whose body copied
+                // `export const make = internal.make` while internal's global
+                // was still undefined. `FindMyWay.make` stayed undefined
+                // forever: "TypeError: value is not a function" at
+                // Layer.launch. Keeping only forward edges (dep positioned
+                // before this module) is exactly ESM's behavior of skipping a
+                // module already on the evaluation stack. A dep missing from
+                // the position map keeps its edge (conservative).
+                let init_pos: std::collections::HashMap<String, usize> =
+                    non_entry_module_names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, name)| (sanitize_name(name), i))
+                        .collect();
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| init_pos.get(dep).map_or(true, |&p| p < self_pos));
+                }
                 deps
             };
             // Build import → source-prefix table for cross-module
