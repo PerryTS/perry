@@ -22,4 +22,20 @@ for (
     descriptor.configurable,
     descriptor.writable,
   );
+  console.log(
+    name + " prototype:",
+    Object.prototype.hasOwnProperty.call(value, "prototype"),
+    typeof value.prototype,
+  );
+}
+
+try {
+  const value = Reflect.construct(wasiImport.args_get, [0, 0]);
+  console.log("args_get construct: ok", typeof value);
+} catch (error: any) {
+  console.log(
+    "args_get construct: throw",
+    error?.name,
+    error?.code || "no-code",
+  );
 }

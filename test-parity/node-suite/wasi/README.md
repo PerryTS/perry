@@ -134,7 +134,17 @@ Bun retain bytes after the first guest-visible terminator. The native
 `imports/syscall-arguments.ts`. It samples both uint32 and BigInt signatures
 before and after binding; exhaustive repetition across all 46 wrappers would be
 redundant because they share the same callback template. The upstream lifecycle
-validation tests override `instance.exports` with a getter.
+validation tests override `instance.exports` with a getter. The representative
+callbacks in `imports/function-descriptors.ts` also cover own-`prototype` shape:
+Node replaces every native callback with a bound function, Deno defines
+object-literal methods, and Bun uses arrow functions, so none has an own
+constructor prototype; Perry currently gives each callback an object-valued own
+`prototype`. The same fixture checks one ordinary callback's independent
+constructibility with valid arity: Node creates its shared native callback
+template with `ConstructorBehavior::kThrow`, while Deno's method and Bun's arrow
+also reject construction; Perry currently constructs an object. It does not use
+the replaced `proc_exit` wrapper for this check because Node's bound exit helper
+throws its private exit sentinel when invoked.
 `lifecycle/exports-access-order.ts` makes that observable ordering explicit:
 Node reads it for default memory, validation, and entrypoint lookup, while Deno,
 Bun, and Perry snapshot at most once per implemented entry method.
@@ -151,8 +161,9 @@ are:
 - module namespace, descriptor/enumerability (including an enumerable,
   configurable, writable constructor `prototype` property), and
   subclass-construction differences plus no normalized experimental warning;
-- import-function name/arity and receiver differences, plus loss of the
-  `wasi_unstable` namespace after replacing `wasiImport`;
+- import-function name/arity, own-`prototype`, constructibility, and receiver
+  differences, plus loss of the `wasi_unstable` namespace after replacing
+  `wasiImport`;
 - import syscalls return `28` before memory binding instead of throwing
   `ERR_WASI_NOT_STARTED`;
 - `WebAssembly.Memory` construction/branding and standard async instance shape
