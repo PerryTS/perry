@@ -18,7 +18,7 @@ layer. The suite has 45 focused fixtures in five groups:
   behavior, patched-import errors, real wasm instance shape, imported-function
   linking, failure-state transitions, explicit-memory override and option
   validation, and cross-realm memory acceptance.
-- `semantics/` (4): argument/environment encoding and constructor-time
+- `semantics/` (4): UTF-8 argument/environment encoding and constructor-time
   snapshots, plus predicate-only clock and zero-length random behavior. No
   random bytes or wall-clock values are compared.
 
@@ -70,8 +70,9 @@ Coverage was compared against primary sources at these revisions:
   consuming lifecycle state, keeps `finalizeBindings()` idempotent, and exposes
   `wasiImport` as a getter. Its `finalizeBindings()` also treats null memory or
   options as absent instead of rejecting them; its constructor does match Node's
-  eager args/env snapshots. No separate checked-in `node:wasi` compatibility
-  selection was present at that revision.
+  eager args/env snapshots, but stringifies undefined env values instead of
+  omitting them. No separate checked-in `node:wasi` compatibility selection was
+  present at that revision.
 - Bun (`aca54d5c2b874ac304a3bbe1d67630e4daf17b43`):
   [`src/js/node/wasi.ts`](https://github.com/oven-sh/bun/blob/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/src/js/node/wasi.ts)
   and the
@@ -80,7 +81,8 @@ Coverage was compared against primary sources at these revisions:
   its implementation retains legacy `getImports()`/optional-memory behavior,
   lacks Node's initialize/finalize helpers, and uses realm-sensitive memory
   branding. It also retains the caller's args array and env object, so mutations
-  after construction remain visible; Node 26.5.0 remains the oracle.
+  after construction remain visible, and does not omit undefined env values;
+  Node 26.5.0 remains the oracle.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the

@@ -11,7 +11,13 @@ function createMemory(): any {
 }
 const wasi = new W({
   version: "preview1",
-  env: { FIRST: "one", SECOND: 2, BOOL: false, OMIT: undefined },
+  env: {
+    FIRST: "one",
+    SECOND: 2,
+    BOOL: false,
+    UNICODE: "café雪🙂",
+    OMIT: undefined,
+  },
 });
 const memory: any = createMemory();
 const instance: any = { exports: { memory } };
@@ -28,16 +34,24 @@ if (hasBuffer) {
   const getErrno = wasi.wasiImport.environ_get(8, 64);
   const decoder = new TextDecoder();
   const values = [];
-  for (let index = 0; index < count; index++) {
+  const pointerCapacity = (64 - 8) / 4;
+  const safeCount = Math.min(count, pointerCapacity);
+  const stringLimit = Math.min(bytes.length, 64 + size);
+  for (let index = 0; index < safeCount; index++) {
     const start = view.getUint32(8 + index * 4, true);
+    if (start < 64 || start >= stringLimit) {
+      values.push("<invalid-pointer>");
+      continue;
+    }
     let end = start;
-    while (end < bytes.length && bytes[end] !== 0) end++;
+    while (end < stringLimit && bytes[end] !== 0) end++;
     values.push(
-      end < bytes.length
+      end < stringLimit
         ? decoder.decode(bytes.subarray(start, end))
         : "<unterminated>",
     );
   }
+  if (count > pointerCapacity) values.push("<count-overflow>");
   console.log("errno:", sizesErrno, getErrno);
   console.log("sizes:", count, size);
   console.log("values:", values.join("|"));
