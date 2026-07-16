@@ -934,6 +934,57 @@ fn icu_style(
     None
 }
 
+/// Format a date-only, name-bearing component set via icu4x. `None` when the
+/// feature is off or icu can't reproduce the combo (numeric-only, narrow,
+/// structurally inexpressible), so the caller falls back.
+#[cfg(feature = "intl-datetime")]
+#[allow(clippy::too_many_arguments)]
+fn icu_components(
+    locale: &str,
+    year: i32,
+    month: u32,
+    day: u32,
+    year_opt: Option<&str>,
+    month_opt: Option<&str>,
+    day_opt: Option<&str>,
+    weekday_opt: Option<&str>,
+) -> Option<String> {
+    use super::icu_dtf::{self, CompReq};
+    icu_dtf::format_components(&CompReq {
+        locale,
+        year,
+        month: month as u8,
+        day: day as u8,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        has_year: year_opt.is_some(),
+        has_month: month_opt.is_some(),
+        has_day: day_opt.is_some(),
+        month_style: month_opt,
+        weekday_style: weekday_opt,
+        has_hour: false,
+        has_minute: false,
+        has_second: false,
+        hour24: None,
+    })
+}
+
+#[cfg(not(feature = "intl-datetime"))]
+#[allow(clippy::too_many_arguments)]
+fn icu_components(
+    _locale: &str,
+    _year: i32,
+    _month: u32,
+    _day: u32,
+    _year_opt: Option<&str>,
+    _month_opt: Option<&str>,
+    _day_opt: Option<&str>,
+    _weekday_opt: Option<&str>,
+) -> Option<String> {
+    None
+}
+
 fn format_date_style(year: i32, month: u32, day: u32, secs: i64, style: &str) -> String {
     let mi = month.saturating_sub(1).min(11) as usize;
     match style {
@@ -1029,7 +1080,9 @@ fn fractional_seconds_str(ms: f64, digits: u8) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn format_components(
+    locale: &str,
     year: i32,
     month: u32,
     day: u32,
@@ -1055,6 +1108,28 @@ fn format_components(
         || minute_opt.is_some()
         || second_opt.is_some()
         || day_period_opt.is_some();
+
+    // A date-only, name-bearing component set (a spelled month or a weekday)
+    // localizes cleanly through icu4x — correct month/weekday names AND the
+    // locale's field order (`5. Januar 2026`, `2026年1月5日`), which the numeric
+    // hand assembly below can't do. icu returns None for numeric-only / narrow
+    // combos, and we skip it when era/fractional-second options are in play
+    // (unmodeled) or a time part is present (hour-cycle handling stays on the
+    // fallback) — so those fall through unchanged.
+    if has_date && !has_time && era_opt.is_none() && fractional_digits.is_none() {
+        if let Some(s) = icu_components(
+            locale,
+            year,
+            month,
+            day,
+            year_opt,
+            month_opt,
+            day_opt,
+            weekday_opt,
+        ) {
+            return s;
+        }
+    }
 
     let date_part = if has_date {
         let has_m = month_opt.is_some();
@@ -1386,6 +1461,7 @@ fn format_ms_with_dtf_obj(
             let fractional_digits =
                 get_number_field(obj, KEY_FRACTIONAL).map(|n| (n as u8).clamp(1, 3));
             format_components(
+                &locale,
                 year,
                 month,
                 day,
@@ -1628,6 +1704,7 @@ pub(crate) fn temporal_locale_string(
     let use_24h = resolve_24h(hour12, hour_cycle.as_deref());
     let secs = (epoch_ms as i64).div_euclid(1000);
     let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
+    let locale = crate::intl::locale_or_default(locale_arg);
 
     let result = match (eff_date_style, eff_time_style) {
         (Some(ds), Some(ts)) => format!(
@@ -1638,6 +1715,7 @@ pub(crate) fn temporal_locale_string(
         (Some(ds), None) => format_date_style(year, month, day, secs, ds),
         (None, Some(ts)) => format_time_style(hour, minute, second, ts, use_24h),
         (None, None) => format_components(
+            &locale,
             year,
             month,
             day,

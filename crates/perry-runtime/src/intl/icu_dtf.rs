@@ -8,7 +8,9 @@
 //! combination) or when the feature is off.
 
 use icu_datetime::fieldsets;
+use icu_datetime::fieldsets::builder::{DateFields, FieldSetBuilder};
 use icu_datetime::input::{Date, DateTime, Time};
+use icu_datetime::options::{Length, TimePrecision};
 use icu_datetime::preferences::HourCycle;
 use icu_datetime::DateTimeFormatter;
 use icu_datetime::DateTimeFormatterPreferences;
@@ -137,6 +139,116 @@ pub(crate) fn format(req: &Req) -> Option<String> {
     }
 }
 
+/// A component-based `Intl.DateTimeFormat` request (year/month/day/weekday +
+/// hour/minute/second, each with its ECMA-402 style). The fields are already in
+/// wall-clock time for the resolved zone.
+pub(crate) struct CompReq<'a> {
+    pub locale: &'a str,
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub has_year: bool,
+    pub has_month: bool,
+    pub has_day: bool,
+    /// `month` option value (`numeric`/`2-digit`/`short`/`long`/`narrow`), or
+    /// `None` when month is absent.
+    pub month_style: Option<&'a str>,
+    /// `weekday` option value (`short`/`long`/`narrow`), or `None` when absent.
+    pub weekday_style: Option<&'a str>,
+    pub has_hour: bool,
+    pub has_minute: bool,
+    pub has_second: bool,
+    pub hour24: Option<bool>,
+}
+
+/// Format an explicit-component request via icu4x's dynamic `FieldSetBuilder`.
+///
+/// Only combos icu's *semantic* field sets reproduce faithfully are handled:
+/// a date part must carry a spelled month (`short`/`long`) or a weekday (icu
+/// gets the localized name + field order right). A **purely numeric** date is
+/// deliberately rejected (returns `None`): its minimal-digit CLDR pattern
+/// (`5.1.2026` for de) can't be expressed by icu's `Short` length, which pads
+/// and truncates the year (`05.01.26`) — the caller's numeric assembly owns
+/// that. `narrow` and structurally-inexpressible field combos also return
+/// `None` for the fallback.
+pub(crate) fn format_components(req: &CompReq) -> Option<String> {
+    let has_weekday = req.weekday_style.is_some();
+    let has_date = req.has_year || req.has_month || req.has_day || has_weekday;
+
+    // Name-bearing = a spelled month or a weekday; only these route to icu.
+    let month_len = match req.month_style {
+        Some("long") => Some(Length::Long),
+        Some("short") => Some(Length::Medium),
+        _ => None,
+    };
+    let weekday_len = match req.weekday_style {
+        Some("long") => Some(Length::Long),
+        Some("short") => Some(Length::Medium),
+        _ => None,
+    };
+    let name_bearing = month_len.is_some() || weekday_len.is_some();
+
+    // Reject narrow (no semantic-fieldset equivalent) and purely numeric dates.
+    if matches!(req.month_style, Some("narrow")) || matches!(req.weekday_style, Some("narrow")) {
+        return None;
+    }
+    if has_date && !name_bearing {
+        return None;
+    }
+
+    let date_fields = if has_date {
+        Some(
+            match (req.has_year, req.has_month, req.has_day, has_weekday) {
+                (true, true, true, true) => DateFields::YMDE,
+                (true, true, true, false) => DateFields::YMD,
+                (false, true, true, true) => DateFields::MDE,
+                (false, true, true, false) => DateFields::MD,
+                (false, false, true, true) => DateFields::DE,
+                (false, false, true, false) => DateFields::D,
+                (false, false, false, true) => DateFields::E,
+                (true, true, false, false) => DateFields::YM,
+                (false, true, false, false) => DateFields::M,
+                (true, false, false, false) => DateFields::Y,
+                // e.g. year+day without month, year+weekday — not expressible.
+                _ => return None,
+            },
+        )
+    } else {
+        None
+    };
+
+    let time_precision = if req.has_second {
+        Some(TimePrecision::Second)
+    } else if req.has_minute {
+        Some(TimePrecision::Minute)
+    } else if req.has_hour {
+        Some(TimePrecision::Hour)
+    } else {
+        None
+    };
+
+    if date_fields.is_none() && time_precision.is_none() {
+        return None;
+    }
+
+    let prefs = prefs(req.locale, req.hour24)?;
+    let mut builder = FieldSetBuilder::default();
+    builder.date_fields = date_fields;
+    // A spelled month wins the length; else the weekday's; else Medium.
+    builder.length = month_len.or(weekday_len).or(Some(Length::Medium));
+    builder.time_precision = time_precision;
+    let fieldset = builder.build_composite_datetime().ok()?;
+
+    let date = Date::try_new_iso(req.year, req.month.into(), req.day.into()).ok()?;
+    let time = Time::try_new(req.hour, req.minute, req.second, 0).ok()?;
+    let dt = DateTime { date, time };
+    let dtf = DateTimeFormatter::try_new(prefs, fieldset).ok()?;
+    Some(normalize(&dtf.format(&dt).to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +356,91 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "\n{}", mismatches.join("\n"));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn comp(
+        locale: &str,
+        year: Option<&str>,
+        month: Option<&str>,
+        day: Option<&str>,
+        weekday: Option<&str>,
+    ) -> Option<String> {
+        format_components(&CompReq {
+            locale,
+            year: 2026,
+            month: 1,
+            day: 5,
+            hour: 14,
+            minute: 37,
+            second: 9,
+            has_year: year.is_some(),
+            has_month: month.is_some(),
+            has_day: day.is_some(),
+            month_style: month,
+            weekday_style: weekday,
+            has_hour: false,
+            has_minute: false,
+            has_second: false,
+            hour24: None,
+        })
+    }
+
+    #[test]
+    fn name_bearing_components_match_node() {
+        let n = Some("numeric");
+        let cases: &[(
+            &str,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            &str,
+        )] = &[
+            ("de", n, Some("long"), n, None, "5. Januar 2026"),
+            ("en-US", None, Some("short"), n, None, "Jan 5"),
+            (
+                "en-US",
+                n,
+                Some("long"),
+                n,
+                Some("long"),
+                "Monday, January 5, 2026",
+            ),
+            ("ja", n, Some("long"), n, None, "2026年1月5日"),
+            ("fr", None, Some("long"), n, Some("long"), "lundi 5 janvier"),
+            ("de", None, Some("long"), n, None, "5. Januar"),
+            ("ko", n, Some("long"), n, None, "2026년 1월 5일"),
+            ("en-GB", None, Some("short"), n, Some("short"), "Mon 5 Jan"),
+        ];
+        let mut mismatches = Vec::new();
+        for (loc, y, m, d, wd, want) in cases {
+            let got = comp(loc, *y, *m, *d, *wd).unwrap_or_else(|| "<None>".into());
+            if got != *want {
+                mismatches.push(format!("{loc} {m:?}/{wd:?}: got {got:?}  want {want:?}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "\n{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn numeric_and_narrow_components_defer() {
+        // Pure-numeric date → None (numeric locale pattern owns it).
+        assert_eq!(
+            comp(
+                "de",
+                Some("numeric"),
+                Some("numeric"),
+                Some("numeric"),
+                None
+            ),
+            None
+        );
+        // Narrow → None.
+        assert_eq!(
+            comp("en-US", None, Some("narrow"), Some("numeric"), None),
+            None
+        );
     }
 
     #[test]
