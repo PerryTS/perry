@@ -9,7 +9,8 @@ const results: string[] = [];
 for (let attempt = 0; attempt < 2; attempt++) {
   const result = await new Promise<string>((resolve) => {
     candidate.once("error", (value) => {
-      resolve(`${value.code}:${value.syscall}`);
+      const error = value as Error & { code?: string; syscall?: string };
+      resolve(`${error.code}:${error.syscall}`);
     });
     candidate.bind(owner.address().port, "127.0.0.1", () => resolve("listening"));
   });
