@@ -48,7 +48,8 @@ that oracle.
   non-cloneable construction rejection, and parent/worker mutation isolation.
 - `structured-clone/`: ArrayBuffer cloning, typed-array backing identity,
   built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
-  transfer detachment, MessagePort ownership, overloads, and atomic rollback.
+  transfer detachment, MessagePort ownership, unsupported URL rejection,
+  overloads, and atomic rollback.
 - `message-port/`: synchronous FIFO receives, invalid-port validation, explicit
   `start()`, event fields/ports, listener deduplication, close callback
   ordering, listener removal/`once`, `onmessage` replacement, method receiver
@@ -58,11 +59,11 @@ that oracle.
   validation, queued delivery, overload validation, first-listener registration,
   pending `once` removal, per-event listener scope, close-callback registration
   order, tamper-resistant listener bookkeeping, post-dispatch `once` registry
-  state, throwing transfer iterators, transfer targets, and
-  `ref`/`unref`/`hasRef` state.
+  state, non-function `onmessage` clearing, peer-close ref behavior, throwing
+  transfer iterators, transfer targets, and `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
-  and VM-context port movement.
+  and VM-context port movement with closed-port and argument validation.
 - `worker-lifecycle/`: constructor transfer validation, structured `workerData`,
   default and built-in workerData, MessagePort/ArrayBuffer transfer, environment
   snapshots, eval/CJS require, file URLs with Unicode names, argv and execArgv
@@ -75,8 +76,9 @@ that oracle.
   `online`/`message`/`error`/`exit` ordering, ref return values, natural exit,
   and deterministic repeated termination settlement, transferred workerData port
   methods, sequential `SHARE_ENV` sibling visibility, post-exit method safety,
-  indexed `SHARE_ENV` keys, eval syntax-error routing, and custom-stack and
-  non-Error serialization.
+  indexed `SHARE_ENV` keys, eval syntax-error routing, URL postMessage
+  rejection, exit-listener exception routing, and custom-stack and non-Error
+  serialization.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -84,7 +86,7 @@ that oracle.
 - `broadcast-channel/`: same-name fanout/FIFO isolation, sender exclusion,
   listener management/`once`, name coercion, close/ref idempotence, typed-array
   and SharedArrayBuffer cloning, untransferable-value rejection, and
-  closed-channel validation.
+  closed-channel and method-receiver validation.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
   the existing surface, option, query, callback settlement/cleanup,
   independent-name concurrency, and shared/exclusive ordering cases.
@@ -106,8 +108,9 @@ cases above or belong to a separate slow/risky runtime feature:
   introducing pressure or timing assertions.
 - Basic eval/CJS require, execArgv, file-URL construction, process restrictions,
   and exit codes are now covered. Data-URL/ESM/custom loaders, preload chains,
-  signals, inspector integration, beforeExit/uncaught-exception variants, and
-  source maps remain separate loader, CLI, or process-subsystem work.
+  signals, inspector integration, beforeExit and worker-side uncaught-exception
+  variants, and source maps remain separate loader, CLI, or process-subsystem
+  work.
 - One controlled nested worker now covers environment-data inheritance. Deeper
   nesting stress, GC/finalization of unreachable ports, shared native handles,
   large message loops, and termination races remain scheduler-sensitive.
@@ -125,8 +128,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `31/127`: all 17 pre-existing cases remain green,
-14 added cases pass, and 96 added cases expose stable diagnostic differences.
+The measured focused result is `31/134`: all 17 pre-existing cases remain green,
+14 added cases pass, and 103 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -142,15 +145,14 @@ visibility in `worker-lifecycle/share-env-siblings.ts` also passes. The
 indexed-key variant in `worker-lifecycle/share-env-indexed.ts` passes too. The
 diagnostic differences are:
 
-- All nine `structured-clone/` fixtures: Perry preserves some indexed values but
+- All ten `structured-clone/` fixtures: Perry preserves some indexed values but
   loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
   cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
-- Twenty-eight `message-port/` diagnostics: closing and dispatch flushing,
-  queued data/callbacks, NodeEventTarget surface, listener counts and
-  validation, receiver/options/iterables/transfers, MessageEvent construction
-  and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
-  state differ.
-- Thirty-seven `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Thirty `message-port/` diagnostics: closing and dispatch flushing, queued
+  data/callbacks, NodeEventTarget surface, listener counts and validation,
+  receiver/options/iterables/transfers, MessageEvent construction and `ports`,
+  duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
+- Thirty-nine `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
@@ -159,10 +161,10 @@ diagnostic differences are:
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
-- Five `broadcast-channel/` diagnostics: name coercion, once listeners,
-  close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
-  MessagePort validation, and closed-channel posts differ.
-- Twelve additional diagnostics cover namespace/prototype completeness,
+- Six `broadcast-channel/` diagnostics: name coercion, once listeners, close/ref
+  behavior, typed-array/SharedArrayBuffer branding and sharing, MessagePort
+  validation, and closed-channel posts differ.
+- Thirteen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
   construction, direct-message argument validation, and Web Locks callback
   rejection cleanup.
@@ -176,10 +178,12 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `31/127 (24.4%), diff=96`, with no compile failures or timeouts. The
-SharedArrayBuffer/Atomics boundary is backed by the added same-process channel
-and cross-worker clone/alias cases plus the existing granular
-`globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
+It reported `31/134 (23.1%), diff=103`, with no compile failures or timeouts.
+The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
+Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
+terminates cleanly. The SharedArrayBuffer/Atomics boundary is backed by the
+added same-process channel and cross-worker clone/alias cases plus the existing
+granular `globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
 `util/types/arraybuffer-sharedarraybuffer.ts` cases; cross-agent fixtures such
 as Node's `test-worker-message-channel-sharedarraybuffer.js` and Deno's
 `broadcast_channel_sab.mjs` remain outside this messaging-focused batch. A
