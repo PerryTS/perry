@@ -80,7 +80,11 @@ matching `lifecycle/` validation, state, and execution cases;
 `test-return-on-exit.js` to the three `return-on-exit-*` cases plus
 patched-import rethrow; `test-wasi-not-started.js` to
 `imports/syscall-before-start.ts`; and `test-wasi-main_args.js` to
-`semantics/args-exposure.ts`.
+`semantics/args-exposure.ts`. The portable parts of `test-wasi-clock_getres.js`,
+and `test-wasi-gettimeofday.js` map to `semantics/clock-random.ts`, which checks
+both realtime and monotonic clock success with positive-value predicates. That
+fixture limits random coverage to the deterministic zero-length no-write
+boundary; it does not claim Node's nonzero `test-wasi-getentropy.js` behavior.
 
 ## Measured result and stopping evidence
 
@@ -111,6 +115,10 @@ platform-specific errno or error text, actual entropy/time values, large or
 concurrent modules, permissions/locking, symlink escape, signals,
 GC/finalization, worker termination, and stress. Those require separate
 WASI/runtime/compiler work and would be redundant or less diagnostic here.
+Node's explicit cross-realm `WebAssembly.Instance` validation case is not a
+separate fixture: current `lib/wasi.js` validates the instance structurally and
+brands only its memory, so `lifecycle/cross-realm-memory.ts` exercises the
+distinct cross-realm WASI contract without duplicating the same Perry failure.
 
 ## Verification
 
