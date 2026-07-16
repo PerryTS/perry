@@ -46,3 +46,48 @@ report("spawnSync argv0 number", () =>
 report("fork serialization invalid", () =>
   fork("unused.js", [], { serialization: "other" as any }),
 );
+
+for (const value of [0, true, "arg", {}]) {
+  report(`fork args ${String(value)}`, () => fork("unused.js", value as any));
+}
+for (const value of [0, true, "options", []]) {
+  report(`fork options ${String(value)}`, () =>
+    fork("unused.js", [], value as any),
+  );
+}
+
+report("spawn stdio string", () =>
+  spawn("node", [], { stdio: "other" as any }),
+);
+report("spawn stdio number", () => spawn("node", [], { stdio: 600 as any }));
+report("spawn stdio entry", () =>
+  spawn("node", [], { stdio: ["other"] as any }),
+);
+report("spawn stdio object", () => spawn("node", [], { stdio: [{}] as any }));
+report("spawn two ipc", () =>
+  spawn("node", [], {
+    stdio: ["ignore", "ignore", "ignore", "ipc", "ipc"],
+  }),
+);
+report("spawnSync ipc", () =>
+  spawnSync("node", [], {
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  }),
+);
+
+const killChild = spawn("node", ["-e", "setInterval(() => {}, 1000)"], {
+  stdio: "ignore",
+});
+function reportKill(label: string, signal: any) {
+  try {
+    console.log(`${label}:`, killChild.kill(signal));
+  } catch (error: any) {
+    console.log(`${label}:`, error?.constructor?.name, error?.code);
+  }
+}
+reportKill("kill unknown name", "NOT_A_SIGNAL");
+reportKill("kill zero", 0);
+reportKill("kill fraction", 3.14);
+reportKill("kill object", {});
+console.log("kill cleanup:", killChild.kill());
+await new Promise((resolve) => killChild.on("close", resolve));

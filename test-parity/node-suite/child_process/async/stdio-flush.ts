@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 
 function collect(
-  child: any,
+  child: ChildProcessWithoutNullStreams,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const stdout: Buffer[] = [];

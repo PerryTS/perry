@@ -17,7 +17,12 @@ writeFileSync(
     "array: Array.isArray(message.items) ? message.items.join('|') : '',",
     "buffer: Buffer.isBuffer(message.buffer) ? message.buffer.toString('hex') : '',",
     "map: message.map instanceof Map ? Array.from(message.map.entries()).join('|') : '',",
+    "set: message.set instanceof Set ? Array.from(message.set.values()).join('|') : '',",
+    "date: message.date instanceof Date ? message.date.toISOString() : '',",
+    "regexp: message.regexp instanceof RegExp ? message.regexp.toString() : '',",
+    "uint16: message.uint16 instanceof Uint16Array ? Array.from(message.uint16).join('|') : '',",
     "bigint: typeof message.bigint === 'bigint' ? String(message.bigint) : '',",
+    "error: message.error instanceof TypeError ? message.error.message : '',",
     "};",
     "process.send(summary, () => process.disconnect());",
     "});",
@@ -53,7 +58,12 @@ try {
     items: ["b", 3, false],
     buffer: Buffer.from([0, 127, 255]),
     map: new Map([["key", "value"]]),
+    set: new Set(["first", "second"]),
+    date: new Date("2020-01-02T03:04:05.000Z"),
+    regexp: /child-process/gi,
+    uint16: new Uint16Array([1, 256, 65535]),
     bigint: 9007199254740993n,
+    error: new TypeError("advanced-error"),
   });
 } finally {
   rmSync(helper, { force: true });

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ const cwd = join(tmpdir(), `perry-child-process-async-${process.pid}`);
 mkdirSync(cwd);
 const expectedCwd = realpathSync(cwd);
 
-function close(child: any): Promise<number | null> {
+function close(child: ChildProcess): Promise<number | null> {
   return new Promise((resolve) => child.on("close", resolve));
 }
 
