@@ -55,11 +55,16 @@ constructor validation, closed-port `DOMException` branding, VM-context
 FileHandle deserialization failure, and orphaned FileHandle ownership/rollback.
 Deno's ordered listener and unref delivery selections and Bun's invalid-name
 FileHandle rollback regression provide independent coverage for the same
-lifecycle boundaries.
+lifecycle boundaries. The latest audit adds Node's worker-created buffer
+lifetime, post-exit diagnostics, CPU-usage validation, process-environment
+descriptors, and code-after-`process.exit()` contracts; Node's BroadcastChannel
+WPT event metadata; and Bun's nested Map/Set FileHandle transfer regression. A
+reverse worker-created MessagePort case closes the remaining deterministic
+ownership direction without relying on scheduler timing.
 
-The inventory review covered all 148 current `test-worker-*` files across Node's
+The inventory review covered all 146 current `test-worker-*` files across Node's
 parallel and sequential directories, all 48 cases in Deno's unit selection plus
-its directory fixtures, and 82 declarations across Bun's current
+its directory fixtures, and 88 `test`/`it` declarations across Bun's current
 `worker_threads/*.test.ts` files. Cases are represented here by observable
 contract rather than copied one-for-one when several upstream files exercise the
 same behavior.
@@ -112,7 +117,9 @@ that oracle.
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement with cross-realm branding, closed-port, argument
   validation, and FileHandle deserialization failure routing through
-  `messageerror`.
+  `messageerror`. Worker-created MessagePorts are also drained synchronously
+  after the creating worker exits, proving queued data and ownership survive the
+  source realm.
 - `worker-lifecycle/`: constructor transfer validation, structured `workerData`,
   default and built-in workerData, MessagePort/ArrayBuffer transfer, environment
   snapshots, eval/CJS require, file URLs with Unicode names, argv and execArgv
@@ -140,7 +147,11 @@ that oracle.
   disjoint/founder `SHARE_ENV` spawning-tree semantics, regular-worker
   `isInternalThread` state, URL/eval rejection, constructor option-validation
   precedence with transfer ownership, and referenced/unreferenced FileHandle
-  construction ownership and rollback.
+  construction ownership and rollback. Reverse worker-created
+  ArrayBuffer/SharedArrayBuffer lifetime, process-environment descriptor rules,
+  post-exit diagnostic behavior, CPU-usage argument validation, Map/Set-nested
+  FileHandle traversal, and the hard boundary after `process.exit()` are covered
+  with exit or termination barriers.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -149,9 +160,9 @@ that oracle.
   listener management/`once`, `onmessage` replacement, name coercion, close/ref
   idempotence, typed-array and SharedArrayBuffer cloning, untransferable-value
   rejection, missing-message validation, clone-versus-closed error precedence,
-  closed-channel and method-receiver validation, custom inspection, channel
-  creation during dispatch, and suppression of delivery already queued for a
-  channel that closes.
+  closed-channel and method-receiver validation, custom inspection, complete
+  MessageEvent metadata, channel creation during dispatch, and suppression of
+  delivery already queued for a channel that closes.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
   the existing surface, option, query, callback settlement/cleanup,
   independent-name concurrency, and shared/exclusive ordering cases.
@@ -170,8 +181,9 @@ cases above or belong to a separate slow/risky runtime feature:
 
 - Resource-limit enforcement, stdio backpressure/large-write timing, heap
   snapshots, and CPU/heap profiling are resource- and platform-sensitive. Basic
-  resource-limit metadata/reset, captured stdout/stderr, and the diagnostic
-  method surface are covered without introducing pressure or timing assertions.
+  resource-limit metadata/reset, captured stdout/stderr, CPU-usage validation,
+  and live/post-exit diagnostic method behavior are covered without introducing
+  pressure or timing assertions.
 - Basic eval/CJS require, execArgv, file-URL construction, synchronous URL/eval
   rejection, process restrictions, and exit codes are now covered.
   Data-URL/ESM/custom loaders, preload chains, signals, inspector integration,
@@ -238,8 +250,8 @@ cases above or belong to a separate slow/risky runtime feature:
   subcontracts are covered through peer-close ordering and unrefed delivery
   without adding timeout-based completion.
 
-The measured focused result is `37/197`: all 17 pre-existing cases remain green,
-20 added cases pass, and 160 added cases expose stable diagnostic differences.
+The measured focused result is `38/205`: all 17 pre-existing cases remain green,
+21 added cases pass, and 167 added cases expose stable diagnostic differences.
 The prior ten cases were each repeated three times under Node 26.5.0 and Perry
 with stable output and exit status. Deno 2.9.2 was stable across the same
 matrix. Bun 1.2.18 was stable for nine cases; its older orphaned-transfer
@@ -258,7 +270,10 @@ founder preservation. The latest ten cases were likewise repeated three times
 under Node 26.5.0, Perry, Deno 2.9.2, and Bun 1.2.18. Bun's older unrefed-port
 implementation retained the external six-second comparison process in all three
 runs; every retained Node/Perry case completed through an explicit event or exit
-barrier.
+barrier. The latest eight cases and strengthened workerData built-in fixture
+were also stable in three runs under all four runtimes. Bun 1.2.18 emits an
+expected not-implemented warning for Worker performance; all retained processes
+terminate without an external comparison timeout.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -280,8 +295,9 @@ also proven not to reappear through the event listener in
 `message-port/receive-consumes-event.ts`. Passing `process.env` directly as a
 Worker environment option is also covered by
 `worker-lifecycle/process-env-option.ts`. Explicit-env `SHARE_ENV` founder
-preservation in `worker-lifecycle/share-env-founder.ts` passes too. The
-diagnostic differences are:
+preservation in `worker-lifecycle/share-env-founder.ts` passes too. Worker
+CPU-usage argument validation in `worker-lifecycle/cpu-usage-validation.ts` also
+matches Node. The diagnostic differences are:
 
 - All thirteen `structured-clone/` fixtures: Perry preserves some indexed values
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
@@ -294,7 +310,7 @@ diagnostic differences are:
   custom inspection differ, as do `.on()` deduplication, pending synchronous
   receives, queued peer-close ordering, orphaned transfers, Event brands, and
   listener alias behavior after closure.
-- Sixty-five `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Seventy-one `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
@@ -308,9 +324,10 @@ diagnostic differences are:
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
-- Eleven `broadcast-channel/` diagnostics: name coercion, once listeners,
+- Twelve `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
-  MessagePort validation, closed-channel posts, and custom inspection differ.
+  MessagePort validation, closed-channel posts, custom inspection, and complete
+  MessageEvent metadata differ.
 - Eighteen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
   construction/callability and VM-context branding, direct-message argument
@@ -325,7 +342,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `37/197 (18.8%), diff=160`, with no compile failures or timeouts.
+It reported `38/205 (18.5%), diff=167`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. Cyclic `workerData` construction also consistently exits by
