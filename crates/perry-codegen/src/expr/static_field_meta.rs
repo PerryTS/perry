@@ -395,6 +395,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // class_id from this object rather than treating it as an instance.
             ctx.block()
                 .call_void("js_object_mark_class", &[(I64, &obj)]);
+            // #6438: pin THIS evaluation's parent onto the object. The lowering
+            // sequences `RegisterClassParentDynamic` immediately ahead of this
+            // node, so `CLASS_DYNAMIC_PARENT_VALUE[template]` still holds this
+            // evaluation's parent; later evaluations overwrite it, but each
+            // object keeps its own edge. Without this, a factory invoked more
+            // than once (effect's `class DeclareClass extends make(ast) { … }`)
+            // has every instance walk to the LAST parent — reading that
+            // evaluation's `static ast` instead of its own. No-op when the class
+            // expression has no heritage.
+            ctx.block().call_void(
+                "js_class_object_pin_parent",
+                &[(I64, &obj), (I32, &tcid_str)],
+            );
             for (name, init) in named_statics {
                 let key_idx = ctx.strings.intern(name);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);

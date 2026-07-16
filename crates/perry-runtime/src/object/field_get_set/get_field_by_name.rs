@@ -258,6 +258,46 @@ pub extern "C" fn js_object_get_field_by_name(
                 }
             }
         }
+        // #6438: static FIELD inheritance for a per-evaluation class object.
+        // Own fields and the registry (static methods / accessors, keyed by the
+        // TEMPLATE class id) are handled above; a static field owned by the
+        // PARENT was not, so `child.parentStaticField` read undefined.
+        //
+        // The parent edge must come from this object's OWN pinned parent
+        // (`js_class_object_pin_parent`), never `CLASS_DYNAMIC_PARENT_VALUE` —
+        // that table is template-keyed and last-wins, so with a factory invoked
+        // repeatedly (effect's `class DeclareClass extends make(ast) { … }`)
+        // every evaluation would walk to the LAST parent and read the wrong
+        // `static ast`. Recursing through the ordinary by-name read gives the
+        // parent's own fields, its registry statics, and — transitively — its
+        // own pinned parent, so a multi-level factory chain resolves correctly.
+        if own.is_undefined() {
+            if let Some(parent) =
+                super::super::class_registry::class_object_pinned_parent(obj as *const ObjectHeader)
+            {
+                let pbits = parent.to_bits();
+                // ONLY a POINTER-tagged heap class object is walked here. The
+                // pinned value can also be an INT32-tagged ClassRef (0x7FFE) —
+                // `js_get_dynamic_parent_value` falls back to one when no
+                // dynamic value was stashed — and a ClassRef's payload is a
+                // class id, NOT an address: casting it to `*mut ObjectHeader`
+                // and reading it segfaults. Class-ref parents already resolve
+                // through the registry's class-id chain above, so skipping them
+                // here loses nothing.
+                if (pbits >> 48) == 0x7FFD {
+                    let praw = (pbits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+                    if praw as usize != obj as usize
+                        && crate::value::addr_class::is_above_handle_band(praw as usize)
+                        && crate::object::is_valid_obj_ptr(praw as *const u8)
+                    {
+                        let v = js_object_get_field_by_name(praw, key);
+                        if !v.is_undefined() {
+                            return v;
+                        }
+                    }
+                }
+            }
+        }
         return own;
     }
     if let Some(addr) =

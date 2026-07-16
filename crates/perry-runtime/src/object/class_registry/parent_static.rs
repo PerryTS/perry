@@ -199,6 +199,97 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     }
 }
 
+/// Own-property key under which a per-evaluation class object
+/// (`ClassExprFresh`) pins ITS OWN parent class value. See
+/// `js_class_object_pin_parent`.
+pub(crate) const CLASS_OBJECT_PARENT_KEY: &str = "__perry_parent_class";
+
+/// #6438: pin THIS evaluation's parent onto a per-evaluation class object.
+///
+/// `CLASS_DYNAMIC_PARENT_VALUE` is keyed by the child's **class id**, i.e. by
+/// the compile-time template — so a class expression evaluated N times with a
+/// DIFFERENT parent each time (effect's
+/// `class DeclareClass extends make(ast) { … }`, where `make(ast)` returns a
+/// fresh class per call) collapses to last-wins: every DeclareClass would walk
+/// to the LAST `make(ast)` and read that evaluation's `static ast`.
+///
+/// Codegen calls this immediately after `RegisterClassParentDynamic` in the
+/// same lowered Sequence, so the table still holds *this* evaluation's parent.
+/// Copy it onto the class object as an own property; later evaluations
+/// overwrite the table but each object already carries its own edge. Same
+/// write-right-before-use shape the capture snapshot already uses.
+///
+/// A no-parent class expression pins nothing (the getter yields undefined or a
+/// static ClassRef fallback, which the field walk treats as "no own edge").
+#[no_mangle]
+pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if obj == 0 || template_class_id == 0 {
+        return;
+    }
+    let parent = js_get_dynamic_parent_value(template_class_id);
+    if parent.to_bits() == TAG_UNDEFINED {
+        return;
+    }
+    let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    crate::object::js_object_set_field_by_name(
+        obj as *mut crate::object::ObjectHeader,
+        key,
+        parent,
+    );
+}
+
+/// Read back the parent pinned by `js_class_object_pin_parent`, or `None` when
+/// this class object has no own parent edge.
+///
+/// Scans the keys array DIRECTLY rather than going through the by-name read
+/// path: that path consults the pinned parent itself (that is the whole point
+/// of the edge), so reading the marker through it re-enters this function and
+/// recurses until the stack guard page — an immediate SIGSEGV. A re-entrancy
+/// flag is not an option either: it would abort the legitimate
+/// parent→grandparent walk of a multi-level factory chain. An own-only scan has
+/// neither problem, and it is cheap: the pinned key sits among a handful of own
+/// statics on a class object.
+pub(crate) fn class_object_pinned_parent(obj: *const crate::object::ObjectHeader) -> Option<f64> {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if obj.is_null() || !crate::object::is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    unsafe {
+        let keys = (*obj).keys_array;
+        if keys.is_null() {
+            return None;
+        }
+        let want = CLASS_OBJECT_PARENT_KEY.as_bytes();
+        let len = (*keys).length;
+        for i in 0..len {
+            let k = crate::array::js_array_get_f64(keys, i);
+            let sp = crate::value::js_get_string_pointer_unified(k) as *const crate::StringHeader;
+            if sp.is_null() {
+                continue;
+            }
+            let blen = (*sp).byte_len as usize;
+            if blen != want.len() {
+                continue;
+            }
+            let bytes = std::slice::from_raw_parts(
+                (sp as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                blen,
+            );
+            if bytes != want {
+                continue;
+            }
+            let v = crate::object::js_object_get_field(obj, i);
+            if v.bits() == TAG_UNDEFINED {
+                return None;
+            }
+            return Some(f64::from_bits(v.bits()));
+        }
+    }
+    None
+}
+
 /// Read back the parent constructor value stashed at class-definition time by
 /// `js_register_class_parent_dynamic` (see `CLASS_DYNAMIC_PARENT_VALUE`).
 /// `super()` in a `class X extends <runtime-value>` body uses this so the
