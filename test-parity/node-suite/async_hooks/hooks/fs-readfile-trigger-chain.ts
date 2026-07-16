@@ -1,7 +1,9 @@
 import { createHook, executionAsyncId } from "node:async_hooks";
 import { readFile, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const path = "/tmp/perry-async-hooks-readfile-chain.txt";
+const path = join(tmpdir(), "perry-async-hooks-readfile-chain.txt");
 rmSync(path, { force: true });
 writeFileSync(path, "read-file-chain");
 const parentId = executionAsyncId();
