@@ -1762,7 +1762,24 @@ fn lower_new_impl(
                 // to match the symbol's real signature (see codegen/mod.rs).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                // new.target cross-module: the imported ctor symbol is compiled
+                // in its SOURCE module and reads `new.target` from the runtime
+                // cell, NOT this module's codegen `new_target_stack` slot. Bind
+                // the cell to the LEAF class ref around the call so an ancestor
+                // ctor (e.g. Auth.js `AuthError`'s `this.type = new.target.type`)
+                // sees the class being constructed instead of a stale/undefined
+                // value. Without this, `new CredentialsSignin()` from another
+                // chunk threw `Cannot read properties of undefined (reading
+                // 'type')`, or silently set `type = undefined` → the auth error
+                // was mis-categorized and the login redirect fell back to
+                // `?error=Configuration`.
+                let nt_prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+                let nt_ref = double_literal(f64::from_bits(new_target_bits));
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_ref)]);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_prev)]);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers, and pack the rest
@@ -1788,7 +1805,16 @@ fn lower_new_impl(
                 // ("value is not a function" on `new Chalk(...).red(...)`).
                 ctx.pending_declares
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                // new.target cross-module: bind the runtime cell to the leaf
+                // class ref around the imported ctor call (see the ANCESTOR arm
+                // above for why). This is the direct `new ImportedClass()` case.
+                let nt_prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+                let nt_ref = double_literal(f64::from_bits(new_target_bits));
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_ref)]);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &nt_prev)]);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
                 found_inherited_ctor = true;
             }

@@ -505,6 +505,34 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_event_emitter_set_max_listeners",          OwnerKind::WellKnown("events")),
     ("js_event_emitter_get_max_listeners",          OwnerKind::WellKnown("events")),
     ("js_event_emitter_domain_value",               OwnerKind::WellKnown("events")),
+
+    // ── mysql2 (perry-ext-mysql2) ────────────────────────────────────
+    // Normally `import "mysql2"` flips the `[bindings.mysql2]` well-known
+    // and links perry-ext-mysql2. But a bundler (webpack/turbopack) inlines
+    // mysql2 under a NUMERIC module id, so there is no bare import for perry
+    // to see — and JS mysql2 JIT-compiles its row parsers with `new Function`
+    // (via `generate-function`), which an AOT binary cannot execute. The HIR
+    // pass in `perry-hir`'s native-module lowering recognizes a bundled
+    // `createPool`/`createConnection` by its mysql2 config-object signature
+    // and emits these FFIs directly, WITHOUT adding "mysql2" to the import
+    // set. Tag them here so the well-known flip fires off codegen provenance
+    // — same mechanism as the http/net/events rows above — and the staticlib
+    // joins the link line instead of leaving `_js_mysql2_*` undefined.
+    ("js_mysql2_create_pool",                       OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_create_connection",                 OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_query",                        OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_execute",                      OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_get_connection",               OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_end",                          OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_connection_query",             OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_connection_execute",           OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_pool_connection_release",           OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_connection_query",                  OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_connection_execute",                OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_connection_begin_transaction",      OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_connection_commit",                 OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_connection_rollback",               OwnerKind::WellKnown("mysql2")),
+    ("js_mysql2_connection_end",                    OwnerKind::WellKnown("mysql2")),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.

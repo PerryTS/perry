@@ -229,66 +229,38 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
 
     // A Web Fetch / zlib handle-band value (Headers/Request/Response, zlib
     // streams) at or above the fetch band is a registry id, not a heap object —
-    // the pointer paths below would dereference the id and segfault, so this
-    // arm must resolve `key in <handle>` on its own and return.
-    //
-    // #6363: it used to report a flat `false`. That was a guard, not a route:
-    // a handle DOES have own properties — anything the user attached, via
-    // `handle.foo = v` or `Object.defineProperty(handle, …)` — and it has the
-    // typed native surface (`"status" in response`) on top. `hasOwnProperty`
-    // reports both, so a bare `false` here had `in` contradicting it. Answer
-    // from the expando table first (authoritative for own properties, and it
-    // sees a `{ value: undefined }` define that a [[Get]] probe cannot
-    // distinguish from absent), then fall back to the property dispatcher for
-    // the typed surface — which is exactly what the common/small-handle band
-    // already does further down this function.
+    // the pointer paths below would dereference the id and segfault. A blanket
+    // `false` was wrong, though: a `Request`/`Response` DOES have `body` /
+    // `method` / `url` / `headers` / … properties. Auth.js's request-body parser
+    // gates on `"body" in request` (`if(!("body" in e) || !e.body …) return`),
+    // so reporting `false` made it skip parsing the credentials POST body — the
+    // `csrfToken` field never reached the CSRF check and every login failed with
+    // `MissingCSRF`. Delegate a STRING key to the same handle property dispatcher
+    // that property *reads* use (safe for these ids — no heap deref): the
+    // property exists if it resolves to a non-undefined value. A symbol key has
+    // no own-property meaning on these handles, so it still reports `false`.
+    // Common/small handles (below the fetch band) are intentionally NOT caught
+    // here: they fall through to the registered small-handle property path later
+    // in this function.
     if obj_val.is_pointer() {
         let addr = (obj_val.bits() & crate::value::POINTER_MASK) as usize;
-        // A Buffer is an ordinary Uint8Array in Node, so `"k" in buf` must see both
-        // the own properties user code hangs on it and the inherited
-        // `Buffer.prototype` methods. Perry keeps buffers outside the object model
-        // (a raw `BufferHeader`), so the generic pointer path below reads the header
-        // as an `ObjectHeader` and reported `false` for both.
-        if crate::buffer::is_registered_buffer(addr) {
-            if let Some(name) = unsafe { crate::object::metadata_key_to_string(key) } {
-                if crate::buffer::buffer_get_own_prop(addr, &name).is_some()
-                    || crate::object::buffer_dispatch::is_buffer_method_name(&name)
-                {
-                    return nanbox_true;
-                }
-                // A numeric key is an index into the bytes: present iff in range.
-                if let Ok(idx) = name.parse::<usize>() {
-                    let len = unsafe { (*(addr as *const crate::buffer::BufferHeader)).length };
-                    return if idx < len as usize {
-                        nanbox_true
-                    } else {
-                        nanbox_false
-                    };
-                }
-                return nanbox_false;
-            }
-        }
         if addr >= crate::value::addr_class::COMMON_HANDLE_BAND_END
             && crate::value::addr_class::is_handle_band(addr)
         {
-            if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-                return if unsafe { crate::symbol::js_object_has_own_symbol(obj, key) } {
-                    nanbox_true
-                } else {
-                    nanbox_false
-                };
-            }
-            if let Some(name) = unsafe { crate::object::metadata_key_to_string(key) } {
-                if crate::object::handle_expando::handle_expando_has(addr as i64, &name) {
-                    return nanbox_true;
-                }
+            if key_val.is_any_string() {
                 if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
-                    let found = unsafe {
-                        dispatch(addr as i64, name.as_ptr(), name.len()).to_bits()
-                            != crate::value::TAG_UNDEFINED
-                    };
-                    if found {
-                        return nanbox_true;
+                    unsafe {
+                        let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                            as *const crate::StringHeader;
+                        if !key_ptr.is_null() {
+                            let name_ptr = (key_ptr as *const u8)
+                                .add(std::mem::size_of::<crate::StringHeader>());
+                            let name_len = (*key_ptr).byte_len as usize;
+                            let result = dispatch(addr as i64, name_ptr, name_len);
+                            if result.to_bits() != crate::value::TAG_UNDEFINED {
+                                return nanbox_true;
+                            }
+                        }
                     }
                 }
             }
@@ -406,6 +378,37 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     }
 
     let obj_addr = obj_val.bits() & 0x0000_FFFF_FFFF_FFFF;
+
+    // A `class X extends Request/Response` instance is a heap object whose native
+    // members (`body`/`method`/`url`/`headers`/…) live on an underlying fetch
+    // handle, not the JS prototype chain — property *reads* forward through the
+    // stashed `__perry_fetch_handle__`. The `in` operator must forward too, or
+    // `"body" in <Request subclass>` is `false`. Next.js's `NextRequest` extends
+    // `Request`, and Auth.js gates request-body parsing on `"body" in request`
+    // (`if(!("body" in e) || …) return`), so without this the credentials POST
+    // body was never parsed and every login failed with `MissingCSRF`. Only a
+    // STRING key forwards (native members are string-keyed); a miss falls through
+    // to the generic own-property scan below so real expandos still resolve.
+    if key_val.is_any_string() {
+        if let Some(handle_id) = unsafe { super::fetch_subclass_handle_id(obj_addr as usize) } {
+            if let Some(dispatch) = super::super::class_registry::handle_property_dispatch() {
+                unsafe {
+                    let key_ptr = crate::value::js_get_string_pointer_unified(key)
+                        as *const crate::StringHeader;
+                    if !key_ptr.is_null() {
+                        let name_ptr =
+                            (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key_ptr).byte_len as usize;
+                        let result = dispatch(handle_id, name_ptr, name_len);
+                        if result.to_bits() != crate::value::TAG_UNDEFINED {
+                            return nanbox_true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Date / RegExp / Error exotic instances: own expando props + builtin
     // slots + prototype methods. The generic pointer path below would
     // bit-cast the cell as an `ObjectHeader`.
@@ -541,14 +544,25 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     // prototype members (`subarray`, `map`, `join`, `toString`, …)
                     // count. `typed_array_prototype_chain_has` builds the shared
                     // prototype intrinsic on demand, so this is order-independent
-                    // (#6164). Buffer-specific `Buffer.prototype` methods
-                    // (`readUInt8`, …) are not covered here.
+                    // (#6164).
                     if unsafe {
                         crate::typedarray_props::typed_array_prototype_chain_has(
                             obj_addr as usize,
                             name,
                         )
                     } {
+                        return nanbox_true;
+                    }
+                    // #6406: the Buffer-specific surface the %TypedArray% chain
+                    // above does NOT cover — a user own-property (`buf.foo = v`)
+                    // and the `Buffer.prototype` methods (`readUInt8`,
+                    // `writeInt8`, …). Perry keeps buffers outside the object
+                    // model, so both live in the buffer side tables, not on a
+                    // prototype the chain scan can reach. Without this,
+                    // `"writeInt8" in buf` and `"foo" in buf` reported false.
+                    if crate::buffer::buffer_get_own_prop(obj_addr as usize, name).is_some()
+                        || crate::object::buffer_dispatch::is_buffer_method_name(name)
+                    {
                         return nanbox_true;
                     }
                 }
