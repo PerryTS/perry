@@ -18,9 +18,9 @@ layer. The suite has 45 focused fixtures in five groups:
   behavior, patched-import errors, real wasm instance shape, imported-function
   linking, failure-state transitions, explicit-memory override and option
   validation, and cross-realm memory acceptance.
-- `semantics/` (4): UTF-8 argument/environment encoding and constructor-time
-  snapshots, plus predicate-only clock and zero-length random behavior. No
-  random bytes or wall-clock values are compared.
+- `semantics/` (4): UTF-8 argument/environment encoding, constructor-time
+  snapshots, and empty defaults, plus predicate-only clock and zero-length
+  random behavior. No random bytes or wall-clock values are compared.
 
 The fixtures use `const W: any = WASI; new W(...)` intentionally. Perry's typed
 `new WASI(...)` path currently bypasses the native WASI constructor, which is a
@@ -103,7 +103,12 @@ only for the separately excluded pthread harness. Generic invalid
 lifecycle entry methods and are not duplicated for `finalizeBindings()`. Node's
 eager `Array.prototype.map`/`Object.entries` copies in `lib/wasi.js` map to
 `semantics/options-snapshot.ts`; Deno matches those snapshots, while Bun's
-current implementation retains both caller-owned inputs by reference.
+current implementation retains both caller-owned inputs by reference. The same
+fixture verifies that omitted args/env report zero count and byte size through
+the two `*_sizes_get` calls. It intentionally skips `*_get` for empty lists:
+Node 26 passes an empty native vector to uvwasi and returns `EINVAL`, while Deno
+and Bun return success, an implementation-specific errno edge rather than the
+portable documented default.
 
 ## Measured result and stopping evidence
 
