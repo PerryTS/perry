@@ -252,6 +252,22 @@ pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
 /// neither problem, and it is cheap: the pinned key sits among a handful of own
 /// statics on a class object.
 pub(crate) fn class_object_pinned_parent(obj: *const crate::object::ObjectHeader) -> Option<f64> {
+    class_object_own_field_bytes(obj, CLASS_OBJECT_PARENT_KEY.as_bytes())
+}
+
+/// OWN-ONLY field read on a class object: scans the keys array directly and
+/// consults no prototype chain, no registry, and no pinned parent.
+///
+/// Needed because `get_field_by_name_object_tail` folds the own lookup together
+/// with a class_id-keyed prototype-chain walk. For a per-evaluation class object
+/// that chain resolves through the TEMPLATE's parent edge — which is last-wins —
+/// so it answers with a sibling evaluation's inherited value instead of this
+/// object's. Callers that must order "own, then MY pinned parent, then the
+/// generic tail" need the own half in isolation.
+pub(crate) fn class_object_own_field_bytes(
+    obj: *const crate::object::ObjectHeader,
+    want: &[u8],
+) -> Option<f64> {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     if obj.is_null() || !crate::object::is_valid_obj_ptr(obj as *const u8) {
         return None;
@@ -261,7 +277,6 @@ pub(crate) fn class_object_pinned_parent(obj: *const crate::object::ObjectHeader
         if keys.is_null() {
             return None;
         }
-        let want = CLASS_OBJECT_PARENT_KEY.as_bytes();
         let len = (*keys).length;
         for i in 0..len {
             let k = crate::array::js_array_get_f64(keys, i);
