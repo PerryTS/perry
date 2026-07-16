@@ -21,7 +21,17 @@ const wasi = new W({
 });
 const memory: any = createMemory();
 const instance: any = { exports: { memory } };
-wasi.initialize(instance);
+let binding: string;
+if (typeof wasi.initialize === "function") {
+  wasi.initialize(instance);
+  binding = "initialize";
+} else if (typeof wasi.start === "function") {
+  wasi.start(instance, memory);
+  binding = "start-memory";
+} else {
+  binding = "unavailable";
+}
+console.log("binding:", binding);
 
 const hasBuffer = typeof memory.buffer === "object";
 console.log("memory buffer:", hasBuffer);

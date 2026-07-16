@@ -102,7 +102,15 @@ Coverage was compared against primary sources at these revisions:
   remain visible, does not omit undefined env values, and retains payload bytes
   after embedded NULs like Deno; Node 26.5.0 truncates each native
   argument/environment string at its first NUL and remains the oracle. Bun does
-  support ordinary WASI subclass construction.
+  support ordinary WASI subclass construction. The args/env/clock semantic
+  fixtures use Bun's existing optional-memory `start(instance, memory)` only
+  when the standard `initialize()` helper is absent, allowing its import
+  behavior to be compared without changing the Node/Deno/Perry path. Bun's
+  numeric/non-string args fail during `args_sizes_get`, and its two
+  `clock_res_get` calls throw while time calls succeed. Its zero-length
+  `random_get` returns success but changes the guarded eight-byte range, unlike
+  Node and Deno; the thrown outcomes are normalized by name/code rather than
+  engine text.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
@@ -169,8 +177,14 @@ With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
 host archive, focused runs were stable at **17/50**, with **33 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
 `globals,wasi` run completed at **129/170** (`globals` 112/120 and `wasi`
-17/50), also without compile failures or timeouts. The stable mismatch families
-are:
+17/50), also without compile failures or timeouts.
+
+An independent bounded sweep of all fixtures completed under Deno with 49
+status-0 results and the one intentional status-7 exit, and under Bun with 47
+status-0 results and the three intentional status-7 exits. Neither sweep had a
+timeout or another nonzero result.
+
+The stable mismatch families are:
 
 - module namespace, descriptor/enumerability (including an enumerable,
   configurable, writable constructor `prototype` property), and
