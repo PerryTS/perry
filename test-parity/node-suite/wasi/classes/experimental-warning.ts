@@ -8,7 +8,13 @@ process.on("warning", (warning: any) => {
   }
 });
 
-await import("node:wasi");
+const module = await import("node:wasi");
 await import("node:wasi");
 await new Promise<void>((resolve) => setImmediate(resolve));
-console.log("normalized WASI warnings:", matches);
+console.log("after import:", matches);
+
+const W: any = module.WASI;
+new W({ version: "preview1" });
+new W({ version: "preview1" });
+await new Promise<void>((resolve) => setImmediate(resolve));
+console.log("after construction:", matches);

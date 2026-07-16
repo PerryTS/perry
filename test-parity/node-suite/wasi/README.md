@@ -5,8 +5,9 @@ layer. The suite has 51 focused fixtures in five groups:
 
 - `classes/` (6): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, ordinary subclass construction, call-without-`new`, and a
-  warning-event assertion that normalizes the experimental warning to a count
-  rather than comparing PID or stderr text.
+  warning-event assertion that separates import-time from construction-time
+  emission and normalizes each phase to a count rather than comparing PID or
+  stderr text.
 - `constructor/` (7): options/version, args, env, preopens, stdio descriptors,
   `returnOnExit` validation, and observable option-property access order.
   Preopens stop at type/empty-object validation; no host path is opened.
@@ -83,13 +84,16 @@ Coverage was compared against primary sources at these revisions:
   snapshots, but stringifies undefined env values instead of omitting them. The
   portable version, namespace, lifecycle, args/env, import-surface,
   finalization, and warning cases selected by Deno are represented here. Its
-  mixed coercion case is split deliberately: its args/env assertions are
-  represented, but its non-empty preopen object coercion is not. That preopen
-  portion, the standalone preopen case, and hello-world `fd_write` cross the
-  host-fd boundary. Its getter-only `wasiImport` rejects replacement while
-  `getImportObject()` continues to expose the original object. Its JavaScript
-  wrappers check memory before syscall arguments and otherwise defer to op
-  coercion, unlike Node's native arity/type-first validation.
+  warning is constructor-triggered (`0` after import, `1` after two
+  constructions), while Node emits once at module load (`1`, then still `1`).
+  Bun and Perry emit neither phase. Deno's mixed coercion case is split
+  deliberately: its args/env assertions are represented, but its non-empty
+  preopen object coercion is not. That preopen portion, the standalone preopen
+  case, and hello-world `fd_write` cross the host-fd boundary. Its getter-only
+  `wasiImport` rejects replacement while `getImportObject()` continues to expose
+  the original object. Its JavaScript wrappers check memory before syscall
+  arguments and otherwise defer to op coercion, unlike Node's native
+  arity/type-first validation.
 - Bun (`aca54d5c2b874ac304a3bbe1d67630e4daf17b43`):
   [`src/js/node/wasi.ts`](https://github.com/oven-sh/bun/blob/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/src/js/node/wasi.ts)
   plus its four-case
