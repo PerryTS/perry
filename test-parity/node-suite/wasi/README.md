@@ -112,6 +112,10 @@ lifecycle entry methods and are not duplicated for `finalizeBindings()`. Node's
 `finalizeBindings()` one-way lifecycle transition maps to
 `lifecycle/finalize-state.ts`, which isolates both transition directions for the
 public entry methods from the unrelated explicit-memory validation gaps. Node's
+parameter destructuring is covered in
+`lifecycle/finalize-options-validation.ts`: Node reads an `options.memory`
+accessor before instance/state validation, Deno reads it only after instance
+validation, and Perry currently ignores the second argument entirely. Node's
 eager `Array.prototype.map`/`Object.entries` copies in `lib/wasi.js` map to
 `semantics/options-snapshot.ts`; Deno matches those snapshots, while Bun's
 current implementation retains both caller-owned inputs by reference. The same
