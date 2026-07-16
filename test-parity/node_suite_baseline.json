@@ -211,8 +211,8 @@
       "total": 8
     },
     "wasi": {
-      "pass": 3,
-      "total": 3
+      "pass": 13,
+      "total": 35
     },
     "worker_threads": {
       "pass": 17,
