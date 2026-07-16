@@ -47,18 +47,33 @@ Node's `test-async-hooks-disable-during-promise.js`,
 `test-querywrap.js`, `test-crypto-randomBytes.js`, and
 `test-zlib.zlib-binding.deflate.js`, `test-immediate.js`,
 `test-fseventwrap.js`, `test-statwatcher.js`, `test-udpwrap.js`,
-`test-tcpwrap.js`, and `test-shutdownwrap.js`. Deno's selected
-bind/snapshot, nesting, enterWith, resource-scope, and propagation contracts and
-Bun's async-context provider matrix are represented by smaller single-boundary fixtures rather
-than copied monolithic tests.
+`test-tcpwrap.js`, `test-shutdownwrap.js`, `test-graph.timeouts.js`,
+`test-pipewrap.js`, `test-signalwrap.js`, and
+`test-async-wrap-providers.js`, plus the `DIRHANDLE` selection in
+`test-async-wrap-getasyncid.js`. The provider request fixtures also exercise the
+`HASHREQUEST`, `CIPHERREQUEST`, and `SIGNREQUEST` paths used by Node's current
+crypto implementation. Deno's selected bind/snapshot, nesting, enterWith,
+resource-scope, and propagation contracts and Bun's async-context provider
+matrix are represented by smaller single-boundary fixtures rather than copied
+monolithic tests.
 
-The current focused result is **76/169** and is recorded in
+For the latest 12 fixtures, Node 26.5.0 produced byte-identical output in three
+rounds. Deno 2.9.2 matches Node's import/namespace table, both subclass cases,
+nested Timeout lifecycle, AsyncResource detached methods, and frozen
+null-prototype provider table, while its native provider selection differs for
+child pipes, signals, directory handles, and WebCrypto requests. Bun 1.2.18
+matches import identity/branding and AsyncLocalStorage subclass propagation,
+but its current `createHook` is a no-op and its provider table remains mutable
+with an ordinary object prototype. These divergences are recorded as comparison
+evidence, not used to weaken the Node oracle.
+
+The current focused result is **76/181** and is recorded in
 `node_suite_baseline.json`. The suite keeps every stable mismatch as a diagnostic
 rather than removing unsupported cases: failures identify context loss, missing hook callbacks/resources,
 lifecycle differences, validation gaps, or a compile/runtime boundary for the
 specific provider named by the fixture.
 
-The 93 non-matching diagnostics are stable and grouped as follows:
+The 105 non-matching diagnostics are stable and grouped as follows:
 
 - hook delivery/configuration: custom and built-in provider lifecycle callbacks,
   cancelled resource destruction and identity, simultaneous hooks, late
@@ -66,31 +81,37 @@ The 93 non-matching diagnostics are stable and grouped as follows:
   pre-created Promise relationships, mixed Promise hook shapes, destroy work
   queued from a destroy callback, repeated interval and sibling-nextTick
   resources, fs.readFile/fs-promises and DNS trigger/lifecycle resources,
-  filesystem watcher, UDP/TCP/shutdown, crypto-request, randomBytes, and zlib
-  resources, `promiseResolve`, resource arguments, execution-resource
-  mapping/metadata, static-bind resource types, and `trackPromises`
-  behavior/validation;
+  filesystem watcher, DIRHANDLE, PROCESS/PIPE, SIGNAL, UDP/TCP/shutdown,
+  classic and WebCrypto request, randomBytes, and zlib resources,
+  `promiseResolve`, resource arguments, execution-resource mapping/metadata,
+  static-bind resource types, the async-wrap provider table prototype, and
+  `trackPromises` behavior/validation;
 - scheduling/context: zlib, HTTP/HTTPS keep-alive reuse and concurrent clients,
   net callback/data isolation, dgram, subprocess, worker, VM, dynamic import,
   readline, events.on, and stream.finished boundaries;
 - callback contract: several async crypto APIs invoke their callback before the
   call returns, while prime callbacks do not settle;
-- resource/storage semantics: snapshot receiver handling, top execution-resource
-  restoration, disable cleanup, caught async `exit()` rejection routing, and
-  EventEmitterAsyncResource prototype/getter brand behavior; and
-- compilation: direct `node:tls` activation currently builds rustls without its
-  `ring` provider and then cannot find a fallback runtime archive. The local
-  certificate fixture itself passes the pinned Node oracle.
+- resource/storage semantics: AsyncResource and AsyncLocalStorage native-class
+  subclassing, detached-method receivers, snapshot receiver handling, top
+  execution-resource restoration, disable cleanup, caught async `exit()`
+  rejection routing, module namespace branding, and EventEmitterAsyncResource
+  prototype/getter brand behavior; and
+- runtime: after a clean Perry compiler/runtime rebuild, the direct `node:tls`
+  fixture compiles but its local TLS connection does not settle within the
+  granular runner's 30-second execution limit. The same certificate fixture
+  passes the pinned Node oracle.
 
 ## Coverage
 
 - `resource/`: construction/type and ID invariants, scope/receiver/arguments,
   instance/static bind including inferred resource types and explicit receiver,
+  detached-method receiver behavior, native-class subclass identity,
   deterministic hook scope callbacks, and explicit destroy.
 - `storage/`: run nesting and restoration, independent instances, enterWith,
   exit and its async descendants, EventEmitter listener bleed/isolation,
   multiple store value types, cross-instance exit isolation, disable/re-entry,
-  repeated disable, and promise-boundary behavior.
+  repeated disable, detached/foreign method receivers, native-class subclass
+  propagation, and promise-boundary behavior.
 - `static/`: AsyncLocalStorage bind/snapshot and AsyncResource.bind context,
   empty and populated captures, receiver, argument, return-value, re-entry, and
   restoration behavior.
@@ -112,10 +133,12 @@ The 93 non-matching diagnostics are stable and grouped as follows:
   async/await Promise trigger chains, execution-resource identity and writable
   metadata propagation, default next-tick triggers, re-entrant destroy queuing, `trackPromises`,
   `promiseResolve`, resource arguments, cancelled timer/immediate destruction,
-  deterministic timer/interval/immediate/microtask/nextTick, callback and
-  promise fs, filesystem watcher, crypto request/PBKDF2/randomBytes, zlib, DNS,
-  UDP, and local TCP lifecycles; sibling, fs.readFile, and provider trigger
-  ancestry; and throwing scoped callbacks.
+  deterministic timer/interval/immediate/microtask/nextTick, nested Timeout
+  ancestry, callback and promise fs, filesystem watcher and directory handles,
+  classic/WebCrypto requests, PBKDF2/randomBytes, zlib, DNS, child-process
+  PROCESS/PIPE, signal registration, UDP, and local TCP lifecycles; sibling,
+  fs.readFile, and provider trigger ancestry; async-wrap provider-table
+  immutability; and throwing scoped callbacks.
 - `providers/`: DNS, child processes, HTTP and HTTPS including keep-alive agent
   and concurrent-client isolation, HTTP execution-resource mapping, TLS, net
   including concurrent data, dual accept/connect context isolation, and
@@ -127,6 +150,9 @@ The 93 non-matching diagnostics are stable and grouped as follows:
   execution-resource state, plus hook-sensitive empty resource type behavior.
   The pre-existing root fixtures retain detailed callback, constructor, and
   hook-option argument validation.
+- root module fixtures: bare/prefixed/default import identity and ESM namespace
+  branding are isolated so a correct export identity does not hide a namespace
+  `Symbol.toStringTag` mismatch.
 
 ## Remaining slow, redundant, or environment-sensitive categories
 
@@ -149,11 +175,15 @@ kept out for a concrete reason rather than to cap the suite size:
 - Bun's crypto cipher/hash/sign/randomUUID selections perform their work
   synchronously and only check a following `setImmediate`; that scheduling
   behavior is already isolated by the immediate propagation and hook fixtures.
-- Node's HTTP parser/socket reuse graphs, exhaustive provider topology,
-  signals, pipes, TTY, process-shutdown, and inspector/trace-event cases assert
-  native implementation details rather than portable public async-context
-  behavior. The retained TCP matrix is limited to the stable loopback lifecycle
-  relationships selected by Node's own TCP/shutdown tests.
+- Node's HTTP parser/socket reuse graphs, exhaustive provider topology, signal
+  delivery/re-registration, local-domain PIPECONNECT/PIPESERVER graphs, forced
+  WRITEWRAP backpressure, TTY, process-shutdown, and inspector/trace-event cases
+  assert native implementation details or depend on a separate transport
+  boundary. The retained bounded cases cover child stdio PROCESS/PIPE resources,
+  signal registration/removal, and the stable loopback TCP relationships
+  selected by Node's own tests. A local-domain socket probe currently fails in
+  Perry with `Can't assign requested address (os error 49)`, while the forced
+  8 MiB WRITEWRAP probe leaves its write callback unsettled past 30 seconds.
 - Node's HTTP/2 ALS selection cannot yet reach an async-context callback in
   Perry because its local plaintext client never emits `connect`; it belongs
   after the underlying `node:http2` provider can complete a loopback session.
@@ -173,15 +203,16 @@ kept out for a concrete reason rather than to cap the suite size:
 - A current Node-main test expects the removed `AsyncResource.domain` getter,
   but the pinned Node 26.5.0 oracle has no such prototype getter; that
   post-oracle surface is not counted.
-- Node 26.5.0 supports AsyncLocalStorage `defaultValue` and `name`, but Perry's
-  API manifest does not claim those constructor/name surfaces, so they are not
-  counted here.
+- Node 26.5.0 supports AsyncLocalStorage `defaultValue`, `name`, and `withScope`,
+  but Perry's API manifest does not claim those constructor/property/scope
+  surfaces, so they are not counted here.
 
 Raw hook coverage remains deliberately bounded. User-created AsyncResource
 cases control init/before/callback/after/destroy directly. Selected built-in
 provider cases are retained only where the pinned Node suite supplies a stable
 contract and the operation is local and deterministic: interval and nextTick,
 fs.readFile and fs promises/watchers, DNS lookup/lookupService/localhost query,
-randomBytes and other crypto requests, zlib, UDP socket, and a bounded loopback
-TCP matrix. All use explicit completion barriers and assert relationships
-rather than raw IDs; GC timing and native topology graphs remain excluded.
+directory handles, randomBytes and other classic/WebCrypto requests, zlib,
+child stdio, signal registration, UDP socket, and a bounded loopback TCP matrix.
+All use explicit completion barriers and assert relationships rather than raw
+IDs; GC timing and exhaustive native topology graphs remain excluded.
