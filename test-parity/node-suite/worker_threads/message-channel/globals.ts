@@ -54,6 +54,14 @@ try {
 }
 console.log("MessageChannel call:", messageChannelCall);
 
+let messagePortCall = "did-not-throw";
+try {
+  (globalThis.MessagePort as any)();
+} catch (_err) {
+  messagePortCall = "threw";
+}
+console.log("MessagePort call:", messagePortCall);
+
 let messagePortNew = "did-not-throw";
 try {
   new (globalThis.MessagePort as any)();

@@ -21,6 +21,9 @@ function run(label: string, options: Record<string, any>): Promise<void> {
 async function main() {
   console.log("parent:", JSON.stringify(process.execArgv));
   await run("inherited:", {});
+  await run("null:", { execArgv: null });
+  await run("zero:", { execArgv: 0 });
+  await run("false:", { execArgv: false });
   await run("empty:", { execArgv: [] });
   await run("custom:", { execArgv: ["--no-warnings"] });
   await run("nonstrings:", { execArgv: [1, null, true] as any });

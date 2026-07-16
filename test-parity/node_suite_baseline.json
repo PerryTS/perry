@@ -6,8 +6,8 @@
   },
   "overall": {
     "pass": 2816,
-    "total": 2993,
-    "pct": 94.1
+    "total": 3000,
+    "pct": 93.9
   },
   "modules": {
     "assert": {
@@ -216,7 +216,7 @@
     },
     "worker_threads": {
       "pass": 32,
-      "total": 147
+      "total": 154
     },
     "zlib": {
       "pass": 58,

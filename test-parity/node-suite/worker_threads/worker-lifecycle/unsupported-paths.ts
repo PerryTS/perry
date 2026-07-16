@@ -3,8 +3,12 @@ import { Worker } from "node:worker_threads";
 const values: Array<[string, any]> = [
   ["undefined", undefined],
   ["null", null],
+  ["boolean", false],
   ["number", 1],
+  ["symbol", Symbol("worker")],
   ["object", {}],
+  ["array", []],
+  ["function", () => {}],
   ["bare relative", "worker.cjs"],
   ["http string", "https://example.com/worker.js"],
   ["http URL", new URL("https://example.com/worker.js")],
