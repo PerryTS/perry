@@ -476,6 +476,19 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     handle
 }
 
+/// Reserve a globally-unique handle id WITHOUT storing a value in the FFI
+/// registry. For a subsystem that keeps its own object map (perry-ext-net's
+/// socket registry) but must not alias another library's ids: every ext lib
+/// that mints ids privately from 1 collides with the others in the shared
+/// `[1, 0x40000)` band, and the composite handle-method dispatch then routes a
+/// call to whichever extension *thinks* it owns that number. That is how
+/// `socket.on('data', …)` on ext-net socket #1 got claimed by ext-http-server
+/// (whose server was also #1) and the mysql2 handshake hung: the listener
+/// registered on the HTTP server and the socket's bytes reached nobody.
+pub fn reserve_handle_id() -> Handle {
+    pop_free_handle().unwrap_or_else(next_fresh_handle_id)
+}
+
 fn next_fresh_handle_id() -> Handle {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     if handle >= FFI_HANDLE_ID_END {

@@ -852,6 +852,47 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Some(v) = result {
                         return JSValue::from_bits(v.to_bits());
                     }
+                    // Static DATA fields are INHERITED by subclasses, exactly like
+                    // static methods: `class D {}; D.kind = "x"; class G extends D {}`
+                    // makes `G.kind === "x"` (the class-object proto chain
+                    // `G.__proto__ === D` carries statics). The own-field read above
+                    // only consulted `class_id`; walk the parent class_id chain here
+                    // so an inherited static field (or runtime `Parent.x = …`
+                    // assignment — both live in CLASS_DYNAMIC_PROPS) resolves. Static
+                    // METHODS are handled by `lookup_static_method_in_chain` below;
+                    // this covers the data-field case that was returning `undefined`
+                    // (Auth.js sets `SignInError.kind = "signIn"` and reads it off a
+                    // `CredentialsSignin` subclass to pick the sign-in vs error page).
+                    {
+                        let mut cid = class_id;
+                        let mut depth = 0usize;
+                        while depth < 32 {
+                            match get_parent_class_id(cid) {
+                                Some(p) if p != 0 && p != cid => {
+                                    cid = p;
+                                    depth += 1;
+                                }
+                                _ => break,
+                            }
+                            if super::super::class_registry::class_is_key_deleted(cid, name) {
+                                // A key deleted on THIS ancestor is not provided by
+                                // it, but a higher ancestor may still define it —
+                                // `delete Mid.foo` must let `Sub.foo` inherit
+                                // `Base.foo`, not resolve to undefined. Skip this
+                                // level and keep walking up (safe: `cid`/`depth`
+                                // advance at the top of every iteration).
+                                continue;
+                            }
+                            let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
+                                m.borrow()
+                                    .get(&cid)
+                                    .and_then(|props| props.get(name).copied())
+                            });
+                            if let Some(v) = inherited {
+                                return JSValue::from_bits(v.to_bits());
+                            }
+                        }
+                    }
                     if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
                         .is_some()
                     {

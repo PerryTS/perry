@@ -428,11 +428,24 @@ extern "C" {
     fn js_net_callback_ptr(value: f64) -> i64;
 }
 
+/// Socket / server / block-list ids come from perry-ffi's SHARED handle-id
+/// allocator, not a private counter.
+///
+/// Every ext staticlib that mints ids privately from 1 aliases the others
+/// inside the shared `[1, 0x40000)` band, and the composite handle-method
+/// dispatch (`class_handles.rs::composite_handle_method_dispatch`) asks each
+/// registered extension "is this handle yours?" — so the FIRST extension whose
+/// private counter reached that number claims the call. Next.js's HTTP server
+/// (perry-ext-http-server handle 1, via `register_handle`) therefore claimed
+/// `socket.on('data', …)` on this crate's socket 1: the listener landed on the
+/// HTTP server, the reader delivered the MySQL greeting to an empty listener
+/// list, and mysql2's handshake hung to ETIMEDOUT.
+///
+/// `reserve_handle_id` consumes an id from the same counter `register_handle`
+/// uses, so ids stay globally unique across every ext library while this
+/// crate keeps its own object map.
 pub(crate) fn next_id() -> i64 {
-    let mut g = statics::next_net_id().lock().unwrap();
-    let id = *g;
-    *g += 1;
-    id
+    perry_ffi::reserve_handle_id()
 }
 
 fn push_event(ev: PendingNetEvent) {
@@ -519,6 +532,23 @@ where
 ///
 /// All three args must be NaN-boxed Perry-runtime values per the
 /// codegen ABI — see `NA_F64` lowering in perry-codegen.
+/// Distinct-symbol alias of `js_net_socket_connect` for perry-stdlib's
+/// dynamic-dispatch bridge (`js_node_http_native_dispatch`'s net arm). The
+/// shared name has a bundled-stdlib twin, and in a build that links BOTH
+/// archives the shared symbol can bind to the twin whose socket registry the
+/// handle-dispatch never consults — connect then "succeeds" into one registry
+/// while `.on('data')` registers in the other and the bytes are silently
+/// dropped (mysql2 handshake ETIMEDOUT). Mirrors the
+/// `js_ext_net_socket_write`/`_end`/`_destroy` splits (#5010/#5021).
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_connect(
+    arg1_f64: f64,
+    arg2_f64: f64,
+    arg3_f64: f64,
+) -> i64 {
+    js_net_socket_connect(arg1_f64, arg2_f64, arg3_f64)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg3_f64: f64) -> i64 {
     /// Register `cb_f64` as a `'connect'` listener on `handle` if it
@@ -1740,9 +1770,45 @@ pub extern "C" fn js_net_server_listening(handle: i64) -> i32 {
 /// reference resolved to perry-stdlib's no-op stub (compiled-out
 /// when bundled-net is off) and Map-retrieved sockets silently
 /// dispatched to undefined.
+/// Distinct-symbol aliases for the socket EVENT-LISTENER surface (#5021's
+/// twin-symbol disease). perry-stdlib exports same-named `js_net_socket_on` /
+/// `_once` / `_remove_listener` twins, so in a build that links BOTH archives
+/// the shared names bind to the bundled twin's EMPTY socket registry and the
+/// listener registration is silently dropped: the socket connects, the reader
+/// task delivers bytes, and the pump finds ZERO 'data' listeners — mysql2's
+/// handshake then hangs to ETIMEDOUT. `write`/`end`/`destroy` were split out
+/// for exactly this reason (#5010/#5021); the listener calls were not.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i64) {
+    js_net_socket_on(handle, event_ptr, cb)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
+    js_net_socket_once(handle, event_ptr, cb)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_remove_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    js_net_socket_remove_listener(handle, event_ptr, cb)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
+    handle: i64,
+    event_ptr: i64,
+) -> i64 {
+    js_net_socket_remove_all_listeners(handle, event_ptr)
+}
+
 #[no_mangle]
 pub extern "C" fn js_ext_net_is_socket_handle(handle: i64) -> i32 {
-    if is_net_socket_handle(handle) {
+    let owned = is_net_socket_handle(handle);
+    if owned {
         1
     } else {
         0
