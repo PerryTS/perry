@@ -19,3 +19,14 @@ console.log("Leaf.external=" + (Leaf as any).external);
 (Sub as any).external = "own";
 console.log("Sub.own-wins=" + (Sub as any).external);
 console.log("Base.unshadowed=" + (Base as any).external);
+
+// A key deleted on an INTERMEDIATE ancestor must not shadow a higher one:
+// `delete Mid.foo` should let `Sub.foo` inherit `Base.foo`, not resolve to
+// undefined. (The chain walk must `continue` past the deleted level, not
+// `break` out of the whole traversal.)
+class DBase { static tag = "base"; }
+class DMid extends DBase { static tag = "mid"; }
+class DSub extends DMid {}
+console.log("del-intermediate before:", (DSub as any).tag);
+delete (DMid as any).tag;
+console.log("del-intermediate after :", (DSub as any).tag);

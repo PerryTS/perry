@@ -875,7 +875,13 @@ pub extern "C" fn js_object_get_field_by_name(
                                 _ => break,
                             }
                             if super::super::class_registry::class_is_key_deleted(cid, name) {
-                                break;
+                                // A key deleted on THIS ancestor is not provided by
+                                // it, but a higher ancestor may still define it —
+                                // `delete Mid.foo` must let `Sub.foo` inherit
+                                // `Base.foo`, not resolve to undefined. Skip this
+                                // level and keep walking up (safe: `cid`/`depth`
+                                // advance at the top of every iteration).
+                                continue;
                             }
                             let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
                                 m.borrow()
