@@ -1,11 +1,12 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 49 focused fixtures in five groups:
+layer. The suite has 50 focused fixtures in five groups:
 
-- `classes/` (5): ESM/CommonJS export shape, constructor/prototype/instance
-  descriptors, call-without-`new`, and a warning-event assertion that normalizes
-  the experimental warning to a count rather than comparing PID or stderr text.
+- `classes/` (6): ESM/CommonJS export shape, constructor/prototype/instance
+  descriptors, ordinary subclass construction, call-without-`new`, and a
+  warning-event assertion that normalizes the experimental warning to a count
+  rather than comparing PID or stderr text.
 - `constructor/` (6): options/version, args, env, preopens, stdio descriptors,
   and `returnOnExit` validation. Preopens stop at type/empty-object validation;
   no host path is opened.
@@ -90,7 +91,9 @@ Coverage was compared against primary sources at these revisions:
   validation, retains the caller's args array and env object so mutations after
   construction remain visible, does not omit undefined env values, and retains
   payload bytes after embedded NULs like Deno; Node 26.5.0 truncates each native
-  argument/environment string at its first NUL and remains the oracle.
+  argument/environment string at its first NUL and remains the oracle. Bun does
+  support ordinary WASI subclass construction, although the inherited instance
+  still lacks Node's `getImportObject()` method.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
@@ -139,14 +142,14 @@ Bun, and Perry snapshot at most once per implemented entry method.
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, focused runs were stable at **17/49**, with **32 behavioral
+host archive, focused runs were stable at **17/50**, with **33 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **129/169** (`globals` 112/120 and `wasi`
-17/49), also without compile failures or timeouts. The stable mismatch families
+`globals,wasi` run completed at **129/170** (`globals` 112/120 and `wasi`
+17/50), also without compile failures or timeouts. The stable mismatch families
 are:
 
-- module namespace and descriptor/enumerability differences plus no normalized
-  experimental warning;
+- module namespace, descriptor/enumerability, and subclass-construction
+  differences plus no normalized experimental warning;
 - import-function name/arity and receiver differences, plus loss of the
   `wasi_unstable` namespace after replacing `wasiImport`;
 - import syscalls return `28` before memory binding instead of throwing
