@@ -28,12 +28,12 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 
 The correctness oracle remains the repository-pinned Node 26.5.0.
 
-The final focused run is **30/37**. The seven stable diagnostic differences are
-custom AsyncResource `init`, `before`/`after`, and `destroy` hook delivery;
-AsyncLocalStorage.snapshot callback receiver handling; top-level
-executionAsyncResource restoration after nested custom scopes; disable cleanup
-for already-scheduled callbacks; and empty AsyncResource type validation while
-hooks are enabled. All other cases match the pinned oracle.
+The current focused run is **47/61**. Fourteen stable diagnostic fixtures cover
+custom AsyncResource lifecycle delivery, snapshot receiver handling,
+execution-resource restoration, disable cleanup, hook-sensitive type
+validation, zlib callback propagation, stream.finished completion, simultaneous
+hooks, init resource arguments, throwing scope lifecycle, and caught async exit
+rejections. The other 47 fixtures match the pinned oracle.
 
 ## Coverage
 
@@ -48,6 +48,11 @@ hooks are enabled. All other cases match the pinned oracle.
 - `propagation/`: controlled concurrent promises, catch/finally, thenables,
   async iterators, queueMicrotask, nextTick, immediate, interval, and timer
   propagation with awaited or callback-driven completion barriers.
+- `integrations/`: fs callbacks/promises/streams, crypto callbacks, zlib,
+  Readable/Writable/Transform/finished, timers/promises, util.promisify, and
+  EventEmitter propagation selected from Bun's Node comparison matrix.
+- `hooks/`: enable/disable/re-enable, simultaneous observers, init resource
+  arguments, and lifecycle behavior when a scoped callback throws.
 - `validation/`: synchronous throw propagation and cleanup of storage and
   execution-resource state, plus hook-sensitive empty resource type behavior.
   The pre-existing root fixtures retain detailed callback, constructor, and
@@ -58,8 +63,9 @@ hooks are enabled. All other cases match the pinned oracle.
 The remaining upstream cases are intentionally not copied into this fast,
 granular module suite:
 
-- Provider graphs and resource internals for HTTP, TLS, sockets, DNS, files,
-  crypto, streams, and datagrams overlap the granular suites for those modules.
+- Network, DNS, subprocess, and worker provider propagation require sequential
+  execution and dedicated cleanup barriers; they remain the next expansion
+  batch rather than being mixed into the parallel lane prematurely.
 - Exact numeric async IDs are runtime-specific; only relationships and
   restoration invariants are asserted here.
 - GC-driven destroy delivery, weak-reference collection, destroy-vs-scheduler
