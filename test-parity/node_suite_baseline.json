@@ -1,13 +1,13 @@
 {
   "_schema": {
     "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
-    "oracle": "node v26.3.0 on Linux (the box)",
-    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. Floors refreshed from a clean node-26 run at 2810/2863 (98.1%)."
+    "oracle": "node v26.3.0 full-suite baseline; node v26.5.0 focused node:inspector ratchet",
+    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. The last clean full-suite refresh measured 2810/2863 (98.1%); the current aggregate adds the separately measured node:inspector focused delta (+2 pass, +34 total)."
   },
   "overall": {
-    "pass": 2810,
-    "total": 2863,
-    "pct": 98.1
+    "pass": 2812,
+    "total": 2897,
+    "pct": 97.1
   },
   "modules": {
     "assert": {
@@ -95,8 +95,8 @@
       "total": 5
     },
     "inspector": {
-      "pass": 2,
-      "total": 3
+      "pass": 4,
+      "total": 37
     },
     "inspector-promises": {
       "pass": 1,

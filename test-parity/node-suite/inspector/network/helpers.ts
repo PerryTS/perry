@@ -56,18 +56,20 @@ for (const name of methods) {
 
 const session = new inspector.Session();
 session.connect();
+try {
+  let genericCount = 0;
+  let specificCount = 0;
+  session.on("inspectorNotification", () => {
+    genericCount++;
+  });
+  session.on("Network.requestWillBeSent", () => {
+    specificCount++;
+  });
 
-let genericCount = 0;
-let specificCount = 0;
-session.on("inspectorNotification", () => {
-  genericCount++;
-});
-session.on("Network.requestWillBeSent", () => {
-  specificCount++;
-});
-
-inspector.Network.requestWillBeSent(payload as any);
-await new Promise((resolve) => setTimeout(resolve, 20));
-console.log("self session events:", genericCount, specificCount);
-
-session.disconnect();
+  inspector.Network.requestWillBeSent(payload as any);
+  await Promise.resolve();
+  console.log("self session events:", genericCount, specificCount);
+} finally {
+  session.removeAllListeners();
+  session.disconnect();
+}
