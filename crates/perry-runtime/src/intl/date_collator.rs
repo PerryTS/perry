@@ -136,13 +136,31 @@ fn date_time_format_to_parts_value(obj: *const ObjectHeader, value: f64) -> f64 
 }
 
 /// Decompose the formatted output into typed parts matching `format_ms_with_dtf_obj`.
+/// Shift a UTC epoch-second count into the DTF instance's configured time zone,
+/// so `timestamp_to_components` yields the zone-local wall-clock fields. Only
+/// applied to plain `Date`/timestamp values — Temporal values carry their own
+/// zone/date semantics — so callers pass `temporal_kind` and get `secs`
+/// unchanged for any Temporal input.
+fn dtf_zone_local_secs(
+    obj: *const ObjectHeader,
+    secs: i64,
+    temporal_kind: Option<crate::temporal::TemporalKind>,
+) -> i64 {
+    if temporal_kind.is_some() {
+        return secs;
+    }
+    let tz = get_string_field(obj, KEY_TIME_ZONE)
+        .unwrap_or_else(|| crate::date::host_time_zone_name().to_string());
+    secs + crate::date::zone_offset_seconds(&tz, secs)
+}
+
 fn format_parts_with_dtf_obj(
     obj: *const ObjectHeader,
     ms: f64,
     temporal_kind: Option<crate::temporal::TemporalKind>,
 ) -> Vec<(&'static str, String)> {
     use crate::temporal::TemporalKind::*;
-    let secs = (ms as i64).div_euclid(1000);
+    let secs = dtf_zone_local_secs(obj, (ms as i64).div_euclid(1000), temporal_kind);
     let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
     let mi = month.saturating_sub(1).min(11) as usize;
 
@@ -1172,7 +1190,7 @@ fn format_ms_with_dtf_obj(
     temporal_kind: Option<crate::temporal::TemporalKind>,
 ) -> String {
     use crate::temporal::TemporalKind::*;
-    let secs = (ms as i64).div_euclid(1000);
+    let secs = dtf_zone_local_secs(obj, (ms as i64).div_euclid(1000), temporal_kind);
     let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
 
     let date_style = get_string_field(obj, KEY_DATE_STYLE);
@@ -1773,7 +1791,10 @@ pub(crate) fn date_time_format_resolved_options_object(obj: *const ObjectHeader)
     set_field(
         out,
         "timeZone",
-        string_value(&get_string_field(obj, KEY_TIME_ZONE).unwrap_or_else(|| "UTC".to_string())),
+        string_value(
+            &get_string_field(obj, KEY_TIME_ZONE)
+                .unwrap_or_else(|| crate::date::host_time_zone_name().to_string()),
+        ),
     );
     // hourCycle / hour12 surface only when an hour field is present. With no tz
     // /CLDR data, the default cycle is the 12-hour clock (`h11` for `ja`, else

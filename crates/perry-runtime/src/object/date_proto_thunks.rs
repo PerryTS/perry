@@ -507,8 +507,17 @@ extern "C" fn date_to_locale_string_opts(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let locale = args.get(0).copied().unwrap_or(undef);
     let opts = args.get(1).copied().unwrap_or(undef);
+    // A `Date` is a specific INSTANT; `toLocaleString` renders it in the resolved
+    // time zone (the `timeZone` option, else the host zone) — not UTC. Shift the
+    // epoch into that zone's wall clock, then format it as the zone-agnostic
+    // date-time it now represents. (Perry formatted it in UTC before, so
+    // `new Date().toLocaleString()` was off by the host offset.)
+    let tz = crate::intl::resolved_date_time_zone(opts);
+    let secs = (epoch_ms as i64).div_euclid(1000);
+    let frac_ms = epoch_ms - (secs as f64) * 1000.0;
+    let shifted_ms = (secs + crate::date::zone_offset_seconds(&tz, secs)) as f64 * 1000.0 + frac_ms;
     crate::intl::temporal_locale_string(
-        epoch_ms,
+        shifted_ms,
         locale,
         opts,
         crate::intl::TemporalLocaleCtx::PlainDateTime,

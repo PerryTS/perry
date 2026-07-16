@@ -315,6 +315,26 @@ fn get_option_string(options: f64, key: &str) -> Option<String> {
     coerce_option_string(get_option_value(options, key))
 }
 
+/// Resolve the effective time zone for a `toLocaleString`-style call: the
+/// `timeZone` option if present, otherwise the host zone (ECMA-402
+/// DefaultTimeZone). Canonicalized the same way the `Intl.DateTimeFormat`
+/// constructor does. Used to shift a `Date`'s UTC instant into wall-clock time
+/// before formatting (a `Date` is an instant, so `toLocaleString` renders it in
+/// the resolved zone — unlike a zone-agnostic `Temporal.PlainDateTime`).
+pub(crate) fn resolved_date_time_zone(options: f64) -> String {
+    let tz = get_option_string(options, "timeZone")
+        .unwrap_or_else(|| crate::date::host_time_zone_name().to_string());
+    if matches!(tz.as_bytes().first(), Some(b'+') | Some(b'-')) {
+        if is_valid_offset_time_zone(&tz) {
+            canonicalize_offset_time_zone(&tz)
+        } else {
+            tz
+        }
+    } else {
+        canonicalize_named_time_zone(&tz).unwrap_or(tz)
+    }
+}
+
 /// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,
 /// `numberingSystem`) whose value is validated for *well-formedness* rather than
 /// against a closed enum. ECMA-402 coerces `null` to the string `"null"` — a
@@ -1133,8 +1153,10 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 }
                 set_internal_field(obj, KEY_HOUR_CYCLE, string_value(&hc));
             }
-            let mut time_zone =
-                get_option_string(options, "timeZone").unwrap_or_else(|| "UTC".to_string());
+            // ECMA-402 DefaultTimeZone(): when no `timeZone` option is given, use
+            // the HOST time zone (Node returns e.g. "Europe/Berlin"), not UTC.
+            let mut time_zone = get_option_string(options, "timeZone")
+                .unwrap_or_else(|| crate::date::host_time_zone_name().to_string());
             // A timeZone that begins with a sign is an offset identifier: it must
             // be syntactically valid (ECMA-402 rejects malformed offsets with a
             // RangeError), and is then canonicalized to `±HH:mm` so
