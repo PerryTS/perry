@@ -36,8 +36,10 @@ for (
   );
 }
 
+let channel: MessageChannel | undefined;
 try {
-  const { port1, port2 } = new MessageChannel();
+  channel = new MessageChannel();
+  const { port1 } = channel;
   const listener = () => {};
   port1.on("message", listener);
   const before = (port1 as any).listenerCount("message");
@@ -48,8 +50,9 @@ try {
   port1.removeAllListeners();
   const empty = (port1 as any).eventNames().length;
   console.log("registry:", before, names, after, empty);
-  port1.close();
-  port2.close();
 } catch (error: any) {
   console.log("registry error:", error?.name, error?.message);
+} finally {
+  channel?.port1.close();
+  channel?.port2.close();
 }
