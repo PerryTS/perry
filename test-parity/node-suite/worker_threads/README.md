@@ -11,30 +11,53 @@ The expansion was compared against these primary-source snapshots:
 - Deno [`f8a17c8`](https://github.com/denoland/deno/tree/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/specs/node/worker_threads) and its [`worker_threads_test.ts`](https://github.com/denoland/deno/blob/f8a17c8171569fa2870d740030aaa59c91fdf9ee/tests/unit_node/worker_threads_test.ts) selection, including port transfer, listener removal/deduplication, `unref`, auto-exit, and broadcast coverage.
 - Bun [`0bffb47`](https://github.com/oven-sh/bun/tree/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads), especially [`worker_threads.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker_threads.test.ts) and [`worker-transfer-list.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker-transfer-list.test.ts).
 
+The inventory review covered all 141 `test-worker-*` files in that Node
+snapshot, all 48 cases in Deno's unit selection plus its directory fixtures,
+and the 72 declarations in Bun's two central worker test files. Cases are
+represented here by observable contract rather than copied one-for-one when
+several upstream files exercise the same behavior.
+
 Node `26.5.0`, pinned by this repository, remains the executable differential
 oracle. The upstream snapshots above guide case selection rather than changing
 that oracle.
 
 ## Coverage added
 
+- `main-thread/`: complete namespace export availability and types, main-thread
+  values, Worker and MessagePort prototype descriptors, and constructor brands.
+- `environment-data/`: key identity, live main-thread values, deletion, worker
+  snapshot cloning, and parent/worker mutation isolation.
 - `structured-clone/`: ArrayBuffer cloning, typed-array backing identity,
   built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
   transfer detachment, MessagePort ownership, overloads, and atomic rollback.
 - `message-port/`: synchronous FIFO receives, invalid-port validation,
   explicit `start()`, event fields/ports, listener deduplication, close callback
-  ordering, transfer-state validation, queued delivery, overload validation,
-  and `ref`/`unref`/`hasRef` state.
+  ordering, listener removal/`once`, `onmessage` replacement, method receiver
+  validation, MessageEvent construction, duplicate/self/closed transfers,
+  atomic clone rollback, transfer-state validation, queued delivery, overload
+  validation, and `ref`/`unref`/`hasRef` state.
+- `message-channel/`: module/global identity, construction rules, port brands,
+  asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
+  and VM-context port movement.
 - `worker-lifecycle/`: constructor transfer validation, structured `workerData`,
   default and built-in workerData, MessagePort/ArrayBuffer transfer, environment
-  snapshots, `online`/`message`/`error`/`exit` ordering, ref return values,
-  natural exit, and deterministic termination settlement.
+  snapshots, argv coercion/validation, inherited/explicit/shared environments,
+  SharedArrayBuffer workerData, thread id/name lifecycle, unsupported paths,
+  EventEmitter listener behavior, method receivers, postMessage clone rollback,
+  `online`/`message`/`error`/`exit` ordering, ref return values, natural exit,
+  and deterministic repeated termination settlement.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
-  clone rejection, transfer rejection, and retained ownership after rejection.
+  clone rejection, transfer rejection, retained ownership after rejection, and
+  the distinction between marking a port uncloneable and transferring it.
 - `broadcast-channel/`: same-name fanout/FIFO isolation, sender exclusion,
-  listener management, typed-array and SharedArrayBuffer cloning,
-  untransferable-value rejection, and closed-channel validation.
+  listener management/`once`, name coercion, close/ref idempotence, typed-array
+  and SharedArrayBuffer cloning, untransferable-value rejection, and
+  closed-channel validation.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
-  the existing surface, option, query, and shared/exclusive ordering cases.
+  the existing surface, option, query, callback settlement/cleanup,
+  independent-name concurrency, and shared/exclusive ordering cases.
+- `direct-message/`: delivery, no-listener and timeout rejection, plus thread id
+  and timeout argument validation.
 
 Every asynchronous fixture uses a message, close, exit, or promise-settlement
 barrier. No added fixture uses a sleep as a completion condition.
@@ -62,30 +85,40 @@ the cases above or belong to a separate slow/risky runtime feature:
 - The existing `direct-message/` fixtures already cover deterministic
   `postMessageToThread` delivery, rejection, and timeout behavior.
 
-The measured focused result is `24/55`: all 17 pre-existing cases remain green,
-seven new cases pass, and 31 new cases expose stable diagnostic differences.
+The measured focused result is `28/84`: all 17 pre-existing cases remain green,
+11 added cases pass, and 56 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
 `message-port/start-and-listeners.ts`,
 `worker-lifecycle/termination-ordering.ts`,
 `worker-lifecycle/worker-ref-state.ts`, `web-locks/web-locks-abort.ts`, and
-`web-locks/web-locks-steal.ts`. The diagnostic differences are:
+`web-locks/web-locks-steal.ts`. The latest broad pass also adds green coverage
+for `environment-data/value-identity.ts`,
+`message-port/onmessage-replacement.ts`,
+`worker-lifecycle/method-receivers.ts`, and
+`web-locks/web-locks-independent-names.ts`. The diagnostic differences are:
 
 - All nine `structured-clone/` fixtures: Perry preserves some indexed values but
   loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
   cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
-- Nine `message-port/` diagnostics: closing drops queued data and callbacks,
-  invalid receivers/options/transfers do not throw, event `ports` are missing,
-  transferred ownership is not enforced, and `hasRef()` does not track state.
-- Eight `worker-lifecycle/` diagnostics: invalid constructor payloads are
-  accepted; transfers, omitted workerData, Map cloning, environment snapshots,
-  post-exit terminate values, and worker error routing differ.
-- All three `transfer-markers/` fixtures: primitives are reported as marked,
+- Fifteen `message-port/` diagnostics: closing drops queued data and callbacks,
+  listener counts, receiver/option/transfer validation, event construction and
+  `ports`, duplicate/self/closed transfer rollback, moved ownership, and
+  `hasRef()` state differ.
+- Seventeen `worker-lifecycle/` diagnostics: invalid constructor payloads and
+  paths, argv/env handling, shared environments, worker metadata, listener
+  behavior, repeated termination, workerData cloning/SAB sharing, postMessage
+  rollback, post-exit values, and worker error routing differ.
+- All four `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection and ArrayBuffer exceptions differ, and marked
-  transferables are still accepted.
-- Two `broadcast-channel/` diagnostics: typed-array/SharedArrayBuffer branding
-  and sharing are lost, while MessagePort and closed-channel posts are accepted.
+  transferables and uncloneable ports differ.
+- Five `broadcast-channel/` diagnostics: name coercion, once listeners,
+  close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
+  MessagePort validation, and closed-channel posts differ.
+- Six additional diagnostics cover namespace/prototype completeness,
+  environment worker snapshots, MessageChannel construction, direct-message
+  argument validation, and Web Locks callback rejection cleanup.
 
 The clean measurement used:
 
@@ -96,7 +129,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `24/55 (43.6%), diff=31`, with no compile failures or timeouts.
+It reported `28/84 (33.3%), diff=56`, with no compile failures or timeouts.
 The SharedArrayBuffer/Atomics boundary is backed by the added same-process
 channel cases plus the existing
 granular `globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
