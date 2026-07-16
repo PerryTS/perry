@@ -2,12 +2,12 @@
   "_schema": {
     "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
     "oracle": "node v26.5.0 (pinned by .node-version)",
-    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. The worker_threads floor was refreshed from a clean focused Node 26.5.0 run; aggregate metadata is recomputed directly from the committed module floors, yielding 2816/2987 (94.3%)."
+    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. The worker_threads floor was refreshed from a clean focused Node 26.5.0 run; aggregate metadata is recomputed directly from the committed module floors, yielding 2816/2988 (94.2%)."
   },
   "overall": {
     "pass": 2816,
-    "total": 2987,
-    "pct": 94.3
+    "total": 2988,
+    "pct": 94.2
   },
   "modules": {
     "assert": {
@@ -216,7 +216,7 @@
     },
     "worker_threads": {
       "pass": 32,
-      "total": 141
+      "total": 142
     },
     "zlib": {
       "pass": 58,

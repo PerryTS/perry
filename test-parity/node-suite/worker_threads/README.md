@@ -62,7 +62,8 @@ that oracle.
   state, non-function `onmessage` clearing, peer-close ref behavior, throwing
   and malformed transfer iterators, accepted empty transfer forms, custom-event
   EventTarget/EventEmitter bridging, max-listener controls, scoped
-  `removeAllListeners`, transfer targets, and `ref`/`unref`/`hasRef` state.
+  `removeAllListeners`, transfer rejection during close flushing, transfer
+  targets, and `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement with closed-port and argument validation.
@@ -130,8 +131,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `32/141`: all 17 pre-existing cases remain green,
-15 added cases pass, and 109 added cases expose stable diagnostic differences.
+The measured focused result is `32/142`: all 17 pre-existing cases remain green,
+15 added cases pass, and 110 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -152,11 +153,10 @@ also pass. The diagnostic differences are:
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
   rejects cycles/BigInt, does not detach or move ownership, and accepts invalid
   lists.
-- Thirty-three `message-port/` diagnostics: closing and dispatch flushing,
-  queued data/callbacks, NodeEventTarget surface, listener counts and
-  validation, receiver/options/iterables/transfers, MessageEvent construction
-  and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
-  state differ.
+- Thirty-four `message-port/` diagnostics: closing and dispatch flushing, queued
+  data/callbacks, NodeEventTarget surface, listener counts and validation,
+  receiver/options/iterables/transfers, MessageEvent construction and `ports`,
+  duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
 - Forty `worker-lifecycle/` diagnostics: invalid constructor payloads and paths,
   execArgv, captured stdio, process restrictions/exit codes, shared environments
   and nested messages, worker/parentPort EventEmitter behavior, metadata/unique
@@ -183,7 +183,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `32/141 (22.7%), diff=109`, with no compile failures or timeouts.
+It reported `32/142 (22.5%), diff=110`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. The SharedArrayBuffer/Atomics boundary is backed by the
