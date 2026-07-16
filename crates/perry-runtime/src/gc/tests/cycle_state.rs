@@ -715,6 +715,137 @@ fn root_scan_slices_remembered_set_dirty_old_pages_with_tiny_budget() {
     }
 }
 
+/// Regression: a born-black (allocate-black) object must also be TRACED.
+/// The budgeted BuildValidPointerSet phase runs mutator windows BEFORE the
+/// insertion barrier enables; an object born there is MARKED at birth, so
+/// the later trace treats it as already-visited. Pre-fix its children —
+/// linked before barrier-enable, hence never shaded — were unreachable to
+/// the whole mark and swept live (the compiled TUI's React fiber tree,
+/// reachable only through a build-window fiber's `alternate` back-edge,
+/// lost its side-table fields this way). `gc_note_black_birth` seeds every
+/// black birth so the trace descends into it.
+#[test]
+fn born_black_build_phase_object_is_traced() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    // Budgeted kind: production build-phase mutator windows only exist in
+    // budgeted cycles, whose valid-pointer set is the live page classifier
+    // (mid-cycle births classify as valid). A census-mode cycle with mutator
+    // windows would be an artificial hybrid production never runs.
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    // One bounded step: parked inside BuildValidPointerSet, barrier not yet
+    // enabled, allocate-black active since cycle construction.
+    state.step(GcWorkBudget::bounded(1));
+    assert_eq!(state.phase(), GcCyclePhase::BuildValidPointerSet);
+
+    // Mutator window: a runtime-path allocation is born black...
+    let (parent, fields) = unsafe { alloc_nursery_test_object(1) };
+    unsafe {
+        let header = header_from_user_ptr(parent as *const u8);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "runtime allocation during an active budgeted cycle is born marked"
+        );
+    }
+    // ...and links a white child with the barrier still off. The child is
+    // reachable ONLY through the born-black parent; the parent is not
+    // rooted anywhere (its birth mark alone keeps it alive this cycle).
+    let (child, _child_fields) = unsafe { alloc_nursery_test_object(1) };
+    unsafe {
+        let ch = header_from_user_ptr(child as *const u8);
+        (*ch).gc_flags &= !GC_FLAG_MARKED;
+    }
+    crate::object::test_seed_overflow_fields_root(child as usize, 7f64.to_bits());
+    unsafe {
+        runtime_store_jsvalue_slot(parent as usize, fields as usize, 0, ptr_bits(child as usize));
+    }
+
+    // Age the parent/child block out of the block-persistence window
+    // (BLOCK_PERSIST_WINDOW = 5 recent general blocks get their objects
+    // force-marked as register-holding candidates — that pass would
+    // otherwise resurrect the child and mask the missing trace).
+    let aged_from = crate::arena::general_block_count();
+    let mut filler_blocks = 0usize;
+    while filler_blocks < 7 {
+        for _ in 0..64 {
+            let _ = unsafe { crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING) };
+        }
+        filler_blocks = crate::arena::general_block_count().saturating_sub(aged_from);
+    }
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+
+    assert!(
+        crate::object::debug_overflow_entry_len(child as usize).is_some(),
+        "child reachable only through a born-black object was swept live: \
+         black births must be seeded into the trace"
+    );
+    crate::object::test_clear_overflow_fields_root();
+}
+
+/// Regression: an object born in a mutator window BETWEEN AtomicFinalize
+/// completion and the first sweep slice ("the finalize->sweep gap"), then
+/// linked from a live parent, must survive the sweep. Pre-fix the barrier
+/// was disabled at finalize-end while the sweep's block/fill snapshot was
+/// only taken one or more mutator windows later: a gap-born object (codegen
+/// bump allocations carry no allocate-black birth flag) was WHITE yet inside
+/// the snapshot and freed live — observed as React fibers losing their
+/// overflow side-table fields in the compiled TUI. The fix keeps the barrier
+/// active across the gap and disables it in the same slice that takes the
+/// snapshot.
+#[test]
+fn gap_born_child_stored_between_finalize_and_sweep_survives() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let (parent, fields) = unsafe { alloc_old_test_object(1) };
+    js_shadow_slot_set(0, ptr_bits(parent as usize));
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    // Stop exactly in the gap: AtomicFinalize is done (marks final), but the
+    // first step_sweep slice (which builds the sweep state's block snapshot)
+    // has not run.
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
+
+    // Mutator window in the gap: birth a young object and link it from the
+    // live parent. Codegen's inline bump allocator does not stamp the
+    // allocate-black birth flag, so emulate a codegen birth by clearing the
+    // runtime-path birth mark before the store.
+    let (child, _child_fields) = unsafe { alloc_nursery_test_object(1) };
+    unsafe {
+        let ch = header_from_user_ptr(child as *const u8);
+        (*ch).gc_flags &= !GC_FLAG_MARKED;
+    }
+    // Give the child a side-table entry: its survival is then observable the
+    // same way the production failure was (a swept child has its
+    // OVERFLOW_FIELDS entry cleared by the dead-payload sweep arm).
+    crate::object::test_seed_overflow_fields_root(child as usize, 42f64.to_bits());
+    unsafe {
+        runtime_store_jsvalue_slot(parent as usize, fields as usize, 0, ptr_bits(child as usize));
+    }
+
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+
+    assert!(
+        crate::object::debug_overflow_entry_len(child as usize).is_some(),
+        "gap-born child was swept live: its overflow side-table entry was cleared"
+    );
+    unsafe {
+        let obj = child as *mut crate::object::ObjectHeader;
+        assert_eq!(
+            (*obj).object_type,
+            1,
+            "gap-born child payload clobbered after sweep"
+        );
+    }
+    crate::object::test_clear_overflow_fields_root();
+}
+
 #[test]
 fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -753,9 +884,20 @@ fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
         atomic_steps > SEEDS,
         "barrier seed drain and remembered rebuild should keep tiny steps in atomic_finalize"
     );
+    // The barrier must survive the AtomicFinalize->Sweep boundary: the sweep
+    // state's per-block fill snapshot is only taken on the first step_sweep
+    // slice, and mutator windows in between would otherwise birth WHITE
+    // objects that sit inside the snapshot and get freed live (the compiled
+    // TUI's lost-fiber-field bug). The first sweep slice drains the gap's
+    // shaded seeds, disables the barrier, and takes the snapshot atomically.
+    assert!(
+        incremental_mark_barrier_active(),
+        "barrier must stay active across the finalize->sweep gap"
+    );
+    state.step(GcWorkBudget::bounded(1));
     assert!(
         !incremental_mark_barrier_active(),
-        "full cycle should disable incremental barriers before sweep"
+        "first sweep slice must disable the barrier when it takes the block snapshot"
     );
 
     run_cycle_in_single_unit_steps(&mut state);

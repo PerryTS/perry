@@ -1277,6 +1277,11 @@ pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
 }
 
 #[cfg(test)]
+pub(crate) fn debug_overflow_entry_len(owner: usize) -> Option<usize> {
+    OVERFLOW_FIELDS.with(|m| m.borrow().get(&owner).map(|v| v.len()))
+}
+
+#[cfg(test)]
 pub(crate) fn test_clear_overflow_fields_root() {
     OVERFLOW_FIELDS.with(|m| m.borrow_mut().clear());
     OVERFLOW_LAST.with(|c| unsafe {
