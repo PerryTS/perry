@@ -30,7 +30,7 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 
 The correctness oracle remains the repository-pinned Node 26.5.0.
 
-The final expansion directly maps the deterministic public contracts from
+The current expansion directly maps the deterministic public contracts from
 Node's `test-async-hooks-disable-during-promise.js`,
 `test-async-hooks-enable-during-promise.js`,
 `test-async-hooks-promise-triggerid.js`, both
@@ -41,25 +41,31 @@ Node's `test-async-hooks-disable-during-promise.js`,
 `test-async-hooks-execution-async-resource-await.js`,
 `test-async-local-storage-http-multiclients.js`,
 `test-async-local-storage-socket.js`, and
-`test-eventemitter-asyncresource.js`. Deno's selected bind/snapshot, nesting,
+`test-eventemitter-asyncresource.js`, `test-async-wrap-trigger-id.js`,
+`test-timers.setInterval.js`, `test-fsreqcallback-readFile.js`,
+`test-getaddrinforeqwrap.js`, `test-getnameinforeqwrap.js`,
+`test-querywrap.js`, `test-crypto-randomBytes.js`, and
+`test-zlib.zlib-binding.deflate.js`. Deno's selected bind/snapshot, nesting,
 enterWith, resource-scope, and propagation contracts and Bun's async-context
 provider matrix are represented by smaller single-boundary fixtures rather
 than copied monolithic tests.
 
-The current focused result is **74/151** and is recorded in `node_suite_baseline.json`. The suite
+The current focused result is **76/163** and is recorded in `node_suite_baseline.json`. The suite
 keeps every stable mismatch as a diagnostic rather than removing unsupported
 cases: failures identify context loss, missing hook callbacks/resources,
 lifecycle differences, validation gaps, or a compile/runtime boundary for the
 specific provider named by the fixture.
 
-The 77 non-matching diagnostics are stable and grouped as follows:
+The 87 non-matching diagnostics are stable and grouped as follows:
 
 - hook delivery/configuration: custom and built-in provider lifecycle callbacks,
   cancelled resource destruction and identity, simultaneous hooks, late
   activation during timers/immediates/next ticks and Promise chains,
   pre-created Promise relationships, mixed Promise hook shapes, destroy work
-  queued from a destroy callback, `promiseResolve`, resource arguments,
-  execution-resource mapping/metadata, and `trackPromises`
+  queued from a destroy callback, repeated interval and sibling-nextTick
+  resources, fs.readFile and DNS trigger/lifecycle resources, randomBytes and
+  zlib resources, `promiseResolve`, resource arguments, execution-resource
+  mapping/metadata, static-bind resource types, and `trackPromises`
   behavior/validation;
 - scheduling/context: zlib, HTTP/HTTPS keep-alive reuse and concurrent clients,
   net callback/data isolation, dgram, subprocess, worker, VM, dynamic import,
@@ -67,7 +73,8 @@ The 77 non-matching diagnostics are stable and grouped as follows:
 - callback contract: several async crypto APIs invoke their callback before the
   call returns, while prime callbacks do not settle;
 - resource/storage semantics: snapshot receiver handling, top execution-resource
-  restoration, disable cleanup, and caught async `exit()` rejection routing; and
+  restoration, disable cleanup, caught async `exit()` rejection routing, and
+  EventEmitterAsyncResource prototype/getter brand behavior; and
 - compilation: direct `node:tls` activation currently builds rustls without its
   `ring` provider and then cannot find a fallback runtime archive. The local
   certificate fixture itself passes the pinned Node oracle.
@@ -75,11 +82,12 @@ The 77 non-matching diagnostics are stable and grouped as follows:
 ## Coverage
 
 - `resource/`: construction/type and ID invariants, scope/receiver/arguments,
-  instance bind, deterministic hook scope callbacks, and explicit destroy.
+  instance/static bind including inferred resource types, deterministic hook
+  scope callbacks, and explicit destroy.
 - `storage/`: run nesting and restoration, independent instances, enterWith,
   exit and its async descendants, EventEmitter listener bleed/isolation,
-  multiple store value types, disable/re-entry, repeated disable, and
-  promise-boundary behavior.
+  multiple store value types, cross-instance exit isolation, disable/re-entry,
+  repeated disable, and promise-boundary behavior.
 - `static/`: AsyncLocalStorage bind/snapshot and AsyncResource.bind context,
   empty and populated captures, receiver, argument, return-value, re-entry, and
   restoration behavior.
@@ -92,16 +100,17 @@ The 77 non-matching diagnostics are stable and grouped as follows:
   directory, watch, promises, and stream callbacks; crypto random, KDF, key,
   key-pair, and prime callbacks; all major zlib callback/stream families;
   Readable/Writable/Transform/finished, timers/promises, util.promisify,
-  util.promisify.custom, EventEmitter, and EventEmitterAsyncResource behavior
-  selected from Bun's async-context matrix and Node's provider tests.
+  util.promisify.custom, EventEmitter, and EventEmitterAsyncResource lifecycle
+  plus prototype-brand behavior selected from Bun's async-context matrix and Node's provider tests.
 - `hooks/`: enable/disable/re-enable, simultaneous observers, enabling and
-  disabling observers from `init` or while callbacks and Promise chains are
-  active, mixed Promise hook shapes, pre-created and async/await Promise trigger
-  chains, execution-resource identity and writable metadata propagation,
+  disabling observers from `init`, `before`, and `after` or while callbacks and
+  Promise chains are active, mixed Promise hook shapes, pre-created and
+  async/await Promise trigger chains, execution-resource identity and writable metadata propagation,
   default next-tick triggers, re-entrant destroy queuing, `trackPromises`,
   `promiseResolve`, resource arguments, cancelled timer/immediate destruction,
-  deterministic timer/microtask/nextTick/fs/crypto/PBKDF2 lifecycles, and
-  throwing scoped callbacks.
+  deterministic timer/interval/microtask/nextTick/fs/crypto/PBKDF2/randomBytes/
+  zlib/DNS lifecycles, sibling and fs.readFile trigger ancestry, and throwing
+  scoped callbacks.
 - `providers/`: DNS, child processes, HTTP and HTTPS including keep-alive agent
   and concurrent-client isolation, HTTP execution-resource mapping, TLS, net
   including concurrent data, dual accept/connect context isolation, and
@@ -150,12 +159,17 @@ kept out for a concrete reason rather than to cap the suite size:
   assertions because Perry's base `createCipheriv` stream never emits data/end
   and exits with unsettled top-level await; it belongs after crypto stream event
   support is functional.
+- A current Node-main test expects the removed `AsyncResource.domain` getter,
+  but the pinned Node 26.5.0 oracle has no such prototype getter; that
+  post-oracle surface is not counted.
 - Node 26.5.0 supports AsyncLocalStorage `defaultValue` and `name`, but Perry's
   API manifest does not claim those constructor/name surfaces, so they are not
   counted here.
 
-The raw hook cases retained here are limited to a user-created AsyncResource:
-its init callback is synchronous, its before/callback/after sequence is fully
-controlled, and explicit `emitDestroy()` is observed behind a setImmediate
-barrier. These cases are deterministic and expose lifecycle gaps without
-depending on provider internals or GC timing.
+Raw hook coverage remains deliberately bounded. User-created AsyncResource
+cases control init/before/callback/after/destroy directly. Selected built-in
+provider cases are retained only where the pinned Node suite supplies a stable
+contract and the operation is local and deterministic: interval and nextTick,
+fs.readFile, DNS lookup/lookupService/localhost query, randomBytes, and zlib.
+All use explicit completion barriers and assert relationships rather than raw
+IDs; GC timing and native topology graphs remain excluded.
