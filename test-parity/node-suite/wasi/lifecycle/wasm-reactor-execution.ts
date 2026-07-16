@@ -12,6 +12,10 @@ if (exportsObject && typeof exportsObject === "object") {
   const memory = new Uint8Array(exportsObject.memory.buffer);
   const wasi = new W({ version: "preview1" });
   console.log("before:", memory[0]);
-  console.log("return:", String(wasi.initialize(instance)));
+  if (typeof wasi.initialize !== "function") {
+    console.log("return: unavailable");
+  } else {
+    console.log("return:", String(wasi.initialize(instance)));
+  }
   console.log("after:", new Uint8Array(exportsObject.memory.buffer)[0]);
 }

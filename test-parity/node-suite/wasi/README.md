@@ -93,11 +93,14 @@ Coverage was compared against primary sources at these revisions:
   lacks Node's initialize/finalize helpers, and uses realm-sensitive memory
   branding. Its `wasiImport` property can be replaced, but it lacks Node's
   `getImportObject()` method; the identity and wrapper-descriptor fixtures
-  normalize that absence instead of terminating before reporting it. It also
-  accepts `args: null` instead of applying Node's non-array validation, retains
-  the caller's args array and env object so mutations after construction remain
-  visible, does not omit undefined env values, and retains payload bytes after
-  embedded NULs like Deno; Node 26.5.0 truncates each native
+  normalize that absence instead of terminating before reporting it. Its missing
+  `initialize()` is likewise reported explicitly by the direct and real-wasm
+  reactor execution fixtures; the command-linking fixture reports the missing
+  import-object helper without substituting Bun's legacy `getImports()` API. It
+  also accepts `args: null` instead of applying Node's non-array validation,
+  retains the caller's args array and env object so mutations after construction
+  remain visible, does not omit undefined env values, and retains payload bytes
+  after embedded NULs like Deno; Node 26.5.0 truncates each native
   argument/environment string at its first NUL and remains the oracle. Bun does
   support ordinary WASI subclass construction.
 

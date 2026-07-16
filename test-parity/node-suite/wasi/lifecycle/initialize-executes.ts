@@ -21,5 +21,9 @@ const instance = {
 };
 const wasi = new W({ version: "preview1" });
 console.log("before:", calls);
-console.log("return:", String(wasi.initialize(instance)));
+if (typeof wasi.initialize !== "function") {
+  console.log("return: unavailable");
+} else {
+  console.log("return:", String(wasi.initialize(instance)));
+}
 console.log("after:", calls);
