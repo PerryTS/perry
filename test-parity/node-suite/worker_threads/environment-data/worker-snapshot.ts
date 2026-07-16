@@ -1,5 +1,8 @@
-import { Worker } from "node:worker_threads";
-import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import {
+  getEnvironmentData,
+  setEnvironmentData,
+  Worker,
+} from "node:worker_threads";
 
 process.chdir("test-parity/node-suite/worker_threads/environment-data");
 

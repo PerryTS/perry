@@ -26,29 +26,37 @@ that oracle.
 - `main-thread/`: complete namespace export availability and types, main-thread
   values, Worker and MessagePort prototype descriptors, and constructor brands.
 - `environment-data/`: key identity, live main-thread values, deletion, worker
-  snapshot cloning, and parent/worker mutation isolation.
+  snapshot cloning, built-in Map/Set/Date values, nested-worker inheritance,
+  non-cloneable construction rejection, and parent/worker mutation isolation.
 - `structured-clone/`: ArrayBuffer cloning, typed-array backing identity,
   built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
   transfer detachment, MessagePort ownership, overloads, and atomic rollback.
 - `message-port/`: synchronous FIFO receives, invalid-port validation,
   explicit `start()`, event fields/ports, listener deduplication, close callback
   ordering, listener removal/`once`, `onmessage` replacement, method receiver
-  validation, MessageEvent construction, duplicate/self/closed transfers,
-  atomic clone rollback, transfer-state validation, queued delivery, overload
-  validation, and `ref`/`unref`/`hasRef` state.
+  validation, NodeEventTarget surface/listener validation, iterable MessageEvent
+  ports and transfer options, dispatch-time close flushing,
+  duplicate/self/closed transfers, atomic clone rollback, transfer-state
+  validation, queued delivery, overload validation, and
+  `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement.
 - `worker-lifecycle/`: constructor transfer validation, structured `workerData`,
   default and built-in workerData, MessagePort/ArrayBuffer transfer, environment
-  snapshots, argv coercion/validation, inherited/explicit/shared environments,
-  SharedArrayBuffer workerData, thread id/name lifecycle, unsupported paths,
-  EventEmitter listener behavior, method receivers, postMessage clone rollback,
-  `online`/`message`/`error`/`exit` ordering, ref return values, natural exit,
-  and deterministic repeated termination settlement.
+  snapshots, eval/CJS require, file URLs with Unicode names, argv and execArgv
+  coercion/validation, inherited/explicit/shared environments, SharedArrayBuffer
+  through workerData and postMessage, queued transferred-port receive, thread
+  id/name uniqueness and lifecycle, parentPort `onmessage`/ref state, Worker
+  EventEmitter surface and listener validation, process restrictions, captured
+  stdout/stderr, explicit and `process.exitCode` exits, unsupported paths,
+  method receivers, postMessage clone rollback, `online`/`message`/`error`/`exit`
+  ordering, ref return values, natural exit, and deterministic repeated
+  termination settlement.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
-  the distinction between marking a port uncloneable and transferring it.
+  the distinction between marking a port uncloneable and transferring it, plus
+  private, unforgeable, and permanent marker behavior.
 - `broadcast-channel/`: same-name fanout/FIFO isolation, sender exclusion,
   listener management/`once`, name coercion, close/ref idempotence, typed-array
   and SharedArrayBuffer cloning, untransferable-value rejection, and
@@ -59,34 +67,42 @@ that oracle.
 - `direct-message/`: delivery, no-listener and timeout rejection, plus thread id
   and timeout argument validation.
 
-Every asynchronous fixture uses a message, close, exit, or promise-settlement
-barrier. No added fixture uses a sleep as a completion condition.
+Every asynchronous fixture uses a message, close, exit, stream-EOF, or
+promise-settlement barrier. No added fixture uses a sleep as a completion
+condition.
 
 ## Stopping judgment
 
 The remaining upstream cases were not copied because they are redundant with
 the cases above or belong to a separate slow/risky runtime feature:
 
-- Resource-limit enforcement, stdio timing/backpressure, heap snapshots and
-  CPU/heap profiling are resource- and platform-sensitive. The pre-existing
-  `worker-file/options-diagnostics.ts` keeps surface coverage only.
-- Eval/data-URL/ESM loaders, preload/`execArgv`, signals, inspector integration,
-  process exit variants, and source maps primarily exercise loader, CLI, or
-  process subsystems rather than the worker messaging contract.
-- Nested-worker stress, GC/finalization of unreachable ports, shared native
-  handles, large message loops, and termination races are scheduler-sensitive
-  and need dedicated stress infrastructure.
-- SharedArrayBuffer aliasing is now covered deterministically through both a
-  MessagePort and BroadcastChannel. Cross-agent wait/notify coordination stays
-  separate because it requires scheduler-aware runtime infrastructure.
+- Resource-limit enforcement, stdio backpressure/large-write timing, heap
+  snapshots, and CPU/heap profiling are resource- and platform-sensitive. Basic
+  captured stdout/stderr and the diagnostic method surface are covered without
+  introducing pressure or timing assertions.
+- Basic eval/CJS require, execArgv, file-URL construction, process restrictions,
+  and exit codes are now covered. Data-URL/ESM/custom loaders, preload chains,
+  signals, inspector integration, beforeExit/uncaught-exception variants, and
+  source maps remain separate loader, CLI, or process-subsystem work.
+- One controlled nested worker now covers environment-data inheritance. Deeper
+  nesting stress, GC/finalization of unreachable ports, shared native handles,
+  large message loops, and termination races remain scheduler-sensitive.
+- SharedArrayBuffer aliasing is covered through same-thread MessagePort and
+  BroadcastChannel paths plus cross-agent workerData and postMessage. Atomics
+  wait/notify coordination remains separate scheduler-aware infrastructure.
+- A cross-worker BroadcastChannel delivery candidate was rejected after Node
+  required cross-agent scheduling turns while Perry's absent delivery left no
+  deterministic completion event. It belongs with scheduler-aware cross-agent
+  infrastructure rather than a sleep/timeout-based fixture here.
 - Web Locks now cover deterministic pre-abort and steal behavior in addition to
   surface, validation, shared/exclusive ordering, `ifAvailable`, and query
   snapshots. In-flight abort races and cross-agent ownership remain excluded.
 - The existing `direct-message/` fixtures already cover deterministic
   `postMessageToThread` delivery, rejection, and timeout behavior.
 
-The measured focused result is `28/84`: all 17 pre-existing cases remain green,
-11 added cases pass, and 56 added cases expose stable diagnostic differences.
+The measured focused result is `29/109`: all 17 pre-existing cases remain
+green, 12 added cases pass, and 80 added cases expose stable diagnostic
+differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -96,29 +112,33 @@ The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `web-locks/web-locks-steal.ts`. The latest broad pass also adds green coverage
 for `environment-data/value-identity.ts`,
 `message-port/onmessage-replacement.ts`,
+`worker-lifecycle/eval-basic.ts`,
 `worker-lifecycle/method-receivers.ts`, and
 `web-locks/web-locks-independent-names.ts`. The diagnostic differences are:
 
 - All nine `structured-clone/` fixtures: Perry preserves some indexed values but
   loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
   cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
-- Fifteen `message-port/` diagnostics: closing drops queued data and callbacks,
-  listener counts, receiver/option/transfer validation, event construction and
-  `ports`, duplicate/self/closed transfer rollback, moved ownership, and
-  `hasRef()` state differ.
-- Seventeen `worker-lifecycle/` diagnostics: invalid constructor payloads and
-  paths, argv/env handling, shared environments, worker metadata, listener
-  behavior, repeated termination, workerData cloning/SAB sharing, postMessage
-  rollback, post-exit values, and worker error routing differ.
-- All four `transfer-markers/` fixtures: primitives are reported as marked,
-  nested clone rejection and ArrayBuffer exceptions differ, and marked
-  transferables and uncloneable ports differ.
+- Twenty `message-port/` diagnostics: closing and dispatch flushing, queued
+  data/callbacks, NodeEventTarget surface, listener counts and validation,
+  receiver/options/iterables/transfers, MessageEvent construction and `ports`,
+  duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
+- Thirty-two `worker-lifecycle/` diagnostics: invalid constructor payloads and
+  paths, execArgv, captured stdio, process restrictions/exit codes, shared
+  environments and nested messages, worker/parentPort EventEmitter behavior,
+  metadata/unique ids, repeated termination, workerData and postMessage SAB
+  sharing, queued port receive, rollback, post-exit values, and error routing
+  differ. Basic eval with CJS require passes.
+- All five `transfer-markers/` fixtures: primitives are reported as marked,
+  nested clone rejection, private/permanent marker enforcement, ArrayBuffer
+  exceptions, and marked transferables/uncloneable ports differ.
 - Five `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
   MessagePort validation, and closed-channel posts differ.
-- Six additional diagnostics cover namespace/prototype completeness,
-  environment worker snapshots, MessageChannel construction, direct-message
-  argument validation, and Web Locks callback rejection cleanup.
+- Nine additional diagnostics cover namespace/prototype completeness,
+  environment-data built-ins/inheritance/construction, MessageChannel
+  construction, direct-message argument validation, and Web Locks callback
+  rejection cleanup.
 
 The clean measurement used:
 
@@ -129,9 +149,9 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `28/84 (33.3%), diff=56`, with no compile failures or timeouts.
+It reported `29/109 (26.6%), diff=80`, with no compile failures or timeouts.
 The SharedArrayBuffer/Atomics boundary is backed by the added same-process
-channel cases plus the existing
+channel and cross-worker clone/alias cases plus the existing
 granular `globals/atomics-*.ts`, `buffer/from/shared-array-buffer.ts`, and
 `util/types/arraybuffer-sharedarraybuffer.ts` cases; cross-agent fixtures such
 as Node's `test-worker-message-channel-sharedarraybuffer.js` and Deno's
