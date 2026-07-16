@@ -60,7 +60,9 @@ that oracle.
   pending `once` removal, per-event listener scope, close-callback registration
   order, tamper-resistant listener bookkeeping, post-dispatch `once` registry
   state, non-function `onmessage` clearing, peer-close ref behavior, throwing
-  transfer iterators, transfer targets, and `ref`/`unref`/`hasRef` state.
+  and malformed transfer iterators, accepted empty transfer forms, custom-event
+  EventTarget/EventEmitter bridging, transfer targets, and
+  `ref`/`unref`/`hasRef` state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement with closed-port and argument validation.
@@ -128,8 +130,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `31/134`: all 17 pre-existing cases remain green,
-14 added cases pass, and 103 added cases expose stable diagnostic differences.
+The measured focused result is `32/137`: all 17 pre-existing cases remain green,
+15 added cases pass, and 105 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -143,12 +145,13 @@ for `environment-data/value-identity.ts`,
 `web-locks/web-locks-independent-names.ts`. Sequential sibling `SHARE_ENV`
 visibility in `worker-lifecycle/share-env-siblings.ts` also passes. The
 indexed-key variant in `worker-lifecycle/share-env-indexed.ts` passes too. The
-diagnostic differences are:
+accepted optional transfer forms in `message-port/transfer-optional-forms.ts`
+also pass. The diagnostic differences are:
 
 - All ten `structured-clone/` fixtures: Perry preserves some indexed values but
   loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing, rejects
   cycles/BigInt, does not detach or move ownership, and accepts invalid lists.
-- Thirty `message-port/` diagnostics: closing and dispatch flushing, queued
+- Thirty-two `message-port/` diagnostics: closing and dispatch flushing, queued
   data/callbacks, NodeEventTarget surface, listener counts and validation,
   receiver/options/iterables/transfers, MessageEvent construction and `ports`,
   duplicate/self/closed rollback, moved ownership, and `hasRef()` state differ.
@@ -178,7 +181,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `31/134 (23.1%), diff=103`, with no compile failures or timeouts.
+It reported `32/137 (23.4%), diff=105`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. The SharedArrayBuffer/Atomics boundary is backed by the
