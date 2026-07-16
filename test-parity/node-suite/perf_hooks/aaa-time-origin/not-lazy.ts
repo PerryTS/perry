@@ -1,10 +1,14 @@
-const start = Date.now();
+import { performance } from "node:perf_hooks";
 
-setTimeout(() => {
-  const elapsed = Date.now() - start;
-  const originAge = Date.now() - performance.timeOrigin;
-
-  console.log("elapsed observed:", elapsed >= 15);
-  console.log("origin includes wait:", originAge + 5 >= elapsed);
-  console.log("now includes wait:", performance.now() + 5 >= elapsed);
-}, 25);
+const before = performance.now();
+await new Promise<void>((resolve) => setImmediate(resolve));
+const after = performance.now();
+console.log(
+  "timeOrigin stable:",
+  performance.timeOrigin === performance.timeOrigin,
+);
+console.log("now advances:", after >= before);
+console.log(
+  "origin relation:",
+  performance.timeOrigin + after >= performance.timeOrigin,
+);

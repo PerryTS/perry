@@ -3,11 +3,10 @@ import { performance } from "node:perf_hooks";
 // cycles via reference preservation).
 const o: any = {};
 o.self = o;
-let ok = false;
 try {
-  performance.mark("c", { detail: o });
-  ok = true;
-} catch {
-  ok = false;
+  const mark = performance.mark("c", { detail: o });
+  console.log("distinct clone:", mark.detail !== o);
+  console.log("cycle preserved:", mark.detail.self === mark.detail);
+} finally {
+  performance.clearMarks();
 }
-console.log("accepted:", ok);

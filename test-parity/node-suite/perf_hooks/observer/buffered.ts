@@ -4,18 +4,15 @@ import { performance, PerformanceObserver } from "node:perf_hooks";
 // runtime so the test reports 0 instead of hanging.)
 performance.mark("pre1");
 performance.mark("pre2");
-await new Promise<void>((resolve) => {
-  let done = false;
-  const finish = (n: number) => {
-    if (done) return;
-    done = true;
-    console.log("buffered count:", n);
-    resolve();
-  };
-  const obs = new PerformanceObserver((list) => {
-    obs.disconnect();
-    finish(list.getEntries().length);
-  });
-  obs.observe({ type: "mark", buffered: true });
-  setTimeout(() => finish(0), 300);
+let names = "not delivered";
+const obs = new PerformanceObserver((list) => {
+  names = list.getEntries().map((entry) => entry.name).join(",");
 });
+try {
+  obs.observe({ type: "mark", buffered: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  console.log("buffered names:", names);
+} finally {
+  obs.disconnect();
+  performance.clearMarks();
+}

@@ -71,7 +71,7 @@ NODE = os.environ.get("NODE_BIN", "node")
 SLOW_MODULES = {
     "http", "http2", "https", "net", "dgram", "tls", "cluster", "dns",
     "stream", "child_process", "worker_threads", "inspector",
-    "inspector-promises", "repl", "diagnostics_channel", "timers", "fetch",
+    "inspector-promises", "repl", "diagnostics_channel", "timers", "perf_hooks", "fetch",
 }
 
 tests = []
