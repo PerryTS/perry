@@ -48,8 +48,8 @@ from collections import defaultdict
 _DUR_MS = re.compile(r"(?<=: )\d+(?:\.\d+)?(ms|s)\b")
 _DUR_CLOCK = re.compile(r"\b\d+:\d{2}\.\d{3} \((h:mm|m):ss\.mmm\)")
 _FRAME = re.compile(r"^\s{4,}(at\s|\d+:\s)|… \d+ more identical frames")
-_TEST_DURATION = re.compile(r"\(\d+(?:\.\d+)?ms\)")
-_TEST_LOCATION = re.compile(r"^test at .+:\d+:\d+$")
+_TEST_DURATION = re.compile(r"\(\d+(?:\.\d+)?(?:ms|s)\)")
+_TEST_LOCATION = re.compile(r"^(\s*)test at .+:\d+:\d+$")
 
 
 def normalize(text: str) -> str:
@@ -57,13 +57,16 @@ def normalize(text: str) -> str:
     for line in text.split("\n"):
         if _FRAME.search(line):
             continue
-        if _TEST_LOCATION.match(line):
-            line = "test at <location>"
+        location = _TEST_LOCATION.match(line)
+        if location:
+            line = f"{location.group(1)}test at <location>"
         line = _DUR_MS.sub(lambda m: "<dur>" + m.group(1), line)
         line = _DUR_CLOCK.sub(lambda m: "<dur:" + m.group(1) + ">", line)
         line = _TEST_DURATION.sub("(<test-duration>)", line)
-        if line.startswith("ℹ duration_ms "):
-            line = "ℹ duration_ms <test-duration>"
+        stripped = line.lstrip()
+        if stripped.startswith("ℹ duration_ms "):
+            indent = line[: len(line) - len(stripped)]
+            line = f"{indent}ℹ duration_ms <test-duration>"
         out.append(line)
     return "\n".join(out)
 

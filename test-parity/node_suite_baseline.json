@@ -2,12 +2,12 @@
   "_schema": {
     "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
     "oracle": "node v26.5.0 (pinned by .node-version)",
-    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant console-time values, node:test reporter durations and locations, and stack-trace frame lines symmetrically before the stdout compare. The node:test floor is the repeated clean focused Node 26.5.0 measurement: 16/43 after 32 diagnostic fixtures. Aggregate metadata is the measured clean full-suite result after that canonicalization: 2763/2902 (95.2%). Existing per-module floors outside node:test were not lowered for unrelated or environment-sensitive deficits in that run."
+    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant console-time values, node:test reporter durations and locations (including nested indentation), and stack-trace frame lines symmetrically before the stdout compare. The node:test floor is the repeated clean focused Node 26.5.0 measurement: 33/90 after 79 diagnostic fixtures. Aggregate metadata is the measured clean full-suite result after that expansion: 2772/2949 (94.0%). Existing per-module floors outside node:test were not lowered for unrelated or environment-sensitive deficits in that run."
   },
   "overall": {
-    "pass": 2763,
-    "total": 2902,
-    "pct": 95.2
+    "pass": 2772,
+    "total": 2949,
+    "pct": 94.0
   },
   "modules": {
     "assert": {
@@ -175,8 +175,8 @@
       "total": 2
     },
     "test": {
-      "pass": 16,
-      "total": 43
+      "pass": 33,
+      "total": 90
     },
     "timers": {
       "pass": 90,

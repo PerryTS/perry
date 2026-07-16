@@ -23,23 +23,27 @@ snapshots:
 
 ## Added diagnostic categories
 
-- `runner/registration`: deferred registration, nested suites/subtests, and
-  parent-child completion.
+- `imports` and `runner/registration` (10 fixtures): export aliases, callback
+  overloads, deferred registration, async/callback completion, option
+  validation, nested suites/subtests, and parent-child completion.
 - `runner/context` and `runner/api`: assertion surface, plans, runtime
   skip/todo/only, failure propagation, names, the existing diagnostic case, and
-  the claimed `run()` surface.
-- `runner/hooks`: global and nested ordering plus cleanup after body or setup
-  throws.
-- `mock-fn`: successful and throwing call records, implementation queues,
-  reset/restore behavior, nested method restoration, property/accessor contexts,
-  `times`, and validation.
-- `mock-timers`: boundary ordering, nested `runAll()`, and deterministic Date
-  `setTime()` behavior.
+  the claimed `run()` surface (16 fixtures).
+- `runner/hooks` (9 fixtures): global, repeated, and nested ordering, hook
+  context, runtime-skip cleanup, and cleanup after body or setup throws.
+- `mock-fn` (27 fixtures): successful, async, bound, no-op, and throwing call
+  records; receiver/prototype/inheritance behavior; implementation queues and
+  indexed overrides; reset/restore behavior; property/accessor contexts;
+  symbols, descriptors, `times`, and validation.
+- `mock-timers` (13 fixtures): timeout arguments and cancellation, interval
+  repetition/self-clear, reset, validation, boundary ordering, nested
+  `runAll()`, Date construction, and deterministic `setTime()` behavior.
+- `snapshots` and `reporters` (4 fixtures): serializer/assertion validation and
+  synthetic directive/nesting events.
 
-The existing snapshot fixtures already use fixed local files, and the existing
-reporter fixture feeds synthetic events. Additional snapshot/reporter cases were
-not added because the remaining upstream coverage is primarily path, stack,
-duration, coverage, and process-output formatting.
+Snapshot fixtures use fixed local files, and reporter fixtures feed synthetic
+events. The 79 added fixtures expand the module from 11 to 90 cases without
+depending on wall-clock time or external files.
 
 ## Stopping judgment
 
@@ -51,11 +55,16 @@ The remaining Node runner corpus is intentionally left for separate work:
 - concurrency, randomization, timeouts, abort scheduling, refed handles, and
   scheduler-sensitive timer APIs are not deterministic enough for byte-for-byte
   stdout comparison here.
+- enabling mock timers twice currently leaves a Perry process handle alive even
+  after `reset()`; that validation belongs with the runtime cleanup fix rather
+  than a granular case that times out the harness.
 - colors/TTY, absolute locations, stacks, durations, and reporter formatting
   tied to those values are environment-specific.
 - `TestContext.waitFor()`, `runOnly()`, tags, full names, signals, and custom
   assertions are not listed in Perry's current `node:test` manifest; testing
   those as claimed compatibility would overstate the supported surface.
 - module mocking and snapshot update/CLI behavior are separate runtime and CLI
-  projects. Further core cases are redundant with the focused fixtures above or
-  depend on one of these excluded surfaces.
+  projects. Constructor-target mocks are also deferred because Perry does not
+  currently expose constructable mock wrappers. Further core cases are
+  redundant with the focused fixtures above or depend on one of these excluded
+  surfaces.
