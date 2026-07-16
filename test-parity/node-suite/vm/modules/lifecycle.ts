@@ -12,7 +12,6 @@ function logError(label: string, fn: () => unknown): void {
             error.constructor.name,
             error.name,
             error.code ?? "-",
-            error.message,
         );
     }
 }

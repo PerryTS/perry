@@ -207,8 +207,8 @@
       "total": 4
     },
     "vm": {
-      "pass": 8,
-      "total": 8
+      "pass": 11,
+      "total": 39
     },
     "wasi": {
       "pass": 3,
