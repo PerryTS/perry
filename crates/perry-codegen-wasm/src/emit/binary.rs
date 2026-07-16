@@ -16,10 +16,12 @@ impl<'a> FuncEmitCtx<'a> {
     ) {
         self.emit_expr(func, left);
         func.instruction(&Instruction::F64ReinterpretI64);
-        func.instruction(&Instruction::I32TruncF64S);
+        func.instruction(&Instruction::I64TruncSatF64S);
+        func.instruction(&Instruction::I32WrapI64);
         self.emit_expr(func, right);
         func.instruction(&Instruction::F64ReinterpretI64);
-        func.instruction(&Instruction::I32TruncF64S);
+        func.instruction(&Instruction::I64TruncSatF64S);
+        func.instruction(&Instruction::I32WrapI64);
         func.instruction(&op);
         func.instruction(&Instruction::F64ConvertI32S);
         func.instruction(&Instruction::I64ReinterpretF64);

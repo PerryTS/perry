@@ -931,6 +931,78 @@ impl WasmModuleEmitter {
                                     .insert((consumer_idx, local.clone()), gidx);
                             }
                         }
+                        // Namespace import (`import * as W from "./mod"`):
+                        // register every exported module-level let under a
+                        // DOTTED key ("W.MESH_COUNT"), so PropertyGet on the
+                        // namespace ident resolves to the source module's
+                        // promoted-let global — the same mechanism the Named
+                        // arm above uses. Without this, every `W.member` read
+                        // emitted a class_get_field on an undefined receiver
+                        // and produced undefined (functions kept working via
+                        // the whole-program name map, which made the failure
+                        // maddeningly partial).
+                        if let perry_hir::ir::ImportSpecifier::Namespace { local } = spec {
+                            let src_module = &modules[src_idx].1;
+                            for export in &src_module.exports {
+                                if let perry_hir::ir::Export::Named {
+                                    local: src_local,
+                                    exported,
+                                } = export
+                                {
+                                    if let Some(&gidx) = src_lets.get(src_local.as_str()) {
+                                        self.imported_var_globals.insert(
+                                            (consumer_idx, format!("{}.{}", local, exported)),
+                                            gidx,
+                                        );
+                                    }
+                                }
+                            }
+                            // Fall-through parity with the Named arm: exports
+                            // registered out-of-band still have their let —
+                            // expose those by name unless an Export::Named
+                            // already claimed the key.
+                            for (name, &gidx) in src_lets.iter() {
+                                self.imported_var_globals
+                                    .entry((consumer_idx, format!("{}.{}", local, name)))
+                                    .or_insert(gidx);
+                            }
+                            // Exported FUNCTIONS: `W.fn(args)` must call the
+                            // source module's compiled function, `W.fn` as a
+                            // value must wrap it in a closure. Register both
+                            // export shapes: the exported_functions list
+                            // (`export function fn`) and Export::Named
+                            // clauses (`function fn() {}; export { fn }`).
+                            let src_fm = &self.module_func_maps[src_idx];
+                            for (exp_name, fid) in &src_module.exported_functions {
+                                if let Some(&fidx) = src_fm.get(fid) {
+                                    self.imported_ns_funcs.insert(
+                                        (consumer_idx, format!("{}.{}", local, exp_name)),
+                                        fidx,
+                                    );
+                                }
+                            }
+                            for export in &src_module.exports {
+                                if let perry_hir::ir::Export::Named {
+                                    local: src_local,
+                                    exported,
+                                } = export
+                                {
+                                    for f in &src_module.functions {
+                                        if &f.name == src_local {
+                                            if let Some(&fidx) = src_fm.get(&f.id) {
+                                                self.imported_ns_funcs
+                                                    .entry((
+                                                        consumer_idx,
+                                                        format!("{}.{}", local, exported),
+                                                    ))
+                                                    .or_insert(fidx);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

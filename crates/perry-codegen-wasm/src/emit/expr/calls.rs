@@ -11,6 +11,37 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::Call { callee, args, .. } => {
                 // Check for method call patterns: obj.method(args)
                 if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                    // Namespace-import member call (`import * as W from "./mod";
+                    // W.fn(args)`): resolve to a DIRECT wasm call of the source
+                    // module's function — the same lowering `fn(args)` gets via
+                    // a named import. Without this the callee fell through to
+                    // the class-dispatch fallback with an undefined receiver
+                    // and silently returned undefined (never executing fn).
+                    if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                        let key = (
+                            self.emitter.current_mod_idx,
+                            format!("{}.{}", name, property),
+                        );
+                        if let Some(&idx) = self.emitter.imported_ns_funcs.get(&key).copied().as_ref() {
+                            for arg in args {
+                                self.emit_expr(func, arg);
+                            }
+                            // Pad-up / drop-excess — see the FuncRef arm below (#183).
+                            if let Some(&expected) = self.emitter.func_param_counts.get(&idx) {
+                                for _ in args.len()..expected {
+                                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                                }
+                                for _ in expected..args.len() {
+                                    func.instruction(&Instruction::Drop);
+                                }
+                            }
+                            func.instruction(&Instruction::Call(idx));
+                            if self.emitter.void_funcs.contains(&idx) {
+                                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                            }
+                            return true;
+                        }
+                    }
                     // console.log/warn/error
                     if let Expr::GlobalGet(_) = object.as_ref() {
                         match property.as_str() {

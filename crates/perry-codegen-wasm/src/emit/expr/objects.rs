@@ -106,6 +106,40 @@ impl<'a> FuncEmitCtx<'a> {
             }
 
             Expr::PropertyGet { object, property } => {
+                // Namespace-import member read (`import * as W; W.MEMBER`):
+                // the object lowers to ExternFuncRef("W"), which as a value is
+                // undefined — resolve the member against the source module's
+                // promoted-let global instead (registered under the dotted key
+                // in compile.rs). Must run before every other special case,
+                // including .length: `W.length` is a module member here, not
+                // a string/array length.
+                if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                    let key = (
+                        self.emitter.current_mod_idx,
+                        format!("{}.{}", name, property),
+                    );
+                    if let Some(&gidx) = self.emitter.imported_var_globals.get(&key) {
+                        func.instruction(&Instruction::GlobalGet(gidx));
+                        return true;
+                    }
+                    // Member is an exported FUNCTION used as a value
+                    // (`const f = W.fn`): wrap in a zero-capture closure,
+                    // mirroring the ExternFuncRef value arm in classes.rs.
+                    // (Direct calls take the fast path in calls.rs instead.)
+                    if let Some(&func_idx) = self.emitter.imported_ns_funcs.get(&key) {
+                        let table_idx = self
+                            .emitter
+                            .func_to_table_idx
+                            .get(&func_idx)
+                            .copied()
+                            .unwrap_or(func_idx);
+                        self.emit_frame_begin(func, 2);
+                        self.emit_store_const(func, 0, table_idx as f64);
+                        self.emit_store_const(func, 1, 0.0);
+                        self.emit_memcall(func, "closure_new", 2);
+                        return true;
+                    }
+                }
                 // Special case: .length uses string_len which handles both strings and arrays
                 if property == "length" {
                     self.emit_frame_begin(func, 1);

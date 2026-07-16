@@ -383,7 +383,8 @@ impl<'a> FuncEmitCtx<'a> {
                     UnaryOp::BitNot => {
                         // ~x: convert i64 to f64, truncate to i32, bitwise not, convert back to i64
                         func.instruction(&Instruction::F64ReinterpretI64);
-                        func.instruction(&Instruction::I32TruncF64S);
+                        func.instruction(&Instruction::I64TruncSatF64S);
+                        func.instruction(&Instruction::I32WrapI64);
                         func.instruction(&Instruction::I32Const(-1));
                         func.instruction(&Instruction::I32Xor);
                         func.instruction(&Instruction::F64ConvertI32S);
