@@ -26,12 +26,24 @@ The expansion was compared against these primary-source snapshots:
   and
   [`worker-transfer-list.test.ts`](https://github.com/oven-sh/bun/blob/0bffb4767dd13b4f5aaf119b13dcf37bd094e2f1/test/js/node/worker_threads/worker-transfer-list.test.ts).
 
-The inventory review covered all 143 `test-worker-*` files across the parallel
-and sequential directories in that Node snapshot, all 48 cases in Deno's unit
-selection plus its directory fixtures, and the 72 declarations in Bun's two
-central worker test files. Cases are represented here by observable contract
-rather than copied one-for-one when several upstream files exercise the same
-behavior.
+The follow-up inventory was refreshed against the 2026-07-16 heads of Node
+[`cf882a79042c`](https://github.com/nodejs/node/tree/cf882a79042cba4146acfdb7993b6a97c21e7239/test),
+Deno
+[`68d51a1fc8f3`](https://github.com/denoland/deno/tree/68d51a1fc8f32faf200ac4c5ba7b69648699c610/tests/unit_node),
+and Bun
+[`aca54d5c2b87`](https://github.com/oven-sh/bun/tree/aca54d5c2b874ac304a3bbe1d67630e4daf17b43/test/js/node/worker_threads).
+That pass added Node's Worker asynchronous-disposal, MessagePort and
+BroadcastChannel custom-inspection, direct-message transferable graph, and
+BroadcastChannel dispatch-time lifecycle contracts. Bun independently selects
+Worker asynchronous disposal and Node's worker corpus, while Deno's unit suite
+provides a second executable Node-compat comparison for the same core objects.
+
+The inventory review covered all 148 current `test-worker-*` files across Node's
+parallel and sequential directories, all 48 cases in Deno's unit selection plus
+its directory fixtures, and 82 declarations across Bun's current
+`worker_threads/*.test.ts` files. Cases are represented here by observable
+contract rather than copied one-for-one when several upstream files exercise the
+same behavior.
 
 Node `26.5.0`, pinned by this repository, remains the executable differential
 oracle. The upstream snapshots above guide case selection rather than changing
@@ -66,7 +78,8 @@ that oracle.
   EventTarget/EventEmitter bridging, max-listener controls, scoped
   `removeAllListeners`, missing-message validation, transfer rejection during
   close flushing, frozen EventTarget prototype resilience, MessageEvent
-  defaults/coercion, transfer targets, and `ref`/`unref`/`hasRef` state.
+  defaults/coercion, transfer targets, `ref`/`unref`/`hasRef` state, and custom
+  inspection of active/refed state.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement with closed-port and argument validation.
@@ -87,7 +100,7 @@ that oracle.
   routing, global `postMessage` replacement, workerData alias/view/cycle
   cloning, multiple and aliased MessagePorts, MessagePorts nested in Map/Set,
   broader filename, falsy execArgv, and disallowed `NODE_OPTIONS` validation,
-  and custom-stack and non-Error serialization.
+  custom-stack and non-Error serialization, and Worker asynchronous disposal.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -96,12 +109,15 @@ that oracle.
   listener management/`once`, `onmessage` replacement, name coercion, close/ref
   idempotence, typed-array and SharedArrayBuffer cloning, untransferable-value
   rejection, missing-message validation, clone-versus-closed error precedence,
-  and closed-channel and method-receiver validation.
+  closed-channel and method-receiver validation, custom inspection, channel
+  creation during dispatch, and suppression of delivery already queued for a
+  channel that closes.
 - `web-locks/`: deterministic pre-aborted requests and lock stealing, extending
   the existing surface, option, query, callback settlement/cleanup,
   independent-name concurrency, and shared/exclusive ordering cases.
 - `direct-message/`: delivery, no-listener, timeout, and handler-failure
-  rejection, plus thread id and timeout argument validation.
+  rejection, plus thread id and timeout argument validation and atomic
+  ArrayBuffer/MessagePort transfer with observable ownership.
 
 Every asynchronous fixture uses a message, close, exit, stream-EOF, or
 promise-settlement barrier. No added fixture uses a sleep as a completion
@@ -131,6 +147,10 @@ cases above or belong to a separate slow/risky runtime feature:
   exceeded the 120-second Perry per-case compilation threshold. It belongs with
   Blob runtime/compilation coverage rather than turning a marker diagnostic into
   a granular timeout.
+- A self-contained WebAssembly.Module worker-post candidate produced the same
+  module brand and result under Node 26.5.0, Deno 2.9.2, and Bun 1.2.18, but
+  exceeded the 120-second Perry compilation threshold. Like the Blob candidate,
+  that is WebAssembly/compiler coverage rather than a useful runtime diagnostic.
 - A cross-worker BroadcastChannel delivery candidate was rejected after Node
   required cross-agent scheduling turns while Perry's absent delivery left no
   deterministic completion event. It belongs with scheduler-aware cross-agent
@@ -144,11 +164,15 @@ cases above or belong to a separate slow/risky runtime feature:
   surface, validation, shared/exclusive ordering, `ifAvailable`, and query
   snapshots. In-flight abort races and cross-agent ownership remain excluded.
 - The existing `direct-message/` fixtures already cover deterministic
-  `postMessageToThread` delivery, rejection, handler failures, and timeout
-  behavior.
+  `postMessageToThread` delivery, transferable ownership, rejection, handler
+  failures, and timeout behavior.
+- Bun's current non-function `process.emit` worker regression was not selected:
+  the pinned Node 26.5.0 oracle exits fatally from `process._fatalException`
+  before an `uncaughtException` handler can establish the recovery contract that
+  Bun asserts. It is therefore not a Node parity case.
 
-The measured focused result is `32/159`: all 17 pre-existing cases remain green,
-15 added cases pass, and 127 added cases expose stable diagnostic differences.
+The measured focused result is `34/165`: all 17 pre-existing cases remain green,
+17 added cases pass, and 131 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -163,33 +187,35 @@ for `environment-data/value-identity.ts`,
 visibility in `worker-lifecycle/share-env-siblings.ts` also passes. The
 indexed-key variant in `worker-lifecycle/share-env-indexed.ts` passes too. The
 accepted optional transfer forms in `message-port/transfer-optional-forms.ts`
-also pass. The diagnostic differences are:
+also pass. The latest refresh adds passing dispatch-time coverage in
+`broadcast-channel/create-during-dispatch.ts` and
+`broadcast-channel/close-queued-delivery.ts`. The diagnostic differences are:
 
 - All twelve `structured-clone/` fixtures: Perry preserves some indexed values
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
   rejects cycles/BigInt, does not detach or move ownership, and accepts invalid
   lists.
-- Thirty-seven `message-port/` diagnostics: closing and dispatch flushing,
+- Thirty-eight `message-port/` diagnostics: closing and dispatch flushing,
   queued data/callbacks, NodeEventTarget surface, listener counts and
   validation, receiver/options/iterables/transfers, MessageEvent construction
   and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
-  state differ.
-- Forty-nine `worker-lifecycle/` diagnostics: invalid constructor payloads and
-  paths, execArgv, captured stdio, process restrictions/exit codes, shared
-  environments and nested messages, worker/parentPort EventEmitter behavior,
-  metadata/unique ids, repeated termination, workerData and postMessage SAB
-  sharing, queued port receive, rollback, post-exit values, and error routing
-  differ. Basic eval with CJS require passes.
+  state and custom inspection differ.
+- Fifty `worker-lifecycle/` diagnostics: invalid constructor payloads and paths,
+  execArgv, captured stdio, process restrictions/exit codes, shared environments
+  and nested messages, worker/parentPort EventEmitter behavior, metadata/unique
+  ids, repeated termination, workerData and postMessage SAB sharing, queued port
+  receive, rollback, post-exit values, error routing, and Worker asynchronous
+  disposal differ. Basic eval with CJS require passes.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
-- Ten `broadcast-channel/` diagnostics: name coercion, once listeners, close/ref
-  behavior, typed-array/SharedArrayBuffer branding and sharing, MessagePort
-  validation, and closed-channel posts differ.
-- Fourteen additional diagnostics cover namespace/prototype completeness,
+- Eleven `broadcast-channel/` diagnostics: name coercion, once listeners,
+  close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
+  MessagePort validation, closed-channel posts, and custom inspection differ.
+- Fifteen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
-  construction, direct-message argument validation, and Web Locks callback
-  rejection cleanup.
+  construction, direct-message argument validation/transfer ownership, and Web
+  Locks callback rejection cleanup.
 
 The clean measurement used:
 
@@ -200,7 +226,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `32/159 (20.1%), diff=127`, with no compile failures or timeouts.
+It reported `34/165 (20.6%), diff=131`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. Cyclic `workerData` construction also consistently exits by
