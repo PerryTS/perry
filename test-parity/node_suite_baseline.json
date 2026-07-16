@@ -2,12 +2,12 @@
   "_schema": {
     "description": "Floor baseline for scripts/node_suite_regression_check.py. Each module's run must produce pass >= floor.pass; dropping below is a regression (exit 1). Improvements are always accepted and reported as ratchet candidates. Captured in the node-26 environment with scripts/node_suite_run.py (pre-warm + fast/slow lanes).",
     "oracle": "node v26.5.0 (pinned by .node-version)",
-    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. Floors refreshed from a clean node-26 run at 2810/2863 (98.1%). The async_hooks floor was separately ratcheted from a clean Node 26.5.0 sequential run at 67/137 after adding deterministic public API, provider, Promise-transition, execution-resource, hook-lifecycle, and validation diagnostics."
+    "note": "Deterministic modules are floored at full pass. Timing/racy modules (http2, net, stream, diagnostics_channel, fs-promises) carry a small margin below observed pass so ordinary flake does not false-alarm; the guard still catches real regressions, which are large (e.g. dns 6->0, http 19->9). node_suite_run.normalize() scrubs environment-variant tokens (console.time hrtime durations, stack-trace frame lines) symmetrically before the stdout compare, so console is floored at full pass (119) on its deterministic content. http is verified 19/19 in isolation but the full-suite harness flakes to 17 under port contention, so it is floored at 17 (flake margin, not a regression); a real http break is a much larger drop. Floors refreshed from a clean node-26 run at 2810/2863 (98.1%). The async_hooks floor was separately ratcheted from a clean Node 26.5.0 sequential run at 72/147 after adding deterministic public API, provider, Promise-transition/hook-shape, execution-resource, hook-lifecycle, and validation diagnostics."
   },
   "overall": {
-    "pass": 2872,
-    "total": 2995,
-    "pct": 95.9
+    "pass": 2877,
+    "total": 3005,
+    "pct": 95.7
   },
   "modules": {
     "assert": {
@@ -15,8 +15,8 @@
       "total": 70
     },
     "async_hooks": {
-      "pass": 67,
-      "total": 137
+      "pass": 72,
+      "total": 147
     },
     "bigint": {
       "pass": 3,
