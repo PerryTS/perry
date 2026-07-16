@@ -45,7 +45,8 @@ that oracle.
   lookup.
 - `environment-data/`: key identity, live main-thread values, deletion, worker
   snapshot cloning, built-in Map/Set/Date values, nested-worker inheritance,
-  non-cloneable construction rejection, and parent/worker mutation isolation.
+  cyclic and aliased graph snapshots, non-cloneable construction rejection, and
+  parent/worker mutation isolation.
 - `structured-clone/`: ArrayBuffer cloning, typed-array backing identity,
   built-in brands, cycles/aliasing, SharedArrayBuffer sharing, multiple views,
   multiple SharedArrayBuffers, transfer detachment, detached-buffer retransfer
@@ -84,8 +85,9 @@ that oracle.
   method safety, indexed `SHARE_ENV` keys, eval syntax-error routing, URL
   postMessage rejection, missing postMessage validation, exit-listener exception
   routing, global `postMessage` replacement, workerData alias/view/cycle
-  cloning, broader filename, falsy execArgv, and disallowed `NODE_OPTIONS`
-  validation, and custom-stack and non-Error serialization.
+  cloning, multiple and aliased MessagePorts, MessagePorts nested in Map/Set,
+  broader filename, falsy execArgv, and disallowed `NODE_OPTIONS` validation,
+  and custom-stack and non-Error serialization.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -145,8 +147,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `32/154`: all 17 pre-existing cases remain green,
-15 added cases pass, and 122 added cases expose stable diagnostic differences.
+The measured focused result is `32/159`: all 17 pre-existing cases remain green,
+15 added cases pass, and 127 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -172,7 +174,7 @@ also pass. The diagnostic differences are:
   validation, receiver/options/iterables/transfers, MessageEvent construction
   and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
   state differ.
-- Forty-five `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Forty-nine `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
@@ -184,7 +186,7 @@ also pass. The diagnostic differences are:
 - Ten `broadcast-channel/` diagnostics: name coercion, once listeners, close/ref
   behavior, typed-array/SharedArrayBuffer branding and sharing, MessagePort
   validation, and closed-channel posts differ.
-- Thirteen additional diagnostics cover namespace/prototype completeness,
+- Fourteen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
   construction, direct-message argument validation, and Web Locks callback
   rejection cleanup.
@@ -198,7 +200,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `32/154 (20.8%), diff=122`, with no compile failures or timeouts.
+It reported `32/159 (20.1%), diff=127`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. Cyclic `workerData` construction also consistently exits by
