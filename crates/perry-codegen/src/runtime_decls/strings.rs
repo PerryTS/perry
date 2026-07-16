@@ -373,6 +373,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_min2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
+    // RequireObjectCoercible + ToString for inline-lowered String.prototype
+    // methods on a non-string receiver: a nullish `this` throws the V8
+    // member-access TypeError instead of coercing undefined→"undefined".
+    // Args: (value, prop_name_ptr, prop_name_len).
+    module.declare_function("js_string_coerce_method_this", I64, &[DOUBLE, PTR, I64]);
     module.declare_function("js_array_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_array_slice_values", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_array_shift_f64", DOUBLE, &[I64]);
