@@ -599,6 +599,52 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             return undef;
         }
     }
+    // #6469: `class X extends Error` lowered with a DYNAMIC parent edge (the
+    // shape a module-top `class Y extends Error {}` takes when its extends
+    // value routes through the dynamic-parent registry): the parent value is
+    // the global Error-family constructor. The ordinary value-super dispatch
+    // below invokes it as a plain call, which builds a FRESH error cell and
+    // drops it — `this` never receives `message`/`name`, so every subclass
+    // instance constructed through this path printed "An error has occurred".
+    // Apply the spec default Error-init directly on `this`, mirroring the
+    // static-`new` arm (#573, `lower_call/new.rs`) and the standalone-ctor arm
+    // (`codegen/method.rs`). The helper carries the spec's "If message is not
+    // undefined" guard.
+    {
+        let err_parent = super::super::class_registry::identify_global_builtin_constructor(
+            parent_val,
+        )
+        .or_else(|| {
+            let obj = subclass_this_object_ptr(this_box)?;
+            let cid = crate::object::js_object_get_class_id(obj);
+            let stash = crate::object::class_registry::js_get_dynamic_parent_value(cid);
+            super::super::class_registry::identify_global_builtin_constructor(stash)
+        });
+        if let Some(kind) = err_parent.filter(|k| {
+            matches!(
+                *k,
+                "Error"
+                    | "TypeError"
+                    | "RangeError"
+                    | "ReferenceError"
+                    | "SyntaxError"
+                    | "URIError"
+                    | "EvalError"
+                    | "AggregateError"
+            )
+        }) {
+            let msg = if !args_ptr.is_null() && args_len >= 1 {
+                *args_ptr
+            } else {
+                undef
+            };
+            let name_str = crate::string::js_string_from_bytes(kind.as_ptr(), kind.len() as u32);
+            crate::object::class_constructors::js_error_subclass_default_init(
+                this_box, msg, name_str,
+            );
+            return undef;
+        }
+    }
     // Resolve the parent constructor kind from the value first. When the
     // `extends` expression is an alias of `global.Request`/`global.Response`
     // (`@hono/node-server`'s `class Request extends GlobalRequest`), the alias

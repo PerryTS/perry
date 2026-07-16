@@ -705,6 +705,61 @@ pub(super) fn compile_method(
                     } else if let Some(ctor) = ctx.imported_class_ctors.get(&pname_owned).cloned() {
                         (ctor.symbol, ctor.param_count)
                     } else {
+                        // #6469: the walk terminated at a native Error-family
+                        // base with no callable ctor symbol — `class X extends
+                        // Error {}` with no own ctor anywhere (effect's
+                        // `makeException` shape). The static-`new` path bakes
+                        // the spec default Error-init at the call site (#573,
+                        // `lower_call/new.rs`); this standalone ctor is the
+                        // only body the DYNAMIC construct replay runs, so
+                        // without the same init `new <classValue>("msg")`
+                        // produced a message-less instance and every effect
+                        // error printed "An error has occurred". Delegate to a
+                        // runtime helper (rather than open-coding like the
+                        // static arm) because the forwarding params here are
+                        // undefined-padded — the helper applies the spec's
+                        // "If message is not undefined" guard so an absent arg
+                        // doesn't shadow `Error.prototype.message` with an own
+                        // undefined.
+                        if matches!(
+                            pname_owned.as_str(),
+                            "Error"
+                                | "TypeError"
+                                | "RangeError"
+                                | "ReferenceError"
+                                | "SyntaxError"
+                                | "URIError"
+                                | "EvalError"
+                                | "AggregateError"
+                        ) {
+                            let undef_lit = crate::nanbox::double_literal(f64::from_bits(
+                                crate::nanbox::TAG_UNDEFINED,
+                            ));
+                            let msg_box = method
+                                .params
+                                .first()
+                                .and_then(|p| ctx.locals.get(&p.id).cloned())
+                                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                                .unwrap_or_else(|| undef_lit.clone());
+                            let this_box = ctx
+                                .this_stack
+                                .last()
+                                .cloned()
+                                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                                .unwrap_or_else(|| undef_lit.clone());
+                            let kind_idx = ctx.strings.intern(&pname_owned);
+                            let kind_handle_global =
+                                format!("@{}", ctx.strings.entry(kind_idx).handle_global);
+                            let blk = ctx.block();
+                            let kind_box = blk.load(DOUBLE, &kind_handle_global);
+                            let kind_bits = blk.bitcast_double_to_i64(&kind_box);
+                            let kind_raw =
+                                blk.and(I64, &kind_bits, crate::nanbox::POINTER_MASK_I64);
+                            blk.call_void(
+                                "js_error_subclass_default_init",
+                                &[(DOUBLE, &this_box), (DOUBLE, &msg_box), (I64, &kind_raw)],
+                            );
+                        }
                         ("".to_string(), 0)
                     };
                     if !ctor_sym.is_empty() {
