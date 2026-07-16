@@ -72,15 +72,15 @@ that oracle.
   coercion/validation, inherited/explicit/shared environments, SharedArrayBuffer
   through workerData and postMessage, queued transferred-port receive, thread
   id/name uniqueness and lifecycle, parentPort `onmessage`/ref state, Worker
-  EventEmitter surface and listener validation, process restrictions, captured
-  stdout/stderr, explicit and `process.exitCode` exits, unsupported paths,
-  method receivers, postMessage clone rollback,
-  `online`/`message`/`error`/`exit` ordering, ref return values, natural exit,
-  and deterministic repeated termination settlement, transferred workerData port
-  methods, sequential `SHARE_ENV` sibling visibility, post-exit method safety,
-  indexed `SHARE_ENV` keys, eval syntax-error routing, URL postMessage
-  rejection, exit-listener exception routing, and custom-stack and non-Error
-  serialization.
+  EventEmitter surface, MessagePort/EventTarget inheritance brands and listener
+  validation, process restrictions, captured stdout/stderr, explicit and
+  `process.exitCode` exits, unsupported paths, method receivers, postMessage
+  clone rollback, `online`/`message`/`error`/`exit` ordering, ref return values,
+  natural exit, and deterministic repeated termination settlement, transferred
+  workerData port methods, sequential `SHARE_ENV` sibling visibility, post-exit
+  method safety, indexed `SHARE_ENV` keys, eval syntax-error routing, URL
+  postMessage rejection, exit-listener exception routing, and custom-stack and
+  non-Error serialization.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -130,8 +130,8 @@ cases above or belong to a separate slow/risky runtime feature:
   `postMessageToThread` delivery, rejection, handler failures, and timeout
   behavior.
 
-The measured focused result is `32/140`: all 17 pre-existing cases remain green,
-15 added cases pass, and 108 added cases expose stable diagnostic differences.
+The measured focused result is `32/141`: all 17 pre-existing cases remain green,
+15 added cases pass, and 109 added cases expose stable diagnostic differences.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -157,12 +157,12 @@ also pass. The diagnostic differences are:
   validation, receiver/options/iterables/transfers, MessageEvent construction
   and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
   state differ.
-- Thirty-nine `worker-lifecycle/` diagnostics: invalid constructor payloads and
-  paths, execArgv, captured stdio, process restrictions/exit codes, shared
-  environments and nested messages, worker/parentPort EventEmitter behavior,
-  metadata/unique ids, repeated termination, workerData and postMessage SAB
-  sharing, queued port receive, rollback, post-exit values, and error routing
-  differ. Basic eval with CJS require passes.
+- Forty `worker-lifecycle/` diagnostics: invalid constructor payloads and paths,
+  execArgv, captured stdio, process restrictions/exit codes, shared environments
+  and nested messages, worker/parentPort EventEmitter behavior, metadata/unique
+  ids, repeated termination, workerData and postMessage SAB sharing, queued port
+  receive, rollback, post-exit values, and error routing differ. Basic eval with
+  CJS require passes.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
@@ -183,7 +183,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `32/140 (22.9%), diff=108`, with no compile failures or timeouts.
+It reported `32/141 (22.7%), diff=109`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. The SharedArrayBuffer/Atomics boundary is backed by the
