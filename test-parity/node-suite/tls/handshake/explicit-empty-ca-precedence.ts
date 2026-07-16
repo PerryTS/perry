@@ -31,9 +31,16 @@ function connect(label: string, ca: Buffer[] | undefined, done: () => void) {
       console.log(
         label + ":",
         client.authorized,
-        client.authorizationError ?? "none",
+        authorizationCode(client.authorizationError),
       ),
   );
   client.on("error", (err: any) => console.log(label + " error:", err.code));
   client.on("close", done);
+}
+
+function authorizationCode(value: unknown) {
+  if (value === null || value === undefined) return "none";
+  if (typeof value === "string") return value;
+  const error = value as { code?: string; name?: string };
+  return error.code ?? error.name ?? "error";
 }
