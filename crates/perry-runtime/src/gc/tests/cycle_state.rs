@@ -26,7 +26,14 @@ fn run_cycle_in_single_unit_steps(state: &mut GcCycleState) -> Vec<GcCyclePhase>
         let result = state.step(GcWorkBudget::bounded(1));
         phases.push(result.phase);
     }
-    panic!("GC cycle did not complete within step limit");
+    let mut hist = std::collections::HashMap::new();
+    for ph in &phases {
+        *hist.entry(format!("{ph:?}")).or_insert(0usize) += 1;
+    }
+    panic!(
+        "GC cycle did not complete within step limit; histogram: {hist:?}; tail: {:?}",
+        &phases[phases.len().saturating_sub(12)..]
+    );
 }
 
 fn run_cycle_until_phase(state: &mut GcCycleState, target: GcCyclePhase) {
@@ -760,7 +767,12 @@ fn born_black_build_phase_object_is_traced() {
     }
     crate::object::test_seed_overflow_fields_root(child as usize, 7f64.to_bits());
     unsafe {
-        runtime_store_jsvalue_slot(parent as usize, fields as usize, 0, ptr_bits(child as usize));
+        runtime_store_jsvalue_slot(
+            parent as usize,
+            fields as usize,
+            0,
+            ptr_bits(child as usize),
+        );
     }
 
     // Age the parent/child block out of the block-persistence window
@@ -785,6 +797,13 @@ fn born_black_build_phase_object_is_traced() {
          black births must be seeded into the trace"
     );
     crate::object::test_clear_overflow_fields_root();
+
+    // The filler blocks above were born black (and seeded) inside the active
+    // cycle, so they survived it as floating garbage. Reclaim them so later
+    // tests' bounded cycles don't walk seven extra blocks of dead strings.
+    let mut cleanup = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_in_single_unit_steps(&mut cleanup);
+    let _ = cleanup.take_outcome();
 }
 
 /// Regression: an object born in a mutator window BETWEEN AtomicFinalize
@@ -825,7 +844,12 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
     // OVERFLOW_FIELDS entry cleared by the dead-payload sweep arm).
     crate::object::test_seed_overflow_fields_root(child as usize, 42f64.to_bits());
     unsafe {
-        runtime_store_jsvalue_slot(parent as usize, fields as usize, 0, ptr_bits(child as usize));
+        runtime_store_jsvalue_slot(
+            parent as usize,
+            fields as usize,
+            0,
+            ptr_bits(child as usize),
+        );
     }
 
     run_cycle_in_single_unit_steps(&mut state);

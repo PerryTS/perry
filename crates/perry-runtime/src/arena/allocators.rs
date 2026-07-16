@@ -273,7 +273,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
             (*header).obj_type = obj_type;
             (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
-        crate::gc::gc_note_black_birth(header);
+            crate::gc::gc_note_black_birth(header);
             (*header)._reserved = 0;
             // size field already set from original allocation
         }

@@ -807,9 +807,17 @@ pub fn gc_birth_extra_flags() -> u8 {
 /// visit per mid-cycle runtime allocation.
 #[inline]
 pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
-    if GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get()) & GC_FLAG_MARKED != 0 {
-        push_mark_seed(header);
+    if GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get()) & GC_FLAG_MARKED == 0 {
+        return;
     }
+    // Leaf types (strings, pointer-free payloads) carry no child edges — the
+    // birth mark alone protects them, and seeding them would turn a lazy
+    // init burst (e.g. the globalThis builtins table populating mid-cycle:
+    // thousands of interned strings) into pure drain traffic.
+    if unsafe { gc_type_is_pointer_free((*header).obj_type) } {
+        return;
+    }
+    push_mark_seed(header);
 }
 
 #[inline]
