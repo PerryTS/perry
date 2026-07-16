@@ -37,6 +37,11 @@ BroadcastChannel custom-inspection, direct-message transferable graph, and
 BroadcastChannel dispatch-time lifecycle contracts. Bun independently selects
 Worker asynchronous disposal and Node's worker corpus, while Deno's unit suite
 provides a second executable Node-compat comparison for the same core objects.
+The latest deterministic audit also selected Node's filename and constructor
+validation, MessagePort prototype/Event brands, and resource-limit metadata;
+Deno's same-reference listener deduplication, pending synchronous receives, and
+`process.env` option regression; and Bun's queued peer-close and orphaned
+transferred-port regressions.
 
 The inventory review covered all 148 current `test-worker-*` files across Node's
 parallel and sequential directories, all 48 cases in Deno's unit selection plus
@@ -80,7 +85,10 @@ that oracle.
   close flushing, frozen EventTarget prototype resilience, MessageEvent
   defaults/coercion, transfer targets, `ref`/`unref`/`hasRef` state, custom
   inspection of active/refed state, and proof that synchronous draining
-  suppresses later event delivery.
+  suppresses later event delivery, same-reference `.on()` deduplication and
+  event-name scoping, synchronous drains after `start()`, queued-message
+  ordering before a peer close, orphaned-transfer peer notification, and the
+  exact MessagePort/Event prototype brands.
 - `message-channel/`: module/global identity, construction rules, port brands,
   asynchronous and synchronous delivery, BroadcastChannel synchronous receive,
   and VM-context port movement with cross-realm branding, closed-port, and
@@ -104,7 +112,9 @@ that oracle.
   broader filename, falsy execArgv, and disallowed `NODE_OPTIONS` validation,
   custom-stack and non-Error serialization, Worker asynchronous disposal,
   construction-time transfer rollback, default environment isolation, and the
-  base file/eval `process.argv` shape.
+  base file/eval `process.argv` shape, complete invalid filename types,
+  `process.env` as an explicit environment option, and deterministic
+  `resourceLimits` snapshots/reset without memory-pressure enforcement.
 - `transfer-markers/`: marker return/value semantics, inheritance boundaries,
   clone rejection, transfer rejection, retained ownership after rejection, and
   the distinction between marking a port uncloneable and transferring it, plus
@@ -134,8 +144,8 @@ cases above or belong to a separate slow/risky runtime feature:
 
 - Resource-limit enforcement, stdio backpressure/large-write timing, heap
   snapshots, and CPU/heap profiling are resource- and platform-sensitive. Basic
-  captured stdout/stderr and the diagnostic method surface are covered without
-  introducing pressure or timing assertions.
+  resource-limit metadata/reset, captured stdout/stderr, and the diagnostic
+  method surface are covered without introducing pressure or timing assertions.
 - Basic eval/CJS require, execArgv, file-URL construction, process restrictions,
   and exit codes are now covered. Data-URL/ESM/custom loaders, preload chains,
   signals, inspector integration, beforeExit and worker-side uncaught-exception
@@ -187,8 +197,13 @@ cases above or belong to a separate slow/risky runtime feature:
   exercises the already covered unresolved-path fallback and leaves the buffer
   untouched vacuously.
 
-The measured focused result is `35/170`: all 17 pre-existing cases remain green,
-18 added cases pass, and 135 added cases expose stable diagnostic differences.
+The measured focused result is `36/180`: all 17 pre-existing cases remain green,
+19 added cases pass, and 144 added cases expose stable diagnostic differences.
+The latest ten cases were each repeated three times under Node 26.5.0 and Perry
+with stable output and exit status. Deno 2.9.2 was stable across the same matrix.
+Bun 1.2.18 was stable for nine cases; its older orphaned-transfer implementation
+did not emit the peer close and hit the external three-second comparison timeout
+in three runs, while current Bun upstream carries that exact regression test.
 
 The passing additions are `broadcast-channel/fanout-fifo.ts`,
 `broadcast-channel/listener-management.ts`,
@@ -207,33 +222,37 @@ also pass. The latest refresh adds passing dispatch-time coverage in
 `broadcast-channel/create-during-dispatch.ts` and
 `broadcast-channel/close-queued-delivery.ts`. Synchronously drained messages are
 also proven not to reappear through the event listener in
-`message-port/receive-consumes-event.ts`. The diagnostic differences are:
+`message-port/receive-consumes-event.ts`. Passing `process.env` directly as a
+Worker environment option is also covered by
+`worker-lifecycle/process-env-option.ts`. The diagnostic differences are:
 
 - All twelve `structured-clone/` fixtures: Perry preserves some indexed values
   but loses built-in/ArrayBuffer/view/SharedArrayBuffer brands and aliasing,
   rejects cycles/BigInt, does not detach or move ownership, and accepts invalid
   lists.
-- Thirty-eight `message-port/` diagnostics: closing and dispatch flushing,
-  queued data/callbacks, NodeEventTarget surface, listener counts and
-  validation, receiver/options/iterables/transfers, MessageEvent construction
-  and `ports`, duplicate/self/closed rollback, moved ownership, and `hasRef()`
-  state and custom inspection differ.
-- Fifty-three `worker-lifecycle/` diagnostics: invalid constructor payloads and
+- Forty-four `message-port/` diagnostics: closing and dispatch flushing, queued
+  data/callbacks, NodeEventTarget surface, listener counts and validation,
+  receiver/options/iterables/transfers, MessageEvent construction and `ports`,
+  duplicate/self/closed rollback, moved ownership, and `hasRef()` state and
+  custom inspection differ, as do `.on()` deduplication, pending synchronous
+  receives, queued peer-close ordering, orphaned transfers, and Event brands.
+- Fifty-five `worker-lifecycle/` diagnostics: invalid constructor payloads and
   paths, execArgv, captured stdio, process restrictions/exit codes, shared
   environments and nested messages, worker/parentPort EventEmitter behavior,
   metadata/unique ids, repeated termination, workerData and postMessage SAB
   sharing, queued port receive, rollback, post-exit values, error routing,
   Worker asynchronous disposal, default environment isolation, process argv
-  shape, and constructor rollback differ. Basic eval with CJS require passes.
+  shape, constructor rollback, invalid filename types, and resource-limit reset
+  differ. Basic eval with CJS require and explicit `process.env` both pass.
 - All five `transfer-markers/` fixtures: primitives are reported as marked,
   nested clone rejection, private/permanent marker enforcement, ArrayBuffer
   exceptions, and marked transferables/uncloneable ports differ.
 - Eleven `broadcast-channel/` diagnostics: name coercion, once listeners,
   close/ref behavior, typed-array/SharedArrayBuffer branding and sharing,
   MessagePort validation, closed-channel posts, and custom inspection differ.
-- Sixteen additional diagnostics cover namespace/prototype completeness,
+- Seventeen additional diagnostics cover namespace/prototype completeness,
   environment-data built-ins/inheritance/construction, MessageChannel
-  construction and VM-context branding, direct-message argument
+  construction/callability and VM-context branding, direct-message argument
   validation/transfer ownership, and Web Locks callback rejection cleanup.
 
 The clean measurement used:
@@ -245,7 +264,7 @@ python3 scripts/node_suite_run.py \
   "$PWD/target/perry-dev/perry" "$PWD" worker_threads
 ```
 
-It reported `35/170 (20.6%), diff=135`, with no compile failures or timeouts.
+It reported `36/180 (20.0%), diff=144`, with no compile failures or timeouts.
 The Worker URL-post diagnostic consistently exits by signal 11 in Perry while
 Node rejects synchronously with `DataCloneError`, keeps the worker usable, and
 terminates cleanly. Cyclic `workerData` construction also consistently exits by
