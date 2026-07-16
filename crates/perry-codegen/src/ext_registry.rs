@@ -45,6 +45,7 @@
 //! served by both `perry-runtime` AND a wrapper crate (most of `js_*`)
 //! aren't in the table; they resolve from the always-linked runtime.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
@@ -444,6 +445,45 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_ws_send_client_i64",                       OwnerKind::WellKnown("ws")),
     ("js_ws_close_client_i64",                      OwnerKind::WellKnown("ws")),
     ("js_ws_on_client_i64",                         OwnerKind::WellKnown("ws")),
+    // #6439: the same "no source-level `import \"ws\"`" situation reaches the
+    // REST of the ws surface, not just the three client helpers above. A library
+    // that merely *mentions* a socket API gets its module compiled — and its
+    // callsites emitted — without any ws import: @effect/platform's `Socket.ts`
+    // is pulled in through the package barrel and emits `js_ws_connect_start`,
+    // so `perry compile` of any @effect/platform program died with
+    //   Undefined symbols: _js_ws_connect_start
+    // even though the plain (non-auto-optimize) runtime links it fine.
+    //
+    // The reason it only breaks under auto-optimize: the definition lives in
+    // perry-stdlib behind `bundled-ws`, and the rebuild uses
+    // `--no-default-features` + only the features derived from
+    // `native_module_imports` — which never contains "ws" here. Meanwhile the
+    // runtime's own `ws_stubs` are compiled OUT whenever any perry-ext-* crate
+    // is in the graph (they build perry-runtime with `external-ws-symbols`, and
+    // cargo unifies features), so nothing defines the symbol at all: stub gone,
+    // stdlib feature stripped, perry-ext-ws never linked.
+    //
+    // Registering the emitted symbols flips the `ws` well-known wrapper onto the
+    // link line, which is exactly what a manual `PERRY_FORCE_WELL_KNOWN=ws`
+    // does (verified to fix both `api.ts` and `web.ts` of the effect repro).
+    // The flip also drops perry-stdlib's `bundled-ws`, so there is no
+    // duplicate-symbol risk.
+    ("js_ws_connect",                               OwnerKind::WellKnown("ws")),
+    ("js_ws_connect_start",                         OwnerKind::WellKnown("ws")),
+    ("js_ws_send",                                  OwnerKind::WellKnown("ws")),
+    ("js_ws_close",                                 OwnerKind::WellKnown("ws")),
+    ("js_ws_on",                                    OwnerKind::WellKnown("ws")),
+    ("js_ws_receive",                               OwnerKind::WellKnown("ws")),
+    ("js_ws_is_open",                               OwnerKind::WellKnown("ws")),
+    ("js_ws_ready_state",                           OwnerKind::WellKnown("ws")),
+    ("js_ws_message_count",                         OwnerKind::WellKnown("ws")),
+    ("js_ws_wait_for_message",                      OwnerKind::WellKnown("ws")),
+    ("js_ws_handle_to_i64",                         OwnerKind::WellKnown("ws")),
+    ("js_ws_handle_upgrade",                        OwnerKind::WellKnown("ws")),
+    ("js_ws_send_to_client",                        OwnerKind::WellKnown("ws")),
+    ("js_ws_close_client",                          OwnerKind::WellKnown("ws")),
+    ("js_ws_server_new",                            OwnerKind::WellKnown("ws")),
+    ("js_ws_server_close",                          OwnerKind::WellKnown("ws")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,
@@ -546,6 +586,27 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 /// optimization horizon worth measuring.
 static USED_PROVIDERS: Mutex<Option<HashSet<OwnerKind>>> = Mutex::new(None);
 
+/// Per-module capture buffer, active only between [`begin_module_capture`]
+/// and [`take_module_capture`] on the same thread.
+///
+/// Why a thread-local rather than another field on [`USED_PROVIDERS`]:
+/// the object cache (`crates/perry/src/commands/compile/object_cache.rs`)
+/// needs to know which registry symbols *this one module* emitted, so it
+/// can persist them next to the module's cached `.o` and replay them on a
+/// later cache hit. [`USED_PROVIDERS`] is process-wide and rayon compiles
+/// many modules concurrently, so it cannot attribute a symbol to a module.
+/// `perry-codegen` itself never uses rayon and `compile_module` runs start
+/// to finish on its caller's worker thread, so a thread-local scoped
+/// around that one call captures exactly this module's emissions.
+///
+/// We record the matched symbol *names* rather than [`OwnerKind`]s: replay
+/// re-runs them through [`record_ffi_call`], so the symbol→owner mapping is
+/// always the one in today's table, never a stale routing decision baked
+/// into a cache entry written by an older perry.
+thread_local! {
+    static MODULE_CAPTURE: RefCell<Option<HashSet<&'static str>>> = const { RefCell::new(None) };
+}
+
 /// Called from every `LlBlock::call` / `LlBlock::call_void` site.
 /// O(N) lookup over `FFI_REGISTRY` (N ≈ 50 today) — measured at
 /// ~30 ns per emission, fully amortized by the surrounding format!
@@ -553,10 +614,66 @@ static USED_PROVIDERS: Mutex<Option<HashSet<OwnerKind>>> = Mutex::new(None);
 pub(crate) fn record_ffi_call(symbol: &str) {
     for (name, owner) in FFI_REGISTRY {
         if *name == symbol {
-            let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
-            guard.get_or_insert_with(HashSet::new).insert(*owner);
+            {
+                let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
+                guard.get_or_insert_with(HashSet::new).insert(*owner);
+            }
+            MODULE_CAPTURE.with(|cell| {
+                if let Some(set) = cell.borrow_mut().as_mut() {
+                    set.insert(*name);
+                }
+            });
             return;
         }
+    }
+}
+
+/// Start capturing this thread's registry-symbol emissions. Call
+/// immediately before `compile_module`; pair with [`take_module_capture`].
+///
+/// Idempotent by design: an already-active capture is reset, so a panic
+/// that skipped a `take_module_capture` can't leak one module's symbols
+/// into the next module compiled on the same rayon worker.
+pub fn begin_module_capture() {
+    MODULE_CAPTURE.with(|cell| {
+        *cell.borrow_mut() = Some(HashSet::new());
+    });
+}
+
+/// End the capture started by [`begin_module_capture`] and return the
+/// registry symbols emitted since, sorted so the persisted manifest is
+/// byte-identical across runs (the cached `.o` already is — #686).
+///
+/// Returns an empty vec when no capture was active.
+pub fn take_module_capture() -> Vec<&'static str> {
+    MODULE_CAPTURE.with(|cell| {
+        let mut syms: Vec<&'static str> = cell
+            .borrow_mut()
+            .take()
+            .map(|set| set.into_iter().collect())
+            .unwrap_or_default();
+        syms.sort_unstable();
+        syms
+    })
+}
+
+/// Re-record symbols read back from a cached module's FFI manifest, as if
+/// codegen had just emitted them.
+///
+/// This is what keeps the object cache from silently changing the link
+/// line: a cache hit skips `compile_module`, so without a replay the
+/// provider that module needs is never recorded and the well-known /
+/// stdlib-feature flip below it never happens — the same source links on a
+/// cold cache and fails to link on a warm one (#6439). Unknown symbols are
+/// ignored, so a manifest written by a perry whose table has since dropped
+/// an entry degrades to "no provider" rather than a hard error.
+pub fn replay_ffi_symbols<I, S>(symbols: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    for symbol in symbols {
+        record_ffi_call(symbol.as_ref());
     }
 }
 
@@ -576,6 +693,58 @@ mod tests {
     use super::*;
 
     static PROVIDER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// #6439: per-module capture must see exactly what this thread emitted,
+    /// sorted and deduped, and must end cleanly. This is what the object
+    /// cache persists beside each `.o`.
+    ///
+    /// Thread-local, so unlike the `USED_PROVIDERS` tests below this needs
+    /// no lock — a concurrent test on another thread cannot perturb it.
+    #[test]
+    fn module_capture_collects_only_registered_symbols_sorted() {
+        begin_module_capture();
+        record_ffi_call("js_ws_send");
+        record_ffi_call("js_ws_connect_start");
+        record_ffi_call("js_ws_send"); // duplicate: deduped
+        record_ffi_call("js_definitely_not_registered_anywhere");
+        let captured = take_module_capture();
+        assert_eq!(captured, vec!["js_ws_connect_start", "js_ws_send"]);
+        // Capture is over: later emissions belong to the next module.
+        record_ffi_call("js_ws_close");
+        assert!(
+            take_module_capture().is_empty(),
+            "take_module_capture must end the capture"
+        );
+    }
+
+    /// A fresh capture must not inherit the previous one's symbols — rayon
+    /// reuses worker threads, so module N+1 would otherwise be credited with
+    /// module N's FFI and drag unused provider crates onto the link line.
+    #[test]
+    fn begin_module_capture_resets_previous_capture() {
+        begin_module_capture();
+        record_ffi_call("js_ws_send");
+        begin_module_capture(); // no take_module_capture in between
+        record_ffi_call("js_ws_close");
+        assert_eq!(take_module_capture(), vec!["js_ws_close"]);
+    }
+
+    /// Replay must route a manifest's symbols exactly as live codegen would
+    /// — this is the whole point: a cache hit and a cache miss must produce
+    /// the same providers, hence the same link line.
+    #[test]
+    fn replayed_symbols_route_like_live_codegen() {
+        let _guard = PROVIDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = take_used_providers();
+        replay_ffi_symbols(["js_ws_connect_start", "js_not_a_real_symbol"]);
+        let got = take_used_providers();
+        assert!(
+            got.contains(&OwnerKind::WellKnown("ws")),
+            "replayed ws symbol must record the ws provider, got {:?}",
+            got
+        );
+        assert_eq!(got.len(), 1, "unknown symbols must not add providers");
+    }
 
     fn assert_symbol_routes_to(symbol: &str, owner: OwnerKind) {
         let _ = take_used_providers();

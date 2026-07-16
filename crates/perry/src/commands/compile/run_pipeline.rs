@@ -3941,9 +3941,19 @@ pub fn run_with_parse_cache(
             let ext = if bitcode_link { "ll" } else { "o" };
             let obj_path = object_output_dir.join(format!("{}.{}", obj_name, ext));
 
-            if let Some((key, cached_path)) =
-                cache_key.and_then(|k| object_cache.lookup_path(k).map(|path| (k, path)))
+            if let Some((key, cached_path, ffi_symbols)) = cache_key
+                .and_then(|k| object_cache.lookup_path_with_ffi(k).map(|(p, s)| (k, p, s)))
             {
+                // #6439: a hit skips `compile_module`, and `compile_module`
+                // is what populates the ext_registry (`record_ffi_call`
+                // fires from `LlBlock::call`). The registry drives
+                // `needs_stdlib` + the well-known flip further down, so
+                // without this replay the link line depends on whether the
+                // cache happened to be warm: `api.ts` (Effect) linked from
+                // cold and failed from warm with an undefined
+                // `_js_ws_connect_start`. Replaying the manifest makes a hit
+                // record exactly what the skipped codegen would have.
+                perry_codegen::ext_registry::replay_ffi_symbols(&ffi_symbols);
                 return Ok(NativeObjectArtifact {
                     path: cached_path,
                     bytes: None,
@@ -3995,7 +4005,15 @@ pub fn run_with_parse_cache(
                 collected: Some(total_codegen_modules),
                 ..Default::default()
             });
+            // #6439: capture which ext_registry FFI symbols this module's
+            // codegen emits, so the manifest stored beside the `.o` can
+            // replay them on a later cache hit. Scoped tightly around
+            // `compile_module` — `perry-codegen` uses no rayon, so
+            // everything recorded on this worker thread between these two
+            // calls belongs to this module and nothing else.
+            perry_codegen::ext_registry::begin_module_capture();
             let object_code = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
+                perry_codegen::ext_registry::take_module_capture();
                 format!(
                     "Error compiling module '{}' ({}) with --backend llvm: {:#}",
                     hir_module.name,
@@ -4003,12 +4021,17 @@ pub fn run_with_parse_cache(
                     e
                 )
             })?;
+            let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
-            if let Some(cached_path) =
-                cache_key.and_then(|k| object_cache.store_and_get_path(k, &object_code))
-            {
+            if let Some(cached_path) = cache_key.and_then(|k| {
+                // Manifest first: a `.o` visible without its manifest reads
+                // as a miss to a concurrent build (correct, just a wasted
+                // recompile), whereas the reverse ordering can never mislead.
+                object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
+                object_cache.store_and_get_path(k, &object_code)
+            }) {
                 return Ok(NativeObjectArtifact {
                     path: cached_path,
                     bytes: None,

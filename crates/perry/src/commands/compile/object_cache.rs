@@ -915,6 +915,20 @@ impl ObjectCache {
             .map(|d| d.join(format!("{:016x}.o", key)))
     }
 
+    /// Path of the FFI manifest that accompanies `<key>.o` (#6439).
+    ///
+    /// The manifest lists the `ext_registry` symbols this module's codegen
+    /// emitted — one per line, sorted, possibly empty (the common case:
+    /// most modules call no registered FFI at all). It exists because a
+    /// cache hit skips codegen, and codegen is what tells the driver which
+    /// external provider crates the link line needs. Without it the same
+    /// sources link cold and fail warm.
+    fn ffi_manifest_path_for(&self, key: u64) -> Option<PathBuf> {
+        self.cache_dir
+            .as_ref()
+            .map(|d| d.join(format!("{:016x}.ffi", key)))
+    }
+
     /// Look up a cached object by key. Returns `Some(bytes)` on hit,
     /// `None` on miss (cache disabled, file missing, or IO error).
     #[allow(dead_code)]
@@ -950,6 +964,75 @@ impl ObjectCache {
                 self.misses.fetch_add(1, Ordering::Relaxed);
                 None
             }
+        }
+    }
+
+    /// Cache-hit path for the codegen workers (#6439): returns the cached
+    /// object *and* the FFI manifest recorded when it was compiled.
+    ///
+    /// An entry is only a hit when both halves are present. A `.o` without
+    /// a manifest is an entry written by a pre-#6439 perry — its FFI
+    /// provenance is unknowable, and guessing "no providers" is exactly the
+    /// bug that made `api.ts` link cold and fail warm. Reporting a miss
+    /// recompiles the module once, writes the manifest, and the entry is
+    /// whole from then on; no user action, no cache wipe.
+    ///
+    /// Counts a hit only when the entry is usable, so `--verbose` cache
+    /// stats stay honest about what was actually reused.
+    pub fn lookup_path_with_ffi(&self, key: u64) -> Option<(PathBuf, Vec<String>)> {
+        let path = self.path_for(key)?;
+        let manifest_path = self.ffi_manifest_path_for(key)?;
+        let object_ok = matches!(
+            fs::File::open(&path).and_then(|f| f.metadata()),
+            Ok(meta) if meta.is_file()
+        );
+        let manifest = object_ok
+            .then(|| fs::read_to_string(&manifest_path).ok())
+            .flatten();
+        match manifest {
+            Some(text) => {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                self.path_reuses.fetch_add(1, Ordering::Relaxed);
+                let symbols = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                Some((path, symbols))
+            }
+            None => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Persist the FFI manifest for `key` (#6439). Atomic via tmp + rename,
+    /// mirroring [`Self::store_and_get_path`], so a concurrent reader never
+    /// sees a half-written manifest and pairs it with a complete `.o`.
+    ///
+    /// Best-effort: on IO failure the manifest is simply absent, which
+    /// [`Self::lookup_path_with_ffi`] treats as a miss — the build stays
+    /// correct and merely recompiles that module next time.
+    pub fn store_ffi_manifest(&self, key: u64, symbols: &[&str]) {
+        let Some(path) = self.ffi_manifest_path_for(key) else {
+            return;
+        };
+        let mut body = symbols.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        let tmp_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = path.with_extension(format!("ffi.tmp.{:x}", tmp_suffix));
+        if fs::write(&tmp_path, body)
+            .and_then(|_| fs::rename(&tmp_path, &path))
+            .is_err()
+        {
+            let _ = fs::remove_file(&tmp_path);
         }
     }
 
@@ -1621,6 +1704,62 @@ mod object_cache_tests {
             assert_ne!(k_unset, k_set, "setting {} must change key", var);
             assert_ne!(k_set, k_two, "changing {} value must change key", var);
         }
+    }
+
+    /// #6439: the FFI manifest must survive a store→lookup round trip, or a
+    /// warm cache silently drops the provider crates the link line needs.
+    #[test]
+    fn store_then_lookup_path_with_ffi_round_trips_manifest() {
+        let dir = tempdir().unwrap();
+        let cache = ObjectCache::new(dir.path(), "test-target", true);
+        let key = 0x6439_0001;
+        cache.store_ffi_manifest(key, &["js_ws_connect_start", "js_ws_send"]);
+        cache.store(key, b"object bytes");
+        let (path, symbols) = cache
+            .lookup_path_with_ffi(key)
+            .expect("object + manifest both present must hit");
+        assert!(path.is_file());
+        assert_eq!(symbols, vec!["js_ws_connect_start", "js_ws_send"]);
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 0);
+    }
+
+    /// The common case: a module that emits no registered FFI stores an
+    /// empty manifest, which must still read back as a hit (an *absent*
+    /// manifest means something quite different — see the test below).
+    #[test]
+    fn empty_ffi_manifest_is_a_hit_with_no_symbols() {
+        let dir = tempdir().unwrap();
+        let cache = ObjectCache::new(dir.path(), "test-target", true);
+        let key = 0x6439_0002;
+        cache.store_ffi_manifest(key, &[]);
+        cache.store(key, b"object bytes");
+        let (_, symbols) = cache
+            .lookup_path_with_ffi(key)
+            .expect("empty manifest is still a complete entry");
+        assert!(symbols.is_empty());
+        assert_eq!(cache.hits(), 1);
+    }
+
+    /// #6439 regression: an object written by a pre-manifest perry has no
+    /// recoverable FFI provenance. Treating it as a hit would replay zero
+    /// symbols and silently drop `perry-ext-ws` from the link line — the
+    /// exact "links cold, fails warm" bug. It must report a miss so the
+    /// module recompiles once and the entry self-heals.
+    #[test]
+    fn object_without_ffi_manifest_reports_miss() {
+        let dir = tempdir().unwrap();
+        let cache = ObjectCache::new(dir.path(), "test-target", true);
+        let key = 0x6439_0003;
+        cache.store(key, b"legacy object with no manifest");
+        assert!(
+            cache.lookup_path_with_ffi(key).is_none(),
+            "unknowable FFI provenance must not be reported as a usable hit"
+        );
+        assert_eq!(cache.misses(), 1);
+        assert_eq!(cache.hits(), 0, "an unusable entry must not count as a hit");
+        // The plain byte lookup still hits — only the FFI-aware path is strict.
+        assert!(cache.lookup(key).is_some());
     }
 
     #[test]
