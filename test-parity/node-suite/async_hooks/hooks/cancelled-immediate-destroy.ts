@@ -1,11 +1,13 @@
 import { createHook } from "node:async_hooks";
 
 let target = -1;
+let observedResource: object | undefined;
 const events: string[] = [];
 const hook = createHook({
-  init(asyncId, type) {
+  init(asyncId, type, _triggerAsyncId, resource) {
     if (type === "Immediate" && target === -1) {
       target = asyncId;
+      observedResource = resource;
       events.push("init");
     }
   },
@@ -25,4 +27,8 @@ clearImmediate(immediate);
 await new Promise<void>((resolve) => setTimeout(resolve, 0));
 await new Promise<void>((resolve) => setImmediate(resolve));
 hook.disable();
+console.log(
+  "cancelled immediate resource identity:",
+  observedResource === immediate,
+);
 console.log("cancelled immediate lifecycle:", events.join(">"));

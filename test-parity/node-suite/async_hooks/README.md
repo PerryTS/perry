@@ -11,7 +11,9 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 - Node.js main at
   [`34c28d5`](https://github.com/nodejs/node/tree/34c28d5a69f4f00cd599adcbe57834435d3a683b/test/async-hooks),
   especially the AsyncResource lifecycle, AsyncLocalStorage nesting,
-  enable/disable, promise, and async/await cases, plus its
+  enable/disable, promise, pre-hook Promise creation, late hook activation,
+  execution-resource identity, default trigger, concurrent HTTP/socket, and
+  async/await cases, plus its
   [bind](https://github.com/nodejs/node/blob/34c28d5a69f4f00cd599adcbe57834435d3a683b/test/parallel/test-async-local-storage-bind.js)
   and
   [snapshot](https://github.com/nodejs/node/blob/34c28d5a69f4f00cd599adcbe57834435d3a683b/test/parallel/test-async-local-storage-snapshot.js)
@@ -28,19 +30,35 @@ The expansion was reviewed on 2026-07-16 against primary repository sources:
 
 The correctness oracle remains the repository-pinned Node 26.5.0.
 
-The current focused result is **67/119** and is recorded in `node_suite_baseline.json`. The suite
+The final expansion directly maps the deterministic public contracts from
+Node's `test-async-hooks-disable-during-promise.js`,
+`test-async-hooks-enable-during-promise.js`,
+`test-async-hooks-promise-triggerid.js`, both
+`test-promise.*-before-init-hooks.js` cases, `test-late-hook-enable.js`,
+`test-nexttick-default-trigger.js`, `test-async-exec-resource-match.js`,
+`test-async-local-storage-http-multiclients.js`,
+`test-async-local-storage-socket.js`, and
+`test-eventemitter-asyncresource.js`. Deno's selected bind/snapshot, nesting,
+enterWith, resource-scope, and propagation contracts and Bun's async-context
+provider matrix are represented by smaller single-boundary fixtures rather
+than copied monolithic tests.
+
+The current focused result is **67/137** and is recorded in `node_suite_baseline.json`. The suite
 keeps every stable mismatch as a diagnostic rather than removing unsupported
 cases: failures identify context loss, missing hook callbacks/resources,
 lifecycle differences, validation gaps, or a compile/runtime boundary for the
 specific provider named by the fixture.
 
-The 52 non-matching diagnostics are stable and grouped as follows:
+The 70 non-matching diagnostics are stable and grouped as follows:
 
 - hook delivery/configuration: custom and built-in provider lifecycle callbacks,
-  cancelled resource destruction, simultaneous hooks, `promiseResolve`, resource
-  arguments, and `trackPromises` behavior/validation;
-- scheduling/context: zlib, HTTP/HTTPS keep-alive reuse, net, dgram, subprocess,
-  worker, VM, dynamic import, readline, events.on, and stream.finished boundaries;
+  cancelled resource destruction and identity, simultaneous hooks, late
+  activation during timers/immediates/next ticks and Promise chains,
+  pre-created Promise relationships, `promiseResolve`, resource arguments,
+  execution-resource mapping, and `trackPromises` behavior/validation;
+- scheduling/context: zlib, HTTP/HTTPS keep-alive reuse and concurrent clients,
+  net callback/data isolation, dgram, subprocess, worker, VM, dynamic import,
+  readline, events.on, and stream.finished boundaries;
 - callback contract: several async crypto APIs invoke their callback before the
   call returns, while prime callbacks do not settle;
 - resource/storage semantics: snapshot receiver handling, top execution-resource
@@ -70,13 +88,18 @@ The 52 non-matching diagnostics are stable and grouped as follows:
   EventEmitter, and EventEmitterAsyncResource behavior selected from Bun's
   async-context matrix and Node's provider tests.
 - `hooks/`: enable/disable/re-enable, simultaneous observers, enabling and
-  disabling observers from `init`, `trackPromises`, `promiseResolve`, resource
+  disabling observers from `init` or while callbacks and Promise chains are
+  active, pre-created Promise trigger chains, execution-resource identity,
+  default next-tick triggers, `trackPromises`, `promiseResolve`, resource
   arguments, cancelled timer/immediate destruction, deterministic
-  timer/microtask/nextTick/fs/crypto lifecycles, and throwing scoped callbacks.
+  timer/microtask/nextTick/fs/crypto/PBKDF2 lifecycles, and throwing scoped
+  callbacks.
 - `providers/`: DNS, child processes, HTTP and HTTPS including keep-alive agent
-  isolation, TLS, net, dgram, workers, readline, events.on, and stream async
-  iterators with local endpoints, ephemeral ports, and explicit close/exit
-  barriers. This directory runs in the sequential lane.
+  and concurrent-client isolation, HTTP execution-resource mapping, TLS, net
+  including concurrent data isolation and `getConnections`, dgram, workers,
+  readline, events.on, and stream async iterators with local endpoints,
+  ephemeral ports, and explicit close/exit barriers. This directory runs in the
+  sequential lane.
 - `validation/`: synchronous throw propagation and cleanup of storage and
   execution-resource state, plus hook-sensitive empty resource type behavior.
   The pre-existing root fixtures retain detailed callback, constructor, and
