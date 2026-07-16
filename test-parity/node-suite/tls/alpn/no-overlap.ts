@@ -16,7 +16,10 @@ server.listen(0, "127.0.0.1", () => {
     rejectUnauthorized: false,
     ALPNProtocols: ["http/1.1"],
   });
-  client.on("secureConnect", () => { secure = true; });
+  client.on("secureConnect", () => {
+    secure = true;
+    client.destroy();
+  });
   client.on("error", (err: any) => { clientError = err.code; });
   client.on("close", () => server.close(() => {
     console.log("secure:", secure);

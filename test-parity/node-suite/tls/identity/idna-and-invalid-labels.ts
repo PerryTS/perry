@@ -1,10 +1,10 @@
 import tls from "node:tls";
 
 function ok(host: string, name: string) {
-  return tls.checkServerIdentity(host, { subject: { CN: name } }) === undefined;
+  return tls.checkServerIdentity(host, { subject: { CN: name } } as any) === undefined;
 }
 function code(host: string, name: string) {
-  return (tls.checkServerIdentity(host, { subject: { CN: name } }) as any)?.code;
+  return (tls.checkServerIdentity(host, { subject: { CN: name } } as any) as any)?.code;
 }
 console.log("idna wildcard:", ok("xn--bcher-kva.example.com", "*.example.com"));
 console.log("idna embedded wildcard:", code("xn--bcher-kva.example.com", "xn--*.example.com"));
