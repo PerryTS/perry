@@ -148,8 +148,9 @@ diffs**, no compile failures, no timeouts, and no harness errors. A related
 17/50), also without compile failures or timeouts. The stable mismatch families
 are:
 
-- module namespace, descriptor/enumerability, and subclass-construction
-  differences plus no normalized experimental warning;
+- module namespace, descriptor/enumerability (including an enumerable,
+  configurable, writable constructor `prototype` property), and
+  subclass-construction differences plus no normalized experimental warning;
 - import-function name/arity and receiver differences, plus loss of the
   `wasi_unstable` namespace after replacing `wasiImport`;
 - import syscalls return `28` before memory binding instead of throwing

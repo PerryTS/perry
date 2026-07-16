@@ -1,11 +1,26 @@
 import { WASI } from "node:wasi";
 
 function flags(object: object, key: PropertyKey) {
-  const descriptor = Object.getOwnPropertyDescriptor(object, key)!;
-  return [descriptor.enumerable, descriptor.configurable, descriptor.writable]
-    .join("/");
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (descriptor === undefined) return "missing";
+  return [
+    descriptor.enumerable,
+    descriptor.configurable,
+    descriptor.writable,
+  ].join("/");
 }
 
+console.log(
+  "constructor names:",
+  Object.getOwnPropertyNames(WASI).sort().join(","),
+);
+for (const key of ["length", "name", "prototype"]) {
+  console.log("constructor " + key + ":", flags(WASI, key));
+}
+console.log(
+  "constructor parent:",
+  Object.getPrototypeOf(WASI) === Function.prototype,
+);
 console.log(
   "prototype names:",
   Object.getOwnPropertyNames(WASI.prototype).sort().join(","),
@@ -23,8 +38,8 @@ for (
   console.log(
     key + ":",
     typeof value,
-    value.name,
-    value.length,
+    typeof value === "function" ? value.name : "-",
+    typeof value === "function" ? value.length : "-",
     flags(WASI.prototype, key),
   );
 }
