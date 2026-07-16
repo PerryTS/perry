@@ -1442,6 +1442,41 @@ pub unsafe extern "C" fn js_class_static_method_call(
             return result;
         }
     }
+    // #6475: `class X extends <function value>() {}` — a static member
+    // INHERITED from the parent FUNCTION's own properties, invoked as a call
+    // (`X.use(f)`, effect's `HttpRouter.Tag(id)().use`/`unwrap`/`serve`). The
+    // field-GET path already walks the parent closure
+    // (`get_field_by_name.rs` #36/#321: `closure_get_dynamic_prop(parent,
+    // name)`), so `typeof X.use === "function"` — but the fused static-CALL
+    // lowering routes here, and this helper only consulted CLASS_DYNAMIC_PROPS
+    // (which holds statics of a CLASS parent, not the own props of a runtime
+    // FUNCTION parent stored in the closure-props table). So the call missed,
+    // fell to the receiver fallback below, and effect's `X.use(f)` returned the
+    // class ref (`1`) instead of running the inherited arrow — every Tag-based
+    // Layer built through `.use`/`.serve` silently became the class itself.
+    // Walk the parent-closure chain and invoke the resolved callable with `this`
+    // bound to the receiver, mirroring the GET path.
+    if let Some(closure_ptr) = parent_closure_in_chain(class_id) {
+        let closure_val = f64::from_bits(
+            crate::value::POINTER_TAG | (closure_ptr as u64 & crate::value::POINTER_MASK),
+        );
+        let member = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+        let mv = crate::value::JSValue::from_bits(member.to_bits());
+        if !mv.is_undefined()
+            && !mv.is_null()
+            && crate::collection_iter::is_callable(member)
+            // Guard against the closure_get_dynamic_prop fallback returning the
+            // closure itself for an unknown key (it never should for a miss,
+            // but be defensive): a member equal to the parent closure value is
+            // not a real inherited member.
+            && member.to_bits() != closure_val.to_bits()
+        {
+            let prev_this = crate::object::js_implicit_this_set(receiver);
+            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
+            crate::object::js_implicit_this_set(prev_this);
+            return result;
+        }
+    }
     // True miss: no static method and no callable static field resolved on the
     // class chain. We hand back the receiver (load-bearing for effect's
     // `.pipe()`-during-init chains, #687) — but that silent class-ref is exactly
