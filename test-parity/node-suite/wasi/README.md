@@ -1,7 +1,7 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 45 focused fixtures in five groups:
+layer. The suite has 46 focused fixtures in five groups:
 
 - `classes/` (5): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, call-without-`new`, and a warning-event assertion that normalizes
@@ -13,11 +13,12 @@ layer. The suite has 45 focused fixtures in five groups:
   preview1/unstable namespace identity, ordinary wrapper descriptors,
   replacement behavior that preserves the selected namespace, method receivers,
   and pre-start syscall validation.
-- `lifecycle/` (23): input/export validation, memory binding, single-start
+- `lifecycle/` (24): input/export validation, memory binding, single-start
   rules, start/initialize exclusivity, entrypoint invocation, return-on-exit
   behavior, patched-import errors, real wasm instance shape, imported-function
-  linking, failure-state transitions, explicit-memory override and option
-  validation, and cross-realm memory acceptance.
+  linking, failure-state transitions (including finalization exclusivity),
+  explicit-memory override and option validation, and cross-realm memory
+  acceptance.
 - `semantics/` (4): UTF-8 argument/environment encoding, constructor-time
   snapshots, and empty defaults, plus predicate-only clock and zero-length
   random behavior. No random bytes or wall-clock values are compared.
@@ -61,8 +62,8 @@ Coverage was compared against primary sources at these revisions:
   documented
   [`finalizeBindings()` contract](https://github.com/nodejs/node/blob/v26.5.0/doc/api/wasi.md#wasifinalizebindingsinstance-options).
   The constructor and start/initialize validation, `finalizeBindings()`
-  memory/options validation, return-on-exit, eager args/env snapshots, and
-  bounded clock/random contracts are represented here.
+  memory/options validation and shared lifecycle state, return-on-exit, eager
+  args/env snapshots, and bounded clock/random contracts are represented here.
 - Deno (`803a3c933e1e23e0972445293ec0b34b8da96ccc`):
   [`ext/node/polyfills/wasi.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/ext/node/polyfills/wasi.ts).
   Its current preview1 implementation follows most Node constructor, import,
@@ -80,9 +81,10 @@ Coverage was compared against primary sources at these revisions:
   Bun's selected fixture exercises preview1 imports and start behavior, while
   its implementation retains legacy `getImports()`/optional-memory behavior,
   lacks Node's initialize/finalize helpers, and uses realm-sensitive memory
-  branding. It also retains the caller's args array and env object, so mutations
-  after construction remain visible, and does not omit undefined env values;
-  Node 26.5.0 remains the oracle.
+  branding. It also accepts `args: null` instead of applying Node's non-array
+  validation, retains the caller's args array and env object so mutations after
+  construction remain visible, and does not omit undefined env values; Node
+  26.5.0 remains the oracle.
 
 The direct Node mapping is: `test-wasi-options-validation.js` to `constructor/`;
 `test-wasi-start-validation.js` and `test-wasi-initialize-validation.js` to the
@@ -101,6 +103,9 @@ null options; Node's checked-in WASI tests use its valid external-memory path
 only for the separately excluded pthread harness. Generic invalid
 `instance`/`instance.exports` branches are already isolated for both public
 lifecycle entry methods and are not duplicated for `finalizeBindings()`. Node's
+`finalizeBindings()` one-way lifecycle transition maps to
+`lifecycle/finalize-state.ts`, which isolates both transition directions for the
+public entry methods from the unrelated explicit-memory validation gaps. Node's
 eager `Array.prototype.map`/`Object.entries` copies in `lib/wasi.js` map to
 `semantics/options-snapshot.ts`; Deno matches those snapshots, while Bun's
 current implementation retains both caller-owned inputs by reference. The same
@@ -113,10 +118,10 @@ portable documented default.
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, focused runs were stable at **15/45**, with **30 behavioral
+host archive, focused runs were stable at **16/46**, with **30 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **127/165** (`globals` 112/120 and `wasi`
-15/45), also without compile failures or timeouts. The stable mismatch families
+`globals,wasi` run completed at **128/166** (`globals` 112/120 and `wasi`
+16/46), also without compile failures or timeouts. The stable mismatch families
 are:
 
 - module namespace and descriptor/enumerability differences plus no normalized
@@ -141,10 +146,22 @@ platform-specific errno or error text, actual entropy/time values, large or
 concurrent modules, permissions/locking, symlink escape, signals,
 GC/finalization, worker termination, and stress. Those require separate
 WASI/runtime/compiler work and would be redundant or less diagnostic here.
-Node's explicit cross-realm `WebAssembly.Instance` validation case is not a
-separate fixture: current `lib/wasi.js` validates the instance structurally and
-brands only its memory, so `lifecycle/cross-realm-memory.ts` exercises the
-distinct cross-realm WASI contract without duplicating the same Perry failure.
+Concretely, the remaining Node 26 files `test-wasi-cant_dotdot.js`,
+`test-wasi-fd_prestat_get_refresh.js`, `test-wasi-ftruncate.js`,
+`test-wasi-io.js`, `test-wasi-notdir.js`, `test-wasi-preopen_populates.js`,
+`test-wasi-readdir.js`, `test-wasi-stat.js`, `test-wasi-stdio.js`,
+`test-wasi-symlinks.js`, and `test-wasi-write_file.js` all cross that host-fd
+boundary. `test-wasi-getentropy.js`, `test-wasi-getrusage.js`, and
+`test-wasi-poll.js` require non-deterministic values or platform scheduling;
+`test-wasi-sock.js`, `test-wasi-pthread.js`, and `test-wasi-worker-terminate.js`
+stay in the explicitly separated socket, thread, and worker categories.
+`test-wasi-exitcode.js` is already represented by the isolated
+default/true/false `returnOnExit` fixtures rather than copied as another
+external-process harness. Node's explicit cross-realm `WebAssembly.Instance`
+validation case is not a separate fixture: current `lib/wasi.js` validates the
+instance structurally and brands only its memory, so
+`lifecycle/cross-realm-memory.ts` exercises the distinct cross-realm WASI
+contract without duplicating the same Perry failure.
 
 ## Verification
 
