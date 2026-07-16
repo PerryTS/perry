@@ -1,7 +1,7 @@
 # `node:wasi` granular parity suite
 
 Deterministic Node 26.5.0 oracle cases for Perry's `node:wasi` compatibility
-layer. The suite has 43 focused fixtures in five groups:
+layer. The suite has 44 focused fixtures in five groups:
 
 - `classes/` (5): ESM/CommonJS export shape, constructor/prototype/instance
   descriptors, call-without-`new`, and a warning-event assertion that normalizes
@@ -11,12 +11,13 @@ layer. The suite has 43 focused fixtures in five groups:
   no host path is opened.
 - `imports/` (7): the complete 46-function preview1 surface, function metadata,
   preview1/unstable namespace identity, ordinary wrapper descriptors,
-  replacement behavior, method receivers, and pre-start syscall validation.
-- `lifecycle/` (22): input/export validation, memory binding, single-start
+  replacement behavior that preserves the selected namespace, method receivers,
+  and pre-start syscall validation.
+- `lifecycle/` (23): input/export validation, memory binding, single-start
   rules, start/initialize exclusivity, entrypoint invocation, return-on-exit
   behavior, patched-import errors, real wasm instance shape, imported-function
-  linking, failure-state transitions, explicit-memory override, and cross-realm
-  memory acceptance.
+  linking, failure-state transitions, explicit-memory override and option
+  validation, and cross-realm memory acceptance.
 - `semantics/` (3): argument/environment encoding plus predicate-only clock and
   zero-length random behavior. No random bytes or wall-clock values are
   compared.
@@ -55,16 +56,20 @@ Coverage was compared against primary sources at these revisions:
 
 - Node.js 26.5.0 (`bebd1b8d92bf4cc917844d6335ed1ecf9c2a75fb`):
   [`lib/wasi.js`](https://github.com/nodejs/node/blob/v26.5.0/lib/wasi.js) and
-  [`test/wasi`](https://github.com/nodejs/node/tree/v26.5.0/test/wasi). The
-  constructor, start/initialize validation, return-on-exit, args, and bounded
-  clock/random contracts are represented here.
+  [`test/wasi`](https://github.com/nodejs/node/tree/v26.5.0/test/wasi), plus the
+  documented
+  [`finalizeBindings()` contract](https://github.com/nodejs/node/blob/v26.5.0/doc/api/wasi.md#wasifinalizebindingsinstance-options).
+  The constructor and start/initialize validation, `finalizeBindings()`
+  memory/options validation, return-on-exit, args, and bounded clock/random
+  contracts are represented here.
 - Deno (`803a3c933e1e23e0972445293ec0b34b8da96ccc`):
   [`ext/node/polyfills/wasi.ts`](https://github.com/denoland/deno/blob/803a3c933e1e23e0972445293ec0b34b8da96ccc/ext/node/polyfills/wasi.ts).
   Its current preview1 implementation follows most Node constructor, import,
   memory-brand, and not-started validation, but validates entrypoints before
   consuming lifecycle state, keeps `finalizeBindings()` idempotent, and exposes
-  `wasiImport` as a getter; no separate checked-in `node:wasi` compatibility
-  selection was present at that revision.
+  `wasiImport` as a getter. Its `finalizeBindings()` also treats null memory or
+  options as absent instead of rejecting them; no separate checked-in
+  `node:wasi` compatibility selection was present at that revision.
 - Bun (`0ecd508247c7e99477717389a6cad44552cac023`):
   [`src/js/node/wasi.ts`](https://github.com/oven-sh/bun/blob/0ecd508247c7e99477717389a6cad44552cac023/src/js/node/wasi.ts)
   and the
@@ -80,31 +85,39 @@ matching `lifecycle/` validation, state, and execution cases;
 `test-return-on-exit.js` to the three `return-on-exit-*` cases plus
 patched-import rethrow; `test-wasi-not-started.js` to
 `imports/syscall-before-start.ts`; and `test-wasi-main_args.js` to
-`semantics/args-exposure.ts`. The portable parts of `test-wasi-clock_getres.js`,
+`semantics/args-exposure.ts`. The portable parts of `test-wasi-clock_getres.js`
 and `test-wasi-gettimeofday.js` map to `semantics/clock-random.ts`, which checks
 both realtime and monotonic clock success with positive-value predicates. That
 fixture limits random coverage to the deterministic zero-length no-write
 boundary; it does not claim Node's nonzero `test-wasi-getentropy.js` behavior.
+The documented `finalizeBindings(instance[, options])` memory/options contract
+maps to the `finalize-*` lifecycle cases, including invalid explicit memory and
+null options; Node's checked-in WASI tests use its valid external-memory path
+only for the separately excluded pthread harness. Generic invalid
+`instance`/`instance.exports` branches are already isolated for both public
+lifecycle entry methods and are not duplicated for `finalizeBindings()`.
 
 ## Measured result and stopping evidence
 
 With Node 26.5.0, a `perry-dev` compiler/runtime build, and the optional wasm
-host archive, two focused runs were stable at **16/43**, with **27 behavioral
+host archive, focused runs were stable at **15/44**, with **29 behavioral
 diffs**, no compile failures, no timeouts, and no harness errors. A related
-`globals,wasi` run completed at **128/163** (`globals` 112/120 and `wasi`
-16/43), also without compile failures or timeouts. The stable mismatch families
+`globals,wasi` run completed at **127/164** (`globals` 112/120 and `wasi`
+15/44), also without compile failures or timeouts. The stable mismatch families
 are:
 
 - module namespace and descriptor/enumerability differences plus no normalized
   experimental warning;
-- import-function name/arity and receiver differences;
+- import-function name/arity and receiver differences, plus loss of the
+  `wasi_unstable` namespace after replacing `wasiImport`;
 - import syscalls return `28` before memory binding instead of throwing
   `ERR_WASI_NOT_STARTED`;
 - `WebAssembly.Memory` construction/branding and standard async instance shape
   differ, while the optional wasm host uses Perry's synchronous opaque handle;
 - lifecycle methods validate but do not invoke `_start`/`_initialize`, do not
   consume state after post-bind validation failures, do not implement exit-code
-  flow, and do not bind or honor explicitly overridden syscall memory;
+  flow, do not bind or honor explicitly overridden syscall memory, and do not
+  validate `finalizeBindings()` memory/options;
 - args/env/clock/random semantics remain unavailable behind those memory/syscall
   gaps.
 
