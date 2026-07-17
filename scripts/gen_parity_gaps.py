@@ -89,7 +89,7 @@ def parse_inventory():
     modules: dict[str, list] = {}
     cur = None
     in_inventory = False
-    for line in INVENTORY.read_text().splitlines():
+    for line in INVENTORY.read_text(encoding="utf-8").splitlines():
         m = SECTION_RE.match(line)
         if m:
             title = m.group(1)
@@ -145,7 +145,7 @@ def parse_manifest():
     by_module: dict[str, set] = {}
     total = 0
     for path in MANIFEST_FILES:
-        for mod, member in MANIFEST_RE.findall(path.read_text()):
+        for mod, member in MANIFEST_RE.findall(path.read_text(encoding="utf-8")):
             by_module.setdefault(mod, set()).add(member)
             total += 1
     if total < MIN_PLAUSIBLE_MANIFEST_ENTRIES:
@@ -159,7 +159,7 @@ def parse_manifest():
 
 
 def parse_expr_variants() -> set:
-    txt = "\n".join(f.read_text(errors="ignore") for f in IR_DIR.rglob("*.rs"))
+    txt = "\n".join(f.read_text(encoding="utf-8", errors="ignore") for f in IR_DIR.rglob("*.rs"))
     # crude: collect PascalCase enum variant idents inside the Expr enum
     return set(re.findall(r"\b([A-Z][A-Za-z0-9]+)\s*[\({,]", txt))
 
@@ -173,7 +173,7 @@ def scan_ffi_and_dispatch():
         if not d.exists():
             continue
         for f in d.rglob("*.rs"):
-            t = f.read_text(errors="ignore")
+            t = f.read_text(encoding="utf-8", errors="ignore")
             files[str(f)] = t
             for fn in re.findall(r"\bfn (js_[a-z0-9_]+)", t):
                 ffi.add(fn)
