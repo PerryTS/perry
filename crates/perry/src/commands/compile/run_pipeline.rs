@@ -1627,16 +1627,39 @@ pub fn run_with_parse_cache(
     // duplicating the (potentially large) `Vec<String>` of every
     // translated string. Pre-fix, a project with N modules cloned the
     // full translations Vec N times during codegen.
-    let i18n_snapshot: Option<std::sync::Arc<(Vec<String>, usize, usize, Vec<String>, usize)>> =
-        i18n_table.as_ref().map(|table| {
-            std::sync::Arc::new((
-                table.translations.clone(),
-                table.keys.len(),
-                table.locale_count,
-                table.locale_codes.clone(),
-                table.default_locale_idx,
-            ))
-        });
+    #[allow(clippy::type_complexity)]
+    let i18n_snapshot: Option<
+        std::sync::Arc<(
+            Vec<String>,
+            usize,
+            usize,
+            Vec<String>,
+            usize,
+            Vec<(String, String)>,
+        )>,
+    > = i18n_table.as_ref().map(|table| {
+        // `[i18n.currencies]` rides along so the entry module's `main`
+        // prelude can bake the `perry_i18n_set_currencies` call. Sorted
+        // for a deterministic object-cache key (the config is a HashMap).
+        let mut currencies: Vec<(String, String)> = i18n_config
+            .as_ref()
+            .map(|c| {
+                c.currencies
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        currencies.sort();
+        std::sync::Arc::new((
+            table.translations.clone(),
+            table.keys.len(),
+            table.locale_count,
+            table.locale_codes.clone(),
+            table.default_locale_idx,
+            currencies,
+        ))
+    });
 
     // Phase J: detect bitcode-link mode. The actual .bc paths aren't known
     // yet (build_optimized_libs runs after compilation), but we decide the

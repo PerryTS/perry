@@ -1518,13 +1518,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // per-module Vec clone — wrapping the I18nLowerCtx field
             // in Arc too would eliminate it, but is a wider refactor
             // tracked as a follow-up.
-            let (translations, key_count, _locale_count, locale_codes, default_locale_idx) =
-                arc.as_ref();
+            let (
+                translations,
+                key_count,
+                _locale_count,
+                locale_codes,
+                default_locale_idx,
+                currencies,
+            ) = arc.as_ref();
             crate::expr::I18nLowerCtx {
                 translations: translations.clone(),
                 key_count: *key_count,
                 default_locale_idx: *default_locale_idx,
                 locale_codes: locale_codes.clone(),
+                currencies: currencies.clone(),
             }
         }),
         imported_vars: opts.imported_vars,

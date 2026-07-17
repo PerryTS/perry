@@ -375,6 +375,68 @@ pub(super) fn compile_module_entry(
                 .filter(|s| !s.is_empty())
                 .map(|suite| llmod.add_string_constant(suite))
         };
+        // i18n startup init: when the project configures `[i18n]`, bake the
+        // configured locale-code list (and the optional `[i18n.currencies]`
+        // map) into `main`'s prelude as a single `perry_i18n_init` call —
+        // this registers the locale registry the plural rules and format
+        // wrappers read, and eagerly resolves the runtime locale index at
+        // startup instead of leaving it pinned to the default row. Non-i18n
+        // projects (`cross_module.i18n` is `None`) emit nothing. Constants
+        // and raw ptr/len arrays are allocated up-front while `llmod` is
+        // still mutable — `main` claims the borrow below.
+        //
+        // (ptrs_global, lens_global, count, default_idx, currencies_const)
+        let i18n_startup: Option<(String, String, usize, usize, Option<(String, usize)>)> =
+            if is_dylib {
+                None
+            } else {
+                cross_module
+                    .i18n
+                    .as_ref()
+                    .filter(|i| !i.locale_codes.is_empty())
+                    .map(|i18n| {
+                        let mut ptr_elems: Vec<String> = Vec::new();
+                        let mut len_elems: Vec<String> = Vec::new();
+                        for code in &i18n.locale_codes {
+                            let (name, len) = llmod.add_string_constant(code);
+                            ptr_elems.push(format!("ptr @{}", name));
+                            len_elems.push(format!("i32 {}", len));
+                        }
+                        let count = i18n.locale_codes.len();
+                        let ptrs_global = "__perry_i18n_locale_ptrs".to_string();
+                        let lens_global = "__perry_i18n_locale_lens".to_string();
+                        llmod.add_raw_global(format!(
+                            "@{} = private unnamed_addr constant [{} x ptr] [{}]",
+                            ptrs_global,
+                            count,
+                            ptr_elems.join(", ")
+                        ));
+                        llmod.add_raw_global(format!(
+                            "@{} = private unnamed_addr constant [{} x i32] [{}]",
+                            lens_global,
+                            count,
+                            len_elems.join(", ")
+                        ));
+                        let currencies = if i18n.currencies.is_empty() {
+                            None
+                        } else {
+                            let joined = i18n
+                                .currencies
+                                .iter()
+                                .map(|(l, c)| format!("{}={}", l, c))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            Some(llmod.add_string_constant(&joined))
+                        };
+                        (
+                            ptrs_global,
+                            lens_global,
+                            count,
+                            i18n.default_locale_idx,
+                            currencies,
+                        )
+                    })
+            };
         // Next.js wall 54 (part 2): emit a string constant for every Deferred
         // `.next/server/**` module path now (before `main` borrows `llmod`); the
         // registration calls go in the block below. `(string_const_name,
@@ -431,6 +493,34 @@ pub(super) fn compile_module_entry(
                     "perry_app_group_init",
                     &[(PTR, suite_ptr.as_str()), (I32, len_str.as_str())],
                 );
+            }
+            // i18n: register the configured locale list + resolve the runtime
+            // locale BEFORE any module init runs, so module-top-level `t()`
+            // calls and format wrappers already see the detected locale.
+            if let Some((ptrs_global, lens_global, count, default_idx, currencies)) =
+                i18n_startup.as_ref()
+            {
+                let ptrs_ref = format!("@{}", ptrs_global);
+                let lens_ref = format!("@{}", lens_global);
+                let count_str = count.to_string();
+                let default_str = default_idx.to_string();
+                blk.call_void(
+                    "perry_i18n_init",
+                    &[
+                        (PTR, ptrs_ref.as_str()),
+                        (PTR, lens_ref.as_str()),
+                        (I32, count_str.as_str()),
+                        (I32, default_str.as_str()),
+                    ],
+                );
+                if let Some((const_name, byte_len)) = currencies {
+                    let pairs_ptr = format!("@{}", const_name);
+                    let pairs_len = byte_len.to_string();
+                    blk.call_void(
+                        "perry_i18n_set_currencies",
+                        &[(PTR, pairs_ptr.as_str()), (I32, pairs_len.as_str())],
+                    );
+                }
             }
             // Wire up stdlib HANDLE_METHOD_DISPATCH eagerly when stdlib is
             // linked. Previously this was only called from

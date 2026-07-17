@@ -700,7 +700,8 @@ fn compute_object_cache_key_with_env(
     // a mis-flagged non-entry module can't collide with an entry one.
     if let Some(arc) = &opts.i18n_table {
         // Tier 4.6: deref the Arc<Tuple> to read the inner fields.
-        let (translations, key_count, locale_count, locale_codes, default_idx) = arc.as_ref();
+        let (translations, key_count, locale_count, locale_codes, default_idx, currencies) =
+            arc.as_ref();
         h.field("i18n_kc", &key_count.to_string());
         h.field("i18n_lc", &locale_count.to_string());
         h.field("i18n_def", &default_idx.to_string());
@@ -708,6 +709,15 @@ fn compute_object_cache_key_with_env(
         // Translations are a single long Vec — join with a NUL to avoid
         // substring ambiguity across entries.
         h.field("i18n_tr", &translations.join("\0"));
+        // `[i18n.currencies]` is baked into the entry `main` prelude —
+        // a change must invalidate the cached entry object. Pre-sorted
+        // at snapshot construction, so the key is deterministic.
+        let currencies_s = currencies
+            .iter()
+            .map(|(l, c)| format!("{}={}", l, c))
+            .collect::<Vec<_>>()
+            .join(",");
+        h.field("i18n_currencies", &currencies_s);
     } else {
         h.field("i18n", "none");
     }
