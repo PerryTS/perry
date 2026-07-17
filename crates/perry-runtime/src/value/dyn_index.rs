@@ -158,16 +158,36 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         );
     }
     if crate::buffer::is_registered_buffer(raw_ptr) {
-        let Some(idx_i32) = finite_nonnegative_i32_index(index) else {
-            return f64::from_bits(TAG_UNDEFINED);
-        };
         let buf = raw_ptr as *const crate::buffer::BufferHeader;
-        let len = unsafe { (*buf).length };
-        if (idx_i32 as u32) >= len {
-            return f64::from_bits(TAG_UNDEFINED);
+        if let Some(idx_i32) = finite_nonnegative_i32_index(index) {
+            let len = unsafe { (*buf).length };
+            if (idx_i32 as u32) >= len {
+                return f64::from_bits(TAG_UNDEFINED);
+            }
+            let byte_val = crate::buffer::js_buffer_get(buf, idx_i32);
+            return byte_val as f64;
         }
-        let byte_val = crate::buffer::js_buffer_get(buf, idx_i32);
-        return byte_val as f64;
+        // A non-numeric (string) key: Node's Buffer is an ordinary Uint8Array
+        // object, so `buf[k]` with a string-valued `k` reads an OWN property
+        // (else the shadowed prototype method) — NOT a byte. This arm used to
+        // return `undefined`, so `(buf as any)[k] = v; (buf as any)[k]` — with
+        // `k` statically `any` but a string at runtime — read back `undefined`
+        // even though the write stored the own prop via
+        // `js_object_set_index_polymorphic` → `buffer_set_own_prop` (#6412).
+        // Route through the by-name getter, which resolves buffer own props +
+        // bound method values (`buffer_own_prop_or_method`), matching the
+        // dotted `buf.k` read and the static-string-key `buf["k"]` fold.
+        let key_jsval = JSValue::from_bits(index.to_bits());
+        if key_jsval.is_string() || key_jsval.is_short_string() {
+            let key_ptr = js_get_string_pointer_unified(index) as *const crate::StringHeader;
+            if !key_ptr.is_null() {
+                return crate::object::js_object_get_field_by_name_f64(
+                    raw_ptr as *const crate::object::ObjectHeader,
+                    key_ptr,
+                );
+            }
+        }
+        return f64::from_bits(TAG_UNDEFINED);
     }
     if crate::set::is_registered_set(raw_ptr) || crate::map::is_registered_map(raw_ptr) {
         let Some(index) = finite_nonnegative_u32_index(index) else {
