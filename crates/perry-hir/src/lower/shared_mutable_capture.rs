@@ -873,6 +873,35 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // Capture sites snapshot the WHOLE handle (the array). Leave the bare
         // `LocalGet(id)` capture args alone; still rewrite non-capture children.
         Expr::RegisterClassCaptures { .. } => return,
+        // #6497: the per-evaluation fresh-binding path (#6470) carries the
+        // same capture-param-ordered `LocalGet` args as RegisterClassCaptures
+        // — they too must snapshot the WHOLE box handle. Rewriting them to
+        // `id[0]` stored the cell's current VALUE on the heap class object,
+        // so methods of a class that captures AND mutates a local indexed
+        // into a number: reads came back `undefined` and writes were lost
+        // (gap tests anon_shape_boxed_capture / 5952_mixin_factory_binding).
+        // Statics' initializer values are ordinary reads and still rewrite.
+        Expr::ClassExprFresh {
+            named_statics,
+            symbol_statics,
+            captured_args,
+            ..
+        } => {
+            for (_, v) in named_statics.iter_mut() {
+                rewrite_expr(v, shared, index_uses);
+            }
+            for (k, v) in symbol_statics.iter_mut() {
+                rewrite_expr(k, shared, index_uses);
+                rewrite_expr(v, shared, index_uses);
+            }
+            for a in captured_args.iter_mut() {
+                if matches!(a, Expr::LocalGet(id) if index_uses.contains(id)) {
+                    continue; // capture argument — keep the array handle
+                }
+                rewrite_expr(a, shared, index_uses);
+            }
+            return;
+        }
         Expr::New {
             class_name, args, ..
         } => {

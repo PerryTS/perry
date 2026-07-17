@@ -1328,6 +1328,27 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 return JSValue::from_bits(value.to_bits());
             }
+            // #6497: `.name` on a heap class-expression value (ClassExprFresh —
+            // #6470 also routes capturing function-body class DECLARATIONS
+            // through it) must expose the template's class name, same as the
+            // INT32 class-ref path's #2059 arm. An explicit `static name`
+            // member (an own field on the class object) still wins.
+            if key_bytes == b"name"
+                && (*obj).object_type == crate::error::OBJECT_TYPE_CLASS
+                && (*obj).class_id != 0
+            {
+                if let Some(v) = own_data_field_by_name(obj, key) {
+                    return v;
+                }
+                let class_id = (*obj).class_id;
+                if !super::super::class_registry::class_is_key_deleted(class_id, "name") {
+                    if let Some(cname) = super::super::class_registry::class_name_for_id(class_id) {
+                        let s =
+                            crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
+                        return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                    }
+                }
+            }
             if (*obj).class_id == CLASS_ID_BOXED_STRING {
                 if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits()),
