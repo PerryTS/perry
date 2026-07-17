@@ -243,18 +243,28 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return JSValue::from_bits(v.to_bits());
                 }
-                if let Some(parent) = crate::object::class_registry::class_object_pinned_parent(obj)
-                {
-                    let pbits = parent.to_bits();
-                    if (pbits >> 48) == 0x7FFD {
-                        let praw = (pbits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-                        if praw as usize != obj as usize
-                            && crate::value::addr_class::is_above_handle_band(praw as usize)
-                            && crate::object::is_valid_obj_ptr(praw as *const u8)
-                        {
-                            let v = js_object_get_field_by_name(praw, key);
-                            if !v.is_undefined() {
-                                return v;
+                // #6530: `name` and `prototype` are OWN properties of every
+                // constructor — never inherited through the parent edge. Skip
+                // the pinned-parent recursion for them so the generic tail
+                // below synthesizes both from THIS object's class_id (the
+                // recursion otherwise answered with the BASE class's `.name`
+                // for every capture-carrying subclass — bundled zod's
+                // identity collapse to "ZodType").
+                if want != b"name" && want != b"prototype" {
+                    if let Some(parent) =
+                        crate::object::class_registry::class_object_pinned_parent(obj)
+                    {
+                        let pbits = parent.to_bits();
+                        if (pbits >> 48) == 0x7FFD {
+                            let praw = (pbits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+                            if praw as usize != obj as usize
+                                && crate::value::addr_class::is_above_handle_band(praw as usize)
+                                && crate::object::is_valid_obj_ptr(praw as *const u8)
+                            {
+                                let v = js_object_get_field_by_name(praw, key);
+                                if !v.is_undefined() {
+                                    return v;
+                                }
                             }
                         }
                     }
@@ -909,7 +919,13 @@ pub extern "C" fn js_object_get_field_by_name(
                     // this covers the data-field case that was returning `undefined`
                     // (Auth.js sets `SignInError.kind = "signIn"` and reads it off a
                     // `CredentialsSignin` subclass to pick the sign-in vs error page).
-                    {
+                    //
+                    // #6530: `name` is an OWN property of every constructor — a
+                    // subclass never inherits its parent's `.name` (spec:
+                    // ClassDefinitionEvaluation installs it per class). Skip the
+                    // chain walk so the #2059 own-name synthesis below answers
+                    // with THIS class's registered name instead of an ancestor's.
+                    if name != "name" {
                         let mut cid = class_id;
                         let mut depth = 0usize;
                         while depth < 32 {
@@ -979,11 +995,18 @@ pub extern "C" fn js_object_get_field_by_name(
                     // parent object was recorded as `class_id`'s static
                     // prototype at `extends` time; walk that chain (also
                     // covering multi-level `class Leaf extends Mid {}`).
-                    if let Some(v) =
-                        super::super::class_registry::resolve_proto_chain_field(class_id, key)
-                    {
-                        if !v.is_undefined() && !v.is_null() {
-                            return v;
+                    // #6530: except `name` — an own property of every
+                    // constructor, never inherited; without the guard a
+                    // subclass of a per-evaluation class object reported its
+                    // BASE's synthesized `.name` (bundled zod:
+                    // `z.string().constructor.name` gave "ZodType").
+                    if name != "name" {
+                        if let Some(v) =
+                            super::super::class_registry::resolve_proto_chain_field(class_id, key)
+                        {
+                            if !v.is_undefined() && !v.is_null() {
+                                return v;
+                            }
                         }
                     }
                     // #36 / #321: the subclass extends a FUNCTION value
