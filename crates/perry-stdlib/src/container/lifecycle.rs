@@ -38,7 +38,19 @@ pub unsafe extern "C" fn js_container_run(spec_ptr: *const StringHeader) -> *mut
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
         };
-        match backend.run(&spec).await {
+        // Route through the security-aware path when the spec carries
+        // fields (`seccomp`, `no_new_privileges`) that only exist on
+        // the protocol's `security_args`. Pre-fix `run()` always
+        // called `backend.run()`, so those knobs were unreachable via
+        // the public API — serde dropped them from the JSON and the
+        // documented hardening silently never reached the runtime.
+        let result = if spec.has_security_opts() {
+            let profile = spec.security_profile();
+            backend.run_with_security(&spec, &profile).await
+        } else {
+            backend.run(&spec).await
+        };
+        match result {
             Ok(handle) => {
                 let handle_id = types::register_container_handle(handle);
                 Ok(handle_to_promise_bits(handle_id as u64))
@@ -75,7 +87,15 @@ pub unsafe extern "C" fn js_container_create(spec_ptr: *const StringHeader) -> *
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
         };
-        match backend.create(&spec).await {
+        // Same security routing as `run()` above — `create()` must not
+        // silently drop `seccomp` / `no_new_privileges` either.
+        let result = if spec.has_security_opts() {
+            let profile = spec.security_profile();
+            backend.create_with_security(&spec, &profile).await
+        } else {
+            backend.create(&spec).await
+        };
+        match result {
             Ok(handle) => {
                 let handle_id = types::register_container_handle(handle);
                 Ok(handle_to_promise_bits(handle_id as u64))

@@ -540,6 +540,14 @@ impl ComposeEngine {
                 workdir: svc.working_dir.clone(),
                 cap_add: svc.cap_add.clone(),
                 cap_drop: svc.cap_drop.clone(),
+                // Left unset here: the compose engine expresses seccomp
+                // / no-new-privileges through the `SecurityProfile`
+                // built from `security_opt` below, and
+                // `run_with_security` emits them from the profile.
+                // Setting them on the spec too would double-emit the
+                // `--security-opt` flags.
+                seccomp: None,
+                no_new_privileges: None,
                 // Register the service KEY as a DNS alias on the
                 // attached network. This makes `db:5432` / `api:8080`
                 // etc. resolve from sibling containers without the

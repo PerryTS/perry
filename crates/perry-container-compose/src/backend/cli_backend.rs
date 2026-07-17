@@ -75,6 +75,83 @@ impl CliBackend {
             })
         }
     }
+
+    /// Shared implementation behind `run_with_security` /
+    /// `create_with_security`.
+    ///
+    /// Cross-backend determinism pass (see `crate::capabilities`):
+    /// normalise the spec and security profile against the backend's
+    /// declared capabilities BEFORE emitting CLI args. Drops fields
+    /// the backend can't honor + emits structured warnings via
+    /// tracing so the user can grep for them. This is the layer
+    /// that prevents an apple/container `run` from receiving a
+    /// `--privileged` flag the CLI rejects.
+    async fn launch_with_security(
+        &self,
+        spec: &ContainerSpec,
+        profile: &SecurityProfile,
+        create_only: bool,
+    ) -> Result<ContainerHandle> {
+        let caps = self.protocol.capabilities();
+        let svc_name = spec.name.as_deref().unwrap_or("<unnamed>");
+        let mut normalised_spec = spec.clone();
+        let mut normalised_profile = profile.clone();
+        let mut warnings =
+            crate::capabilities::normalise_spec_for(caps, svc_name, &mut normalised_spec);
+        warnings.extend(crate::capabilities::normalise_security_profile(
+            caps,
+            svc_name,
+            &mut normalised_profile,
+        ));
+        for w in &warnings {
+            tracing::warn!(
+                target: "perry::container::normalise",
+                backend = w.backend,
+                service = %w.service,
+                field = w.field,
+                reason = %w.reason,
+                "spec field dropped/translated for backend"
+            );
+        }
+
+        let base_args = if create_only {
+            self.protocol.create_args(&normalised_spec)
+        } else {
+            self.protocol.run_args(&normalised_spec)
+        };
+        let sec_args = self.protocol.security_args(&normalised_profile);
+        let args = splice_security_args(base_args, &normalised_spec.image, sec_args);
+
+        let (stdout, _) = self.exec_raw(&args).await?;
+        let id = self.protocol.parse_container_id(&stdout)?;
+        Ok(ContainerHandle {
+            id,
+            name: normalised_spec.name,
+        })
+    }
+}
+
+/// Insert the protocol's `security_args` immediately before the image
+/// reference in a `run`/`create` argument vector. The image is the
+/// first positional argument; everything after it is the container
+/// command, so flags must land before it. Pure function so the final
+/// argv shape is unit-testable without spawning a CLI process (see
+/// the arg-construction tests in `crate::backend::tests`).
+///
+/// If the image can't be located (defensive — `run_args` always pushes
+/// it) the args are returned unchanged rather than emitting flags into
+/// the container command position.
+pub(crate) fn splice_security_args(
+    mut args: Vec<String>,
+    image: &str,
+    sec_args: Vec<String>,
+) -> Vec<String> {
+    if let Some(pos) = args.iter().position(|a| a == image) {
+        for (i, arg) in sec_args.into_iter().enumerate() {
+            args.insert(pos + i, arg);
+        }
+    }
+    args
 }
 
 #[async_trait]
@@ -234,52 +311,15 @@ impl ContainerBackend for CliBackend {
         spec: &ContainerSpec,
         profile: &SecurityProfile,
     ) -> Result<ContainerHandle> {
-        // Cross-backend determinism pass (see `crate::capabilities`):
-        // normalise the spec and security profile against the backend's
-        // declared capabilities BEFORE emitting CLI args. Drops fields
-        // the backend can't honor + emits structured warnings via
-        // tracing so the user can grep for them. This is the layer
-        // that prevents an apple/container `run` from receiving a
-        // `--privileged` flag the CLI rejects.
-        let caps = self.protocol.capabilities();
-        let svc_name = spec.name.as_deref().unwrap_or("<unnamed>");
-        let mut normalised_spec = spec.clone();
-        let mut normalised_profile = profile.clone();
-        let mut warnings =
-            crate::capabilities::normalise_spec_for(caps, svc_name, &mut normalised_spec);
-        warnings.extend(crate::capabilities::normalise_security_profile(
-            caps,
-            svc_name,
-            &mut normalised_profile,
-        ));
-        for w in &warnings {
-            tracing::warn!(
-                target: "perry::container::normalise",
-                backend = w.backend,
-                service = %w.service,
-                field = w.field,
-                reason = %w.reason,
-                "spec field dropped/translated for backend"
-            );
-        }
+        self.launch_with_security(spec, profile, false).await
+    }
 
-        let mut args = self.protocol.run_args(&normalised_spec);
-        // Find the image name to insert security args before it
-        if let Some(pos) = args.iter().position(|a| a == &normalised_spec.image) {
-            let sec_args = self.protocol.security_args(&normalised_profile);
-            // If it's lima, we need to be careful with where we insert.
-            // But let's assume we can just insert before the image.
-            for (i, arg) in sec_args.into_iter().enumerate() {
-                args.insert(pos + i, arg);
-            }
-        }
-
-        let (stdout, _) = self.exec_raw(&args).await?;
-        let id = self.protocol.parse_container_id(&stdout)?;
-        Ok(ContainerHandle {
-            id,
-            name: normalised_spec.name,
-        })
+    async fn create_with_security(
+        &self,
+        spec: &ContainerSpec,
+        profile: &SecurityProfile,
+    ) -> Result<ContainerHandle> {
+        self.launch_with_security(spec, profile, true).await
     }
 
     async fn wait(&self, id: &str) -> Result<i32> {

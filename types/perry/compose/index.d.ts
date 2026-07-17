@@ -89,6 +89,11 @@ export interface Service {
   cap_add?: string[];
   /** Linux capabilities to drop (e.g. `["ALL"]`) */
   cap_drop?: string[];
+  /** Security options (compose-spec § service.security_opt), e.g.
+   *  `["seccomp=default", "no-new-privileges"]`. Parsed into the
+   *  engine's `SecurityProfile`; entries a backend can't honor are
+   *  dropped with a warning. */
+  security_opt?: string[];
 }
 
 /**
