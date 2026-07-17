@@ -131,3 +131,64 @@ async fn test_compose_down_cleans_resources() {
         state.containers
     );
 }
+
+#[tokio::test]
+async fn test_compose_project_name_scopes_volumes_networks_and_labels() {
+    // The project name (ComposeSpec.name via the FFI; the second
+    // ComposeEngine::new arg here) must namespace non-external volumes
+    // and networks as `<project>_<declared-name>` and stamp the
+    // `perry.compose.project` label on every container. Typed TS
+    // callers couldn't set it before ComposeSpec.name landed in the
+    // d.ts — every stack silently collided under "perry-stack".
+    use perry_container_compose::types::ServiceNetworks;
+
+    let mut spec = ComposeSpec::default();
+    spec.services.insert(
+        "web".into(),
+        ComposeService {
+            image: Some("nginx".into()),
+            volumes: Some(vec![serde_yaml::Value::String("data:/var/www".into())]),
+            networks: Some(ServiceNetworks::List(vec!["appnet".into()])),
+            ..Default::default()
+        },
+    );
+    spec.volumes = Some({
+        let mut m = indexmap::IndexMap::new();
+        m.insert("data".to_string(), None);
+        m
+    });
+    spec.networks = Some({
+        let mut m = indexmap::IndexMap::new();
+        m.insert("appnet".to_string(), None);
+        m
+    });
+
+    let backend = Arc::new(MockBackend::default());
+    let engine = Arc::new(ComposeEngine::new(spec, "myproj".into(), backend.clone()));
+    Arc::clone(&engine)
+        .up(&[], true, false, false)
+        .await
+        .expect("up failed");
+
+    let state = backend.state.lock().unwrap();
+    assert!(
+        state.volumes.contains(&"myproj_data".to_string()),
+        "volume must be project-scoped as myproj_data; got {:?}",
+        state.volumes
+    );
+    assert!(
+        state.networks.contains(&"myproj_appnet".to_string()),
+        "network must be project-scoped as myproj_appnet; got {:?}",
+        state.networks
+    );
+    let web = state
+        .containers
+        .values()
+        .next()
+        .expect("one container expected");
+    assert_eq!(
+        web.labels.get("perry.compose.project"),
+        Some(&"myproj".to_string()),
+        "container must carry the project label"
+    );
+}

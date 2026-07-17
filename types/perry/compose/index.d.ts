@@ -129,6 +129,16 @@ export interface ComposeVolume {
  * Root Compose file structure (docker-compose.yaml / compose.yaml).
  */
 export interface ComposeSpec {
+  /**
+   * Compose project name. Scopes everything the engine creates:
+   * containers get the `perry.compose.project=<name>` label (used by
+   * `down()` and `perry/container.downByProject()`), and non-external
+   * volumes / networks are namespaced `<name>_<declared-name>` so two
+   * stacks declaring the same volume key don't collide and corrupt
+   * each other's data. Defaults to `"perry-stack"` when omitted — set
+   * it whenever more than one stack can run on the same host.
+   */
+  name?: string;
   version?: string;
   services: Record<string, Service>;
   networks?: Record<string, ComposeNetwork>;

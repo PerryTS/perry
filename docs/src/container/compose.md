@@ -41,6 +41,14 @@ The full `ComposeSpec` shape is exported from `perry/compose` as
 `ComposeSpec`, with sub-types `Service`, `ComposeNetwork`,
 `ComposeVolume`, `Build`, and `Healthcheck`.
 
+The root-level `name:` field sets the **compose project name** — it
+labels every container (`perry.compose.project=<name>`) and namespaces
+non-external volumes and networks as `<name>_<declared-name>`, exactly
+like docker-compose's project prefix. It defaults to `"perry-stack"`
+when omitted, so set it whenever more than one stack can run on the
+same host (see [Volumes → Volume naming and
+ownership](./volumes.md#volume-naming-and-ownership)).
+
 ### Recognised Service fields
 
 The full set Perry's engine understands (matches compose-spec § services):

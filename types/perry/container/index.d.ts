@@ -246,6 +246,11 @@ export function removeImage(reference: string, force?: boolean): Promise<void>;
  * Multi-container application specification.
  */
 export interface ComposeSpec {
+  /** Compose project name — labels every container
+   *  (`perry.compose.project=<name>`) and namespaces non-external
+   *  volumes / networks as `<name>_<declared-name>`. Defaults to
+   *  `"perry-stack"` when omitted. */
+  name?: string;
   /** Compose file version */
   version?: string;
   /** Service definitions */
