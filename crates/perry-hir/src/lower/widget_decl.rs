@@ -325,7 +325,11 @@ pub(crate) fn try_lower_widget_decl(
     let mut placeholder: Option<Vec<(String, WidgetPlaceholderValue)>> = None;
     let mut family_param_name: Option<String> = None;
     let mut app_group: Option<String> = None;
-    let reload_after_seconds: Option<u32> = None;
+    // Compile-time `reloadPolicy: { after: { minutes: N } }` literals found in
+    // the provider's return statements (converted to seconds), plus a flag for
+    // `reloadPolicy` values that exist but aren't statically parseable.
+    let mut reload_policy_seconds: Vec<u32> = Vec::new();
+    let mut reload_policy_unparsed = false;
 
     for prop in &config_obj.props {
         let kv = match prop {
@@ -361,6 +365,13 @@ pub(crate) fn try_lower_widget_decl(
                         // Provider as method: provider(config) { ... }
                         let func_name = format!("__widget_provider_{}", kind);
                         provider_func_name = Some(func_name);
+                        if let Some(body) = &method.function.body {
+                            scan_provider_stmts_for_reload_policy(
+                                &body.stmts,
+                                &mut reload_policy_seconds,
+                                &mut reload_policy_unparsed,
+                            );
+                        }
                     }
                     continue;
                 }
@@ -419,7 +430,7 @@ pub(crate) fn try_lower_widget_decl(
             }
             "provider" => {
                 // Arrow function provider: provider: async (config) => { ... }
-                if let ast::Expr::Arrow(_arrow) = kv.value.as_ref() {
+                if let ast::Expr::Arrow(arrow) = kv.value.as_ref() {
                     let func_name = if kind.is_empty() {
                         "__widget_provider_widget".to_string()
                     } else {
@@ -427,6 +438,22 @@ pub(crate) fn try_lower_widget_decl(
                         format!("__widget_provider_{}", safe)
                     };
                     provider_func_name = Some(func_name);
+                    match arrow.body.as_ref() {
+                        ast::BlockStmtOrExpr::BlockStmt(block) => {
+                            scan_provider_stmts_for_reload_policy(
+                                &block.stmts,
+                                &mut reload_policy_seconds,
+                                &mut reload_policy_unparsed,
+                            );
+                        }
+                        ast::BlockStmtOrExpr::Expr(expr) => {
+                            scan_provider_return_expr_for_reload_policy(
+                                expr,
+                                &mut reload_policy_seconds,
+                                &mut reload_policy_unparsed,
+                            );
+                        }
+                    }
                 }
             }
             "placeholder" => {
@@ -515,6 +542,38 @@ pub(crate) fn try_lower_widget_decl(
             *pfn = format!("__widget_provider_{}", safe);
         }
     }
+
+    // Resolve the compile-time reload policy. The refresh interval is a single
+    // compile-time constant per widget: if the provider returns several
+    // distinct literal policies (e.g. a short error-retry interval and a
+    // longer happy-path one), use the smallest so the most urgent request
+    // wins, and tell the user.
+    if reload_policy_unparsed {
+        eprintln!(
+            "[perry] warning: widget '{}': `reloadPolicy` must be a literal \
+`{{ after: {{ minutes: N }} }}` for the compiler to read it; a non-literal \
+value was ignored and the platform default refresh interval applies \
+(see docs/src/widgets/data-fetching.md)",
+            kind
+        );
+    }
+    reload_policy_seconds.sort_unstable();
+    reload_policy_seconds.dedup();
+    let reload_after_seconds: Option<u32> = match reload_policy_seconds.as_slice() {
+        [] => None,
+        [only] => Some(*only),
+        many => {
+            eprintln!(
+                "[perry] warning: widget '{}': provider returns {} distinct \
+compile-time `reloadPolicy` values; the refresh interval is a single \
+compile-time constant per widget — using the smallest ({} seconds)",
+                kind,
+                many.len(),
+                many[0]
+            );
+            Some(many[0])
+        }
+    };
 
     Some(WidgetDecl {
         kind,
@@ -1666,6 +1725,163 @@ fn parse_widget_config_param(name: &str, value: &ast::Expr) -> Option<WidgetConf
     }
 }
 
+/// Strip semantically transparent wrappers (parens, TS casts) so return-value
+/// scanning sees the underlying object literal in shapes like
+/// `return ({ ... } as ProviderResult)`.
+fn strip_expr_wrappers(expr: &ast::Expr) -> &ast::Expr {
+    match expr {
+        ast::Expr::Paren(p) => strip_expr_wrappers(&p.expr),
+        ast::Expr::TsAs(a) => strip_expr_wrappers(&a.expr),
+        ast::Expr::TsNonNull(n) => strip_expr_wrappers(&n.expr),
+        ast::Expr::TsTypeAssertion(a) => strip_expr_wrappers(&a.expr),
+        ast::Expr::TsConstAssertion(a) => strip_expr_wrappers(&a.expr),
+        ast::Expr::TsSatisfies(s) => strip_expr_wrappers(&s.expr),
+        _ => expr,
+    }
+}
+
+/// Parse a `reloadPolicy` value literal into whole seconds. The single
+/// documented form is `{ after: { minutes: N } }` with a numeric literal `N`
+/// (`N` may be fractional; the result is rounded to the nearest second).
+/// Returns `None` for anything else — non-literal shapes can't be read at
+/// compile time.
+fn parse_reload_policy_seconds(expr: &ast::Expr) -> Option<u32> {
+    let obj = match strip_expr_wrappers(expr) {
+        ast::Expr::Object(obj) => obj,
+        _ => return None,
+    };
+    for prop in &obj.props {
+        let ast::PropOrSpread::Prop(p) = prop else {
+            continue;
+        };
+        let ast::Prop::KeyValue(kv) = p.as_ref() else {
+            continue;
+        };
+        if prop_name_to_string(&kv.key) != "after" {
+            continue;
+        }
+        let after_obj = match strip_expr_wrappers(kv.value.as_ref()) {
+            ast::Expr::Object(o) => o,
+            _ => return None,
+        };
+        for after_prop in &after_obj.props {
+            let ast::PropOrSpread::Prop(ap) = after_prop else {
+                continue;
+            };
+            let ast::Prop::KeyValue(akv) = ap.as_ref() else {
+                continue;
+            };
+            if prop_name_to_string(&akv.key) != "minutes" {
+                continue;
+            }
+            let ast::Expr::Lit(ast::Lit::Num(n)) = strip_expr_wrappers(akv.value.as_ref()) else {
+                return None;
+            };
+            let minutes = n.value;
+            if !minutes.is_finite() || minutes <= 0.0 {
+                return None;
+            }
+            let seconds = (minutes * 60.0).round();
+            if seconds < 1.0 {
+                return Some(1);
+            }
+            if seconds >= u32::MAX as f64 {
+                return Some(u32::MAX);
+            }
+            return Some(seconds as u32);
+        }
+        return None;
+    }
+    None
+}
+
+/// Inspect one provider return-value expression for a `reloadPolicy`
+/// property. Literal policies are appended to `found` (in seconds); a
+/// `reloadPolicy` that exists but isn't a readable literal sets `unparsed`.
+fn scan_provider_return_expr_for_reload_policy(
+    expr: &ast::Expr,
+    found: &mut Vec<u32>,
+    unparsed: &mut bool,
+) {
+    let obj = match strip_expr_wrappers(expr) {
+        ast::Expr::Object(obj) => obj,
+        _ => return,
+    };
+    for prop in &obj.props {
+        let ast::PropOrSpread::Prop(p) = prop else {
+            continue;
+        };
+        let ast::Prop::KeyValue(kv) = p.as_ref() else {
+            continue;
+        };
+        if prop_name_to_string(&kv.key) != "reloadPolicy" {
+            continue;
+        }
+        match parse_reload_policy_seconds(kv.value.as_ref()) {
+            Some(seconds) => found.push(seconds),
+            None => *unparsed = true,
+        }
+    }
+}
+
+/// Walk a provider function body and collect every compile-time
+/// `reloadPolicy` from its `return` statements, recursing through the
+/// statement shapes a provider realistically uses (blocks, if/else, loops,
+/// try/catch, switch, labels).
+fn scan_provider_stmts_for_reload_policy(
+    stmts: &[ast::Stmt],
+    found: &mut Vec<u32>,
+    unparsed: &mut bool,
+) {
+    for stmt in stmts {
+        scan_provider_stmt_for_reload_policy(stmt, found, unparsed);
+    }
+}
+
+fn scan_provider_stmt_for_reload_policy(
+    stmt: &ast::Stmt,
+    found: &mut Vec<u32>,
+    unparsed: &mut bool,
+) {
+    match stmt {
+        ast::Stmt::Return(ret) => {
+            if let Some(arg) = &ret.arg {
+                scan_provider_return_expr_for_reload_policy(arg, found, unparsed);
+            }
+        }
+        ast::Stmt::Block(block) => {
+            scan_provider_stmts_for_reload_policy(&block.stmts, found, unparsed);
+        }
+        ast::Stmt::If(if_stmt) => {
+            scan_provider_stmt_for_reload_policy(&if_stmt.cons, found, unparsed);
+            if let Some(alt) = &if_stmt.alt {
+                scan_provider_stmt_for_reload_policy(alt, found, unparsed);
+            }
+        }
+        ast::Stmt::While(w) => scan_provider_stmt_for_reload_policy(&w.body, found, unparsed),
+        ast::Stmt::DoWhile(d) => scan_provider_stmt_for_reload_policy(&d.body, found, unparsed),
+        ast::Stmt::For(f) => scan_provider_stmt_for_reload_policy(&f.body, found, unparsed),
+        ast::Stmt::ForIn(f) => scan_provider_stmt_for_reload_policy(&f.body, found, unparsed),
+        ast::Stmt::ForOf(f) => scan_provider_stmt_for_reload_policy(&f.body, found, unparsed),
+        ast::Stmt::Try(t) => {
+            scan_provider_stmts_for_reload_policy(&t.block.stmts, found, unparsed);
+            if let Some(handler) = &t.handler {
+                scan_provider_stmts_for_reload_policy(&handler.body.stmts, found, unparsed);
+            }
+            if let Some(finalizer) = &t.finalizer {
+                scan_provider_stmts_for_reload_policy(&finalizer.stmts, found, unparsed);
+            }
+        }
+        ast::Stmt::Switch(s) => {
+            for case in &s.cases {
+                scan_provider_stmts_for_reload_policy(&case.cons, found, unparsed);
+            }
+        }
+        ast::Stmt::Labeled(l) => scan_provider_stmt_for_reload_policy(&l.body, found, unparsed),
+        _ => {}
+    }
+}
+
 /// Parse a placeholder value from an expression
 fn parse_placeholder_value(expr: &ast::Expr) -> WidgetPlaceholderValue {
     match expr {
@@ -1979,6 +2195,157 @@ mod tests {
             }
             other => panic!("expected Formatted, got {:?}", other),
         }
+    }
+
+    /// Parse `source`, extract the body statements of the first function
+    /// declaration, and run the reload-policy scanner over them.
+    fn scan_first_fn_body(source: &str) -> (Vec<u32>, bool) {
+        let module = perry_parser::parse_typescript(source, "widget_reload_test.ts")
+            .expect("test source parses");
+        for item in &module.body {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) = item {
+                let body = fn_decl.function.body.as_ref().expect("fn has body");
+                let mut found = Vec::new();
+                let mut unparsed = false;
+                scan_provider_stmts_for_reload_policy(&body.stmts, &mut found, &mut unparsed);
+                return (found, unparsed);
+            }
+        }
+        panic!("no function declaration in test source");
+    }
+
+    #[test]
+    fn reload_policy_literal_minutes_becomes_seconds() {
+        let (found, unparsed) = scan_first_fn_body(
+            r#"
+            async function provider() {
+                return {
+                    entries: [{ temperature: 20 }],
+                    reloadPolicy: { after: { minutes: 30 } },
+                };
+            }
+            "#,
+        );
+        assert_eq!(found, vec![1800]);
+        assert!(!unparsed);
+    }
+
+    #[test]
+    fn reload_policy_found_inside_if_and_try() {
+        // The docs' error-handling shape: a short retry interval on the
+        // failure path, a longer one on the happy path.
+        let (found, unparsed) = scan_first_fn_body(
+            r#"
+            async function provider() {
+                try {
+                    const res = await fetch("https://api.example.com/weather");
+                    if (!res.ok) {
+                        return {
+                            entries: [{ temperature: 0 }],
+                            reloadPolicy: { after: { minutes: 5 } },
+                        };
+                    }
+                    return {
+                        entries: [{ temperature: 21 }],
+                        reloadPolicy: { after: { minutes: 15 } },
+                    };
+                } catch (e) {
+                    return {
+                        entries: [{ temperature: 0 }],
+                        reloadPolicy: { after: { minutes: 1 } },
+                    };
+                }
+            }
+            "#,
+        );
+        assert_eq!(found, vec![300, 900, 60]);
+        assert!(!unparsed);
+    }
+
+    #[test]
+    fn reload_policy_non_literal_flags_unparsed() {
+        let (found, unparsed) = scan_first_fn_body(
+            r#"
+            async function provider() {
+                const policy = { after: { minutes: 10 } };
+                return { entries: [], reloadPolicy: policy };
+            }
+            "#,
+        );
+        assert!(found.is_empty());
+        assert!(unparsed);
+    }
+
+    #[test]
+    fn reload_policy_missing_is_neither_found_nor_unparsed() {
+        let (found, unparsed) = scan_first_fn_body(
+            r#"
+            async function provider() {
+                return { entries: [{ temperature: 20 }] };
+            }
+            "#,
+        );
+        assert!(found.is_empty());
+        assert!(!unparsed);
+    }
+
+    #[test]
+    fn reload_policy_arrow_expression_body_scanned() {
+        // `provider: async () => ({ entries: [], reloadPolicy: ... })` —
+        // exercise the expression-body scanner directly.
+        let module = perry_parser::parse_typescript(
+            r#"const p = async () => ({ entries: [], reloadPolicy: { after: { minutes: 45 } } });"#,
+            "widget_reload_arrow_test.ts",
+        )
+        .expect("test source parses");
+        let mut found = Vec::new();
+        let mut unparsed = false;
+        for item in &module.body {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+                let init = var.decls[0].init.as_ref().expect("var has init");
+                let ast::Expr::Arrow(arrow) = init.as_ref() else {
+                    panic!("expected arrow init");
+                };
+                let ast::BlockStmtOrExpr::Expr(expr) = arrow.body.as_ref() else {
+                    panic!("expected expression body");
+                };
+                scan_provider_return_expr_for_reload_policy(expr, &mut found, &mut unparsed);
+            }
+        }
+        assert_eq!(found, vec![2700]);
+        assert!(!unparsed);
+    }
+
+    #[test]
+    fn reload_policy_seconds_parser_edge_cases() {
+        // Fractional minutes round to the nearest second.
+        let half_minute = object_lit(vec![key_value(
+            "after",
+            object_lit(vec![key_value("minutes", num_lit(0.5))]),
+        )]);
+        assert_eq!(parse_reload_policy_seconds(&half_minute), Some(30));
+
+        // Zero and negative intervals are rejected.
+        let zero = object_lit(vec![key_value(
+            "after",
+            object_lit(vec![key_value("minutes", num_lit(0.0))]),
+        )]);
+        assert_eq!(parse_reload_policy_seconds(&zero), None);
+        let negative = object_lit(vec![key_value(
+            "after",
+            object_lit(vec![key_value("minutes", num_lit(-5.0))]),
+        )]);
+        assert_eq!(parse_reload_policy_seconds(&negative), None);
+
+        // Missing `minutes`, wrong key, or non-object shapes are rejected.
+        let empty_after = object_lit(vec![key_value("after", object_lit(vec![]))]);
+        assert_eq!(parse_reload_policy_seconds(&empty_after), None);
+        let wrong_key = object_lit(vec![key_value(
+            "every",
+            object_lit(vec![key_value("minutes", num_lit(10.0))]),
+        )]);
+        assert_eq!(parse_reload_policy_seconds(&wrong_key), None);
+        assert_eq!(parse_reload_policy_seconds(&str_lit("hourly")), None);
     }
 
     #[test]
