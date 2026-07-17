@@ -799,6 +799,36 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
+        // #6530: a named write on a per-evaluation CLASS OBJECT (`object_type
+        // == OBJECT_TYPE_CLASS` — what a capture-carrying class statement
+        // materializes as) must ALSO be mirrored into the class_id-keyed
+        // CLASS_DYNAMIC_PROPS side table. Compiled method bodies reference
+        // sibling classes as INT32 ClassRefs (bundled zod's
+        // `ZodOptional.create(this, this._def)` inside `ZodType.optional()`),
+        // and `js_class_static_method_call` resolves statics through that
+        // table only — without the mirror the dispatch missed and handed back
+        // the class ref itself, so `.optional()` returned the ZodOptional
+        // CLASS instead of an instance. The own-field write still proceeds
+        // below, so reads through the class-object binding (module-scope
+        // `ZodOptional.create`, re-exports) are unchanged. Internal
+        // `__perry_*` markers (the pinned-parent edge) stay object-local.
+        // Last-wins across evaluations of the same class statement, matching
+        // the established template-cid compromise. Placed BEFORE the
+        // store-plan fast gate below so a recorded plan for the same
+        // (class_id, key) can never skip the mirror on a repeat write.
+        if (*obj).object_type == crate::error::OBJECT_TYPE_CLASS
+            && (*obj).class_id != 0
+            && !key.is_null()
+        {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+                if !name.is_empty() && !name.starts_with("__perry_") {
+                    class_dynamic_prop_root_store((*obj).class_id, name.to_string(), value);
+                }
+            }
+        }
+
         // Resolve the interned key EARLY (hoisted from below the interception
         // vet): the store-plan cache and the shape-transition cache both key
         // on interned pointer identity. If the key is already interned
