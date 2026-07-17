@@ -661,6 +661,8 @@ pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
         ("pg", "connect") => Some("PoolClient"),
         ("ioredis", "duplicate") => Some("Redis"),
+        // dayjs manipulation methods return a NEW date handle.
+        ("dayjs", "add" | "subtract" | "startOf" | "endOf") => Some("App"),
         _ => None,
     }
 }

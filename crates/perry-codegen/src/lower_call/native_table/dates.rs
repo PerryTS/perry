@@ -4,17 +4,21 @@ pub(super) const DATES_ROWS: &[NativeModSig] = &[
     // ========== dayjs ==========
     // Factory: `import dayjs from 'dayjs'; dayjs()` → method:"default".
     // Named import: `import { dayjs } from 'dayjs'; dayjs()` → method:"dayjs".
+    // The factory takes the raw NaN-boxed first arg (NA_JSV; pads to
+    // TAG_UNDEFINED when absent): undefined → now, string → ISO parse,
+    // number → epoch ms. The old rows called js_dayjs_now with args:&[]
+    // so `dayjs('2024-01-15')` silently ignored its argument (the extra
+    // arg was passed as a trailing f64 the runtime never read).
     // Instance methods: handle is a small i64 stored in f64 bits; unbox_to_i64
     // does bitcast+mask which is identity for small values, so has_receiver:true works.
     // dayjs handle args (isBefore/isAfter/diff) use NA_JSV (bitcast, no mask).
-    // Note: moment instance methods use f64 handle ABI so cannot use this path.
     NativeModSig {
         module: "dayjs",
         has_receiver: false,
         method: "default",
         class_filter: None,
-        runtime: "js_dayjs_now",
-        args: &[],
+        runtime: "js_dayjs_factory",
+        args: &[NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -22,8 +26,8 @@ pub(super) const DATES_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "dayjs",
         class_filter: None,
-        runtime: "js_dayjs_now",
-        args: &[],
+        runtime: "js_dayjs_factory",
+        args: &[NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {

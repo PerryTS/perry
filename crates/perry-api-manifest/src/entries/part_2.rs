@@ -175,8 +175,32 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         &[p_any("p0"), p_any("p1")],
         TypeSpec::Number,
     ),
-    method_sig("dayjs", "default", false, None, &[], TypeSpec::Any),
-    method_sig("dayjs", "dayjs", false, None, &[], TypeSpec::Any),
+    // Factory takes an optional input (string | number | undefined) —
+    // matches the 1-slot NA_JSV dispatch row (js_dayjs_factory).
+    method_sig(
+        "dayjs",
+        "default",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "input",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Any,
+    ),
+    method_sig(
+        "dayjs",
+        "dayjs",
+        false,
+        None,
+        &[ParamSpec::Named {
+            name: "input",
+            ty: TypeSpec::Any,
+            optional: true,
+        }],
+        TypeSpec::Any,
+    ),
     method("dayjs", "format", true, None),
     method("dayjs", "year", true, None),
     method("dayjs", "month", true, None),

@@ -63,6 +63,7 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_dayjs_day", DOUBLE, &[I64]);
     module.declare_function("js_dayjs_diff", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_dayjs_end_of", DOUBLE, &[I64, I64]);
+    module.declare_function("js_dayjs_factory", DOUBLE, &[I64]);
     module.declare_function("js_dayjs_format", I64, &[I64, I64]);
     module.declare_function("js_dayjs_from_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_dayjs_hour", DOUBLE, &[I64]);

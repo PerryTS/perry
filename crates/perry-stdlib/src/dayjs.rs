@@ -98,7 +98,47 @@ pub unsafe extern "C" fn js_dayjs_parse(date_str_ptr: *const StringHeader) -> f6
         return handle_to_f64(handle);
     }
 
+    // Offset-less ISO forms ("2024-01-15T10:30:00", optional fraction) —
+    // dayjs treats these as local time; Perry's date runtime is UTC-based
+    // so they match Node under TZ=UTC.
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(&date_str, fmt) {
+            let dt = Utc.from_utc_datetime(&naive);
+            let handle = register_handle(DayjsHandle::new(dt));
+            return handle_to_f64(handle);
+        }
+    }
+
     0.0 // Invalid date string
+}
+
+/// dayjs(input?) -> Dayjs
+///
+/// The dayjs factory with its real argument surface: `value_bits` is the
+/// raw NaN-boxed first argument (TAG_UNDEFINED when absent). undefined →
+/// now; string → ISO parse; number → epoch milliseconds. The dispatch
+/// row previously called `js_dayjs_now` with no args, silently ignoring
+/// `dayjs('2024-01-15')`'s argument.
+#[no_mangle]
+pub unsafe extern "C" fn js_dayjs_factory(value_bits: i64) -> f64 {
+    use perry_runtime::JSValue;
+    let bits = value_bits as u64;
+    let jv = JSValue::from_bits(bits);
+    if jv.is_any_string() {
+        let ptr = perry_runtime::js_get_string_pointer_unified(f64::from_bits(bits))
+            as *const StringHeader;
+        return js_dayjs_parse(ptr);
+    }
+    if jv.is_int32() {
+        return js_dayjs_from_timestamp(jv.as_int32() as f64);
+    }
+    if jv.is_number() {
+        let n = f64::from_bits(bits);
+        if n.is_finite() {
+            return js_dayjs_from_timestamp(n);
+        }
+    }
+    js_dayjs_now()
 }
 
 /// dayjs.format(pattern) -> string
