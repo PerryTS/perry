@@ -32,7 +32,7 @@ use crate::expr::{variant_name, FnCtx};
 //   extraction of the original `lower_call.rs`'s 4.3k-LOC body so
 //   every file in this directory stays under 2000 lines.
 mod atomics;
-mod buffer_intrinsic;
+pub(crate) mod buffer_intrinsic;
 mod builtin;
 mod builtin_table_gate;
 mod capture_writeback;
