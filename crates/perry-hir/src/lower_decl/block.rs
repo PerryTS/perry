@@ -434,12 +434,42 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
     for m in &c.body {
         match m {
             ast::ClassMember::Method(mm) => {
+                for p in &mm.function.params {
+                    cic_pat(&p.pat, true, out);
+                }
                 if let Some(b) = &mm.function.body {
                     b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
                 }
             }
             ast::ClassMember::PrivateMethod(mm) => {
+                for p in &mm.function.params {
+                    cic_pat(&p.pat, true, out);
+                }
                 if let Some(b) = &mm.function.body {
+                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
+                }
+            }
+            // #6523: the CONSTRUCTOR body runs at `new` time, not at class
+            // definition — a binding it references that is declared AFTER the
+            // class (`class C { constructor(){ a() } } const a = ...`) must be
+            // pre-registered as a forward-captured lexical exactly like a
+            // method-body reference. This arm was missing, so such refs never
+            // got a box: `collect_method_captures` dropped them (not in
+            // `ctx.locals` at the class decl) and the ref fell through to the
+            // global lookup — "a is not defined" at construction (bundled
+            // semver's Comparator debug/constant pattern).
+            ast::ClassMember::Constructor(ctor) => {
+                for p in &ctor.params {
+                    match p {
+                        ast::ParamOrTsParamProp::Param(p) => cic_pat(&p.pat, true, out),
+                        ast::ParamOrTsParamProp::TsParamProp(tp) => {
+                            if let ast::TsParamPropParam::Assign(a) = &tp.param {
+                                cic_expr(&a.right, true, out);
+                            }
+                        }
+                    }
+                }
+                if let Some(b) = &ctor.body {
                     b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
                 }
             }
@@ -452,6 +482,9 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
                 if let Some(v) = &p.value {
                     cic_expr(v, true, out);
                 }
+            }
+            ast::ClassMember::StaticBlock(sb) => {
+                sb.body.stmts.iter().for_each(|st| cic_stmt(st, true, out));
             }
             _ => {}
         }
