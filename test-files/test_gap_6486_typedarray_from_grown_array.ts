@@ -49,6 +49,24 @@ console.log(many.length, md.length, md[0], md[17]);
 const u8 = new Uint8Array(verts);
 console.log(u8.length, u8[0], u8[17]);
 
+// Sparse shapes: logical length exceeds dense capacity (clean_arr_ptr's
+// sparse exception) — the byte snapshot must bounds-check per element via
+// js_array_get_f64 instead of walking `length` raw slots (OOB read).
+const sparseLen: number[] = [1, 2, 3];
+sparseLen.length = 21;
+const sl = new Uint8Array(sparseLen);
+console.log(sl.length, sl[0], sl[1], sl[2], sl[3], sl[20]);
+
+const sparseFar: number[] = [5];
+sparseFar[40] = 9;
+const sf = new Uint8Array(sparseFar);
+console.log(sf.length, sf[0], sf[1], sf[40]);
+
+const sparseBuf: number[] = [7, 8];
+sparseBuf.length = 30;
+const sb = Buffer.from(sparseBuf);
+console.log(sb.length, sb[0], sb[1], sb[2], sb[29]);
+
 // Below-capacity control: must keep working (never corrupted before either).
 function fillSmall(out: number[], a: number[]): void {
   const vs = [a, a, a];
