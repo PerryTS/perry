@@ -1070,14 +1070,18 @@ pub(crate) fn lower_module_decl(
                                                             ("sqlite", "createSession") => {
                                                                 Some("Session")
                                                             }
-                                                            // dayjs manipulation
-                                                            // methods return a NEW
-                                                            // date handle (see
-                                                            // native_new.rs).
+                                                            // dayjs / moment manipulation
+                                                            // methods return a NEW date
+                                                            // handle (see native_new.rs).
                                                             (
                                                                 "dayjs",
                                                                 "add" | "subtract" | "startOf"
                                                                 | "endOf",
+                                                            ) => Some("App"),
+                                                            (
+                                                                "moment",
+                                                                "add" | "subtract" | "startOf"
+                                                                | "endOf" | "clone",
                                                             ) => Some("App"),
                                                             _ => None,
                                                         };
