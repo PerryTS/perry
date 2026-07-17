@@ -243,6 +243,39 @@ fn inline_constructor_param_values_with_class(
     out
 }
 
+/// #6530: true when the trailing args of a bare-identifier `new C(...)` site
+/// are the HIR-appended capture forwards for `class`'s synthesized
+/// `__perry_cap_<id>` constructor params. The HIR `Expr::New` arm appends
+/// `LocalGet(cid)` per captured id, in cap-param order, ONLY where those
+/// locals are in scope (the class's declaring function) — so each trailing
+/// arg must be a `LocalGet` whose id equals the id embedded in the matching
+/// param name. Any mismatch (a sibling-class method's `new ZodEffects({...})`
+/// carries only user args) means the caps are absent and the tail-split must
+/// not steal user args as cap fallbacks.
+fn new_site_args_carry_appended_caps(class: &perry_hir::Class, args: &[Expr]) -> bool {
+    let Some(ctor) = class.constructor.as_ref() else {
+        return false;
+    };
+    let cap_params: Vec<&Param> = ctor
+        .params
+        .iter()
+        .filter(|p| {
+            p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+        })
+        .collect();
+    if cap_params.is_empty() || args.len() < cap_params.len() {
+        return false;
+    }
+    let tail = &args[args.len() - cap_params.len()..];
+    tail.iter().zip(cap_params.iter()).all(|(arg, p)| {
+        matches!(arg, Expr::LocalGet(id)
+            if p.name
+                .strip_prefix("__perry_cap_")
+                .and_then(|s| s.parse::<u32>().ok())
+                == Some(*id))
+    })
+}
+
 fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
     let cap = (args.len() as u32).to_string();
     let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
@@ -676,6 +709,22 @@ fn lower_new_impl(
             return Ok(nanbox_pointer_inline(ctx.block(), &handle));
         }
     };
+
+    // #6530: the HIR bare-identifier `Expr::New` arm appends the class's
+    // captures as trailing `LocalGet(<cap_id>)` args only where the captured
+    // locals are IN SCOPE (the class's declaring function). Inside a SIBLING
+    // class's method nothing is appended — bundled zod's
+    // `ZodType.transform() { return new ZodEffects({...}) }` — but this path
+    // assumed the bare form always carries them, so the tail-split treated
+    // the trailing USER args as cap fallbacks: the synthesized ctor received
+    // an empty rest array, `super(...[])` ran the parent ctor with no `def`,
+    // and every base-ctor field (`_def`, the bound methods) stayed
+    // undefined. The appended form is exactly `LocalGet(id)` paired with the
+    // synthesized trailing param `__perry_cap_<id>` (same id, same order —
+    // `expr_new.rs` pushes `LocalGet(cid)` per captured id), so verify the
+    // tail matches before treating it as appended caps.
+    let caps_absent_from_args =
+        caps_absent_from_args || !new_site_args_carry_appended_caps(class, args);
 
     // Lower the args first (constructor params).
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());

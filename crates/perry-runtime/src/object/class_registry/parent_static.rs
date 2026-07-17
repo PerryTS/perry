@@ -365,6 +365,12 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
         unsafe {
             (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
+            // #6530: record cid → class object so `instance.constructor`
+            // resolves to the SAME value the module scope/exports hold (see
+            // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
+            // `js_object_alloc(cid, …)` call directly preceding this mark.
+            let cid = (*(obj as *const ObjectHeader)).class_id;
+            super::class_object_value_root_store(cid, obj as *mut ObjectHeader);
         }
     }
 }

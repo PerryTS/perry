@@ -1338,6 +1338,20 @@ pub(crate) fn get_field_by_name_object_tail(
                     return v;
                 }
                 let class_id = (*obj).class_id;
+                // #6530: a capture-carrying class has no ClassRef value — the
+                // class VALUE is the per-evaluation class OBJECT registered at
+                // `js_object_mark_class` time. Return that same object so
+                // identity holds (`x.constructor === Sub`, bundled zod's
+                // `describe()` re-construction via `this.constructor`
+                // yielding the SUBCLASS instead of collapsing to the base).
+                // The arms below would otherwise hand back a bound
+                // constructor-method closure (whose underlying func is the
+                // nearest ancestor ctor — reporting the BASE class's name for
+                // every subclass) or the bare INT32 ClassRef.
+                if let Some(v) = super::super::class_registry::class_object_value_for_cid(class_id)
+                {
+                    return JSValue::from_bits(v.to_bits());
+                }
                 // #5834: WeakMap/WeakSet instances carry a reserved class_id
                 // (not a registered declared-class one), so none of the
                 // arms below resolve them and `(new WeakMap()).constructor`
