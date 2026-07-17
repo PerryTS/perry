@@ -83,6 +83,13 @@ pub(super) struct WasmModuleEmitter {
     /// value to a zero-capture closure (objects.rs) — the same two shapes a
     /// named import gets via ExternFuncRef.
     pub(super) imported_ns_funcs: BTreeMap<(usize, String), u32>,
+    /// Named-import FUNCTIONS, per consumer: `(consumer_module_idx, local)`
+    /// → wasm function index, resolved through re-export chains. Consulted
+    /// BEFORE the whole-program `func_name_map`, whose bare-name keys
+    /// collide the moment two modules define a same-named function (a local
+    /// serializer helper `vec3(v): string` must not capture the math
+    /// library's `vec3(x,y,z)` for every caller in the program).
+    pub(super) imported_func_indices: BTreeMap<(usize, String), u32>,
 }
 
 impl WasmModuleEmitter {
@@ -116,6 +123,7 @@ impl WasmModuleEmitter {
             async_js_code: Vec::new(),
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
+            imported_func_indices: BTreeMap::new(),
         }
     }
 

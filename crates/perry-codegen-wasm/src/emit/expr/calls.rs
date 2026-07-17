@@ -178,10 +178,20 @@ impl<'a> FuncEmitCtx<'a> {
                     Expr::ExternFuncRef {
                         name, return_type, ..
                     } => {
-                        // Cross-module or FFI function call — look up by name.
-                        // See FuncRef arm above for why both pad-up and drop-excess
-                        // are required (#183).
-                        if let Some(&idx) = self.emitter.func_name_map.get(name) {
+                        // Cross-module or FFI function call. The consumer's
+                        // own import table wins (resolved through re-export
+                        // chains); the whole-program name map is only a
+                        // fallback, since its bare-name keys collide across
+                        // modules. See FuncRef arm above for why both pad-up
+                        // and drop-excess are required (#183).
+                        let consumer_key =
+                            (self.emitter.current_mod_idx, name.clone());
+                        if let Some(&idx) = self
+                            .emitter
+                            .imported_func_indices
+                            .get(&consumer_key)
+                            .or_else(|| self.emitter.func_name_map.get(name))
+                        {
                             if let Some(&expected) = self.emitter.func_param_counts.get(&idx) {
                                 for _ in args.len()..expected {
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));

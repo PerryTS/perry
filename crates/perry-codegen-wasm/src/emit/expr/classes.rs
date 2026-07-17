@@ -104,8 +104,14 @@ impl<'a> FuncEmitCtx<'a> {
                 let mod_key = (self.emitter.current_mod_idx, name.clone());
                 if let Some(&gidx) = self.emitter.imported_var_globals.get(&mod_key) {
                     func.instruction(&Instruction::GlobalGet(gidx));
-                } else if let Some(&func_idx) = self.emitter.func_name_map.get(name) {
-                    // Create a closure wrapper with 0 captures (like FuncRef)
+                } else if let Some(&func_idx) = self
+                    .emitter
+                    .imported_func_indices
+                    .get(&mod_key)
+                    .or_else(|| self.emitter.func_name_map.get(name))
+                {
+                    // Create a closure wrapper with 0 captures (like FuncRef).
+                    // Consumer import table first — bare names collide.
                     let table_idx = self
                         .emitter
                         .func_to_table_idx

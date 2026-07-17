@@ -132,3 +132,246 @@ pub(super) fn collect_locals(
         }
     }
 }
+
+/// String-based sibling of `resolve_source_module_idx` for `Export::ReExport
+/// { source }` / `Export::ExportAll { source }`, which carry only the module
+/// specifier (no resolved path). Same suffix/stem matching as the fallback
+/// branch above.
+pub(super) fn resolve_module_idx_by_source(
+    modules: &[(String, perry_hir::ir::Module)],
+    source: &str,
+) -> Option<usize> {
+    let src = source
+        .trim_start_matches("./")
+        .trim_start_matches("../")
+        .replace('\\', "/");
+    // A directory specifier ("./core") resolves to its index module.
+    let src_index = format!("{}/index", src);
+    let mut best: Option<(usize, usize)> = None;
+    for (i, (_, m)) in modules.iter().enumerate() {
+        // Module names are project-relative paths with the platform's
+        // separators ("engine\src\core\keys.ts" on Windows) — normalize.
+        let mn = m.name.replace('\\', "/");
+        let stem = mn.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_else(|| mn.clone());
+        let hit = stem == src
+            || mn == src
+            || stem.ends_with(&format!("/{}", src))
+            || stem.ends_with(&format!("/{}", src_index))
+            || stem == src_index;
+        if hit {
+            let n = mn.len();
+            if best.map(|(_, bn)| n > bn).unwrap_or(true) {
+                best = Some((i, n));
+            }
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// Resolve module `mod_idx`'s export `name` to a promoted-let wasm global,
+/// following re-export chains: `Export::Named` whose local is itself an
+/// import binding, `Export::ReExport { source, imported }`, and
+/// `Export::ExportAll { source }` star re-exports. Depth-capped — a facade
+/// index re-exporting from a sub-index re-exporting from the defining module
+/// is the normal library shape (bloom's `Key` is three hops from a consumer).
+pub(super) fn resolve_export_to_let(
+    modules: &[(String, perry_hir::ir::Module)],
+    src_let_names: &[std::collections::HashMap<String, u32>],
+    name_to_idx: &std::collections::HashMap<&str, usize>,
+    mod_idx: usize,
+    name: &str,
+    depth: u32,
+) -> Option<u32> {
+    if depth == 0 {
+        return None;
+    }
+    let m = &modules[mod_idx].1;
+    for export in &m.exports {
+        match export {
+            perry_hir::ir::Export::Named { local, exported } if exported == name => {
+                if let Some(&g) = src_let_names[mod_idx].get(local.as_str()) {
+                    return Some(g);
+                }
+                // The exported local may itself be an import binding
+                // (`import { Key } from "./core"; export { Key };`).
+                for import in &m.imports {
+                    if import.type_only {
+                        continue;
+                    }
+                    for spec in &import.specifiers {
+                        if let perry_hir::ir::ImportSpecifier::Named { imported, local: il } = spec
+                        {
+                            if il == local {
+                                if let Some(si) =
+                                    resolve_source_module_idx(modules, import, name_to_idx)
+                                {
+                                    if let Some(g) = resolve_export_to_let(
+                                        modules,
+                                        src_let_names,
+                                        name_to_idx,
+                                        si,
+                                        imported,
+                                        depth - 1,
+                                    ) {
+                                        return Some(g);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            perry_hir::ir::Export::ReExport {
+                source,
+                imported,
+                exported,
+            } if exported == name => {
+                if let Some(si) = resolve_module_idx_by_source(modules, source) {
+                    if let Some(g) = resolve_export_to_let(
+                        modules,
+                        src_let_names,
+                        name_to_idx,
+                        si,
+                        imported,
+                        depth - 1,
+                    ) {
+                        return Some(g);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Star re-exports: the name isn't listed, try every `export * from`.
+    for export in &m.exports {
+        if let perry_hir::ir::Export::ExportAll { source } = export {
+            if let Some(si) = resolve_module_idx_by_source(modules, source) {
+                if si != mod_idx {
+                    if let Some(g) = resolve_export_to_let(
+                        modules,
+                        src_let_names,
+                        name_to_idx,
+                        si,
+                        name,
+                        depth - 1,
+                    ) {
+                        return Some(g);
+                    }
+                }
+            }
+        }
+    }
+    // Fall-through: exports registered out-of-band keep their let by name.
+    src_let_names[mod_idx].get(name).copied()
+}
+
+/// Function twin of `resolve_export_to_let`: resolve module `mod_idx`'s
+/// export `name` to a compiled function index, following the same re-export
+/// shapes. `module_func_maps[i]` maps FuncId → wasm function index for
+/// module i.
+pub(super) fn resolve_export_to_func(
+    modules: &[(String, perry_hir::ir::Module)],
+    module_func_maps: &[std::collections::BTreeMap<perry_types::FuncId, u32>],
+    name_to_idx: &std::collections::HashMap<&str, usize>,
+    mod_idx: usize,
+    name: &str,
+    depth: u32,
+) -> Option<u32> {
+    if depth == 0 {
+        return None;
+    }
+    let m = &modules[mod_idx].1;
+    let find_local_fn = |local: &str| -> Option<u32> {
+        for f in &m.functions {
+            if f.name == local {
+                if let Some(&idx) = module_func_maps[mod_idx].get(&f.id) {
+                    return Some(idx);
+                }
+            }
+        }
+        None
+    };
+    // exported_functions is the authoritative `export function foo` list.
+    for (exp_name, fid) in &m.exported_functions {
+        if exp_name == name {
+            if let Some(&idx) = module_func_maps[mod_idx].get(fid) {
+                return Some(idx);
+            }
+        }
+    }
+    for export in &m.exports {
+        match export {
+            perry_hir::ir::Export::Named { local, exported } if exported == name => {
+                if let Some(idx) = find_local_fn(local) {
+                    return Some(idx);
+                }
+                for import in &m.imports {
+                    if import.type_only {
+                        continue;
+                    }
+                    for spec in &import.specifiers {
+                        if let perry_hir::ir::ImportSpecifier::Named { imported, local: il } = spec
+                        {
+                            if il == local {
+                                if let Some(si) =
+                                    resolve_source_module_idx(modules, import, name_to_idx)
+                                {
+                                    if let Some(idx) = resolve_export_to_func(
+                                        modules,
+                                        module_func_maps,
+                                        name_to_idx,
+                                        si,
+                                        imported,
+                                        depth - 1,
+                                    ) {
+                                        return Some(idx);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            perry_hir::ir::Export::ReExport {
+                source,
+                imported,
+                exported,
+            } if exported == name => {
+                if let Some(si) = resolve_module_idx_by_source(modules, source) {
+                    if let Some(idx) = resolve_export_to_func(
+                        modules,
+                        module_func_maps,
+                        name_to_idx,
+                        si,
+                        imported,
+                        depth - 1,
+                    ) {
+                        return Some(idx);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for export in &m.exports {
+        if let perry_hir::ir::Export::ExportAll { source } = export {
+            if let Some(si) = resolve_module_idx_by_source(modules, source) {
+                if si != mod_idx {
+                    if let Some(idx) = resolve_export_to_func(
+                        modules,
+                        module_func_maps,
+                        name_to_idx,
+                        si,
+                        name,
+                        depth - 1,
+                    ) {
+                        return Some(idx);
+                    }
+                }
+            }
+        }
+    }
+    // Fall-through: a function with that very name (exports registered
+    // out-of-band).
+    find_local_fn(name)
+}
