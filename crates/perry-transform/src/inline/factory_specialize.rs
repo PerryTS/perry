@@ -982,13 +982,21 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
     // lets `lower_new` walk through the specialized class for inherited
     // constructors and field initializers instead of the unspecialized
     // anonymous original.
+    //
+    // `parent_expr` may be an `Expr::Sequence([RegisterClassParentDynamic, …,
+    // ClassRef(<inline>)])` when a class DECLARATION extends a factory call
+    // with a runtime-value arg (`class Child extends Factory(runtimeVar) {}`):
+    // `rewrite_call_init` rewrote the inner factory Call to that Sequence
+    // (see `rewrite_to_specialized_class`). Resolve through `classref_name`,
+    // which unwraps a Sequence to its trailing `ClassRef`, so the child's
+    // static parent still hoists rather than falling back to the runtime edge.
     for stmt in &module.init {
         if let Stmt::Expr(Expr::RegisterClassParentDynamic {
             class_name,
             parent_expr,
         }) = stmt
         {
-            if let Expr::ClassRef(parent_name) = parent_expr.as_ref() {
+            if let Some(ref parent_name) = classref_name(parent_expr.as_ref()) {
                 if let Some(child) = module.classes.iter_mut().find(|c| &c.name == class_name) {
                     child.extends_name = Some(parent_name.clone());
                     if let Some(parent_cls) = new_classes

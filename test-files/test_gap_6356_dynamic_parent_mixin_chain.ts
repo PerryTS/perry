@@ -94,3 +94,21 @@ console.log("sibling comp instanceof base:", compAgain instanceof Base);
 console.log("sibling top instanceof mid:", topAgain instanceof Mid);
 console.log("sibling comp value:", compAgain.value);
 console.log("sibling top value:", topAgain.value);
+
+// --- (5) class DECLARATION extending a factory call with a runtime-value arg
+// `class Child extends Serializable(V)` rewrites the factory Call into a
+// `Sequence([RegisterClassParentDynamic, ClassRef(clone)])`. The decl-time
+// `RegisterClassParentDynamic { class_name: "Child", parent_expr: <that
+// Sequence> }` must still hoist the clone as `Child`'s static parent (the hoist
+// resolves through the Sequence's trailing `ClassRef`), so `Child` inherits the
+// base's field/method through the specialized clone.
+const V: any = Base;
+class Child extends Serializable(V) {
+  child() {
+    return "child";
+  }
+}
+console.log("decl field:", (new Child() as any).value);
+console.log("decl inherited method:", (new Child() as any).hello());
+console.log("decl own method:", new Child().child());
+console.log("decl instanceof base:", new Child() instanceof Base);
