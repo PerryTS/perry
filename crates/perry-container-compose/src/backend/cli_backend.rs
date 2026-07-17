@@ -114,13 +114,12 @@ impl CliBackend {
             );
         }
 
-        let base_args = if create_only {
-            self.protocol.create_args(&normalised_spec)
-        } else {
-            self.protocol.run_args(&normalised_spec)
-        };
-        let sec_args = self.protocol.security_args(&normalised_profile);
-        let args = splice_security_args(base_args, &normalised_spec.image, sec_args);
+        let args = build_secured_args(
+            self.protocol.as_ref(),
+            &normalised_spec,
+            &normalised_profile,
+            create_only,
+        );
 
         let (stdout, _) = self.exec_raw(&args).await?;
         let id = self.protocol.parse_container_id(&stdout)?;
@@ -132,11 +131,63 @@ impl CliBackend {
 }
 
 /// Insert the protocol's `security_args` immediately before the image
-/// reference in a `run`/`create` argument vector. The image is the
-/// first positional argument; everything after it is the container
-/// command, so flags must land before it. Pure function so the final
-/// argv shape is unit-testable without spawning a CLI process (see
-/// the arg-construction tests in `crate::backend::tests`).
+/// Unique stand-in for the image reference while the argv is built, so
+/// the image slot is found by construction rather than by matching a
+/// value that an option (e.g. `--name`) may legitimately repeat. The
+/// control characters keep it distinct from any real image reference.
+pub(crate) const IMAGE_SENTINEL: &str = "\u{1}perry-image-sentinel\u{1}";
+
+/// Build the final `run`/`create` argv with the protocol's security
+/// flags spliced immediately before the image reference.
+///
+/// The image slot is located by *construction* rather than by value:
+/// the argv is built from a probe spec carrying [`IMAGE_SENTINEL`], so
+/// an option value that happens to equal the real image reference
+/// (`run --name alpine alpine`) cannot be mistaken for the image and
+/// have the flags spliced between a flag and its value. The protocols
+/// only ever emit `spec.image` at the image position, so substituting
+/// the sentinel back afterwards is exact.
+///
+/// Pure (the protocol's arg builders are sync), so the whole secured
+/// argv shape is unit-testable without spawning a CLI process.
+pub(crate) fn build_secured_args(
+    protocol: &dyn CliProtocol,
+    spec: &ContainerSpec,
+    profile: &SecurityProfile,
+    create_only: bool,
+) -> Vec<String> {
+    let mut probe_spec = spec.clone();
+    probe_spec.image = IMAGE_SENTINEL.to_string();
+    let base_args = if create_only {
+        protocol.create_args(&probe_spec)
+    } else {
+        protocol.run_args(&probe_spec)
+    };
+    let sec_args = protocol.security_args(profile);
+    splice_security_args(base_args, IMAGE_SENTINEL, sec_args)
+        .into_iter()
+        .map(|a| {
+            if a == IMAGE_SENTINEL {
+                spec.image.clone()
+            } else {
+                a
+            }
+        })
+        .collect()
+}
+
+/// Insert the protocol's `security_args` immediately before `image` in a
+/// `run`/`create` argument vector. The image is the first positional
+/// argument; everything after it is the container command, so flags must
+/// land before it. Pure function so the final argv shape is
+/// unit-testable without spawning a CLI process (see the
+/// arg-construction tests in `crate::backend::tests`).
+///
+/// `image` must occur exactly once, at the image position — production
+/// callers pass [`IMAGE_SENTINEL`] and substitute the real reference
+/// afterwards, because matching the real reference can hit an earlier
+/// option value first (`run --name alpine alpine` would splice between
+/// `--name` and its value).
 ///
 /// If the image can't be located (defensive — `run_args` always pushes
 /// it) the args are returned unchanged rather than emitting flags into

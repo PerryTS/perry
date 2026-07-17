@@ -373,6 +373,68 @@ mod tests {
     }
 
     #[test]
+    fn test_docker_run_with_security_argv_when_option_value_equals_image() {
+        // Regression: the image slot used to be located by string value,
+        // so a container name equal to the image reference matched the
+        // `--name` VALUE first and the security flags were spliced
+        // between `--name` and its value:
+        //   run --name --security-opt seccomp=default alpine alpine
+        // which corrupts both the name and the command. The image is now
+        // located by construction, so duplicate values are harmless.
+        let proto = DockerProtocol;
+        let spec = ContainerSpec {
+            image: "alpine".into(),
+            name: Some("alpine".into()),
+            cmd: Some(vec!["alpine".into()]),
+            seccomp: Some("default".into()),
+            ..Default::default()
+        };
+        let args = cli_backend::build_secured_args(
+            &proto,
+            &spec,
+            &spec.security_profile(),
+            /* create_only */ false,
+        );
+
+        // `--name` keeps its value, and no flag separates the two.
+        let name_pos = args.iter().position(|a| a == "--name").unwrap();
+        assert_eq!(
+            args[name_pos + 1],
+            "alpine",
+            "--name lost its value: {:?}",
+            args
+        );
+
+        // Ordering: security flag → image → command, with exactly three
+        // `alpine` tokens (name value, image, command).
+        let seccomp_pos = args.iter().position(|a| a == "seccomp=default").unwrap();
+        assert!(
+            seccomp_pos > name_pos + 1,
+            "security flags spliced into the --name pair: {:?}",
+            args
+        );
+        assert_eq!(
+            args.iter().filter(|a| *a == "alpine").count(),
+            3,
+            "expected name value + image + cmd: {:?}",
+            args
+        );
+        // The image is the token right after the last security flag.
+        assert_eq!(
+            args[seccomp_pos + 1],
+            "alpine",
+            "image must directly follow the security flags: {:?}",
+            args
+        );
+        // No sentinel may leak into the executed argv.
+        assert!(
+            !args.iter().any(|a| a.contains('\u{1}')),
+            "image sentinel leaked: {:?}",
+            args
+        );
+    }
+
+    #[test]
     fn test_docker_create_with_security_argv_from_spec() {
         // Same shape for the fixed `create()` path — `create` has no
         // security-arg splice pre-fix (there was no
