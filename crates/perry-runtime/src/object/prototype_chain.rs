@@ -90,13 +90,10 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     if instance_override {
         crate::object::prop_plan::prop_plan_epoch_bump();
         unsafe {
-            if obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
-                && crate::value::addr_class::is_above_handle_band(obj_ptr)
-            {
-                let hdr = (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                    as *mut crate::gc::GcHeader;
-                if (*hdr).obj_type == crate::gc::GC_TYPE_OBJECT {
-                    (*hdr)._reserved |= crate::gc::OBJ_FLAG_PROTO_OVERRIDE;
+            if let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let header = header as *const crate::gc::GcHeader as *mut crate::gc::GcHeader;
+                    (*header)._reserved |= crate::gc::OBJ_FLAG_PROTO_OVERRIDE;
                 }
             }
         }
