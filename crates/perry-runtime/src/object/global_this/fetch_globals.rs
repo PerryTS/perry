@@ -737,6 +737,34 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 // applies to closure/object parents, not a ClassRef.
                 return undef;
             }
+            // #6530: the parent can be a per-evaluation CLASS OBJECT — what a
+            // capture-carrying class statement materializes as (bundled zod's
+            // `class ZodEffects extends ZodType` where ZodType captures module
+            // helpers, registered via `js_register_class_parent_dynamic`).
+            // Dispatching it through `js_native_call_value` below hits that
+            // helper's class-object arm, which CONSTRUCTS a fresh parent
+            // instance — and this super leg drops the result, so the parent
+            // constructor never ran on `this` and every base-ctor field
+            // (zod's `_def`, the bound methods) stayed undefined. Route
+            // through the same flat constructor-on-`this` dispatch as the
+            // ClassRef arm above, using the template class id stamped on the
+            // class object at `js_object_alloc` time.
+            if bits & TAG_MASK == POINTER_TAG {
+                let p = (bits & PTR_MASK) as usize;
+                if super::super::class_registry::is_class_object_ptr(p as *const u8) {
+                    let parent_cid = crate::object::js_object_get_class_id(
+                        p as *const crate::object::ObjectHeader,
+                    );
+                    if parent_cid != 0 {
+                        if let Some(obj) = subclass_this_object_ptr(this_box) {
+                            super::super::class_constructors::run_class_constructor_on_this_flat(
+                                parent_cid, obj as i64, args_ptr, args_len,
+                            );
+                            return undef;
+                        }
+                    }
+                }
+            }
             let usable = if bits & TAG_MASK == POINTER_TAG {
                 let p = (bits & PTR_MASK) as usize;
                 // A real callability test: a closure, or a per-evaluation class
