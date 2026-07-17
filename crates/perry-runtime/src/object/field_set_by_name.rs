@@ -199,6 +199,43 @@ unsafe fn string_key_eq(key: *const crate::StringHeader, expected: &[u8]) -> boo
 /// `writable: false`); `Object.defineProperty(Function.prototype, k, {...})`
 /// round-trips via `closure_set_via_function_prototype_descriptor` before
 /// falling back to a plain own-property write.
+/// #6530: mirror a SUCCESSFUL own-data write on a per-evaluation CLASS OBJECT
+/// (`object_type == OBJECT_TYPE_CLASS` — what a capture-carrying class
+/// statement materializes as) into the class_id-keyed `CLASS_DYNAMIC_PROPS`
+/// side table. Compiled method bodies reference sibling classes as INT32
+/// ClassRefs (bundled zod's `ZodOptional.create(this, this._def)` inside
+/// `ZodType.optional()`), and `js_class_static_method_call` resolves statics
+/// through that table only — without the mirror the dispatch missed and
+/// handed back the class ref itself, so `.optional()` returned the
+/// ZodOptional CLASS instead of an instance.
+///
+/// Called ONLY at the own-data write completions in
+/// `js_object_set_field_by_name` (after the accessor walk, frozen/sealed
+/// gates, and writable checks have all passed), so a setter-intercepted or
+/// rejected assignment never desyncs the ClassRef read path from the class
+/// object's real state. Internal `__perry_*` markers (the pinned-parent
+/// edge) stay object-local. Last-wins across evaluations of the same class
+/// statement, matching the established template-cid compromise.
+unsafe fn mirror_class_object_static_write(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    if (*obj).object_type != crate::error::OBJECT_TYPE_CLASS
+        || (*obj).class_id == 0
+        || key.is_null()
+    {
+        return;
+    }
+    let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let name_len = (*key).byte_len as usize;
+    if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        if !name.is_empty() && !name.starts_with("__perry_") {
+            class_dynamic_prop_root_store((*obj).class_id, name.to_string(), value);
+        }
+    }
+}
+
 unsafe fn closure_set_field_by_name(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
@@ -799,36 +836,6 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
-        // #6530: a named write on a per-evaluation CLASS OBJECT (`object_type
-        // == OBJECT_TYPE_CLASS` — what a capture-carrying class statement
-        // materializes as) must ALSO be mirrored into the class_id-keyed
-        // CLASS_DYNAMIC_PROPS side table. Compiled method bodies reference
-        // sibling classes as INT32 ClassRefs (bundled zod's
-        // `ZodOptional.create(this, this._def)` inside `ZodType.optional()`),
-        // and `js_class_static_method_call` resolves statics through that
-        // table only — without the mirror the dispatch missed and handed back
-        // the class ref itself, so `.optional()` returned the ZodOptional
-        // CLASS instead of an instance. The own-field write still proceeds
-        // below, so reads through the class-object binding (module-scope
-        // `ZodOptional.create`, re-exports) are unchanged. Internal
-        // `__perry_*` markers (the pinned-parent edge) stay object-local.
-        // Last-wins across evaluations of the same class statement, matching
-        // the established template-cid compromise. Placed BEFORE the
-        // store-plan fast gate below so a recorded plan for the same
-        // (class_id, key) can never skip the mirror on a repeat write.
-        if (*obj).object_type == crate::error::OBJECT_TYPE_CLASS
-            && (*obj).class_id != 0
-            && !key.is_null()
-        {
-            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let name_len = (*key).byte_len as usize;
-            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-                if !name.is_empty() && !name.starts_with("__perry_") {
-                    class_dynamic_prop_root_store((*obj).class_id, name.to_string(), value);
-                }
-            }
-        }
-
         // Resolve the interned key EARLY (hoisted from below the interception
         // vet): the store-plan cache and the shape-transition cache both key
         // on interned pointer identity. If the key is already interned
@@ -1088,6 +1095,12 @@ pub extern "C" fn js_object_set_field_by_name(
                     // Deliberately do NOT bump field_count here — see
                     // above.
                 }
+                // #6530: this shape-cache hit is a successful own-data
+                // write; class objects repeat identical key sequences
+                // (bundled zod assigns `create` onto ~40 sibling class
+                // objects), so from the SECOND class on the write lands
+                // here — the mirror must fire on this path too.
+                mirror_class_object_static_write(obj, key, value);
                 return;
             }
         }
@@ -1112,6 +1125,7 @@ pub extern "C" fn js_object_set_field_by_name(
             // Reallocate fields to hold at least one value
             // Note: We assume the object has enough field slots pre-allocated
             js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+            mirror_class_object_static_write(obj, key, value);
             // Bump field_count so Object.keys()/values()/entries() see the new property.
             if (*obj).field_count == 0 {
                 (*obj).field_count = 1;
@@ -1223,6 +1237,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     };
                     overflow_set(obj as usize, i, vbits);
                 }
+                mirror_class_object_static_write(obj, key, value);
                 return;
             }
             // Miss path: the linear scan below will confirm and then
@@ -1285,6 +1300,7 @@ pub extern "C" fn js_object_set_field_by_name(
                 set_object_keys_array(obj, new_keys);
                 super::mark_object_dynamic_shape_unknown(obj);
                 overflow_set(obj as usize, new_index, vbits);
+                mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
                     prev_keys_usize,
                     interned_key,
@@ -1311,6 +1327,7 @@ pub extern "C" fn js_object_set_field_by_name(
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+            mirror_class_object_static_write(obj, key, value);
             if new_index as u32 >= (*obj).field_count {
                 (*obj).field_count = new_index as u32 + 1;
             }
@@ -1392,6 +1409,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     };
                     overflow_set(obj as usize, i, vbits);
                 }
+                mirror_class_object_static_write(obj, key, value);
                 return;
             }
         }
@@ -1475,6 +1493,7 @@ pub extern "C" fn js_object_set_field_by_name(
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
             overflow_set(obj as usize, new_index, vbits);
+            mirror_class_object_static_write(obj, key, value);
             // Record the shape transition so the next object sharing
             // `prev_keys` that adds the same key hits the fast path.
             // The cached target is stamped `GC_FLAG_SHAPE_SHARED` by
@@ -1503,6 +1522,7 @@ pub extern "C" fn js_object_set_field_by_name(
 
         // Set the field at the new index and update logical field_count
         js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
+        mirror_class_object_static_write(obj, key, value);
         // Bump field_count to reflect the newly added property
         if new_index as u32 >= (*obj).field_count {
             (*obj).field_count = new_index as u32 + 1;

@@ -252,6 +252,15 @@ fn inline_constructor_param_values_with_class(
 /// param name. Any mismatch (a sibling-class method's `new ZodEffects({...})`
 /// carries only user args) means the caps are absent and the tail-split must
 /// not steal user args as cap fallbacks.
+///
+/// Soundness of the id match: `LocalId`s come from a single MODULE-WIDE
+/// counter (`LoweringContext::fresh_local` — never reset per function), so
+/// `LocalGet(id)` anywhere in the module denotes the one local with that id.
+/// A user expression can therefore only produce the cap-matching ids (all of
+/// them, in declaration order) by referencing the captured locals themselves
+/// — possible only in scopes where they are visible, which are exactly the
+/// scopes where the HIR appends the caps anyway (and there the appended tail
+/// follows the user args, so the tail-split still binds correctly).
 fn new_site_args_carry_appended_caps(class: &perry_hir::Class, args: &[Expr]) -> bool {
     let Some(ctor) = class.constructor.as_ref() else {
         return false;
