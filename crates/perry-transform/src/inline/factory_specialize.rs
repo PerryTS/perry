@@ -162,9 +162,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             .as_ref()
             .map(|c| {
                 c.params.iter().any(|p| {
-                    p.name
-                        .strip_prefix("__perry_cap_")
-                        .and_then(|suffix| suffix.parse::<LocalId>().ok())
+                    perry_hir::cap_fields::cap_field_outer_id(&p.name)
                         .map(|outer_id| param_set.contains(&outer_id))
                         .unwrap_or(false)
                 })
@@ -786,8 +784,8 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             .collect();
         if let Some(ctor) = &class.constructor {
             for p in &ctor.params {
-                if let Some(suffix) = p.name.strip_prefix("__perry_cap_") {
-                    if let Ok(outer_id) = suffix.parse::<LocalId>() {
+                if let Some(outer_id) = perry_hir::cap_fields::cap_field_outer_id(&p.name) {
+                    {
                         if let Some(idx) = param_ids.iter().position(|id| *id == outer_id) {
                             let arg_expr = padded_args[idx].clone();
                             subst.insert(p.id, arg_expr);

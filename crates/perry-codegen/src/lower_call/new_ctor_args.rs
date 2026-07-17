@@ -266,10 +266,7 @@ pub(super) fn new_site_args_carry_appended_caps(class: &perry_hir::Class, args: 
     let tail = &args[args.len() - cap_params.len()..];
     tail.iter().zip(cap_params.iter()).all(|(arg, p)| {
         matches!(arg, Expr::LocalGet(id)
-            if p.name
-                .strip_prefix("__perry_cap_")
-                .and_then(|s| s.parse::<u32>().ok())
-                == Some(*id))
+            if perry_hir::cap_fields::cap_field_outer_id(&p.name) == Some(*id))
     })
 }
 

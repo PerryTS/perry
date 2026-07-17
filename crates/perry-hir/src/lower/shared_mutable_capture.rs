@@ -62,6 +62,15 @@ fn collect_assigned_deep_expr(expr: &Expr, out: &mut HashSet<LocalId>) {
 /// Detect shared-mutable class captures and rewrite them to one-element array
 /// boxes. A no-op when there are none (the common case), so non-capturing /
 /// immutable-capture code is left byte-identical.
+
+/// Does `name` denote a class-capture field/param for one of `ids`?
+/// Matches by parsed outer id (see `crate::cap_fields`): the names carry a
+/// per-module salt, and these per-module passes only ever compare names
+/// minted by this module's own lowering.
+fn is_cap_name_of(name: &str, ids: &HashSet<LocalId>) -> bool {
+    crate::cap_fields::cap_field_outer_id(name).is_some_and(|id| ids.contains(&id))
+}
+
 pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // Bisection escape hatch (#5951): disable the desugar to isolate its effect.
     if std::env::var("PERRY_NO_5951").is_ok() {
@@ -152,10 +161,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // Match them BY NAME within each member and rewrite only that member's body
     // with its own ids (never the declaring `shared` set — the declaring `Let`
     // that gets array-wrapped lives outside the class).
-    let targets: HashSet<String> = all_shared
-        .iter()
-        .map(|id| format!("__perry_cap_{}", id))
-        .collect();
+    let targets: &HashSet<LocalId> = &all_shared;
     let no_shared: HashSet<LocalId> = HashSet::new();
     for c in &mut module.classes {
         for m in &mut c.methods {
@@ -189,7 +195,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
                 collect_let_names_expr(key, &mut names);
             }
             for (id, n) in names {
-                if targets.contains(&n) {
+                if is_cap_name_of(&n, targets) {
                     ctor_ids.insert(id);
                 }
             }
@@ -259,9 +265,9 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
 
 /// The ids in `f`'s own scope (params + `Let`s, descending into nested
 /// closures) whose NAME is a flagged `__perry_cap_<id>` rebind target.
-fn collect_fn_target_ids(f: &Function, targets: &HashSet<String>, out: &mut HashSet<LocalId>) {
+fn collect_fn_target_ids(f: &Function, targets: &HashSet<LocalId>, out: &mut HashSet<LocalId>) {
     for p in &f.params {
-        if targets.contains(&p.name) {
+        if is_cap_name_of(&p.name, targets) {
             out.insert(p.id);
         }
     }
@@ -270,7 +276,7 @@ fn collect_fn_target_ids(f: &Function, targets: &HashSet<String>, out: &mut Hash
         collect_let_names_stmt(s, &mut names);
     }
     for (id, n) in names {
-        if targets.contains(&n) {
+        if is_cap_name_of(&n, targets) {
             out.insert(id);
         }
     }
@@ -281,7 +287,7 @@ fn collect_fn_target_ids(f: &Function, targets: &HashSet<String>, out: &mut Hash
 /// its params and deep `Let`s/closure params; see `retain_unambiguous`).
 fn rewrite_member_scoped(
     f: &mut Function,
-    targets: &HashSet<String>,
+    targets: &HashSet<LocalId>,
     no_shared: &HashSet<LocalId>,
 ) {
     let mut ids: HashSet<LocalId> = HashSet::new();
@@ -350,19 +356,16 @@ fn collect_declared_counts_expr(expr: &Expr, out: &mut HashMap<LocalId, u32>) {
 }
 
 fn retype_capture_holders(module: &mut Module, shared: &HashSet<LocalId>) {
-    let targets: HashSet<String> = shared
-        .iter()
-        .map(|id| format!("__perry_cap_{}", id))
-        .collect();
+    let targets: &HashSet<LocalId> = shared;
     for c in &mut module.classes {
         for f in &mut c.fields {
-            if targets.contains(&f.name) {
+            if is_cap_name_of(&f.name, targets) {
                 f.ty = Type::Any;
             }
         }
         let mut retype_fn = |f: &mut Function| {
             for p in &mut f.params {
-                if targets.contains(&p.name) {
+                if is_cap_name_of(&p.name, targets) {
                     p.ty = Type::Any;
                 }
             }
@@ -389,15 +392,15 @@ fn retype_capture_holders(module: &mut Module, shared: &HashSet<LocalId>) {
     }
 }
 
-fn retype_lets_in_stmts(stmts: &mut [Stmt], targets: &HashSet<String>) {
+fn retype_lets_in_stmts(stmts: &mut [Stmt], targets: &HashSet<LocalId>) {
     for s in stmts.iter_mut() {
         retype_lets_in_stmt(s, targets);
     }
 }
 
-fn retype_lets_in_stmt(stmt: &mut Stmt, targets: &HashSet<String>) {
+fn retype_lets_in_stmt(stmt: &mut Stmt, targets: &HashSet<LocalId>) {
     if let Stmt::Let { name, ty, init, .. } = stmt {
-        if targets.contains(name) {
+        if is_cap_name_of(name, targets) {
             *ty = Type::Any;
         }
         if let Some(e) = init {
@@ -446,7 +449,7 @@ fn retype_lets_in_stmt(stmt: &mut Stmt, targets: &HashSet<String>) {
     }
 }
 
-fn retype_lets_in_expr(expr: &mut Expr, targets: &HashSet<String>) {
+fn retype_lets_in_expr(expr: &mut Expr, targets: &HashSet<LocalId>) {
     if let Expr::Closure { body, .. } = expr {
         retype_lets_in_stmts(body, targets);
     }
@@ -492,12 +495,13 @@ fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> Hash
 }
 
 fn class_mutates_capture(c: &Class, id: LocalId) -> bool {
-    let target = format!("__perry_cap_{}", id);
     let id_name = collect_class_names(c);
     let assigned = collect_class_assigned(c);
-    assigned
-        .iter()
-        .any(|aid| id_name.get(aid).is_some_and(|n| *n == target))
+    assigned.iter().any(|aid| {
+        id_name
+            .get(aid)
+            .is_some_and(|n| crate::cap_fields::cap_field_outer_id(n) == Some(id))
+    })
 }
 
 /// id -> name across a class: every member function's PARAMS (a field-init

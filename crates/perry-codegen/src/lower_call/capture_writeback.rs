@@ -55,7 +55,7 @@ pub(crate) fn emit_class_capture_writeback(
     let cap_args_start = new_args.len().saturating_sub(cap_params.len());
 
     for (cap_idx, param) in cap_params.iter().enumerate() {
-        let Some(id_str) = param.name.strip_prefix("__perry_cap_") else {
+        let Some(name_outer_id) = perry_hir::cap_fields::cap_field_outer_id(&param.name) else {
             continue;
         };
         // Prefer position-based lookup using new_args: the arg at index
@@ -71,9 +71,9 @@ pub(crate) fn emit_class_capture_writeback(
                     None
                 }
             })
-            // Fallback to the numeric suffix from __perry_cap_<id> for
+            // Fallback to the numeric id parsed from the cap name for
             // call sites that don't supply new_args (empty slice).
-            .or_else(|| id_str.parse::<u32>().ok());
+            .or(Some(name_outer_id));
         let Some(outer_id) = current_scope_id else {
             continue;
         };
