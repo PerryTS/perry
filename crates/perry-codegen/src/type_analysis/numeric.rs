@@ -380,3 +380,6 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;
