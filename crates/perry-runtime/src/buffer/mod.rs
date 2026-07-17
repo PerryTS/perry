@@ -28,6 +28,11 @@ mod u8_codec;
 pub mod validate;
 pub(crate) mod view;
 
+// Canonical view-resolving span accessor. Every path that hands a raw data
+// pointer to native code routes through this so a Uint8Array view over an
+// ArrayBuffer exposes its backing bytes, not its stale local copy (#6515).
+pub(crate) use view::resolve_data_ptr as resolve_span_data_ptr;
+
 // ---- Re-exports: types & constants ----
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 

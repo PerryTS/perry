@@ -79,6 +79,37 @@ pub(crate) fn byte_offset_of(buf_ptr: usize) -> u32 {
     lookup(buf_ptr).map(|v| v.offset).unwrap_or(0)
 }
 
+/// Resolve `buf_ptr` to the canonical data pointer for its bytes.
+///
+/// A registered view (`Buffer.prototype.slice`/`subarray`,
+/// `new Uint8Array(arrayBuffer)`, `new Uint8Array(ab, off, len)`) keeps its
+/// own *copy* of the bytes so the codegen fast path can `gep+load` against the
+/// view pointer, but the ultimate backing buffer is the source of truth:
+/// `read_buffer_byte` reads and `js_buffer_set` writes `backing_data + offset`,
+/// and a direct fast-path store to the backing never refreshes the view's
+/// local copy. Any code that hands a raw span to a native callee must resolve
+/// through here too — otherwise a native write lands in the view's stale local
+/// copy while JS reads come from the backing (or vice-versa), a silent
+/// corruption with no null and no error (#6515).
+///
+/// Falls back to the buffer's own inline storage for a plain (non-view) buffer
+/// or a view whose recorded offset is out of the backing's bounds — matching
+/// `read_buffer_byte`'s per-byte guard so the two never drift.
+///
+/// SAFETY: `buf_ptr` must be a live `BufferHeader`; a registered view's backing
+/// is kept in the registry only while it is live (see
+/// `remove_entries_for_dead_buffer`), the same invariant `read_buffer_byte`
+/// and `js_buffer_set` already rely on.
+pub(crate) unsafe fn resolve_data_ptr(buf_ptr: *const BufferHeader) -> *const u8 {
+    if let Some(info) = lookup(buf_ptr as usize) {
+        let backing_ptr = info.backing as *const BufferHeader;
+        if !backing_ptr.is_null() && info.offset < (*backing_ptr).length {
+            return buffer_data(backing_ptr).add(info.offset as usize);
+        }
+    }
+    buffer_data(buf_ptr)
+}
+
 #[inline]
 pub(crate) fn for_each_view<F: FnMut(usize, ViewInfo)>(backing_ptr: usize, mut f: F) {
     BACKING_TO_VIEWS.with(|m| {
