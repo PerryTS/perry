@@ -267,6 +267,15 @@ unsafe fn dispatch_pointer_with_replacer(
         }
         return;
     }
+    // #6519: a nested WHATWG `URL` (the value the replacer passed through)
+    // serializes as its `href` string. Its `searchParams` field points back at
+    // the URL, so the generic object walk below would trip the circular-
+    // structure detector. The href is a plain string, so the emit is identical
+    // for compact and pretty walks. See `write_url_href_json`.
+    if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+        super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
+        return;
+    }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => {
             // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
@@ -776,6 +785,14 @@ pub(crate) unsafe fn stringify_value_pretty(
         // `{"field0":null}`. Detected by the header magic (never a raw deref).
         if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
             buf.push_str("{}");
+            return;
+        }
+        // #6519: a nested WHATWG `URL` must serialize as its `href` string, not
+        // be walked as a plain object (its `searchParams` back-reference trips
+        // the circular-structure detector). Mirrors the compact-path branch in
+        // `stringify_object_inner`; see `write_url_href_json`.
+        if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+            super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
             return;
         }
         if matches!(
