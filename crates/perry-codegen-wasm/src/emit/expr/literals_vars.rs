@@ -199,7 +199,8 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_bitwise_binary(func, left, right, Instruction::I32ShrS);
                     }
                     BinaryOp::UShr => {
-                        self.emit_bitwise_binary(func, left, right, Instruction::I32ShrU);
+                        // ToUint32 result — see emit_bitwise_binary_u.
+                        self.emit_bitwise_binary_u(func, left, right, Instruction::I32ShrU);
                     }
                     // Mod and Pow go through JS bridge (no native WASM instruction)
                     // — use emit_store_arg to keep values as i64, like Add
