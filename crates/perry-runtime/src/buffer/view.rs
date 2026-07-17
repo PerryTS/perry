@@ -52,15 +52,18 @@ pub(crate) struct ViewInfo {
 }
 
 thread_local! {
-    /// `view_ptr → ViewInfo`.  Lookups during writes are O(1).
-    static VIEW_REGISTRY: RefCell<HashMap<usize, ViewInfo>> =
-        RefCell::new(HashMap::with_capacity(64));
+    /// `view_ptr → ViewInfo`.  Lookups during writes are O(1). Address-keyed
+    /// `PtrHashMap` (#6386): both maps are probed on EVERY DataView/typed
+    /// view write via `propagate_written_range_from_receiver`, and SipHash
+    /// dominated those probes.
+    static VIEW_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, ViewInfo>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
     /// `backing_ptr → Vec<view_ptr>`.  Backing-side writes walk this
     /// list to mirror bytes into every aliased view.  Vector entries
     /// are tombstoned (set to 0) on view drop rather than removed so
     /// hot-path iteration stays branch-light.
-    static BACKING_TO_VIEWS: RefCell<HashMap<usize, Vec<usize>>> =
-        RefCell::new(HashMap::with_capacity(64));
+    static BACKING_TO_VIEWS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<usize>>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 #[inline]

@@ -797,6 +797,28 @@ pub fn try_lower_native_method_str_dispatch(
                     return Ok(Some(materialized));
                 }
             }
+            // #6386 fast path: `dv.getFloat64(off, le)` / `dv.setInt32(off, v)`
+            // lowers to one `js_data_view_{get,set}_direct` call instead of
+            // the generic dispatch tower. Fires for a statically-typed
+            // DataView receiver AND for an unknown-typed receiver (a mutable
+            // `var v = new DataView(b)` is widened to Any by the local-type
+            // fixpoint) whose method name matches the accessor family — the
+            // runtime entry re-validates the receiver against the DataView
+            // registry and re-enters `js_native_call_method` otherwise, so a
+            // non-DataView receiver that happens to share the method name
+            // keeps its generic dispatch semantics (same #5525 guarded-
+            // fast-path shape as typed-array index access).
+            if matches!(class_name_opt.as_deref(), Some("DataView") | None) {
+                if let Some(reg) = super::dataview_intrinsic::try_emit_data_view_accessor(
+                    ctx,
+                    object,
+                    property,
+                    args,
+                    call_byte_offset,
+                )? {
+                    return Ok(Some(reg));
+                }
+            }
             let recv_box = lower_expr(ctx, object)?;
             let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
             for a in args {

@@ -38,6 +38,7 @@ mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
 mod console_promise;
+mod dataview_intrinsic;
 mod early_branches;
 mod event_target;
 mod extern_func;

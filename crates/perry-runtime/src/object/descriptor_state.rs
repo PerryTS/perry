@@ -532,6 +532,25 @@ pub(crate) unsafe fn json_object_getter_value(
     Some(result)
 }
 
+/// Monotonic (#6386): has an accessor descriptor keyed `"constructor"` ever
+/// been installed on ANY object? While false, `ArraySpeciesCreate`'s
+/// own-`constructor`-accessor probe on a plain array cannot hit, so the
+/// species fast path skips the `(addr, String)` descriptor-table lookup (a
+/// per-call `String` allocation + SipHash probe). Set (release) before the
+/// insert, so a false (acquire) read can't race a completed install.
+static CONSTRUCTOR_ACCESSOR_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn constructor_accessor_ever_installed() -> bool {
+    CONSTRUCTOR_ACCESSOR_EVER.load(Ordering::Acquire)
+}
+
+fn note_accessor_descriptor_key(key: &str) {
+    if key == "constructor" {
+        CONSTRUCTOR_ACCESSOR_EVER.store(true, Ordering::Release);
+    }
+}
+
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump();
@@ -539,6 +558,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     ACCESSORS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_class_field_inline_guard_for_target(obj);
+    note_accessor_descriptor_key(&key);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), acc);
     });
@@ -574,6 +594,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
     attrs: PropertyAttrs,
 ) {
     super::prop_plan::prop_plan_epoch_bump();
+    note_accessor_descriptor_key(&key);
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key.clone()), acc);
     });

@@ -449,6 +449,48 @@ pub(crate) unsafe fn sym_key_from_f64(sym_f64: f64) -> usize {
     ptr as usize
 }
 
+/// Monotonic gate (#6386): has a `Symbol.isConcatSpreadable`-keyed property
+/// EVER been installed anywhere (instance symbol store, symbol accessor,
+/// symbol defineProperty attrs, class static symbol)? While `false`, the
+/// spreadable read `Array.prototype.concat` performs per argument is
+/// guaranteed to find undefined for any non-proxy value — and to be
+/// side-effect free — so the whole lookup ladder can be skipped.
+static CONCAT_SPREADABLE_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn concat_spreadable_symbol_ever_set() -> bool {
+    CONCAT_SPREADABLE_EVER.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Note a symbol-keyed property install. Flips the gate when the key is the
+/// well-known `isConcatSpreadable`. Must be called BEFORE the table insert in
+/// every install funnel, so a `false` (acquire) read can never race a
+/// completed insert.
+pub(crate) fn note_symbol_key_installed(sym_key: usize) {
+    if sym_key == 0 || CONCAT_SPREADABLE_EVER.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    // Non-allocating peek: a stored key can only BE the well-known
+    // `isConcatSpreadable` if that symbol was already materialized (every
+    // user route to it goes through `well_known_symbol`). Never create it
+    // here — this runs on every symbol install and must not perturb
+    // allocation accounting.
+    let wk = well_known_symbol_if_cached("isConcatSpreadable");
+    if !wk.is_null() && sym_key == wk as usize {
+        CONCAT_SPREADABLE_EVER.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// The cached well-known symbol pointer if `short_name` was ever
+/// materialized, else null. Unlike [`well_known_symbol`], never allocates.
+pub(crate) fn well_known_symbol_if_cached(short_name: &str) -> *mut SymbolHeader {
+    let guard = WELL_KNOWN_SYMBOLS.lock().unwrap();
+    guard
+        .as_ref()
+        .and_then(|m| m.get(short_name).copied())
+        .unwrap_or(0) as *mut SymbolHeader
+}
+
 pub(crate) fn publish_symbol_side_table_root_edges(sym_key: usize, value_bits: u64) {
     crate::gc::runtime_write_barrier_root_raw_ptr(sym_key as *const SymbolHeader);
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
@@ -459,6 +501,7 @@ pub(crate) fn store_object_symbol_property_root(
     sym_key: usize,
     value_bits: u64,
 ) -> bool {
+    note_symbol_key_installed(sym_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if guard.is_none() {
@@ -481,6 +524,7 @@ pub(crate) fn store_object_symbol_property_root(
 }
 
 pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
+    note_symbol_key_installed(sym_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if guard.is_none() {
