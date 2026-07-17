@@ -109,12 +109,15 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
         let jv = JSValue::from_bits(original.to_bits());
         if jv.is_pointer() {
             let raw = crate::value::js_nanbox_get_pointer(original) as usize;
-            if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-                let arr = raw as *const crate::array::ArrayHeader;
+            let arr = raw as *const crate::array::ArrayHeader;
+            // Proxy check FIRST: a masked proxy id is not a heap pointer, so
+            // the GcHeader deref below would read unmapped memory for one.
+            if crate::array::array_ptr_as_proxy(arr).is_none()
+                && raw >= crate::gc::GC_HEADER_SIZE + 0x1000
+            {
                 let hdr =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
-                    && crate::array::array_ptr_as_proxy(arr).is_none()
                     && !crate::object::constructor_accessor_ever_installed()
                     && crate::array::array_named_property_get_by_name(arr, "constructor").is_none()
                 {
@@ -161,7 +164,7 @@ fn throw_not_constructor() -> ! {
 /// elements (via [[Set]] / CreateDataProperty for the custom case). May throw
 /// (poisoned constructor/@@species getter, or a non-constructor species).
 pub(crate) unsafe fn array_species_create(original: f64, length: usize) -> f64 {
-    array_species_create_with_capacity(original, length, 0)
+    array_species_create_with_capacity(original, length, 0).0
 }
 
 /// [`array_species_create`] with a result-capacity hint (#6386). Capacity is
@@ -170,11 +173,17 @@ pub(crate) unsafe fn array_species_create(original: f64, length: usize) -> f64 {
 /// callers the grow-doubling allocations and copies of populating a
 /// `MIN_ARRAY_CAPACITY` array element-by-element. The hint must come from
 /// pure header peeks (no user code); a custom species constructor ignores it.
+///
+/// The second return is `true` only when the DEFAULT species branch ran —
+/// i.e. the result is a freshly allocated, empty, unfrozen plain array. A
+/// custom `@@species` constructor can RETURN a plain-typed array too (frozen,
+/// sealed, or pre-populated), so callers wanting raw-write access must gate
+/// on this flag, not on the result's GC type.
 pub(crate) unsafe fn array_species_create_with_capacity(
     original: f64,
     length: usize,
     capacity_hint: u32,
-) -> f64 {
+) -> (f64, bool) {
     match resolve_species(original) {
         SpeciesChoice::Default => {
             let out = if capacity_hint > length as u32 {
@@ -184,11 +193,17 @@ pub(crate) unsafe fn array_species_create_with_capacity(
             } else {
                 crate::array::js_array_alloc_with_length(length as u32)
             };
-            f64::from_bits(JSValue::pointer(out as *const u8).bits())
+            (
+                f64::from_bits(JSValue::pointer(out as *const u8).bits()),
+                true,
+            )
         }
         SpeciesChoice::Custom(c) => {
             let args = [length as f64];
-            crate::object::js_new_function_construct(c, args.as_ptr(), args.len())
+            (
+                crate::object::js_new_function_construct(c, args.as_ptr(), args.len()),
+                false,
+            )
         }
     }
 }

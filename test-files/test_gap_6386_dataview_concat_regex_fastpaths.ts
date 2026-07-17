@@ -49,6 +49,14 @@
   const v2 = new DataView(new ArrayBuffer(16));
   v2.setBigInt64(0, -2n, true);
   console.log("dv bigint:", v2.getBigInt64(0, true), v2.getBigUint64(0, true));
+  // Mid-run flip of the own-prop gate: an own method assigned onto a
+  // DataView AFTER the direct path ran hot must shadow the prototype
+  // accessor at the same call site.
+  const v3: any = new DataView(new ArrayBuffer(8));
+  v3.setUint8(0, 5);
+  console.log("dv pre-shadow:", v3.getUint8(0));
+  v3.getUint8 = (o: number) => 42 + o;
+  console.log("dv shadowed:", v3.getUint8(1));
 }
 
 // ---- Array.prototype.concat -----------------------------------------------

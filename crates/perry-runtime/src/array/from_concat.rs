@@ -218,10 +218,11 @@ pub extern "C" fn js_array_concat_variadic(
     // (unobservable), so it runs before the observable species resolution
     // without reordering anything the spec sequences.
     let cap_hint = unsafe { concat_capacity_hint(recv, args_ptr, count) };
-    let (result_box, result_is_plain) = unsafe {
-        let b = crate::array::species::array_species_create_with_capacity(recv_value, 0, cap_hint);
-        (b, crate::array::species::species_result_is_plain_array(b))
+    let (result_box, species_was_default) = unsafe {
+        crate::array::species::array_species_create_with_capacity(recv_value, 0, cap_hint)
     };
+    let result_is_plain = species_was_default
+        || unsafe { crate::array::species::species_result_is_plain_array(result_box) };
     let result = if result_is_plain {
         crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader
     } else {
@@ -229,13 +230,15 @@ pub extern "C" fn js_array_concat_variadic(
         // array first, then CreateDataProperty them onto the container below.
         js_array_alloc(cap_hint)
     };
-    // #6386 all-dense bulk path: when the spreadable gate is closed and every
-    // source is a plain dense hole-free array (or a non-pointer single
-    // value), fill the pre-sized plain result with one copy pass and ONE
-    // layout/barrier rebuild — no per-source rebuild, no spreadable reads,
-    // no growth. Falls through (result still empty) when anything exotic
-    // shows up.
-    if result_is_plain && !crate::symbol::concat_spreadable_symbol_ever_set() {
+    // #6386 all-dense bulk path: when the DEFAULT species ran (so the result
+    // is guaranteed fresh, empty, and unfrozen — a custom `@@species` ctor
+    // can return a plain-typed array that is none of those), the spreadable
+    // gate is closed, and every source is a plain dense hole-free array (or
+    // a non-pointer single value), fill the pre-sized result with one copy
+    // pass and ONE layout/barrier rebuild — no per-source rebuild, no
+    // spreadable reads, no growth. Falls through (result still empty) when
+    // anything exotic shows up.
+    if species_was_default && !crate::symbol::concat_spreadable_symbol_ever_set() {
         if let Some(out) = unsafe { try_concat_all_dense(result, recv, args_ptr, count) } {
             return out;
         }
@@ -855,20 +858,32 @@ unsafe fn try_concat_all_dense(
     args_ptr: *const f64,
     count: i32,
 ) -> Option<*mut ArrayHeader> {
+    // Small fixed classification buffer: pass 1's validated (ptr, len) pairs
+    // feed pass 2 directly, so pass 2 has NO bail-out point — no side effect
+    // (string shared-demote) can be applied and then re-applied by the
+    // fallback path. Wider argument lists take the per-source flow.
+    const MAX_DENSE_ARGS: usize = 8;
     let count = count.max(0) as usize;
+    if count > MAX_DENSE_ARGS {
+        return None;
+    }
     let args: &[f64] = if args_ptr.is_null() || count == 0 {
         &[]
     } else {
         std::slice::from_raw_parts(args_ptr, count)
     };
-    // Pass 1: validate every source and total the lengths.
+    // Pass 1: validate every source and total the lengths. `None` in a slot
+    // marks a single-value (non-pointer) argument occupying one result slot.
     let (recv_src, recv_len) = dense_concat_array_source(recv)?;
+    let mut arg_sources: [Option<(*const ArrayHeader, u32)>; MAX_DENSE_ARGS] =
+        [None; MAX_DENSE_ARGS];
     let mut total: u64 = recv_len as u64;
-    for &arg in args {
+    for (i, &arg) in args.iter().enumerate() {
         let bits = arg.to_bits();
         if bits >> 48 == 0x7FFD {
-            let (_, len) =
+            let (src, len) =
                 dense_concat_array_source((bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader)?;
+            arg_sources[i] = Some((src, len));
             total += len as u64;
         } else {
             // Non-pointer value (number / string-by-tag / bool / undefined /
@@ -883,9 +898,9 @@ unsafe fn try_concat_all_dense(
     if total > (*result).capacity {
         return None;
     }
-    // Pass 2: copy. Nothing below allocates, so no GC can move a source or
-    // the result mid-copy, which is what makes the single deferred rebuild
-    // sound.
+    // Pass 2: copy. Nothing below allocates or bails, so no GC can move a
+    // source or the result mid-copy and no shared-demote runs twice — which
+    // is what makes the single deferred rebuild sound.
     let dst = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
     let mut off: usize = 0;
     let mut copy_array = |src: *const ArrayHeader, len: u32, off: &mut usize| {
@@ -908,16 +923,11 @@ unsafe fn try_concat_all_dense(
         *off += len as usize;
     };
     copy_array(recv_src, recv_len, &mut off);
-    for &arg in args {
-        let bits = arg.to_bits();
-        if bits >> 48 == 0x7FFD {
-            // Re-validated cheaply: pass 1 proved this resolves to a dense
-            // array; nothing has run since that could change it.
-            let (src, len) =
-                dense_concat_array_source((bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader)?;
+    for (i, &arg) in args.iter().enumerate() {
+        if let Some((src, len)) = arg_sources[i] {
             copy_array(src, len, &mut off);
         } else {
-            if bits >> 48 == 0x7FFF {
+            if arg.to_bits() >> 48 == 0x7FFF {
                 crate::string::js_string_addref_if_heap_string(arg);
             }
             std::ptr::write(dst.add(off), arg);
@@ -983,18 +993,15 @@ unsafe fn try_append_spread_array_dense(
     if crate::array::array_is_frozen(result) || crate::array::array_is_sealed_or_no_extend(result) {
         return None;
     }
-    // Single pass: holes need the spec `HasProperty`/`Get` reads (inherited
-    // elements, side-table entries) — punt those to the slow path. Heap
-    // strings get the same shared-demote `js_array_push_f64` performs, so a
-    // later mutation of the source local can't edit the stored element.
+    // Validation pass, no side effects: holes need the spec
+    // `HasProperty`/`Get` reads (inherited elements, side-table entries) —
+    // punt those to the slow path. String addrefs happen only after the copy
+    // has committed below, so a mid-scan bail can't leave the fallback path
+    // double-retaining an already-addref'd string.
     let src_elems = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
     for i in 0..src_len as usize {
-        let v = *src_elems.add(i);
-        if v.to_bits() == crate::value::TAG_HOLE {
+        if (*src_elems.add(i)).to_bits() == crate::value::TAG_HOLE {
             return None;
-        }
-        if v.to_bits() >> 48 == 0x7FFF {
-            crate::string::js_string_addref_if_heap_string(v);
         }
     }
     let dest_len = (*result).length;
@@ -1024,6 +1031,16 @@ unsafe fn try_append_spread_array_dense(
         dst_elems.add(dest_len as usize),
         src_len as usize,
     );
+    // The copy has committed — apply the same shared-demote
+    // `js_array_push_f64` performs per element, so a later in-place mutation
+    // of a source string local can't edit the stored element. Runs after
+    // every bail-out point so a fallback re-append can't double-retain.
+    for i in dest_len as usize..new_len as usize {
+        let v = *dst_elems.add(i);
+        if v.to_bits() >> 48 == 0x7FFF {
+            crate::string::js_string_addref_if_heap_string(v);
+        }
+    }
     (*result).length = new_len;
     crate::array::rebuild_array_layout_exact(result);
     Some(result)
