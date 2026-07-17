@@ -621,6 +621,11 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     method("cron", "stop", true, None),
     method("cron", "isRunning", true, None),
     method("cron", "nextDate", true, None),
+    // npm `cron` package class form: `new CronJob(cronTime, onTick,
+    // onComplete?, start?)` — constructed by the lower_builtin_new arm
+    // (js_cron_job_new; no auto-start, matching the npm package). The
+    // instance methods reuse the ("cron", true, …) rows above.
+    class("cron", "CronJob"),
     method_sig(
         "perry/tui",
         "Text",

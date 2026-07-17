@@ -901,6 +901,16 @@ pub(super) fn compile_module_entry(
                 let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
                 let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
                 let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
+                // Cron jobs (node-cron schedule() / npm cron's CronJob).
+                // The symbol always resolves: perry-ext-cron or the
+                // bundled scheduler provide the real queue; perry-stdlib
+                // exports a 0-returning stub otherwise. Without this gate
+                // (and the tick in loop_body below) a program whose only
+                // live work is a running cron job exits immediately and
+                // scheduled callbacks never fire — the CRON_TIMERS
+                // machinery existed but nothing in the generated event
+                // loop drove it.
+                let has_cron = ctx.block().call(I32, "js_cron_timer_has_pending", &[]);
                 let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
                 // #591: TASK_QUEUE may carry a pending `.then` continuation
                 // that was queued by `js_run_stdlib_pump`'s resolution path
@@ -912,7 +922,8 @@ pub(super) fn compile_module_entry(
                 let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
                 let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
                 let any3 = ctx.block().or(I32, &any1, &any2);
-                let any = ctx.block().or(I32, &any3, &has_microtasks);
+                let any4 = ctx.block().or(I32, &any3, &has_cron);
+                let any = ctx.block().or(I32, &any4, &has_microtasks);
                 let cmp = ctx.block().icmp_ne(I32, &any, &zero);
                 ctx.block().cond_br(&cmp, &body_label, &exit_label);
 
@@ -924,6 +935,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
+                let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 // Issue #84: condvar-backed wait. Returns immediately when
                 // a tokio worker (net/ws/http/fetch/redis/spawn) notifies

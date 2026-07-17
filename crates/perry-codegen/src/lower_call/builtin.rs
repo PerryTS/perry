@@ -52,6 +52,7 @@ pub(super) fn lower_builtin_new(
         "MongoClient" => Some(&["mongodb"]),
         "Decimal" => Some(&["decimal.js"]),
         "RateLimiterMemory" => Some(&["rate-limiter-flexible"]),
+        "CronJob" => Some(&["cron", "node-cron"]),
         _ => None,
     };
     if let Some(sources) = required_sources {
@@ -722,6 +723,48 @@ pub(super) fn lower_builtin_new(
                 I64,
                 "js_ratelimit_new_from_options",
                 &[(I64, &options_bits)],
+            );
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // npm `cron` package: `new CronJob(cronTime, onTick, onComplete?,
+        // start?)`. Gated on the import source above. Unlike node-cron's
+        // `schedule()` factory (which auto-starts), a CronJob only begins
+        // firing when the 4th argument is truthy or `job.start()` is
+        // called — `js_cron_job_new` implements that. The onTick closure
+        // is UNBOXED to a raw ClosureHeader pointer (unbox_to_i64): the
+        // cron tick calls it via js_closure_call0 on the raw pointer, so
+        // tagged NaN-box bits would throw "value is not a function" on
+        // the first fire. onComplete is lowered for side effects only.
+        // start/stop/isRunning/nextDate dispatch via the existing
+        // ("cron", true, …) NATIVE_MODULE_TABLE rows.
+        "CronJob" => {
+            let expr_ptr = if let Some(arg) = args.first() {
+                get_raw_string_ptr(ctx, arg)?
+            } else {
+                "0".to_string()
+            };
+            let on_tick = if let Some(arg) = args.get(1) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            if let Some(arg) = args.get(2) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let start = if let Some(arg) = args.get(3) {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for arg in args.iter().skip(4) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let cb_ptr = unbox_to_i64(blk, &on_tick);
+            let handle = blk.call(
+                I64,
+                "js_cron_job_new",
+                &[(I64, &expr_ptr), (I64, &cb_ptr), (DOUBLE, &start)],
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }

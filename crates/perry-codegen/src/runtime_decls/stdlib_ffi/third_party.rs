@@ -122,6 +122,9 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_cron_clear_timeout", VOID, &[I64]);
     module.declare_function("js_cron_describe", I64, &[I64]);
     module.declare_function("js_cron_job_is_running", DOUBLE, &[I64]);
+    // npm `cron` CronJob ctor arm in lower_call/builtin.rs —
+    // (expr StringHeader, onTick closure bits, NaN-boxed start flag).
+    module.declare_function("js_cron_job_new", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_cron_job_start", VOID, &[I64]);
     module.declare_function("js_cron_job_stop", VOID, &[I64]);
     module.declare_function("js_cron_next_date", I64, &[I64]);
