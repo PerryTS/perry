@@ -806,6 +806,92 @@ fn compute_object_cache_key_with_env(
         "env_target_cpu",
         env_var("PERRY_TARGET_CPU").as_deref().unwrap_or(""),
     );
+    // Codegen tuning/emission toggles (#6394). Each is read by perry-codegen
+    // at compile time and changes the emitted IR / .o bytes, so a warm cache
+    // must not serve an object built under a different setting. These are
+    // process-env reads (`std::env::var`), NOT runtime globals: the class-field
+    // inline guard, typed-array view guard, and TA kind cache are emitted as
+    // loads of `@PERRY_*` globals resolved at run time — codegen emits them
+    // identically regardless of the compile-time environment, so they are
+    // deliberately absent here.
+    h.field(
+        "env_typed_feedback",
+        env_var("PERRY_TYPED_FEEDBACK").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_typed_feedback_trace",
+        env_var("PERRY_TYPED_FEEDBACK_TRACE")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_full_outline_ic",
+        env_var("PERRY_FULL_OUTLINE_IC").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_full_outline_ic_min_funcs",
+        env_var("PERRY_FULL_OUTLINE_IC_MIN_FUNCS")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_outline_method_dispatch",
+        env_var("PERRY_OUTLINE_METHOD_DISPATCH")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_inline_new",
+        env_var("PERRY_INLINE_NEW").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_inline_ctor",
+        env_var("PERRY_INLINE_CTOR").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_string_init_chunk_size",
+        env_var("PERRY_STRING_INIT_CHUNK_SIZE")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_ll_o0_threshold_bytes",
+        env_var("PERRY_LL_O0_THRESHOLD_BYTES")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_ll_size_opt",
+        env_var("PERRY_LL_SIZE_OPT").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_ll_size_opt_max_fn_bytes",
+        env_var("PERRY_LL_SIZE_OPT_MAX_FN_BYTES")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_entry_symbol",
+        env_var("PERRY_ENTRY_SYMBOL").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_codegen_units",
+        env_var("PERRY_CODEGEN_UNITS").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_codegen_unit_size",
+        env_var("PERRY_CODEGEN_UNIT_SIZE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_setjmp_volatile",
+        env_var("PERRY_SETJMP_VOLATILE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_gc_moving_loop_polls",
+        env_var("PERRY_GC_MOVING_LOOP_POLLS")
+            .as_deref()
+            .unwrap_or(""),
+    );
 
     h.finish()
 }
