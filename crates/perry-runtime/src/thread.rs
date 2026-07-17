@@ -821,7 +821,22 @@ pub extern "C" fn js_thread_parallel_map(array_val: f64, closure_val: f64) -> f6
 }
 
 unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
-    // ── 1. Extract array pointer from NaN-boxed value ────────────────
+    // ── 1. Extract closure pointer and func_ptr, and root the closure ─
+    // The closure is validated and rooted BEFORE `clean_arr_ptr`: resolving
+    // the array can force-materialize a lazy array — a GC point — and a
+    // moving minor there would strand a raw closure pointer held in an
+    // unrooted local (#6521 review follow-up).
+    let closure_bits = closure_val.to_bits();
+    let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;
+    if closure.is_null() || (closure as usize) < 0x1000 {
+        // No valid closure — can't call anything
+        return crate::array::js_array_alloc(0) as i64;
+    }
+    let func = (*closure).func_ptr;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
+
+    // ── 1b. Extract array pointer from NaN-boxed value ───────────────
     let array_bits = array_val.to_bits();
     let arr = (array_bits & POINTER_MASK) as *const crate::array::ArrayHeader;
     // #6518: follow a push-grown array's forwarding stub (#233, the #6486
@@ -839,15 +854,9 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
         return crate::array::js_array_alloc(0) as i64;
     }
 
-    // ── 1b. Extract closure pointer and func_ptr ─────────────────────
-    let closure_bits = closure_val.to_bits();
-    let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;
-    let func = if !closure.is_null() && (closure as usize) >= 0x1000 {
-        (*closure).func_ptr
-    } else {
-        // No valid closure — can't call anything
-        return crate::array::js_array_alloc(0) as i64;
-    };
+    // Re-derive the (possibly moved) closure now that the GC points above
+    // are behind us; no further GC points before the derefs below.
+    let closure = closure_handle.get_raw_const_ptr::<ClosureHeader>();
     let closure_ptr_raw = closure as i64;
 
     // ── 2. Determine thread count ────────────────────────────────────
@@ -1029,19 +1038,20 @@ unsafe fn single_thread_map(
     func: *const u8,
     closure_ptr: i64,
 ) -> i64 {
-    // Root the input array BEFORE allocating the result (the allocation can
-    // trigger a moving minor), and re-derive the elements pointer from the
-    // rooted handle each iteration — the user callback can allocate too.
+    // Root the input array AND the closure BEFORE allocating the result (the
+    // allocation can trigger a moving minor), and re-derive both from their
+    // rooted handles each iteration — the user callback can allocate too, and
+    // a moved closure would leave later iterations calling through a dangling
+    // capture block (#6521 review).
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr as *mut crate::array::ArrayHeader);
+    let closure_handle = if closure_ptr != 0 {
+        Some(scope.root_raw_mut_ptr(closure_ptr as *mut ClosureHeader))
+    } else {
+        None
+    };
     let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
-
-    let closure = if closure_ptr != 0 {
-        closure_ptr as *const ClosureHeader
-    } else {
-        ptr::null()
-    };
 
     let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
 
@@ -1052,6 +1062,9 @@ unsafe fn single_thread_map(
             arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
             i as u32,
         );
+        let closure = closure_handle
+            .as_ref()
+            .map_or(ptr::null(), |h| h.get_raw_const_ptr::<ClosureHeader>());
         let result = call_fn(closure, arg);
         let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
         // GC_STORE_AUDIT(BARRIERED): single-thread map result slot uses the shared array slot-store helper.
@@ -1082,6 +1095,17 @@ pub extern "C" fn js_thread_parallel_filter(array_val: f64, closure_val: f64) ->
 }
 
 unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
+    // Closure validated and rooted BEFORE `clean_arr_ptr` — same GC-point
+    // ordering as `parallel_map_impl` above (#6521 review follow-up).
+    let closure_bits = closure_val.to_bits();
+    let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;
+    if closure.is_null() || (closure as usize) < 0x1000 {
+        return crate::array::js_array_alloc(0) as i64;
+    }
+    let func = (*closure).func_ptr;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
+
     let array_bits = array_val.to_bits();
     let arr = (array_bits & POINTER_MASK) as *const crate::array::ArrayHeader;
     // #6518: same forwarding-stub resolution as `parallel_map_impl` above.
@@ -1095,13 +1119,9 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         return crate::array::js_array_alloc(0) as i64;
     }
 
-    let closure_bits = closure_val.to_bits();
-    let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;
-    let func = if !closure.is_null() && (closure as usize) >= 0x1000 {
-        (*closure).func_ptr
-    } else {
-        return crate::array::js_array_alloc(0) as i64;
-    };
+    // Re-derive the (possibly moved) closure now that the GC points above
+    // are behind us; no further GC points before the derefs below.
+    let closure = closure_handle.get_raw_const_ptr::<ClosureHeader>();
 
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -1257,9 +1277,16 @@ unsafe fn single_thread_filter(
     closure: *const ClosureHeader,
 ) -> i64 {
     // Same rooting discipline as single_thread_map: the result allocation
-    // and every user callback can trigger a moving minor.
+    // and every user callback can trigger a moving minor, so the array AND
+    // the closure are re-derived from rooted handles each iteration
+    // (#6521 review).
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr as *mut crate::array::ArrayHeader);
+    let closure_handle = if closure.is_null() {
+        None
+    } else {
+        Some(scope.root_raw_mut_ptr(closure as *mut ClosureHeader))
+    };
     let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
@@ -1273,6 +1300,9 @@ unsafe fn single_thread_filter(
             arr_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
             i as u32,
         );
+        let closure = closure_handle
+            .as_ref()
+            .map_or(ptr::null(), |h| h.get_raw_const_ptr::<ClosureHeader>());
         let result = call_fn(closure, arg);
         let keep = is_truthy_bits(result.to_bits());
         if keep {
