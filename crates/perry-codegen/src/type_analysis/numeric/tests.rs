@@ -138,8 +138,10 @@ fn mul(left: Expr, right: Expr) -> Expr {
 
 #[test]
 fn math_result_multiply_stays_inline_fmul() {
-    // The #6511 repro shape: `for (i = 0; i < 64; i++) acc += Math.sqrt(i)
-    // * Math.sin(i * 0.001);`
+    // The #6511 repro's accumulator-loop shape, with a call-free MathSin
+    // operand (`Math.sin(i)`, not the repro's `i * 0.001`) so the only
+    // `fmul` in the function is the Math-result multiply under test:
+    // `for (i = 0; i < 64; i++) acc += Math.sqrt(i) * Math.sin(i);`
     let ir = emitted_ir(probe_module(
         "math_result_multiply_unit.ts",
         Vec::new(),
@@ -165,7 +167,7 @@ fn math_result_multiply_stays_inline_fmul() {
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(mul(
                             Expr::MathSqrt(Box::new(Expr::LocalGet(2))),
-                            Expr::MathSin(Box::new(mul(Expr::LocalGet(2), Expr::Number(0.001)))),
+                            Expr::MathSin(Box::new(Expr::LocalGet(2))),
                         )),
                     }),
                 ))],

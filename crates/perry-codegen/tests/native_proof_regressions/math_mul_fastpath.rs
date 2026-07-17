@@ -16,8 +16,10 @@ fn mul(left: Expr, right: Expr) -> Expr {
 }
 
 fn sqrt_times_sin_loop_ir() -> String {
-    // The issue's repro shape: `for (i = 0; i < 64; i++) acc += Math.sqrt(i)
-    // * Math.sin(i * 0.001);`
+    // The issue's accumulator-loop shape, with a call-free MathSin operand
+    // (`Math.sin(i)`, not the repro's `i * 0.001`) so the only `fmul` in the
+    // function is the Math-result multiply under test:
+    // `for (i = 0; i < 64; i++) acc += Math.sqrt(i) * Math.sin(i);`
     compile_ir(
         "math_result_multiply.ts",
         vec![
@@ -32,7 +34,7 @@ fn sqrt_times_sin_loop_ir() -> String {
                         local(1),
                         mul(
                             Expr::MathSqrt(Box::new(local(2))),
-                            Expr::MathSin(Box::new(mul(local(2), number(0.001)))),
+                            Expr::MathSin(Box::new(local(2))),
                         ),
                     )),
                 ))],
