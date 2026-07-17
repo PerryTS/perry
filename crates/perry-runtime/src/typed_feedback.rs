@@ -1101,6 +1101,14 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
         return false;
     };
     unsafe {
+        // #6518 audit note: the GC_FLAG_FORWARDED arm below is load-bearing
+        // for the stale-grown-pointer family (#6486). A caller-held pre-grow
+        // pointer left by `js_array_grow` (#233) is rejected HERE, before
+        // the raw length/capacity read below — the `len > cap` sanity check
+        // alone is not a reliable defense against forwarding-pointer bit
+        // patterns. Same applies to the sibling check in
+        // `numeric_array_push_guard`. Do not remove either arm without
+        // routing the guard through `clean_arr_ptr`.
         if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {

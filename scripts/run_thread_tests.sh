@@ -121,6 +121,75 @@ else
     fail=$((fail+1))
 fi
 
+# Case 5 (#6518, family of #6486): an array push-grown past its inline
+# capacity (16) inside a helper leaves the caller's slot holding a stale
+# pre-grow pointer (js_array_grow forwarding stub, #233). parallelMap /
+# parallelFilter read raw `(*arr).length` on the input, and serialize_array
+# raw-read it on any array crossing the thread boundary (as an element on the
+# way in, or as a worker's return value on the way out) — in every case
+# reading the forwarding pointer's bytes as the element count. Must compile,
+# run, and produce exact output.
+cat >"$TMP_DIR/grown_array_crossing.ts" <<'EOF'
+import { parallelFilter, parallelMap, spawn } from "perry/thread";
+
+function fill(out: number[], a: number[]): void {
+  const vs = [a, a, a, a, a, a];
+  for (const v of vs) out.push(v[0], v[1], v[2]);
+}
+
+const verts: number[] = [];
+fill(verts, [1, 2, 3]);
+
+// parallel_map_impl / parallel_filter_impl: raw length read on the input.
+const doubled = parallelMap(verts, (x: number) => x * 2);
+console.log(doubled.length, doubled[0], doubled[17]);
+
+const twos = parallelFilter(verts, (x: number) => x === 2);
+console.log(twos.length, twos[0]);
+
+// serialize_array, main-thread side: grown rows as crossing elements.
+const matrix = [verts, verts, verts, verts];
+const lens = parallelMap(matrix, (r: number[]) => r.length);
+console.log(lens.length, lens[0], lens[3]);
+
+// Holes cross as undefined: element serialization reads through the
+// canonical accessor, which normalizes the hole sentinel.
+const holey: number[] = [];
+holey[20] = 5;
+const marks = parallelMap(holey, (x: number | undefined) => (x === undefined ? 1 : 2));
+console.log(marks.length, marks[0], marks[20]);
+
+// serialize_array, worker side: the worker's own slot goes stale the same
+// way (fill grows `out` past 16), then the return value crosses back.
+async function main(): Promise<void> {
+  const back: number[] = await spawn(() => {
+    const out: number[] = [];
+    fill(out, [4, 5, 6]);
+    return out;
+  });
+  console.log(back.length, back[0], back[17]);
+}
+await main();
+EOF
+expected_grown_output=$'18 2 6\n6 2\n4 18 18\n21 1 2\n18 4 6'
+if ! "$PERRY_BIN" "$TMP_DIR/grown_array_crossing.ts" -o "$TMP_DIR/grown_array_crossing.out" \
+        >/dev/null 2>"$TMP_DIR/grown_array_crossing.stderr"; then
+    echo "FAIL grown_array_crossing: compile error"
+    sed 's/^/    /' "$TMP_DIR/grown_array_crossing.stderr"
+    fail=$((fail+1))
+elif actual_grown_output="$("$TMP_DIR/grown_array_crossing.out" 2>&1)" \
+        && [[ "$actual_grown_output" == "$expected_grown_output" ]]; then
+    echo "PASS grown_array_crossing"
+    pass=$((pass+1))
+else
+    echo "FAIL grown_array_crossing: wrong runtime output"
+    echo "  expected:"
+    sed 's/^/    /' <<<"$expected_grown_output"
+    echo "  actual:"
+    sed 's/^/    /' <<<"$actual_grown_output"
+    fail=$((fail+1))
+fi
+
 echo
 echo "thread-tests: $pass passed, $fail failed"
 
