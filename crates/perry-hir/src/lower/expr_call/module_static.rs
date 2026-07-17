@@ -388,20 +388,22 @@ pub(super) fn try_module_static_methods(
                                 // string. Perry's runtime JSON stringifier doesn't
                                 // honor `toJSON` on opaque runtime objects, so
                                 // intercept the URL case at HIR time. Recognize URL
-                                // both via the original AST (typed local / direct
-                                // `new URL`) and via the HIR variants (`UrlNew`,
-                                // `UrlInstanceToJSON`, …) that earlier passes may
-                                // already have produced.
+                                // via the original AST (typed local / direct
+                                // `new URL`) and via `Expr::UrlNew` when the arg
+                                // was already lowered. `UrlInstanceToJSON` /
+                                // `UrlInstanceToString` must NOT match here: those
+                                // are the href STRING produced by `u.toJSON()` /
+                                // `u.toString()`, and wrapping them in another
+                                // `UrlInstanceToJSON` reads a `StringHeader` as a
+                                // URL `ObjectHeader` → undefined (#6488). The
+                                // AST-side check can't misfire on those either:
+                                // `static_receiver_class` of a call expression is
+                                // `None`, not the callee receiver's class.
                                 let original_arg = call.args.first().map(|a| a.expr.as_ref());
                                 let arg_is_url = original_arg
                                     .map(|e| static_receiver_class(ctx, e) == Some("URL"))
                                     .unwrap_or(false)
-                                    || matches!(
-                                        &value,
-                                        Expr::UrlNew { .. }
-                                            | Expr::UrlInstanceToJSON(_)
-                                            | Expr::UrlInstanceToString(_)
-                                    );
+                                    || matches!(&value, Expr::UrlNew { .. });
                                 if arg_is_url {
                                     let href = Expr::UrlInstanceToJSON(Box::new(value));
                                     return Ok(Ok(Expr::JsonStringifyFull(
