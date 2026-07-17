@@ -762,8 +762,25 @@ pub extern "C" fn perry_key_content_hash(key: *const crate::StringHeader) -> u64
 }
 
 #[inline(always)]
-fn key_content_hash(key: *const crate::StringHeader) -> u64 {
+pub(crate) fn key_content_hash(key: *const crate::StringHeader) -> u64 {
     key_content_hash_impl(key)
+}
+
+/// Resolve `key` to its canonical interned `StringHeader` pointer (as a
+/// `usize`), the identity the `prop_plan` store/read caches key on. Returns 0
+/// for a null / handle-band key. Mirrors the inline interning both field
+/// stores do, so a plan recorded on one store path is found by another.
+#[inline]
+pub(crate) unsafe fn interned_key_ptr(key: *const crate::StringHeader) -> usize {
+    if key.is_null() || !crate::value::addr_class::is_above_handle_band(key as usize) {
+        return 0;
+    }
+    let gc_hdr = (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_hdr).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+        key as usize
+    } else {
+        crate::string::js_string_intern(key, key_content_hash(key)) as usize
+    }
 }
 
 #[inline(always)]
