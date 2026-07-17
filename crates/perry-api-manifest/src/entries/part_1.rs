@@ -1192,12 +1192,15 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         }],
         TypeSpec::String,
     ),
+    // Second arg is npm slugify's replacement-or-options overload
+    // (string | { replacement, lower, strict, trim }) — Any, matching
+    // the NA_JSV dispatch slot.
     method_sig(
         "slugify",
         "default",
         false,
         None,
-        &[p_str("p0"), p_str("p1"), p_str("p2")],
+        &[p_str("p0"), p_any("p1")],
         TypeSpec::String,
     ),
     method_sig(
@@ -1205,7 +1208,7 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         "slugify",
         false,
         None,
-        &[p_str("p0"), p_str("p1"), p_str("p2")],
+        &[p_str("p0"), p_any("p1")],
         TypeSpec::String,
     ),
     method_sig(
