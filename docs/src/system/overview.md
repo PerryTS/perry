@@ -24,9 +24,9 @@ links the file on every PR.
 | `keychainGet(key)` | Secure storage read | All |
 | `keychainDelete(key)` | Secure storage remove | All |
 | `notificationSend(title, body)` | Local notification | All |
-| `notificationCancel(id)` | Cancel a scheduled notification | Apple |
-| `notificationOnTap(cb)` | Handle banner taps | Apple |
-| `notificationRegisterRemote(cb)` / `notificationOnReceive(cb)` | Push (APNs) | iOS, macOS |
+| `notificationCancel(id)` | Cancel a scheduled notification | Apple, Android |
+| `notificationOnTap(cb)` | Handle banner taps | Apple, Android |
+| `notificationRegisterRemote(cb)` / `notificationOnReceive(cb)` | Push (APNs / FCM) | iOS, macOS; Android needs app-side Firebase setup — see [Notifications](notifications.md) |
 | `audioStart()` / `audioStop()` | Microphone capture | All |
 | `audioGetLevel()` / `audioGetPeak()` | RMS / peak amplitude (`0..1`) | All |
 | `audioGetWaveform(n)` | Recent waveform samples for visualization | All |
