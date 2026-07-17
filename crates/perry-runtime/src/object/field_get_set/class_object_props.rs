@@ -135,10 +135,8 @@ pub(super) unsafe fn instance_constructor_value(
         // `Object` report stays for ordinary shapeless objects (raw `{}`
         // from JSON.parse etc.), which spec-correctly inherit
         // `Object.prototype.constructor`.
-        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let gc_header =
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        if let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
+            if gc_header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                 return None;
             }
         }
