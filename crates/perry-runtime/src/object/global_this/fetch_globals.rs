@@ -653,8 +653,37 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // `None`. Fall back to the fetch-parent kind registered against the
     // instance's class at module init (via `js_register_class_parent_dynamic`,
     // where the alias resolved correctly) so the native handle still attaches.
+    // A parent value that resolves to a USER constructor (ClassRef, class
+    // object, or closure) must take the value-super dispatch below — its own
+    // constructor body has to run on `this` (and its own `super()` leg will
+    // attach the native handle when it reaches the builtin). The chain-walk
+    // fallback exists ONLY for a stale/unresolvable alias of the builtin
+    // itself; letting it preempt a live user parent skipped every
+    // intermediate constructor in `class Hint extends NextRequest extends
+    // Request` — Next.js middleware's NextRequestHint lost the parent's
+    // symbol-keyed internal state (`this[INTERNALS]`), so `request.nextUrl`
+    // threw on every request.
+    let parent_is_user_ctor = {
+        let bits = parent_val.to_bits();
+        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+        const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+        match bits & TAG_MASK {
+            INT32_TAG => true, // ClassRef
+            POINTER_TAG => {
+                let p = (bits & PTR_MASK) as usize;
+                crate::closure::is_closure_ptr(p)
+                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
+            }
+            _ => false,
+        }
+    };
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
+            if parent_is_user_ctor {
+                return None;
+            }
             let obj = subclass_this_object_ptr(this_box)?;
             match super::super::class_registry::fetch_parent_kind_in_chain(
                 crate::object::js_object_get_class_id(obj),
