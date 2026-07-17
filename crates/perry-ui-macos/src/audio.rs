@@ -298,8 +298,11 @@ pub fn get_waveform(count: f64) -> f64 {
     }
 }
 
-/// Get the device model identifier string (e.g., "MacBookPro18,3").
-/// Returns a NaN-boxed string pointer.
+/// Get the device model identifier string (e.g., "MacBookPro18,3"),
+/// read from sysctl `hw.model`. Returns a raw `*mut StringHeader` (i64)
+/// via `js_string_from_bytes`; the `ReturnKind::Str` dispatch row
+/// NaN-boxes it with STRING_TAG (#5972 — declaring it `F64` passed the
+/// pointer bits through as a double and callers read `NaN`).
 pub fn get_device_model() -> i64 {
     let model = get_sysctl_model();
     unsafe { js_string_from_bytes(model.as_ptr(), model.len() as i32) }

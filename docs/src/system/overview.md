@@ -16,7 +16,7 @@ links the file on every PR.
 |----------|------------|-----------|
 | `openURL(url)` | Open URL in default browser/app | All |
 | `isDarkMode()` | Check system dark mode | All |
-| `getDeviceIdiom()` | `"phone"`, `"pad"`, `"mac"`, `"tv"`, … | All |
+| `getDeviceIdiom()` | `"phone"`, `"pad"`, `"mac"`, `"tv"`, `"watch"`, `"vision"`, `"desktop"` | All |
 | `getDeviceModel()` | Device model identifier (e.g. `"iPhone13,4"`) | All |
 | `preferencesSet(key, value)` | Store a preference (string or number) | All |
 | `preferencesGet(key)` | Read a preference (returns `string | number | undefined`) | All |
