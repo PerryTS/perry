@@ -402,6 +402,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
     PROPERTY_ATTRS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
@@ -414,6 +415,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
+    super::prop_plan::prop_plan_epoch_bump();
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().remove(&(obj, key.to_string()));
     });
@@ -532,6 +534,7 @@ pub(crate) unsafe fn json_object_getter_value(
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
+    super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
     ACCESSORS_IN_USE.with(|c| c.set(true));
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
@@ -544,6 +547,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
+    super::prop_plan::prop_plan_epoch_bump();
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().remove(&(obj, key.to_string()));
     });
@@ -569,6 +573,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
     acc: AccessorDescriptor,
     attrs: PropertyAttrs,
 ) {
+    super::prop_plan::prop_plan_epoch_bump();
     ACCESSOR_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key.clone()), acc);
     });
@@ -593,6 +598,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
 /// `PROPERTY_DESCRIPTORS` per-object and unconditionally. The gate stays
 /// down, so the object get/set hot path is unaffected for every program.
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    super::prop_plan::prop_plan_epoch_bump();
     note_descriptor_target(obj);
     PROPERTY_DESCRIPTORS.with(|m| {
         m.borrow_mut().insert((obj, key), attrs);

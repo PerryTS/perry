@@ -8,6 +8,9 @@ use std::sync::RwLock;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
+    // Parent linking changes what a class chain can intercept — flush cached
+    // store plans (`object::prop_plan`).
+    crate::object::prop_plan::prop_plan_epoch_bump();
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());

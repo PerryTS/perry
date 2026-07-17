@@ -50,6 +50,23 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 /// bits of the prototype object (POINTER-tagged) or `TAG_NULL`. Idempotent
 /// overwrite.
 pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
+    object_set_static_prototype_impl(obj_ptr, proto_bits, true)
+}
+
+/// Construct-path variant: link a fresh instance to its class-DEFAULT
+/// prototype (the synthetic-class `F.prototype` object). Unlike a user
+/// `setPrototypeOf`, this chain is identical for every instance of the class,
+/// so it neither flushes class-keyed store plans (`object::prop_plan`) nor
+/// marks the instance as chain-divergent — later mutations that could change
+/// the verdict (`F.prototype = other`, descriptor installs on the proto)
+/// bump the epoch at their own entry points. Calling the loud variant here
+/// flushed the plan cache on EVERY function-ctor construction, which kept it
+/// permanently cold in fiber-heavy workloads.
+pub(crate) fn object_link_class_default_prototype(obj_ptr: usize, proto_bits: u64) {
+    object_set_static_prototype_impl(obj_ptr, proto_bits, false)
+}
+
+fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_override: bool) {
     if obj_ptr == 0 {
         return;
     }
@@ -65,6 +82,23 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
         };
         if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
+        }
+    }
+    // A per-instance prototype override invalidates class-keyed interception
+    // verdicts (the overridden chain can differ from the class chain), and the
+    // object itself must never satisfy a class-keyed plan again.
+    if instance_override {
+        crate::object::prop_plan::prop_plan_epoch_bump();
+        unsafe {
+            if obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+                && crate::value::addr_class::is_above_handle_band(obj_ptr)
+            {
+                let hdr = (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                    as *mut crate::gc::GcHeader;
+                if (*hdr).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    (*hdr)._reserved |= crate::gc::OBJ_FLAG_PROTO_OVERRIDE;
+                }
+            }
         }
     }
     let mut slot_addr = 0usize;

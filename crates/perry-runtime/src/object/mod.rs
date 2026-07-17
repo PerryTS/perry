@@ -41,6 +41,7 @@ mod field_set_by_name;
 mod global_fetch;
 mod global_this;
 pub mod handle_expando;
+pub(crate) mod prop_plan;
 pub(crate) use global_this::{default_prepare_stack_trace_func_ptr, ERROR_CONSTRUCTOR_PTR};
 mod global_this_tables;
 mod groupby;

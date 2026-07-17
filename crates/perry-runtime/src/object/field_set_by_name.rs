@@ -799,6 +799,51 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
+        // Resolve the interned key EARLY (hoisted from below the interception
+        // vet): the store-plan cache and the shape-transition cache both key
+        // on interned pointer identity. If the key is already interned
+        // (GC_FLAG_INTERNED set — e.g. from js_string_concat intern hit), skip
+        // the FNV-1a hash entirely. No allocation happens here, so the raw
+        // `obj`/`key` pointers stay valid.
+        let mut interned_key = if !key.is_null() && (key as usize) > 0x10000 {
+            let gc_hdr =
+                (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_hdr).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
+                key // already interned
+            } else {
+                let kh = key_content_hash(key);
+                crate::string::js_string_intern(key, kh)
+            }
+        } else {
+            key
+        };
+        let interned_key_handle = scope.root_string_ptr(interned_key);
+        interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+
+        // Store-plan fast gate (`object::prop_plan`): a recorded verdict means
+        // the full interception vet below (class vtable setter walk, URL-shape
+        // probe, `plain_data_write_may_intercept`) proved a store of this key
+        // to this class cannot be intercepted, and no invalidation (vtable /
+        // descriptor / prototype mutation, GC) happened since. Per-OBJECT
+        // conditions stay outside the verdict: frozen/sealed/own-descriptor
+        // flags are checked below as always, and an instance whose chain
+        // diverges from its class chain (per-instance `setPrototypeOf`
+        // override, null-proto) never records or honors a plan.
+        // Flags that make an object ineligible for class-keyed plans: a
+        // diverging chain (per-instance proto override / null proto) or own
+        // descriptors (an own accessor must dispatch through the short-circuit
+        // below, which a plan hit skips).
+        const PLAN_BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_PROTO_OVERRIDE
+            | crate::gc::OBJ_FLAG_NULL_PROTO
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+        let obj_class_id = (*obj).class_id;
+        let plan_eligible = !key.is_null()
+            && obj_class_id != 0
+            && obj_class_id != NATIVE_MODULE_CLASS_ID
+            && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0;
+        let plan_fast = plan_eligible
+            && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
+
         // Refs #486 (hono): class setter dispatch. JS spec: a `set X(...)`
         // accessor on the prototype intercepts `obj.X = value` writes
         // before they hit the instance's data slots. Hono's `set res(_res)
@@ -809,7 +854,7 @@ pub extern "C" fn js_object_set_field_by_name(
         // hono-base's `if (!context.finalized) throw` fired on every
         // request. Walk the class -> parent chain mirroring the getter
         // dispatch in `js_object_get_field_by_name`.
-        if !key.is_null() && (key as usize) > 0x10000 {
+        if !plan_fast && !key.is_null() && (key as usize) > 0x10000 {
             let class_id = (*obj).class_id;
             if class_id != 0 {
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
@@ -854,7 +899,11 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
-        if !key.is_null() && (key as usize) > 0x10000 && crate::url::is_url_object_shape(obj) {
+        if !plan_fast
+            && !key.is_null()
+            && (key as usize) > 0x10000
+            && crate::url::is_url_object_shape(obj)
+        {
             let key_str = key_to_str_for_diag(key);
             let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
             let value = value_handle.get_nanbox_f64();
@@ -917,23 +966,6 @@ pub extern "C" fn js_object_set_field_by_name(
 
         let mut prev_keys_usize = keys as usize;
 
-        // Resolve to interned pointer for transition cache (pointer identity).
-        // If the key is already interned (GC_FLAG_INTERNED set — e.g. from
-        // js_string_concat intern hit), skip the FNV-1a hash entirely.
-        let mut interned_key = if !key.is_null() && (key as usize) > 0x10000 {
-            let gc_hdr =
-                (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_hdr).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
-                key // already interned
-            } else {
-                let kh = key_content_hash(key);
-                crate::string::js_string_intern(key, kh)
-            }
-        } else {
-            key
-        };
-        let interned_key_handle = scope.root_string_ptr(interned_key);
-        interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
         macro_rules! refresh_roots_after_alloc {
             () => {{
                 obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
@@ -957,12 +989,26 @@ pub extern "C" fn js_object_set_field_by_name(
             && !is_frozen
             && !is_sealed_or_no_extend
             && !has_own_descriptors
-            && !super::plain_data_write_may_intercept(
-                obj as usize,
-                (*obj).class_id,
-                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
-            )
+            && (plan_fast
+                || !super::plain_data_write_may_intercept(
+                    obj as usize,
+                    (*obj).class_id,
+                    f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+                ))
         {
+            // The full interception vet just returned negative for this
+            // (class, key) — the vtable setter walk above found nothing, the
+            // URL-shape probe fell through, and `plain_data_write_may_intercept`
+            // cleared the chain. Record the verdict so the next store skips
+            // the vet (`plan_fast` above). Eligibility is re-derived from the
+            // freshly read `obj_flags`, not the pre-vet read.
+            if !plan_fast
+                && obj_class_id != 0
+                && obj_class_id != NATIVE_MODULE_CLASS_ID
+                && obj_flags & PLAN_BLOCKING_FLAGS == 0
+            {
+                super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
+            }
             if let Some((next_keys, slot_idx)) =
                 transition_cache_lookup(prev_keys_usize, interned_key)
             {
@@ -1058,8 +1104,12 @@ pub extern "C" fn js_object_set_field_by_name(
         // 200k of those allocations per query; with this guard the
         // count drops to zero unless userland actually defined a
         // descriptor.
-        let needs_descriptor_key =
-            ACCESSORS_IN_USE.with(|c| c.get()) || PROPERTY_ATTRS_IN_USE.with(|c| c.get());
+        // On a store-plan hit the object provably has no own descriptors
+        // (OBJ_FLAG_HAS_DESCRIPTORS is clear — vetted below before the plan is
+        // honored), so the descriptor key string can never be consulted: skip
+        // the per-store String allocation entirely.
+        let needs_descriptor_key = !plan_fast
+            && (ACCESSORS_IN_USE.with(|c| c.get()) || PROPERTY_ATTRS_IN_USE.with(|c| c.get()));
         let incoming_key_str: Option<String> = if needs_descriptor_key && !key.is_null() {
             let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let name_len = (*key).byte_len as usize;
@@ -1086,7 +1136,10 @@ pub extern "C" fn js_object_set_field_by_name(
         // throw "Cannot assign to read only property" on a plain `{}` (Next.js
         // app-page-turbo runtime's `exports.Fragment = …`). A fresh allocation
         // has the flag clear, so it skips the stale lookup entirely.
-        if ACCESSORS_IN_USE.with(|c| c.get()) && super::object_has_descriptors(obj as usize) {
+        if !plan_fast
+            && ACCESSORS_IN_USE.with(|c| c.get())
+            && super::object_has_descriptors(obj as usize)
+        {
             if let Some(ref k) = incoming_key_str {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
                     if acc.set != 0 {

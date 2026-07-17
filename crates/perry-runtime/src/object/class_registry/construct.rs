@@ -949,7 +949,7 @@ pub unsafe extern "C" fn js_new_function_construct(
                         )
                     });
                 if has_user_proto {
-                    super::super::prototype_chain::object_set_static_prototype(
+                    super::super::prototype_chain::object_link_class_default_prototype(
                         obj_ptr as usize,
                         dyn_proto.to_bits(),
                     );
@@ -961,7 +961,7 @@ pub unsafe extern "C" fn js_new_function_construct(
     if !linked_user_proto {
         let proto = ensure_function_prototype_object(func_value, cid);
         if !proto.is_null() {
-            super::super::prototype_chain::object_set_static_prototype(
+            super::super::prototype_chain::object_link_class_default_prototype(
                 obj_ptr as usize,
                 crate::value::js_nanbox_pointer(proto as i64).to_bits(),
             );
