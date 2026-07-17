@@ -114,3 +114,46 @@ fn multiple_distinct_policies_use_smallest() {
         "smallest literal policy (5 minutes) must win"
     );
 }
+
+#[test]
+fn literal_plus_non_literal_policy_falls_back_to_platform_default() {
+    // A provider mixing a readable literal with a policy the compiler
+    // can't evaluate: the literal must NOT be adopted for the whole
+    // widget. Honoring it would silently apply the error path's interval
+    // to the branch whose policy is unknown — and would contradict the
+    // warning, which says the platform default applies. `None` is what
+    // makes every backend fall back to its own default.
+    let module = lower(
+        r#"
+        import { Widget, VStack, Text } from "perry/widget";
+
+        const dynamicPolicy = { after: { minutes: 5 } };
+
+        const w = Widget({
+            kind: "com.test.Mixed",
+            displayName: "Mixed",
+            description: "One literal policy, one dynamic",
+            entryFields: { temperature: "number" },
+            provider: async (ctx) => {
+                if (ctx.failed) {
+                    return {
+                        entries: [{ temperature: 0 }],
+                        reloadPolicy: dynamicPolicy,
+                    };
+                }
+                return {
+                    entries: [{ temperature: 21 }],
+                    reloadPolicy: { after: { minutes: 45 } },
+                };
+            },
+            render: (entry) => VStack([Text("hi")]),
+        });
+    "#,
+    );
+    assert_eq!(module.widgets.len(), 1, "expected one widget decl");
+    assert_eq!(
+        module.widgets[0].reload_after_seconds, None,
+        "an unreadable reloadPolicy must fall back to the platform default, \
+not silently adopt the other return path's literal"
+    );
+}

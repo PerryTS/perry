@@ -548,7 +548,12 @@ pub(crate) fn try_lower_widget_decl(
     // distinct literal policies (e.g. a short error-retry interval and a
     // longer happy-path one), use the smallest so the most urgent request
     // wins, and tell the user.
-    if reload_policy_unparsed {
+    let reload_after_seconds: Option<u32> = if reload_policy_unparsed {
+        // A policy the compiler can't read makes the whole widget's
+        // interval indeterminate: honoring some *other* return path's
+        // literal would silently apply that branch's interval to every
+        // branch, including the unreadable one. Fall back to the platform
+        // default for the widget, which is what this warning promises.
         eprintln!(
             "[perry] warning: widget '{}': `reloadPolicy` must be a literal \
 `{{ after: {{ minutes: N }} }}` for the compiler to read it; a non-literal \
@@ -556,22 +561,24 @@ value was ignored and the platform default refresh interval applies \
 (see docs/src/widgets/data-fetching.md)",
             kind
         );
-    }
-    reload_policy_seconds.sort_unstable();
-    reload_policy_seconds.dedup();
-    let reload_after_seconds: Option<u32> = match reload_policy_seconds.as_slice() {
-        [] => None,
-        [only] => Some(*only),
-        many => {
-            eprintln!(
-                "[perry] warning: widget '{}': provider returns {} distinct \
+        None
+    } else {
+        reload_policy_seconds.sort_unstable();
+        reload_policy_seconds.dedup();
+        match reload_policy_seconds.as_slice() {
+            [] => None,
+            [only] => Some(*only),
+            many => {
+                eprintln!(
+                    "[perry] warning: widget '{}': provider returns {} distinct \
 compile-time `reloadPolicy` values; the refresh interval is a single \
 compile-time constant per widget — using the smallest ({} seconds)",
-                kind,
-                many.len(),
-                many[0]
-            );
-            Some(many[0])
+                    kind,
+                    many.len(),
+                    many[0]
+                );
+                Some(many[0])
+            }
         }
     };
 
