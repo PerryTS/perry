@@ -60,7 +60,7 @@ use constants::{
 };
 use func_emit_ctx::FuncEmitCtx;
 use locals::{
-    collect_locals, collect_module_let_ids, resolve_export_to_func,
+    collect_exported_names, collect_locals, collect_module_let_ids, resolve_export_to_func,
     resolve_export_to_let, resolve_source_module_idx,
 };
 use module_emitter::WasmModuleEmitter;

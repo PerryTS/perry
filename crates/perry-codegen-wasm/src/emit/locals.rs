@@ -168,6 +168,74 @@ pub(super) fn resolve_module_idx_by_source(
     best.map(|(i, _)| i)
 }
 
+/// Is `name` part of module `m`'s own PUBLIC surface — i.e. does it appear
+/// in an `export` declaration (named, re-export, exported function, or
+/// exported object)? Used to gate the resolve_export_to_* fallbacks so they
+/// never hand back a PRIVATE module-local: during `export *` recursion, a
+/// private `foo` in an early source must not mask a real exported `foo` in a
+/// later one. Non-recursive by design — `export *`-reachable names are
+/// resolved by the explicit ExportAll traversal, not the fallback.
+pub(super) fn module_exports_name(m: &perry_hir::ir::Module, name: &str) -> bool {
+    for e in &m.exports {
+        match e {
+            perry_hir::ir::Export::Named { exported, .. }
+            | perry_hir::ir::Export::ReExport { exported, .. } => {
+                if exported == name {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    m.exported_functions.iter().any(|(n, _)| n == name)
+        || m.exported_objects.iter().any(|n| n == name)
+}
+
+/// The names a `import * as W from "mod"` namespace should expose: mod's own
+/// named/re-exported/function/object exports, plus — recursively — every
+/// name re-exported through `export * from "..."`. Deduped; depth-capped.
+/// Replaces the old "register every module-level let" fallback, which leaked
+/// private locals into the namespace object.
+pub(super) fn collect_exported_names(
+    modules: &[(String, perry_hir::ir::Module)],
+    mod_idx: usize,
+    depth: u32,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    if depth == 0 {
+        return;
+    }
+    let m = &modules[mod_idx].1;
+    for e in &m.exports {
+        match e {
+            perry_hir::ir::Export::Named { exported, .. }
+            | perry_hir::ir::Export::ReExport { exported, .. } => {
+                out.insert(exported.clone());
+            }
+            perry_hir::ir::Export::ExportAll { source } => {
+                if let Some(si) = resolve_module_idx_by_source(modules, source) {
+                    if si != mod_idx {
+                        collect_exported_names(modules, si, depth - 1, out);
+                    }
+                }
+            }
+            // `export * as ns from "..."` binds the whole namespace under one
+            // name; the namespace object itself is not a promoted let we can
+            // resolve here, so expose the name (resolution is a no-op) rather
+            // than recurse into the source's members.
+            perry_hir::ir::Export::NamespaceReExport { name, .. } => {
+                out.insert(name.clone());
+            }
+        }
+    }
+    for (n, _) in &m.exported_functions {
+        out.insert(n.clone());
+    }
+    for n in &m.exported_objects {
+        out.insert(n.clone());
+    }
+}
+
 /// Resolve module `mod_idx`'s export `name` to a promoted-let wasm global,
 /// following re-export chains: `Export::Named` whose local is itself an
 /// import binding, `Export::ReExport { source, imported }`, and
@@ -261,8 +329,16 @@ pub(super) fn resolve_export_to_let(
             }
         }
     }
-    // Fall-through: exports registered out-of-band keep their let by name.
-    src_let_names[mod_idx].get(name).copied()
+    // Fall-through: an export registered out-of-band (e.g. an exported
+    // object-const) keeps its let by name — but ONLY if the name is actually
+    // part of this module's public surface. Returning a private local here
+    // would let it mask a genuine export of the same name in a later
+    // `export *` source.
+    if module_exports_name(m, name) {
+        src_let_names[mod_idx].get(name).copied()
+    } else {
+        None
+    }
 }
 
 /// Function twin of `resolve_export_to_let`: resolve module `mod_idx`'s
@@ -371,7 +447,11 @@ pub(super) fn resolve_export_to_func(
             }
         }
     }
-    // Fall-through: a function with that very name (exports registered
-    // out-of-band).
-    find_local_fn(name)
+    // Fall-through: an out-of-band exported function keeps its name — but
+    // only if it's genuinely exported (see resolve_export_to_let).
+    if module_exports_name(m, name) {
+        find_local_fn(name)
+    } else {
+        None
+    }
 }

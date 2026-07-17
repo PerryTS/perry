@@ -982,72 +982,41 @@ impl WasmModuleEmitter {
                         // the whole-program name map, which made the failure
                         // maddeningly partial).
                         if let perry_hir::ir::ImportSpecifier::Namespace { local } = spec {
-                            let src_module = &modules[src_idx].1;
-                            for export in &src_module.exports {
-                                let exported = match export {
-                                    perry_hir::ir::Export::Named { exported, .. } => exported,
-                                    perry_hir::ir::Export::ReExport { exported, .. } => exported,
-                                    _ => continue,
-                                };
+                            // Register `W.<member>` for exactly the source
+                            // module's PUBLIC surface — its named/re-exported/
+                            // function/object exports, plus everything reached
+                            // through `export * from "..."` (recursively). This
+                            // replaced a blanket "register every module-level
+                            // let" loop, which both exposed PRIVATE locals as
+                            // `W.private` (not valid JS namespace members) and
+                            // missed `export *` re-exports entirely.
+                            let mut public: std::collections::BTreeSet<String> =
+                                std::collections::BTreeSet::new();
+                            collect_exported_names(modules, src_idx, 8, &mut public);
+                            for name in &public {
                                 if let Some(gidx) = resolve_export_to_let(
                                     modules,
                                     &src_let_names,
                                     &name_to_idx,
                                     src_idx,
-                                    exported,
+                                    name,
                                     8,
                                 ) {
                                     self.imported_var_globals.insert(
-                                        (consumer_idx, format!("{}.{}", local, exported)),
+                                        (consumer_idx, format!("{}.{}", local, name)),
                                         gidx,
                                     );
                                 }
-                            }
-                            // Fall-through parity with the Named arm: exports
-                            // registered out-of-band still have their let —
-                            // expose those by name unless an Export::Named
-                            // already claimed the key.
-                            for (name, &gidx) in src_lets.iter() {
-                                self.imported_var_globals
-                                    .entry((consumer_idx, format!("{}.{}", local, name)))
-                                    .or_insert(gidx);
-                            }
-                            // Exported FUNCTIONS: `W.fn(args)` must call the
-                            // source module's compiled function, `W.fn` as a
-                            // value must wrap it in a closure. Resolved with
-                            // the same chain-following helper the named arm
-                            // uses.
-                            for (exp_name, _) in &src_module.exported_functions {
                                 if let Some(fidx) = resolve_export_to_func(
                                     modules,
                                     &self.module_func_maps,
                                     &name_to_idx,
                                     src_idx,
-                                    exp_name,
-                                    8,
-                                ) {
-                                    self.imported_ns_funcs.insert(
-                                        (consumer_idx, format!("{}.{}", local, exp_name)),
-                                        fidx,
-                                    );
-                                }
-                            }
-                            for export in &src_module.exports {
-                                let exported = match export {
-                                    perry_hir::ir::Export::Named { exported, .. } => exported,
-                                    perry_hir::ir::Export::ReExport { exported, .. } => exported,
-                                    _ => continue,
-                                };
-                                if let Some(fidx) = resolve_export_to_func(
-                                    modules,
-                                    &self.module_func_maps,
-                                    &name_to_idx,
-                                    src_idx,
-                                    exported,
+                                    name,
                                     8,
                                 ) {
                                     self.imported_ns_funcs
-                                        .entry((consumer_idx, format!("{}.{}", local, exported)))
+                                        .entry((consumer_idx, format!("{}.{}", local, name)))
                                         .or_insert(fidx);
                                 }
                             }
@@ -1432,6 +1401,13 @@ impl WasmModuleEmitter {
             // Initialize globals — swap in per-module func_map for correct FuncRef resolution
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
+                // Per-consumer import resolution (imported_var_globals /
+                // imported_func_indices / imported_ns_funcs) is keyed by
+                // current_mod_idx; a module-scope initializer that calls an
+                // imported symbol (e.g. `const P = vec3(...)`) resolves
+                // against a stale consumer without this and could bind
+                // another module's like-named export.
+                self.current_mod_idx = mod_idx;
                 for global in &module.globals {
                     if let Some(init) = &global.init {
                         let mut ctx =
@@ -1452,6 +1428,7 @@ impl WasmModuleEmitter {
             // Register class methods with the bridge and set up inheritance
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
+                self.current_mod_idx = mod_idx; // see the globals loop above
                 for class in &module.classes {
                     let class_name_id = self
                         .string_map
