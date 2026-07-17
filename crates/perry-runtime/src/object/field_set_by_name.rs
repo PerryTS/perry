@@ -332,7 +332,8 @@ pub extern "C" fn js_object_set_field_by_name(
                     {
                         let keys = (*o).keys_array;
                         let keys_ok = keys.is_null()
-                            || (((keys as u64) >> 48) == 0 && crate::value::addr_class::is_above_handle_band(keys as usize));
+                            || (((keys as u64) >> 48) == 0
+                                && crate::value::addr_class::is_above_handle_band(keys as usize));
                         if keys_ok {
                             // Overwrite of an EXISTING own key: the keys array
                             // doesn't change, so the shape-transition cache
