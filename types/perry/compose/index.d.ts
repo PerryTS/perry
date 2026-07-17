@@ -166,6 +166,15 @@ export interface UpOptions {
 export interface DownOptions {
   /** Remove named volumes */
   volumes?: boolean;
+  /**
+   * Remove orphaned containers: containers that still carry this
+   * stack's project label (`perry.compose.project`) but whose service
+   * key is no longer present in the spec — typically left behind when
+   * a service was renamed or deleted between deploys. Containers
+   * belonging to other projects (or without Perry's compose labels)
+   * are never touched. Default false.
+   */
+  removeOrphans?: boolean;
 }
 
 export interface LogsOptions {

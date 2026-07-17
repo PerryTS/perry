@@ -141,12 +141,14 @@ still works but is now optional.
 `down(handle)` removes containers and networks, and **preserves named
 volumes by default**. Pass `{ volumes: true }` to also drop the volumes
 (destroys committed data — use only for "rip and replace" redeploy or
-test cleanup).
+test cleanup). Pass `{ removeOrphans: true }` to also sweep out
+containers left behind by earlier deploys of the same project whose
+service key no longer exists in the spec.
 
 | `down` option | Type | Default | Effect |
 |---|---|---|---|
 | `volumes` | `boolean` | `false` | Also remove named volumes after containers + networks. |
-| `removeOrphans` | `boolean` | `false` | Remove containers labelled with this stack's project but not in the current spec. |
+| `removeOrphans` | `boolean` | `false` | Remove **orphaned containers**: ones still carrying this stack's `perry.compose.project` label whose `perry.compose.service` key is no longer in the spec (service renamed/deleted between deploys). Strictly label-scoped — other projects' containers and anything not created by Perry are never touched. |
 
 ## Status / logs / exec
 
