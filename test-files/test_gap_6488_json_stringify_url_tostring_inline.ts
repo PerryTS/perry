@@ -21,5 +21,12 @@ console.log(JSON.stringify(r));
 console.log(JSON.stringify(u));
 console.log(JSON.stringify(new URL("http://y/fr", "http://y/")));
 
+// Replacer/spacer forms: toJSON runs BEFORE the replacer per
+// SerializeJSONProperty, so these also print the quoted href (perry
+// used to walk the opaque URL object and throw a circular-structure
+// TypeError on its searchParams back-reference).
+console.log(JSON.stringify(u, null, 2));
+console.log(JSON.stringify(u, (_k: string, v: unknown) => v, 2));
+
 // Property read producing the href string.
 console.log(JSON.stringify(u.href));
