@@ -159,6 +159,90 @@ pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize) {
     }
 }
 
+// ── Read-plan cache: (keys_array, interned key) → own-field index ──────────
+//
+// The read fast lane (`js_object_get_field_by_name`) resolves an OWN data
+// field on a provably-plain arena class instance without key hashing or a
+// keys-array scan: one direct-mapped probe keyed by (keys_array address,
+// interned key pointer). Entries are valid for one epoch window — the same
+// [`PROP_PLAN_EPOCH`] that guards store plans — which is bumped on every GC
+// collection (a keys-array address cannot be freed/reused and an interned
+// key cannot move within a window), on descriptor/prototype/vtable
+// mutations, and on property deletes (a delete can rewrite key→slot
+// mappings in place at the same keys-array address).
+
+#[derive(Clone, Copy)]
+struct ReadPlanEntry {
+    keys_id: usize,
+    key_ptr: usize,
+    epoch: u64,
+    field_idx: u32,
+}
+
+const READ_PLAN_SIZE: usize = 8192;
+const READ_PLAN_MASK: usize = READ_PLAN_SIZE - 1;
+
+thread_local! {
+    // Heap-allocated for the same arm64_32 TLS-size reason as the store table.
+    static READ_PLAN_CACHE: std::cell::UnsafeCell<Box<[ReadPlanEntry]>> =
+        std::cell::UnsafeCell::new(
+            vec![
+                ReadPlanEntry {
+                    keys_id: 0,
+                    key_ptr: 0,
+                    epoch: 0,
+                    field_idx: 0,
+                };
+                READ_PLAN_SIZE
+            ]
+            .into_boxed_slice(),
+        );
+}
+
+#[inline(always)]
+fn read_plan_slot(keys_id: usize, key_ptr: usize) -> usize {
+    let h = ((keys_id >> 4) as u64 ^ ((key_ptr >> 3) as u64).rotate_left(21))
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h >> 40) as usize & READ_PLAN_MASK
+}
+
+/// Look up the cached own-field index for (keys_array, interned key).
+#[inline]
+pub(crate) fn read_plan_lookup(keys_id: usize, key_ptr: usize) -> Option<u32> {
+    if keys_id == 0 || key_ptr == 0 {
+        return None;
+    }
+    let slot = read_plan_slot(keys_id, key_ptr);
+    READ_PLAN_CACHE.with(|c| unsafe {
+        let e = (*c.get())[slot];
+        if e.keys_id == keys_id
+            && e.key_ptr == key_ptr
+            && e.epoch == PROP_PLAN_EPOCH.load(Ordering::Relaxed)
+        {
+            Some(e.field_idx)
+        } else {
+            None
+        }
+    })
+}
+
+/// Record an own-field index resolved by a validated keys-array scan.
+#[inline]
+pub(crate) fn read_plan_record(keys_id: usize, key_ptr: usize, field_idx: u32) {
+    if keys_id == 0 || key_ptr == 0 {
+        return;
+    }
+    let slot = read_plan_slot(keys_id, key_ptr);
+    READ_PLAN_CACHE.with(|c| unsafe {
+        (*c.get())[slot] = ReadPlanEntry {
+            keys_id,
+            key_ptr,
+            epoch: PROP_PLAN_EPOCH.load(Ordering::Relaxed),
+            field_idx,
+        };
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +270,17 @@ mod tests {
         assert!(store_plan_check(9, key));
         crate::object::class_registry::test_bump_vtable_generation();
         assert!(!store_plan_check(9, key));
+    }
+
+    #[test]
+    fn read_plan_roundtrip_and_epoch_flush() {
+        let keys = 0xAAAA_0040usize;
+        let key = 0xBBBB_0080usize;
+        read_plan_record(keys, key, 21);
+        assert_eq!(read_plan_lookup(keys, key), Some(21));
+        assert_eq!(read_plan_lookup(keys, key + 8), None);
+        prop_plan_epoch_bump();
+        assert_eq!(read_plan_lookup(keys, key), None);
     }
 
     #[test]

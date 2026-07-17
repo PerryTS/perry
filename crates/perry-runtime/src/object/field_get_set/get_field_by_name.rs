@@ -60,6 +60,113 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // FAST LANE (store-plan-cache follow-up): resolve an OWN data field on a
+    // provably-plain arena class instance with no rooting scope, no
+    // exotic-registry probes, and no key hashing. Every gate proves a property
+    // the skipped slow-path checks would have tested:
+    //  - band/tag checks: not a proxy (above) / handle / stream encoding;
+    //  - `classify_heap_generation != Unknown`: the address is inside a
+    //    registered arena page, so its GcHeader is real — and no malloc-backed
+    //    exotic (BufferHeader / TypedArrayHeader / DateCell / RegExpHeader /
+    //    Temporal cell, all mi- or gc-malloc'd) can classify as arena;
+    //  - `GC_TYPE_OBJECT`: not a closure / array / error / Map / Set;
+    //  - `class_id != 0` (and not the native-module id): not an arguments
+    //    object (allocated with class 0), URL-shape object, builtin prototype
+    //    host, or plain literal — those keep their existing paths;
+    //  - `OBJ_FLAG_HAS_DESCRIPTORS` clear: no own accessor can shadow the
+    //    slot (an own data property shadows inherited accessors per [[Get]]);
+    //    `OBJ_FLAG_TYPED_ARRAY_PROTO` clear: not the per-kind TypedArray
+    //    prototype host (its reflection accessors have empty backing fields).
+    // The (keys_array, interned key) → index mapping comes from the
+    // epoch-guarded read-plan cache (flushed on GC, descriptor / prototype /
+    // vtable mutations, and property deletes); a lane-local bounded scan
+    // populates it. An absent own key falls through — prototype and getter
+    // resolution stay on the existing path.
+    unsafe {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let raw = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000
+            && !crate::value::addr_class::is_small_handle(raw)
+            && !crate::value::addr_class::is_stream_id_band(raw)
+            && crate::value::addr_class::is_above_handle_band(key as usize)
+        {
+            let key_gc =
+                (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0
+                && crate::arena::classify_heap_generation(raw)
+                    != crate::arena::HeapGeneration::Unknown
+            {
+                let gc_hdr =
+                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                const LANE_BLOCKING: u16 =
+                    crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && (*gc_hdr)._reserved & LANE_BLOCKING == 0
+                {
+                    let o = raw as *const ObjectHeader;
+                    let class_id = (*o).class_id;
+                    if class_id != 0
+                        && class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
+                    {
+                        let keys = (*o).keys_array;
+                        if !keys.is_null()
+                            && ((keys as u64) >> 48) == 0
+                            && crate::value::addr_class::is_above_handle_band(keys as usize)
+                        {
+                            let alloc_limit = std::cmp::max((*o).field_count, 8) as usize;
+                            if let Some(idx) = super::super::prop_plan::read_plan_lookup(
+                                keys as usize,
+                                key as usize,
+                            ) {
+                                return if (idx as usize) < alloc_limit {
+                                    super::accessors::js_object_get_field(o, idx)
+                                } else {
+                                    match super::super::overflow_get(raw, idx as usize) {
+                                        Some(b) => JSValue::from_bits(b),
+                                        None => JSValue::undefined(),
+                                    }
+                                };
+                            }
+                            let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                                as *const crate::gc::GcHeader;
+                            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                                let key_count =
+                                    crate::array::keys_array_len_capped_to_capacity(keys);
+                                if key_count <= 4096 {
+                                    for i in 0..key_count {
+                                        let kv = crate::array::js_array_get(keys, i as u32);
+                                        if crate::string::js_string_key_matches(kv, key) {
+                                            super::super::prop_plan::read_plan_record(
+                                                keys as usize,
+                                                key as usize,
+                                                i as u32,
+                                            );
+                                            return if i < alloc_limit {
+                                                super::accessors::js_object_get_field(o, i as u32)
+                                            } else {
+                                                match super::super::overflow_get(raw, i) {
+                                                    Some(b) => JSValue::from_bits(b),
+                                                    None => JSValue::undefined(),
+                                                }
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // A receiver that LOOKS like a bare heap pointer (top 16 bits clear) but does
     // not land in the platform heap range is a MIS-decoded primitive, not an
     // object. The common case is a `number` whose raw f64 bits alias a sub-heap
