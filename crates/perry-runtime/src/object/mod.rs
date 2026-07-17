@@ -1012,13 +1012,9 @@ pub fn scan_overflow_fields_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
             }
-            if crate::gc::layout_visit_pointer_slots_for_user(new_owner, fields.len(), |i| {
-                if let Some(val_bits) = fields.get_mut(i) {
-                    visitor.visit_nanbox_u64_slot(val_bits);
-                }
-            }) {
-                continue;
-            }
+            // #6495: same contract as `visit_overflow_field_slots_mut` — the
+            // layout mask under-reports overflow pointer slots on paths that
+            // skip `layout_note_slot`, so scan every slot.
             for val_bits in fields.iter_mut() {
                 visitor.visit_nanbox_u64_slot(val_bits);
             }
@@ -1049,17 +1045,18 @@ pub(crate) fn visit_overflow_field_slots_mut(owner: usize, mut visit: impl FnMut
         if fields.is_empty() {
             return Vec::new();
         }
-        let mut slots = Vec::new();
+        // #6495: visit EVERY overflow slot — never the layout-mask subset.
+        // The per-object slot mask is maintained by `layout_note_slot` at
+        // store time, but not every overflow write path notes (GC owner
+        // moves merge entries via `merge_overflow_fields` with no notes), so
+        // a usable-looking SIDE_MASK can under-report pointer-bearing
+        // overflow slots; the trace would then skip live children and the
+        // sweep frees them while referenced. The Vec's length is the live
+        // overflow region, and objects with large overflow populations are
+        // in UNKNOWN layout state in practice (dynamic-shape stores degrade
+        // the layout), so the mask bought little here.
+        let mut slots = Vec::with_capacity(fields.len());
         let base = fields.as_ptr() as *mut u64;
-        if crate::gc::layout_visit_pointer_slots_for_user(owner, fields.len(), |i| {
-            if i < fields.len() {
-                unsafe {
-                    slots.push(base.add(i));
-                }
-            }
-        }) {
-            return slots;
-        }
         for i in 0..fields.len() {
             unsafe {
                 slots.push(base.add(i));
@@ -1279,6 +1276,16 @@ pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
 #[cfg(test)]
 pub(crate) fn debug_overflow_entry_len(owner: usize) -> Option<usize> {
     OVERFLOW_FIELDS.with(|m| m.borrow().get(&owner).map(|v| v.len()))
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_overflow_fields_vec(owner: usize, values: Vec<u64>) {
+    OVERFLOW_FIELDS.with(|m| {
+        m.borrow_mut().insert(owner, values);
+    });
+    OVERFLOW_LAST.with(|c| unsafe {
+        *c.get() = (0, std::ptr::null_mut());
+    });
 }
 
 #[cfg(test)]

@@ -870,6 +870,76 @@ fn gap_born_child_stored_between_finalize_and_sweep_survives() {
     crate::object::test_clear_overflow_fields_root();
 }
 
+/// Regression (#6495): the trace must visit EVERY overflow slot of a live
+/// object, not the subset its layout mask claims. The per-object slot mask
+/// is maintained by `layout_note_slot` at store time, but not every
+/// overflow write path notes (GC owner moves merge entries via
+/// `merge_overflow_fields` with no notes) — a stale SIDE_MASK then hides
+/// pointer-bearing slots from the trace, and their referents are swept
+/// while referenced. Observed at bundle scale as masks capped at bit 48
+/// with live NaN-boxed pointers sitting at slots 49..63.
+#[test]
+fn overflow_slots_beyond_layout_mask_are_traced() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let (owner, _fields) = unsafe { alloc_nursery_test_object(1) };
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+
+    // Build a usable SIDE_MASK layout claiming slots 0..=48 as the complete
+    // pointer set. A pointer note only creates a side mask from the
+    // POINTER_FREE state (notes on an UNKNOWN object leave it UNKNOWN =
+    // conservative full visit), so first rebuild the layout from the
+    // object's single non-pointer inline slot.
+    unsafe {
+        let zero: u64 = 0;
+        crate::gc::layout_rebuild_from_slots(owner as *mut u8, &zero as *const u64, 1);
+    }
+    let dummy = young_leaf();
+    for i in 0..49 {
+        crate::gc::layout_note_slot(owner as usize, i, string_bits(dummy));
+    }
+    // The bug path: an overflow write that never runs `layout_note_slot`.
+    // Slot 50 holds the ONLY reference to a live string; the mask does not
+    // know about it.
+    let child = young_leaf();
+    let mut values = vec![crate::value::TAG_UNDEFINED; 51];
+    values[50] = string_bits(child);
+    crate::object::test_seed_overflow_fields_vec(owner as usize, values);
+
+    // Age the owner/child block out of the block-persistence window (that
+    // pass would otherwise force-mark the child as a register-holding
+    // candidate and mask the missing trace).
+    let aged_from = crate::arena::general_block_count();
+    let mut filler_blocks = 0usize;
+    while filler_blocks < 7 {
+        for _ in 0..64 {
+            let _ = unsafe { crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING) };
+        }
+        filler_blocks = crate::arena::general_block_count().saturating_sub(aged_from);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_until_phase(&mut state, GcCyclePhase::Sweep);
+    unsafe {
+        let header = header_from_user_ptr(child as *const u8);
+        assert_ne!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "a pointer in an overflow slot beyond the layout mask was not \
+             traced: its referent is about to be swept live"
+        );
+    }
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+    crate::object::test_clear_overflow_fields_root();
+
+    // Reclaim the filler blocks so later bounded-step tests aren't slowed.
+    let mut cleanup = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    run_cycle_in_single_unit_steps(&mut cleanup);
+    let _ = cleanup.take_outcome();
+}
+
 #[test]
 fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
     let _guard = CopyingNurseryTestGuard::new(1);
