@@ -13390,3 +13390,6 @@ mod invalidation;
 
 #[path = "native_proof_regressions/integer_modulo.rs"]
 mod integer_modulo;
+
+#[path = "native_proof_regressions/math_mul_fastpath.rs"]
+mod math_mul_fastpath;
