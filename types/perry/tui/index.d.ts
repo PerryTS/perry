@@ -281,14 +281,14 @@ declare module "perry/tui" {
      * call. Cleanup-on-dep-change (returning a cleanup function from
      * `fn`) is not wired yet — a returned function is ignored.
      */
-    export function useEffect(fn: () => void | (() => void), deps?: unknown[]): void;
+    export function useEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void;
 
     /**
      * Cache the result of `fn()` keyed by `deps` (same bit-identity
      * comparison as `useEffect`). Recomputes on first call or when
      * `deps` change; otherwise returns the cached value.
      */
-    export function useMemo<T>(fn: () => T, deps: unknown[]): T;
+    export function useMemo<T>(fn: () => T, deps: readonly unknown[]): T;
 
     /**
      * A stable mutable cell that doesn't trigger a re-render when
