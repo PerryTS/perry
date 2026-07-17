@@ -278,6 +278,9 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
     module.declare_function("js_ratelimit_create", I64, &[I64]);
     module.declare_function("js_ratelimit_delete", I64, &[I64, I64]);
     module.declare_function("js_ratelimit_get", I64, &[I64, I64]);
+    // `new RateLimiterMemory({...})` ctor arm in lower_call/builtin.rs —
+    // takes the raw NaN-boxed options object bits.
+    module.declare_function("js_ratelimit_new_from_options", I64, &[I64]);
     module.declare_function("js_ratelimit_penalty", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_ratelimit_reward", I64, &[I64, I64, DOUBLE]);
 

@@ -697,9 +697,18 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("date-fns", "startOfDay", false, None),
     method("date-fns", "endOfDay", false, None),
     // --- rate-limiter-flexible — perry-ext-ratelimit. Surface mirrors
-    //     the npm package's RateLimiterMemory class. ---
+    //     the npm package's RateLimiterMemory class. Construction is a
+    //     lower_builtin_new arm (js_ratelimit_new_from_options); the
+    //     instance methods dispatch via the NATIVE_MODULE_TABLE rows in
+    //     lower_call/native_table/extras.rs. ---
     class("rate-limiter-flexible", "RateLimiterMemory"),
     class("rate-limiter-flexible", "RateLimiterAbstract"),
+    method("rate-limiter-flexible", "consume", true, None),
+    method("rate-limiter-flexible", "get", true, None),
+    method("rate-limiter-flexible", "delete", true, None),
+    method("rate-limiter-flexible", "block", true, None),
+    method("rate-limiter-flexible", "penalty", true, None),
+    method("rate-limiter-flexible", "reward", true, None),
     // --- fetch — well-known alias for perry-ext-fetch. Same surface
     //     as node-fetch (the more common alias above). ---
     method("fetch", "default", false, None),

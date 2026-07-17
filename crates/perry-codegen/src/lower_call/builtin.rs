@@ -51,6 +51,7 @@ pub(super) fn lower_builtin_new(
         "Redis" => Some(&["ioredis", "redis"]),
         "MongoClient" => Some(&["mongodb"]),
         "Decimal" => Some(&["decimal.js"]),
+        "RateLimiterMemory" => Some(&["rate-limiter-flexible"]),
         _ => None,
     };
     if let Some(sources) = required_sources {
@@ -696,6 +697,32 @@ pub(super) fn lower_builtin_new(
             // The runtime sig takes one i64 (currently *const c_void, ignored).
             // Pass 0 — semantically "use env-var defaults".
             let handle = blk.call(I64, "js_ioredis_new", &[(I64, "0")]);
+            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+        }
+        // rate-limiter-flexible `new RateLimiterMemory({ points, duration })`.
+        // Gated on the import source above. The options object crosses as
+        // raw NaN-box bits (i64) so the runtime parses `points`/`duration`
+        // by name; missing arg → TAG_UNDEFINED → npm defaults (4 points /
+        // 1 s). Pre-fix this fell to the js_object_alloc(0,0) placeholder
+        // and every method call dispatched against `{}`. Instance methods
+        // (consume/get/delete/block/penalty/reward) are wired in
+        // NATIVE_MODULE_TABLE for module "rate-limiter-flexible".
+        "RateLimiterMemory" => {
+            let options = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            for arg in args.iter().skip(1) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let blk = ctx.block();
+            let options_bits = blk.bitcast_double_to_i64(&options);
+            let handle = blk.call(
+                I64,
+                "js_ratelimit_new_from_options",
+                &[(I64, &options_bits)],
+            );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // async_hooks.AsyncLocalStorage — `new AsyncLocalStorage()` produces a
