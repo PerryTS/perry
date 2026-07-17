@@ -128,6 +128,20 @@ pub(super) unsafe fn instance_constructor_value(
     // empty `{}` produced by JSON.parse, etc.). Report
     // `Object` so duck-type tests don't trip undefined.
     if class_id == 0 {
+        // #6537 review: an EXPLICIT null-prototype object
+        // (`Object.create(null)` / `js_object_alloc_null_proto`, marked with
+        // `OBJ_FLAG_NULL_PROTO` on the GC header) has NO `constructor` —
+        // fall through (→ undefined) instead of reporting `Object`. The
+        // `Object` report stays for ordinary shapeless objects (raw `{}`
+        // from JSON.parse etc.), which spec-correctly inherit
+        // `Object.prototype.constructor`.
+        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                return None;
+            }
+        }
         let v = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
         return Some(JSValue::from_bits(v.to_bits()));
     }

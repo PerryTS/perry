@@ -333,7 +333,13 @@ pub(super) fn marshal_imported_ctor_args(
         while out.len() < param_count {
             out.push(undef.clone());
         }
-        out.truncate(param_count.max(out.len()));
+        // #6537 review: `param_count.max(out.len())` made this a no-op, so a
+        // call site passing MORE args than the imported ctor's fixed arity
+        // emitted excess operands — violating the documented "returns exactly
+        // `ctor.param_count`" contract (the compiled `<class>_constructor`
+        // symbol has exactly that many post-`this` params; JS ignores extra
+        // ctor args). Truncate for real.
+        out.truncate(param_count);
         out
     }
 }
