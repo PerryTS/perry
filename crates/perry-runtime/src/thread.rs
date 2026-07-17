@@ -246,6 +246,17 @@ pub enum SerializedValue {
         captures: Vec<SerializedValue>,
     },
 
+    /// A closure capture slot that, on the source thread, held a pointer to a
+    /// mutable `Box` rather than a NaN-boxed value — the shape codegen produces
+    /// for every `async`-fn body local (boxed by the async-to-generator
+    /// transform) and every mutable capture. The box itself is thread-local and
+    /// never crosses; this carries a deep copy of the value it held, and
+    /// deserialization re-boxes it in the receiving thread's registry so the
+    /// reconstructed closure's `js_box_get`/`js_box_set` slot reads work again
+    /// (#6520). Only ever appears in a capture position; the inner value is any
+    /// ordinary transferable `SerializedValue`.
+    BoxedCapture(Box<SerializedValue>),
+
     /// A BigInt: 16 x u64 limbs in little-endian order.
     BigInt([u64; BIGINT_LIMBS]),
 
@@ -394,6 +405,38 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
     SerializedValue::Inline(bits)
 }
 
+/// Serialize a single closure capture slot for a thread boundary.
+///
+/// Capture slots differ from array elements / object fields: a slot for a
+/// *boxed* local holds a raw box pointer, not a NaN-boxed value. Every body
+/// local of an `async` function is boxed by the async-to-generator transform,
+/// and any mutable capture is boxed too; codegen stores the box pointer in the
+/// capture slot so reads/writes inside the closure body go through
+/// `js_box_get`/`js_box_set` — and the reconstructed closure on the receiving
+/// thread reads its slots the same way. That box lives in the *spawning*
+/// thread's thread-local, never-freed registry, so it cannot cross verbatim:
+/// crossing the raw pointer left the worker's `js_box_get` reading an
+/// unregistered address (→ `undefined`), so a captured async-fn local array
+/// looked empty (length 0) and a captured scalar looked `undefined` (#6520).
+///
+/// Cross it as a [`SerializedValue::BoxedCapture`]: deep-copy the value the box
+/// *holds* now, and re-box it on the receiving thread (see
+/// [`deserialize_nanbox_on_current_thread`]) so the slot there again holds a
+/// valid, locally-registered box pointer. Non-boxed slots (plain value
+/// captures, the `this`/`new.target` slots) serialize directly.
+///
+/// # Safety
+/// Same contract as [`serialize_nanbox_for_thread`]: pointer-tagged values
+/// must reference live objects in the current thread's arena/heap.
+unsafe fn serialize_capture_for_thread(slot_bits: u64) -> SerializedValue {
+    match crate::r#box::box_slot_contents_bits(slot_bits) {
+        Some(inner_bits) => {
+            SerializedValue::BoxedCapture(Box::new(serialize_nanbox_for_thread(inner_bits)))
+        }
+        None => serialize_nanbox_for_thread(slot_bits),
+    }
+}
+
 /// Human-readable name for a GC object type that cannot cross a thread
 /// boundary. Used only to build the TypeError message (#6185).
 ///
@@ -436,6 +479,7 @@ pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'
         SerializedValue::Closure { captures, .. } => {
             captures.iter().find_map(first_unsupported_transfer_type)
         }
+        SerializedValue::BoxedCapture(inner) => first_unsupported_transfer_type(inner),
         _ => None,
     }
 }
@@ -585,7 +629,7 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
     let mut captures = Vec::with_capacity(actual_count);
     for i in 0..actual_count {
         let cap_bits = (*captures_base.add(i)).to_bits();
-        captures.push(serialize_nanbox_for_thread(cap_bits));
+        captures.push(serialize_capture_for_thread(cap_bits));
     }
 
     SerializedValue::Closure {
@@ -733,6 +777,20 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
                 crate::closure::js_closure_set_capture_f64(closure, i as u32, f64::from_bits(bits));
             }
             JSValue::pointer(closure as *const u8).bits()
+        }
+
+        SerializedValue::BoxedCapture(inner) => {
+            // Re-box on THIS thread: deep-copy the held value into the local
+            // arena, then allocate a fresh box (registered in this thread's
+            // registry) holding it. The returned bits are the raw box POINTER,
+            // exactly what codegen expects a boxed-capture slot to contain, so
+            // `js_box_get`/`js_box_set` in the reconstructed closure body work
+            // (#6520). `js_box_alloc_bits` uses the system allocator (no GC
+            // trigger), so `value_bits` cannot be collected between the two
+            // steps; once stored, the box-registry GC scanner keeps it alive.
+            let value_bits = deserialize_nanbox_on_current_thread(inner);
+            let box_ptr = crate::r#box::js_box_alloc_bits(value_bits as i64);
+            box_ptr as u64
         }
 
         SerializedValue::BigInt(limbs) => {
@@ -894,7 +952,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
-                caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
+                caps.push(serialize_capture_for_thread((*base.add(i)).to_bits()));
             }
             guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
             Some((fp, cc, caps))
@@ -1151,7 +1209,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
         let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
         let mut caps = Vec::with_capacity(actual);
         for i in 0..actual {
-            caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
+            caps.push(serialize_capture_for_thread((*base.add(i)).to_bits()));
         }
         guard_transferable(&caps); // #6185: named throw for a captured Map/Set/…
         Some((fp, cc, caps))
@@ -1365,7 +1423,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
                 (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
             let mut caps = Vec::with_capacity(actual);
             for i in 0..actual {
-                caps.push(serialize_nanbox_for_thread((*base.add(i)).to_bits()));
+                caps.push(serialize_capture_for_thread((*base.add(i)).to_bits()));
             }
             guard_transferable(&caps);
             Some((cc, caps))
