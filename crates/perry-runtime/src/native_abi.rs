@@ -541,6 +541,18 @@ mod tests {
             js_native_abi_check_buffer_data_ptr(boxed_ptr(standalone)),
             crate::buffer::buffer_data(standalone)
         );
+
+        // Hardening: if the backing shrinks after the view is registered so the
+        // recorded window no longer fits, resolution falls back to the view's
+        // own (correctly-sized) storage rather than hand back a backing pointer
+        // that a `len`-byte native write would overrun.
+        unsafe {
+            (*ab).length = 8;
+        }
+        assert_eq!(
+            js_native_abi_check_buffer_data_ptr(boxed_ptr(view)),
+            crate::buffer::buffer_data(view)
+        );
     }
 
     #[test]

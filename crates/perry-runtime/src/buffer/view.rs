@@ -92,9 +92,16 @@ pub(crate) fn byte_offset_of(buf_ptr: usize) -> u32 {
 /// copy while JS reads come from the backing (or vice-versa), a silent
 /// corruption with no null and no error (#6515).
 ///
-/// Falls back to the buffer's own inline storage for a plain (non-view) buffer
-/// or a view whose recorded offset is out of the backing's bounds — matching
-/// `read_buffer_byte`'s per-byte guard so the two never drift.
+/// Falls back to the buffer's own inline storage for a plain (non-view) buffer,
+/// or for a view whose recorded window no longer fits inside the backing (a
+/// backing that was detached or shrunk since the view was registered). The
+/// native callee consumes `(*buf_ptr).length` bytes — the byte-length half of
+/// the ABI — so the whole `[offset, offset + length)` span must fit in the
+/// current backing before we hand back a backing pointer; otherwise it could
+/// read/write past the backing's end. The view's own storage is always sized
+/// to its own length, so the fallback stays in bounds. The `<=` boundary lets a
+/// zero-length view sitting exactly at `backing.length` still resolve to the
+/// backing edge rather than falling back.
 ///
 /// SAFETY: `buf_ptr` must be a live `BufferHeader`; a registered view's backing
 /// is kept in the registry only while it is live (see
@@ -103,7 +110,9 @@ pub(crate) fn byte_offset_of(buf_ptr: usize) -> u32 {
 pub(crate) unsafe fn resolve_data_ptr(buf_ptr: *const BufferHeader) -> *const u8 {
     if let Some(info) = lookup(buf_ptr as usize) {
         let backing_ptr = info.backing as *const BufferHeader;
-        if !backing_ptr.is_null() && info.offset < (*backing_ptr).length {
+        if !backing_ptr.is_null()
+            && info.offset.saturating_add((*buf_ptr).length) <= (*backing_ptr).length
+        {
             return buffer_data(backing_ptr).add(info.offset as usize);
         }
     }
