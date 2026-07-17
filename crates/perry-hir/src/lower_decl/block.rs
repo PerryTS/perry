@@ -417,13 +417,21 @@ fn cic_decl(d: &ast::Decl, in_cl: bool, out: &mut std::collections::HashSet<Stri
             }
         }),
         // A nested function declaration's body is a closure scope.
-        ast::Decl::Fn(f) => {
-            if let Some(b) = &f.function.body {
-                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
-            }
-        }
+        ast::Decl::Fn(f) => cic_function(&f.function, out),
         ast::Decl::Class(c) => cic_class(&c.class, in_cl, out),
         _ => {}
+    }
+}
+
+/// Param patterns (defaults evaluate at CALL time) + body of a closure-scoped
+/// `ast::Function` — nested fn declarations/expressions and class methods all
+/// share this traversal.
+fn cic_function(f: &ast::Function, out: &mut std::collections::HashSet<String>) {
+    for p in &f.params {
+        cic_pat(&p.pat, true, out);
+    }
+    if let Some(b) = &f.body {
+        b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
     }
 }
 
@@ -433,22 +441,8 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
     }
     for m in &c.body {
         match m {
-            ast::ClassMember::Method(mm) => {
-                for p in &mm.function.params {
-                    cic_pat(&p.pat, true, out);
-                }
-                if let Some(b) = &mm.function.body {
-                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
-                }
-            }
-            ast::ClassMember::PrivateMethod(mm) => {
-                for p in &mm.function.params {
-                    cic_pat(&p.pat, true, out);
-                }
-                if let Some(b) = &mm.function.body {
-                    b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
-                }
-            }
+            ast::ClassMember::Method(mm) => cic_function(&mm.function, out),
+            ast::ClassMember::PrivateMethod(mm) => cic_function(&mm.function, out),
             // #6523: the CONSTRUCTOR body runs at `new` time, not at class
             // definition — a binding it references that is declared AFTER the
             // class (`class C { constructor(){ a() } } const a = ...`) must be
@@ -510,14 +504,7 @@ fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::HashSet<Stri
                 ast::BlockStmtOrExpr::Expr(ex) => cic_expr(ex, true, out),
             }
         }
-        Fn(f) => {
-            for p in &f.function.params {
-                cic_pat(&p.pat, true, out);
-            }
-            if let Some(b) = &f.function.body {
-                b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
-            }
-        }
+        Fn(f) => cic_function(&f.function, out),
         Class(c) => cic_class(&c.class, in_cl, out),
         Array(a) => a
             .elems
