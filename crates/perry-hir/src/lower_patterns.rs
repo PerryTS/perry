@@ -1454,7 +1454,19 @@ pub(crate) fn get_param_default(ctx: &mut LoweringContext, pat: &ast::Pat) -> Re
             }
         }
         ast::Pat::Assign(assign) => {
+            // #6604: a capturing class EXPRESSION used as a default value
+            // (`function f(C = class { … }) {}`) must NOT register with the
+            // enclosing body's end-of-body capture-refresh machinery: param
+            // defaults are lowered BEFORE the callee's own body twin takes
+            // its list mark (fn-decl / ctor / method param sites), so the
+            // entry would be drained by the WRONG (enclosing) body and its
+            // ids interpreted in the wrong function's local numbering.
+            // Truncate whatever this default expression recorded — the
+            // default is re-evaluated at every call anyway, so its
+            // evaluation-time snapshot is per-call fresh.
+            let mark = ctx.body_class_expr_captures.len();
             let default_expr = lower_expr(ctx, &assign.right)?;
+            ctx.body_class_expr_captures.truncate(mark);
             Ok(Some(default_expr))
         }
         _ => Ok(None),

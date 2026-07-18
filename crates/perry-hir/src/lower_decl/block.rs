@@ -1126,6 +1126,10 @@ pub fn lower_fn_body_block_stmt(
     // Used by the Phase 1.6 forward `let`/`const` pre-registration so a const
     // that shadows an outer binding still gets a fresh this-body local.
     let body_entry_locals_len = ctx.locals.len();
+    // #6604: entries pushed while lowering THIS body belong to THIS body's
+    // capture-refresh pass (their ids are this function's locals); drain the
+    // suffix at body end, truncate on the error path so nothing leaks upward.
+    let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
     let hoisted_var_slots = predefine_var_bindings_in_function_body(ctx, block);
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
@@ -1224,6 +1228,8 @@ pub fn lower_fn_body_block_stmt(
     let mut body = match lower_block_stmt(ctx, block) {
         Ok(body) => body,
         Err(err) => {
+            ctx.body_class_expr_captures
+                .truncate(body_class_expr_captures_mark);
             ctx.current_strict = parent_strict;
             ctx.forward_class_names = saved_forward_class_names;
             ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
@@ -1290,6 +1296,30 @@ pub fn lower_fn_body_block_stmt(
                     }
                 }
             }
+        }
+        // #6604: capturing class EXPRESSIONS lowered directly in this body
+        // (`var Comparator = class _Comparator { … }`, argument-position
+        // `register(class { … })`, …) need the same assignment-tracking
+        // refresh as class declarations: semver assigns the captured
+        // `parseOptions`/`debug` vars AFTER the class, so the snapshot (and
+        // the per-evaluation `__perry_ctor_caps` array, whose stale-undefined
+        // slots the runtime construct path now backfills from this snapshot)
+        // must be re-registered with the live values. Entries were recorded
+        // by `lower_class_expr` under the RESOLVED registration name; no
+        // `append_new_args_stmt` pass — a class expression's construct sites
+        // are either static (binding-name `new C()`, live locals appended at
+        // the site) or dynamic (replayed through the snapshot).
+        for (cname, ids) in ctx
+            .body_class_expr_captures
+            .split_off(body_class_expr_captures_mark)
+        {
+            let captures: Vec<Expr> = ids.iter().map(|id| Expr::LocalGet(*id)).collect();
+            let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
+                class_name: cname,
+                captures,
+            });
+            re_reg_capsets.push((re_reg.clone(), ids.iter().copied().collect()));
+            re_regs.push(re_reg);
         }
         if !re_regs.is_empty() {
             // Audit P0-B: the decl-site snapshot is authoritative at
