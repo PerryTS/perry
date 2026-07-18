@@ -41,6 +41,8 @@ use super::property_get_names::{
 mod generic_dispatch;
 mod globalget;
 mod helpers;
+#[cfg(test)]
+mod nullish_read_location_tests;
 
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
