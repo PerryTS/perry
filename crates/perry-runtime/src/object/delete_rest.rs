@@ -34,6 +34,10 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    // A delete can rewrite key→slot mappings in place (same keys_array
+    // address), so cached (keys_array, key)→index plans must be flushed
+    // (`object::prop_plan` read-plan cache).
+    super::prop_plan::prop_plan_epoch_bump();
     // A Proxy is a small registered id in the proxy id band, not a heap
     // ObjectHeader. Dereferencing it below (GC header / keys_array reads) would
     // segfault. Route `delete proxy.k` / `delete proxy[k]` through the proxy

@@ -1,3 +1,95 @@
+## v0.5.1263 — fix(cache): key the object cache on all codegen-affecting env vars (#6394, PR #6526)
+
+The per-module object cache (`node_modules/.cache/perry`) keyed on a curated
+but incomplete set of codegen environment variables. ~16 `PERRY_*` vars that
+`perry-codegen` reads at compile time and that change the emitted `.o` —
+typed-feedback site emission, IC and method-dispatch outlining, inline `new`/ctor,
+string-init chunking, per-unit `-O0`/`-Os` selection, entry-symbol rename,
+codegen-unit partitioning, volatile-setjmp promotion, loop GC-poll emission — were
+absent from the key, so setting any of them against a warm cache silently reused an
+object built without it (the switch appears to do nothing; any A/B built on it is
+vacuous). Added to `compute_object_cache_key_with_env`. Deliberately excluded:
+runtime-global `@PERRY_*` loads (`CLASS_FIELD_INLINE_GUARD_DISABLED`,
+`TA_VIEW_GUARD`, `TA_KIND_CACHE` — codegen emits them identically regardless of the
+compile-time env), diagnostics-only vars, the final-link `PERRY_LD`, and vars already
+captured via the resolved target triple or the HIR fingerprint.
+
+## v0.5.1262 — refactor(hir): split widget_decl.rs under the 2000-line file-size cap (PR #6531)
+
+`crates/perry-hir/src/lower/widget_decl.rs` reached 2372 lines, over the
+`check_file_size.sh` cap (2000). Pure mechanical split, no logic change, into the
+`foo.rs` + `foo/` submodule layout the repo already uses:
+`widget_decl/reactive_animate.rs` (`collect_state_value_reads` +
+`try_desugar_reactive_animate`) and `widget_decl/tests.rs` (the `#[cfg(test)]`
+module). `try_desugar_reactive_animate` is re-exported from `widget_decl.rs` as
+`pub(crate)` so `lower/mod.rs`'s `pub(crate) use widget_decl::*` still resolves it.
+`widget_decl.rs` drops to 1665 lines.
+
+## v0.5.1261 — fix(bench): version-invariant Cargo.toml fingerprint in the public-baseline gate (PR #6528)
+
+The public-benchmark-evidence freshness gate (the lint job's "Public benchmark
+evidence freshness" step) fingerprinted `Cargo.toml` over its whole bytes, so every
+workspace version bump invalidated the recorded baseline and reddened lint on every
+subsequent PR until the baseline was regenerated (a full, environment-gated benchmark
+run). Normalized the volatile `[workspace.package] version` line out of the
+`Cargo.toml` contribution to the source fingerprint (dependency/profile/edition
+changes still move it), and refreshed the recorded source + harness fingerprints in
+the artifact. Benchmark measurements are unchanged — a version bump does not affect
+performance; only the fingerprint bookkeeping is corrected.
+
+## v0.5.1260 — fix(hir): abstract class fields are type-only, emit no runtime slot (#6498, PR #6499)
+
+`abstract readonly _tag: string;` on a base class was lowered into a real
+runtime property slot. TypeScript treats abstract members as type-only and
+erases them (`node --experimental-strip-types` emits no runtime slot). When a
+subclass declared the same field with an initializer, the instance carried two
+physical slots of the same name (`Object.keys` → `_tag|_tag`); a read through a
+base- or union-typed local variable resolved to the phantom (undefined) base
+slot instead of the concrete subclass value. Reads via `any` or a function
+parameter typed as the base/union were unaffected — only a local statically
+typed as the base/union hit the wrong slot.
+
+This is the exact shape of `@effect/platform`'s `HttpBody`
+(`abstract class BodyBase { abstract readonly _tag }` with concrete
+`Uint8ArrayImpl` / `EmptyImpl` / `RawImpl`). The Node HTTP response writer does
+`switch (body._tag)` with no default; with `_tag` reading `undefined` the switch
+fell through, the `Effect.suspend` thunk returned `undefined`, and the fiber
+runtime reported `Not a valid effect: undefined` — an Effect HTTP server
+(`HttpLayerRouter` / `HttpApi`) answered `500` to every request. Since
+`HttpBody.text` / `.html` / `.json` / `.uint8Array` all produce `Uint8Array`-tagged
+bodies, this affected essentially all response bodies.
+
+Fix: skip abstract instance fields during class lowering, exactly as `declare`
+fields are already skipped, at both lowering entry points in
+`crates/perry-hir/src/lower_decl/class_decl.rs`. Abstract fields cannot carry
+initializers and are always overridden by a concrete subclass, so removing the
+phantom slot is semantically safe. `is_abstract` was previously unused across
+the compiler. Regression test:
+`test-files/test_gap_abstract_field_shadow_union_read.ts` (byte-identical to
+`node --experimental-strip-types`).
+
+Completes the Effect web-server campaign: all four effect example apps
+(logger / forking / api / web) now match Node byte-for-byte. web.ts serves its
+homepage and JSON API responses identically; the only residual difference is a
+non-deterministic tracer span duration (`http.span.1=Nms`).
+
+## v0.5.1259 — fix: static/namespace resolution for effect Tag & Schema — web.ts server starts (#6475, PR #6496)
+
+Five fixes that let an Effect HTTP server start under Perry:
+
+- Bind `this` to the receiver on both proto-method call paths.
+- Substitute a function-object call-site `this` for canonical bound class
+  methods, so a method looked up on a callable function object still runs with
+  the caller's receiver.
+- Invalidate the cached dispatch strategy on every closure registration, so a
+  re-registered closure can't keep serving a stale resolution.
+- Static-member CALL now walks the parent-closure chain: `class X extends Tag(id)()`
+  (effect's `Context.Tag` / `HttpRouter.Tag`) inherits static `use` / `serve`
+  from the parent function's own properties instead of returning the class ref.
+- Namespace-member spread call resolves the function, not a same-named class:
+  `Schema.Union(...arr)` no longer bakes an unrelated `Union` class ref as the
+  spread callee.
+
 ## v0.5.1258 — fix(thread): compile-time containment for perry/thread worker closures (#6185 Tier 1, PR #6276)
 
 The closure passed to `spawn` / `parallelMap` / `parallelFilter` is now

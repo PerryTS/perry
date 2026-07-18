@@ -5,6 +5,37 @@
 use perry_hir::ir::*;
 use std::fmt::Write;
 
+/// Default tile freshness interval when the widget declares no compile-time
+/// `reloadPolicy`: 60 minutes.
+const DEFAULT_FRESHNESS_MS: u64 = 3_600_000;
+
+/// Wear OS floor for `setFreshnessIntervalMillis`: tile refreshes are
+/// scheduled through WorkManager-style periodic work, which does not run
+/// more often than every 15 minutes.
+const MIN_FRESHNESS_MS: u64 = 900_000;
+
+/// Resolve the widget's effective `setFreshnessIntervalMillis` value: the
+/// parsed `reloadPolicy` if present, clamped to the 15-minute Wear OS floor
+/// (with a compile-time warning), or the 60-minute default.
+fn effective_freshness_millis(widget: &WidgetDecl) -> u64 {
+    match widget.reload_after_seconds {
+        None => DEFAULT_FRESHNESS_MS,
+        Some(s) => {
+            let ms = s as u64 * 1000;
+            if ms < MIN_FRESHNESS_MS {
+                eprintln!(
+                    "[perry] warning: widget '{}': reloadPolicy requests a refresh every {}ms, \
+below the Wear OS tile freshness minimum of {}ms (15 minutes); clamping to {}ms",
+                    widget.kind, ms, MIN_FRESHNESS_MS, MIN_FRESHNESS_MS
+                );
+                MIN_FRESHNESS_MS
+            } else {
+                ms
+            }
+        }
+    }
+}
+
 /// Emit the TileService Kotlin class
 pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> String {
     let mut out = String::new();
@@ -79,10 +110,7 @@ pub fn emit_tile_service(widget: &WidgetDecl, name: &str, package: &str) -> Stri
     }
     writeln!(out).unwrap();
 
-    let reload_ms = widget
-        .reload_after_seconds
-        .map(|s| s as u64 * 1000)
-        .unwrap_or(3600000);
+    let reload_ms = effective_freshness_millis(widget);
 
     writeln!(
         out,
@@ -502,5 +530,44 @@ mod tests {
         let manifest = emit_manifest_snippet("Stats", "com.test");
         assert!(manifest.contains("StatsTileService"));
         assert!(manifest.contains("BIND_TILE_PROVIDER"));
+    }
+
+    fn make_reload_widget(reload_after_seconds: Option<u32>) -> WidgetDecl {
+        WidgetDecl {
+            kind: "com.test.Reload".to_string(),
+            display_name: "Reload".to_string(),
+            description: String::new(),
+            supported_families: vec!["accessoryCircular".to_string()],
+            entry_fields: vec![("value".to_string(), WidgetFieldType::Number)],
+            render_body: vec![],
+            entry_param_name: "entry".to_string(),
+            config_params: vec![],
+            provider_func_name: None,
+            placeholder: None,
+            family_param_name: None,
+            app_group: None,
+            reload_after_seconds,
+        }
+    }
+
+    #[test]
+    fn test_tile_custom_reload_policy() {
+        // 120 minutes → 7200000 ms freshness interval.
+        let kt = emit_tile_service(&make_reload_widget(Some(7200)), "Reload", "com.test");
+        assert!(kt.contains(".setFreshnessIntervalMillis(7200000)"));
+    }
+
+    #[test]
+    fn test_tile_default_reload_policy() {
+        let kt = emit_tile_service(&make_reload_widget(None), "Reload", "com.test");
+        assert!(kt.contains(".setFreshnessIntervalMillis(3600000)"));
+    }
+
+    #[test]
+    fn test_tile_reload_policy_clamped_to_wear_floor() {
+        // 1 minute — below the 15-minute Wear OS floor, must clamp to 900000 ms.
+        let kt = emit_tile_service(&make_reload_widget(Some(60)), "Reload", "com.test");
+        assert!(kt.contains(".setFreshnessIntervalMillis(900000)"));
+        assert!(!kt.contains(".setFreshnessIntervalMillis(60000)"));
     }
 }

@@ -9,9 +9,12 @@ if [[ "${1:-}" == "--__did-skip-marker" ]]; then
     exit 1
 fi
 
-if [[ "${PERRY_EFFECT_BASIC_ADVISORY:-0}" != "1" ]]; then
-    fixture_skip "$NAME" "advisory #802 signal; set PERRY_EFFECT_BASIC_ADVISORY=1 to compile/run"
-fi
+# #5890: this fixture now compiles and runs clean on `main`, so it runs by
+# default like the other tier-3 package smokes (drizzle-mysql, ink-link)
+# instead of skipping behind an opt-in flag. The CI job stays advisory
+# (`continue-on-error: true`) per the tier-3 convention. The historical
+# `PERRY_EFFECT_BASIC_ADVISORY=1` gate (added in #4391 when Effect reliably
+# failed) is gone; the env var is now a harmless no-op.
 
 fixture_setup "$NAME" || exit 1
 fixture_compile_run_diff "$NAME"

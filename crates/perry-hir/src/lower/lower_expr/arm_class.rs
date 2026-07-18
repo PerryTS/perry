@@ -187,11 +187,37 @@ pub(crate) fn lower_class_expr(
     // `make()`), which produce a distinct class object per call.
     let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
     if !at_module_top
-        && parent_expr.is_none()
         && (!named_statics.is_empty()
             || !static_symbol_registrations.is_empty()
             || !captured_args.is_empty())
     {
+        // #6438: a class expression WITH heritage (`class extends <expr>`) used
+        // to be excluded here and fell back to the shared-template `ClassRef`
+        // path — the very thing #1772's comment above warns about: it "shares
+        // one template class and `.ast` is undefined/clobbered". effect's
+        // Schema.ts hits exactly that shape:
+        //
+        //   function makeDeclareClass(typeParameters, ast) {
+        //     return class DeclareClass extends make(ast) {
+        //       static typeParameters = [...typeParameters]
+        //     }
+        //   }
+        //
+        // `makeDeclareClass` runs 5+ times during Schema.ts init, so all five
+        // DeclareClasses shared ONE `@perry_static_…__DeclareClass__typeParameters`
+        // module global whose initializer is hoisted to module init — where the
+        // enclosing `typeParameters` parameter is not in scope. Every instance
+        // then read `undefined`, and `this.typeParameters` inside the inherited
+        // static `annotations` fed `[...undefined]` → "TypeError: undefined is
+        // not iterable", taking down the whole @effect/platform HttpApi server.
+        //
+        // Heritage is orthogonal to per-evaluation static storage: sequence the
+        // dynamic-parent registration (which wires the runtime parent edge for
+        // method dispatch, exactly as the shared-template path below does)
+        // AHEAD of the fresh class object, so the parent edge is registered
+        // before the object is materialized and the Sequence still yields the
+        // class value as its last element.
+        //
         // #1787: snapshot the class's captured outer-scope values so a
         // later `new <classObjectValue>()` can run the instance-field
         // initializers / constructor body with the right environment.
@@ -201,15 +227,22 @@ pub(crate) fn lower_class_expr(
         // that same order as `LocalGet(outer_id)`, evaluated here where
         // the captures are still live.
         let fresh_expr = Expr::ClassExprFresh {
-            template: synthetic_name,
+            template: synthetic_name.clone(),
             named_statics,
             symbol_statics: static_symbol_registrations,
             captured_args,
         };
-        if computed_member_registrations.is_empty() {
+        let mut seq: Vec<Expr> = Vec::new();
+        if let Some(p) = parent_expr {
+            seq.push(Expr::RegisterClassParentDynamic {
+                class_name: synthetic_name,
+                parent_expr: p,
+            });
+        }
+        seq.extend(computed_member_registrations);
+        if seq.is_empty() {
             return Ok(fresh_expr);
         }
-        let mut seq = computed_member_registrations;
         seq.push(fresh_expr);
         return Ok(Expr::Sequence(seq));
     }

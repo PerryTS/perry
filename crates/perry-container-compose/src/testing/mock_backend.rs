@@ -381,4 +381,12 @@ impl ContainerBackend for MockBackend {
         }
         self.run(spec).await
     }
+
+    async fn create_with_security(
+        &self,
+        spec: &ContainerSpec,
+        _profile: &SecurityProfile,
+    ) -> Result<ContainerHandle> {
+        self.create(spec).await
+    }
 }

@@ -5,6 +5,7 @@
 
 pub mod analysis;
 pub mod audit;
+pub mod cap_fields;
 pub mod capability;
 mod class_accessors;
 pub mod deferral;

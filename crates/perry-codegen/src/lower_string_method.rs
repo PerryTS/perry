@@ -129,8 +129,26 @@ pub(crate) fn lower_string_method(
     let recv_box = if is_string_expr(ctx, object) {
         recv_box
     } else {
+        // A nullish receiver must throw the V8 member-access TypeError —
+        // `undefined.charAt(0)` reads `charAt` off `undefined` FIRST (ECMA-262
+        // §13.3), so it throws `Cannot read properties of undefined (reading
+        // 'charAt')` — NOT coerce `undefined`→`"undefined"` like the general
+        // `js_string_coerce`. The guarded helper does RequireObjectCoercible +
+        // ToString; pass the method name for the diagnostic.
+        let prop_idx = ctx.strings.intern(property);
+        let (prop_global, prop_len) = {
+            let entry = ctx.strings.entry(prop_idx);
+            (
+                format!("@{}", entry.bytes_global),
+                entry.byte_len.to_string(),
+            )
+        };
         let blk = ctx.block();
-        let coerced = blk.call(I64, "js_string_coerce", &[(DOUBLE, &recv_box)]);
+        let coerced = blk.call(
+            I64,
+            "js_string_coerce_method_this",
+            &[(DOUBLE, &recv_box), (PTR, &prop_global), (I64, &prop_len)],
+        );
         nanbox_string_inline(blk, &coerced)
     };
 

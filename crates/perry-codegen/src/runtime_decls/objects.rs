@@ -47,6 +47,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // (object_type = OBJECT_TYPE_CLASS) so typeof → "function" and
     // new/instanceof read class_id from it.
     module.declare_function("js_object_mark_class", VOID, &[I64]);
+    // #6438: pin a per-evaluation class object's own parent edge.
+    module.declare_function("js_class_object_pin_parent", VOID, &[I64, I32]);
     // Shape-cache-aware variant: pre-populates keys_array via SHAPE_INLINE_CACHE,
     // so subsequent field stores can use index-based set_field (skipping the
     // per-call linear key-search done by js_object_set_field_by_name).
@@ -78,6 +80,13 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "js_object_set_field_by_name_nonenum",
         VOID,
         &[I64, I64, DOUBLE],
+    );
+    // #6469: spec default Error-init for the synthesized standalone ctor of a
+    // no-own-ctor `class X extends Error {}` (this, message, name-string ptr).
+    module.declare_function(
+        "js_error_subclass_default_init",
+        VOID,
+        &[DOUBLE, DOUBLE, I64],
     );
     module.declare_function(
         "js_object_set_field_by_name_nonconfigurable",

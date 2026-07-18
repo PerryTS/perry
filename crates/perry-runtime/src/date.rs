@@ -244,6 +244,100 @@ fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i6
     }
 }
 
+/// The host IANA time-zone identifier (e.g. `"Europe/Berlin"`), matching what
+/// Node returns from `Intl.DateTimeFormat().resolvedOptions().timeZone`. Honors
+/// the `TZ` environment variable first (like libc / Node), then the OS default
+/// via the `/etc/localtime` symlink; falls back to `"UTC"`. Cached for the
+/// process lifetime (the host zone doesn't change under us).
+pub fn host_time_zone_name() -> &'static str {
+    use std::sync::OnceLock;
+    static TZ: OnceLock<String> = OnceLock::new();
+    TZ.get_or_init(|| {
+        if let Some(raw) = std::env::var_os("TZ") {
+            if let Some(s) = raw.to_str() {
+                // A `TZ` of `:Europe/Berlin` / `:/path/zoneinfo/Europe/Berlin`
+                // (leading colon) or a bare IANA id. Empty `TZ` means UTC.
+                let s = s.trim().strip_prefix(':').unwrap_or_else(|| s.trim());
+                if s.is_empty() {
+                    return "UTC".to_string();
+                }
+                if let Some(name) = iana_id_from_zoneinfo_path(s) {
+                    return name;
+                }
+                return s.to_string();
+            }
+        }
+        #[cfg(unix)]
+        {
+            if let Ok(target) = std::fs::read_link("/etc/localtime") {
+                if let Some(name) = iana_id_from_zoneinfo_path(&target.to_string_lossy()) {
+                    return name;
+                }
+            }
+        }
+        "UTC".to_string()
+    })
+    .as_str()
+}
+
+/// Extract the IANA id (`Europe/Berlin`) after a `.../zoneinfo/` path segment.
+/// Returns `None` when the path has no `zoneinfo/` component (e.g. a bare id).
+fn iana_id_from_zoneinfo_path(p: &str) -> Option<String> {
+    const MARKER: &str = "zoneinfo/";
+    p.rfind(MARKER).map(|i| p[i + MARKER.len()..].to_string())
+}
+
+/// Parse a fixed UTC offset like `"+02:00"`, `"-0500"`, `"+03"` into seconds
+/// east of UTC. Returns `None` for named zones / non-offset strings.
+fn parse_fixed_offset(tz: &str) -> Option<i64> {
+    let bytes = tz.as_bytes();
+    let sign = match bytes.first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let digits: String = tz[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+    let (h, m) = match digits.len() {
+        1 | 2 => (digits.parse::<i64>().ok()?, 0),
+        3 => (digits[..1].parse().ok()?, digits[1..].parse().ok()?),
+        4 => (digits[..2].parse().ok()?, digits[2..].parse().ok()?),
+        _ => return None,
+    };
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(sign * (h * 3600 + m * 60))
+}
+
+/// UTC offset (seconds east of UTC) for time-zone `tz` at instant `secs`,
+/// DST-aware, matching the OS tz database — the amount to add to a UTC timestamp
+/// to get the wall-clock time in `tz`. `UTC`/`GMT`/empty are 0; a fixed numeric
+/// offset is parsed directly; the process's own host zone is read straight from
+/// libc (thread-safe — it uses the process `TZ`). A named zone that is NOT the
+/// host zone can't be resolved without mutating the global libc `TZ` state
+/// (unsafe in a threaded runtime), so it falls back to 0 (UTC) — callers that
+/// need arbitrary named zones should gate a tzdb path. The common cases —
+/// default (host) zone, explicit host zone, UTC, and numeric offsets — are exact.
+pub fn zone_offset_seconds(tz: &str, secs: i64) -> i64 {
+    if tz.is_empty()
+        || tz.eq_ignore_ascii_case("UTC")
+        || tz.eq_ignore_ascii_case("GMT")
+        || tz == "Etc/UTC"
+        || tz == "Etc/GMT"
+    {
+        return 0;
+    }
+    if let Some(off) = parse_fixed_offset(tz) {
+        return off;
+    }
+    if tz == host_time_zone_name() {
+        // The process is already running in this zone; libc localtime applies
+        // the correct (DST-aware) offset for `secs`.
+        return timestamp_to_local_components(secs).6;
+    }
+    0
+}
+
 /// Get current timestamp in milliseconds (Date.now())
 #[no_mangle]
 pub extern "C" fn js_date_now() -> f64 {

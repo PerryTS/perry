@@ -139,6 +139,16 @@ pub fn transform_generator_function_with_extra_captures(
         await_async_generator_yield_operands(&mut func.body, next_local_id);
     }
 
+    // #6354: a per-iteration binding a closure WRITES that also outlives a
+    // suspend is fixed by neither #6345 path (a value snapshot would drop the
+    // write, so it stays in `mutable_captures` and keeps its shared box). Back
+    // each such binding with a one-element heap cell BEFORE the #6345 passes
+    // run: the cell reference is then a read-only per-iteration capture the
+    // snapshot below handles, while writes go to the shared element. See
+    // `per_iteration.rs` part 3.
+    let cell_ids = collect_written_suspended_loop_captures(&func.body);
+    rewrite_written_captures_to_cells(&mut func.body, &cell_ids);
+
     // #6345: decide which loop bindings must NOT be hoisted into the
     // activation-wide box frame, and snapshot the ones that outlive a suspend
     // into per-state locals. Both run BEFORE `linearize_body` so the inserted

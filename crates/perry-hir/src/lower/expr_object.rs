@@ -752,6 +752,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 args,
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             });
         }
     }
