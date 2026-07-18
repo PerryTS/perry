@@ -1999,6 +1999,18 @@ mod extension_resolution_tests {
     }
 
     #[test]
+    fn bare_specifier_resolves_to_cts_source() {
+        // A bare (extensionless) specifier must reach a `.cts` source directly,
+        // consistent with `.mts`/`.ts` — `.cts` is in `all_extensions`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("mod.cts"), "export const x = 1;\n").unwrap();
+
+        let resolved = resolve_with_extensions(&root.join("mod")).expect("resolve");
+        assert_eq!(resolved, root.join("mod.cts"));
+    }
+
+    #[test]
     fn ts_source_counterparts_map_each_js_extension_to_its_own_source() {
         assert_eq!(ts_source_counterparts("cjs").to_vec(), vec![".cts"]);
         assert_eq!(ts_source_counterparts("mjs").to_vec(), vec![".mts"]);

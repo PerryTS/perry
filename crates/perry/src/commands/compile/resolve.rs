@@ -432,8 +432,13 @@ fn ts_source_counterparts(js_ext: &str) -> &'static [&'static str] {
 /// Try to resolve a path with common extensions
 /// Prefers TypeScript source files over JavaScript for native compilation
 pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
-    // All extensions in order of preference
-    let all_extensions = [".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs", ".json"];
+    // All extensions in order of preference (TypeScript sources first, then
+    // their JS counterparts, then data). `.cts` sits with the other TS
+    // extensions so a bare specifier resolves to a `.cts` source directly,
+    // consistent with `.mts`/`.ts` — not only via the `.cjs` counterpart fallback.
+    let all_extensions = [
+        ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json",
+    ];
 
     // Check if the path has an explicit JS extension - if so, try its TS source
     // counterpart(s) first (`.cjs`→`.cts`, `.mjs`→`.mts`, `.js`→`.ts`/`.tsx`).
