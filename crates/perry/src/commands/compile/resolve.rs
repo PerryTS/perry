@@ -124,6 +124,8 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
 #[cfg(test)]
 mod bun_store_tests;
 #[cfg(test)]
+mod extension_resolution_tests;
+#[cfg(test)]
 mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
