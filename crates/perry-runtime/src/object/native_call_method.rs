@@ -875,15 +875,38 @@ pub unsafe extern "C" fn js_native_call_method(
             | "sort"
             | "forEach"
     ) {
-        let recv_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
-            if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
-                recv_ptr,
-                method_name,
-                args_ptr,
-                args_len,
-            ) {
-                return result;
+        // Only a pointer-shaped receiver can be the URLSearchParams heap
+        // object: a NaN-boxed pointer above the handle band, or a raw
+        // (untagged) heap address. A plain double must NOT have its low 48
+        // bits reinterpreted as an address — a Web Streams handle id
+        // (`1049102.0`, bits `0x4130_020E_0000_0000`) extracts to
+        // `(id - 2^20) * 2^32`, which crosses the macOS heap floor
+        // (`is_valid_obj_ptr`'s 2 TB) once ~512 stream ids are live and the
+        // shape probe then dereferences unmapped memory. That is the
+        // gscmaster request-12 SIGSEGV: React's render-stream `for await`
+        // resolves `@@asyncIterator` to a bound `values` re-dispatch that
+        // lands here with the numeric handle as receiver. On Linux the heap
+        // floor is 0x1000, so the very first dynamic stream call would probe
+        // low memory. Gated the same way as the AbortSignal block below;
+        // numeric stream receivers fall through to the primitive-methods
+        // stream dispatch (`stream_handle_probe`) that owns them.
+        let bits = object.to_bits();
+        let top16 = bits >> 48;
+        let payload = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        let pointer_shaped = (top16 == 0x7FFD
+            && crate::value::addr_class::is_above_handle_band(payload))
+            || (top16 == 0 && payload >= 0x10000);
+        if pointer_shaped {
+            let recv_ptr = payload as *mut ObjectHeader;
+            if crate::url::search_params::shape_is_url_search_params(recv_ptr) {
+                if let Some(result) = crate::url::search_params::url_search_params_dynamic_call(
+                    recv_ptr,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return result;
+                }
             }
         }
     }
