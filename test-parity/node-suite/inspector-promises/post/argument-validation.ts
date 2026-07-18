@@ -17,11 +17,14 @@ try {
     let pending: Promise<unknown> | undefined;
     let synchronous = false;
     try {
-      pending = run();
-    } catch {
-      synchronous = true;
-    }
-    try {
+      try {
+        pending = run();
+      } catch (inner) {
+        // synchronous throw: record it and re-throw so the real error (name/code)
+        // reaches the outer catch instead of being swallowed with pending undefined.
+        synchronous = true;
+        throw inner;
+      }
       await pending;
       console.log(label, "unexpected", synchronous);
     } catch (error) {

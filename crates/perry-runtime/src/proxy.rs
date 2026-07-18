@@ -1337,7 +1337,39 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // walk (O(n²)). Safe to fast-path when no inherited accessor /
                             // non-writable anywhere in the prototype chain could intercept
                             // this key.
-                            !crate::object::class_instance_set_may_intercept(addr, class_id, key)
+                            //
+                            // This receiver-based [[Set]] is the dominant real-code store
+                            // path (codegen emits js_put_value_set for many `obj.f = v`),
+                            // and it re-ran the full O(chain) interception walk on every
+                            // call. Consult the SHARED store-plan cache first: the verdict
+                            // is the identical `!class_instance_set_may_intercept(class_id,
+                            // key)` that `js_object_set_field_by_name` already memoizes, so
+                            // a hit on either path serves the other. Only trust a cached
+                            // class-chain verdict for instances whose chain matches the
+                            // class chain — SLOW_FLAGS above already excluded
+                            // frozen/sealed/descriptor bits; add the per-instance
+                            // divergence flags (setPrototypeOf override / null proto).
+                            const CHAIN_DIVERGE: u16 =
+                                crate::gc::OBJ_FLAG_PROTO_OVERRIDE | crate::gc::OBJ_FLAG_NULL_PROTO;
+                            let key_ptr = crate::builtins::js_string_coerce(key)
+                                as *const crate::StringHeader;
+                            let interned = crate::object::interned_key_ptr(key_ptr);
+                            let plan_eligible = header._reserved & CHAIN_DIVERGE == 0
+                                && class_id != crate::object::NATIVE_MODULE_CLASS_ID
+                                && interned != 0;
+                            if plan_eligible
+                                && crate::object::prop_plan::store_plan_check(class_id, interned)
+                            {
+                                true
+                            } else {
+                                let clear = !crate::object::class_instance_set_may_intercept(
+                                    addr, class_id, key,
+                                );
+                                if clear && plan_eligible {
+                                    crate::object::prop_plan::store_plan_record(class_id, interned);
+                                }
+                                clear
+                            }
                         };
                         if fast_safe {
                             target_set(target, key, value);

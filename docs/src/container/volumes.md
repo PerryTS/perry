@@ -125,19 +125,23 @@ remove it explicitly with `docker volume rm team-shared-cache`.
 
 ## Volume naming and ownership
 
-Perry doesn't currently namespace volume names by project — the name
-you write in the spec is the literal docker volume name. So
-`forgejo-pgdata` is created as the docker volume `forgejo-pgdata`, and
-two stacks both declaring `forgejo-pgdata` would share it.
-
-For multi-stack isolation, prefix the volume name with the project /
-stack identifier:
+Perry project-scopes volume (and network) names as `<project>_<name>`
+unless the volume is `external: true` or carries an explicit `name:`
+override — so `forgejo-pgdata` under project `forgejo` becomes the
+docker volume `forgejo_forgejo-pgdata`. The project identifier comes
+from `ComposeSpec.name` and defaults to `"perry-stack"` when omitted —
+so two stacks that *both* leave `name` unset and declare the same
+volume key still collide. Give each stack a distinct project name for
+multi-stack isolation:
 
 ```typescript,no-test
-volumes: {
-  "myapp-staging-pgdata":   { driver: "local" },
-  "myapp-production-pgdata": { driver: "local" },
-},
+await up({
+  name: "myapp-staging",              // → volume myapp-staging_pgdata
+  services: { /* … */ },
+  volumes: {
+    pgdata: { driver: "local" },
+  },
+});
 ```
 
 ## Inspecting volume state

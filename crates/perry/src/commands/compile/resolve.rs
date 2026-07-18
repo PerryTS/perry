@@ -124,6 +124,8 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
 #[cfg(test)]
 mod bun_store_tests;
 #[cfg(test)]
+mod extension_resolution_tests;
+#[cfg(test)]
 mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
@@ -410,28 +412,50 @@ pub(super) fn parse_package_specifier(specifier: &str) -> (String, Option<String
     (specifier.to_string(), None)
 }
 
+/// TypeScript *source* counterparts for an explicit JS module extension, in
+/// preference order. Node resolves an explicit `.cjs`/`.mjs` specifier to that
+/// exact file, and its only TypeScript source form is `.cts`/`.mts`
+/// respectively — never a bare `.ts`. Blanket-mapping every JS extension to
+/// `.ts`/`.tsx`/`.mts` made `require("./x.cjs")` prefer a co-located `x.ts`
+/// (e.g. a `.ts` entry requiring a same-basename `.cjs` webpack bundle), so the
+/// CJS module was never compiled and its exports read back `undefined` (#6535).
+/// `.js`/`.jsx` keep the broader preference Perry uses to compile a co-located
+/// `.ts` source in place of a stale `.js` build artifact. Non-JS extensions
+/// return an empty slice (no TS redirect).
+fn ts_source_counterparts(js_ext: &str) -> &'static [&'static str] {
+    match js_ext {
+        "js" | "jsx" => &[".ts", ".tsx", ".mts"],
+        "mjs" => &[".mts"],
+        "cjs" => &[".cts"],
+        _ => &[],
+    }
+}
+
 /// Try to resolve a path with common extensions
 /// Prefers TypeScript source files over JavaScript for native compilation
 pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
-    // TypeScript extensions to try (in order of preference)
-    let ts_extensions = [".ts", ".tsx", ".mts"];
-    // JavaScript extensions (fallback)
-    let _js_extensions = [".js", ".mjs", ".cjs"];
-    // All extensions in order of preference
-    let all_extensions = [".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs", ".json"];
+    // All extensions in order of preference (TypeScript sources first, then
+    // their JS counterparts, then data). `.cts` sits with the other TS
+    // extensions so a bare specifier resolves to a `.cts` source directly,
+    // consistent with `.mts`/`.ts` — not only via the `.cjs` counterpart fallback.
+    let all_extensions = [
+        ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json",
+    ];
 
-    // Check if the path has an explicit JS extension - if so, try TS equivalents first
+    // Check if the path has an explicit JS extension - if so, try its TS source
+    // counterpart(s) first (`.cjs`→`.cts`, `.mjs`→`.mts`, `.js`→`.ts`/`.tsx`).
     if let Some(ext) = base.extension().and_then(|e| e.to_str()) {
-        if matches!(ext, "js" | "mjs" | "cjs") {
-            // Strip the JS extension and try TS extensions first
+        let counterparts = ts_source_counterparts(ext);
+        if !counterparts.is_empty() {
+            // Strip the JS extension and try the TS counterpart(s) first
             let stem = base.with_extension("");
-            for ts_ext in ts_extensions {
+            for ts_ext in counterparts {
                 let ts_path = stem.with_extension(ts_ext.trim_start_matches('.'));
                 if ts_path.exists() && ts_path.is_file() {
                     return Some(ts_path);
                 }
             }
-            // If no TS file found, fall back to the original JS file
+            // If no TS source found, fall back to the original JS file
             if base.exists() && base.is_file() {
                 return Some(base.to_path_buf());
             }
@@ -440,11 +464,12 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
 
     // If it already exists as-is (and not a JS file that we already handled above)
     if base.exists() && base.is_file() {
-        // Even if it exists, check for TS version first
+        // Even if it exists, check for a TS source counterpart first
         if let Some(ext) = base.extension().and_then(|e| e.to_str()) {
-            if matches!(ext, "js" | "mjs" | "cjs") {
+            let counterparts = ts_source_counterparts(ext);
+            if !counterparts.is_empty() {
                 let stem = base.with_extension("");
-                for ts_ext in ts_extensions {
+                for ts_ext in counterparts {
                     let ts_path = stem.with_extension(ts_ext.trim_start_matches('.'));
                     if ts_path.exists() && ts_path.is_file() {
                         return Some(ts_path);
@@ -486,9 +511,10 @@ pub(super) fn resolve_with_extensions(base: &Path) -> Option<PathBuf> {
         // APPEND: `./stream-ops.web` + `.js` -> `./stream-ops.web.js`.
         let appended = PathBuf::from(format!("{}{}", path_str, ext));
         if appended.exists() && appended.is_file() {
-            // If we landed on a JS file, prefer a co-located TS source.
-            if matches!(ext, ".js" | ".mjs" | ".cjs") {
-                for ts_ext in ts_extensions {
+            // If we landed on a JS file, prefer its co-located TS source.
+            let counterparts = ts_source_counterparts(ext.trim_start_matches('.'));
+            if !counterparts.is_empty() {
+                for ts_ext in counterparts {
                     let ts_path = PathBuf::from(format!("{}{}", path_str, ts_ext));
                     if ts_path.exists() && ts_path.is_file() {
                         return Some(ts_path);

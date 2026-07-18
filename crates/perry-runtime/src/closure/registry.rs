@@ -200,6 +200,32 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
 /// `fixed_arity` (i.e., the closure has `fixed_arity` fixed params before the
 /// rest param, and its declared LLVM arity is `fixed_arity + 1` — the +1 is
 /// the rest array). Called once per closure literal at module init time.
+
+/// #6475: purge a func_ptr's cached dispatch strategy. The strategy caches
+/// (`DISPATCH_CACHE` + the single-slot `DISPATCH_LAST`) memoize the FIRST
+/// resolution per func_ptr — but effect's module-init graph calls `.pipe`
+/// (an `arguments`-object method) during init, and inside an import cycle
+/// such a call can precede the module's own `js_register_closure_*` batch.
+/// The pre-registration miss resolved to `Arity`/`Direct` and was cached
+/// FOREVER: every later `obj.pipe(a, b, c)` transmuted three positional args
+/// onto the 1-slot `arguments` ABI, so `arguments.length` read 1 and effect's
+/// `pipeArguments` applied only the first stage (`HttpApiBuilder.group`
+/// returned the wrong pipe stage; web.ts died with "Not a valid effect:
+/// undefined"). Registration is init-time-rare, so invalidating here keeps
+/// the hot-path caches lock-free and unchanged. Also covers the late arity
+/// registration for plain closures.
+fn invalidate_dispatch_strategy(func_ptr: *const u8) {
+    let key = func_ptr as usize;
+    DISPATCH_CACHE.with(|c| {
+        c.borrow_mut().remove(&key);
+    });
+    DISPATCH_LAST.with(|c| {
+        if c.get().0 == key {
+            c.set((0, DispatchStrategy::Direct));
+        }
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32) {
     if func_ptr.is_null() {
@@ -209,6 +235,7 @@ pub extern "C" fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32
         r.borrow_mut()
             .insert(func_ptr as usize, (fixed_arity, RestDispatchKind::UserRest));
     });
+    invalidate_dispatch_strategy(func_ptr);
 }
 
 /// Like `js_register_closure_rest`, but flags the rest param as the
@@ -231,6 +258,7 @@ pub extern "C" fn js_register_closure_synthetic_arguments(func_ptr: *const u8, f
             (fixed_arity, RestDispatchKind::SyntheticArguments),
         );
     });
+    invalidate_dispatch_strategy(func_ptr);
 }
 
 /// Register a function with both a user-declared rest parameter and a hidden
@@ -248,6 +276,7 @@ pub extern "C" fn js_register_closure_rest_and_arguments(func_ptr: *const u8, fi
             (fixed_arity, RestDispatchKind::UserRestAndArguments),
         );
     });
+    invalidate_dispatch_strategy(func_ptr);
 }
 
 #[no_mangle]
@@ -293,6 +322,9 @@ pub extern "C" fn js_register_closure_arity(func_ptr: *const u8, arity: u32) {
     CLOSURE_ARITY_REGISTRY.with(|r| {
         r.borrow_mut().insert(func_ptr as usize, arity);
     });
+    // #6475: same pre-registration cache-poisoning hazard as the rest-family
+    // registrations above — a call before this registration caches `Direct`.
+    invalidate_dispatch_strategy(func_ptr);
 }
 
 #[inline(always)]

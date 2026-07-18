@@ -267,6 +267,15 @@ unsafe fn dispatch_pointer_with_replacer(
         }
         return;
     }
+    // #6519: a nested WHATWG `URL` (the value the replacer passed through)
+    // serializes as its `href` string. Its `searchParams` field points back at
+    // the URL, so the generic object walk below would trip the circular-
+    // structure detector. The href is a plain string, so the emit is identical
+    // for compact and pretty walks. See `write_url_href_json`.
+    if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+        super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
+        return;
+    }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => {
             // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
@@ -357,6 +366,13 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
+    // GC-safety: same rooting discipline as the array variant above — the
+    // replacer / toJSON / getter callbacks can trigger a moving GC, so every
+    // raw pointer derived from `ptr` / `keys_arr` / `replacer` must be
+    // re-derived from a rewritable root after each callback.
+    let gc_scope = crate::gc::RuntimeHandleScope::new();
+    let obj_root = gc_scope.root_raw_const_ptr(ptr);
+    let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = (*obj).field_count;
     let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
@@ -366,11 +382,8 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         buf.push_str("{}");
         return;
     };
+    let keys_root = gc_scope.root_raw_const_ptr(keys_arr);
     let keys_len = (*keys_arr).length;
-    let keys_elements =
-        (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-    let fields_ptr =
-        (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
 
     // #5989 (mirrors the plain-stringify #307 fix): iterate up to keys_len, not
     // min(num_fields, keys_len). Objects with ≥9 fields cap field_count at the
@@ -388,6 +401,13 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     buf.push('{');
     let mut first = true;
     for f in 0..actual_fields {
+        let obj = obj_root.get_raw_const_ptr::<crate::ObjectHeader>();
+        let keys_elements = (keys_root.get_raw_const_ptr::<u8>())
+            .add(std::mem::size_of::<crate::ArrayHeader>())
+            as *const f64;
+        let fields_ptr = (obj_root.get_raw_const_ptr::<u8>())
+            .add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+        let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         // Skip non-enumerable own keys before invoking the replacer.
         if filter_non_enum
             && f < keys_len
@@ -440,7 +460,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             replacer,
             key_f64_for_replacer,
             field_after_to_json,
-            holder_value(ptr),
+            holder_value(obj_root.get_raw_const_ptr::<u8>()),
         );
         let replaced_bits = replaced.to_bits();
 
@@ -507,9 +527,20 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
+    // GC-safety (#gscmaster ~10-render crash): the replacer / toJSON callbacks
+    // run arbitrary JS, which allocates — a minor GC mid-loop can PROMOTE
+    // (move) this array, the replacer closure, or both. The raw `elements`
+    // base and `replacer` pointer would then dangle: the next `*elements
+    // .add(i)` read garbage f64s off the old nursery copy and the NaN-boxed
+    // "pointer" they produced faulted in whatever shape-probe touched it
+    // first (temporal::dispatch::get_property, url::search_params, …).
+    // Root both in a RuntimeHandleScope (rewritten on evacuation) and
+    // re-derive the raw pointers after every callback.
+    let gc_scope = crate::gc::RuntimeHandleScope::new();
+    let arr_root = gc_scope.root_raw_const_ptr(ptr);
+    let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let arr = ptr as *const crate::ArrayHeader;
     let len = (*arr).length;
-    let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
 
     if len == 0 {
         buf.push_str("[]");
@@ -530,6 +561,9 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
                 buf.push_str(indent);
             }
         }
+        let arr_base = arr_root.get_raw_const_ptr::<u8>();
+        let elements = arr_base.add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+        let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         let elem = *elements.add(i as usize);
         // #5989: a sparse-array HOLE slot must surface to toJSON / the replacer
         // as `undefined` (spec: Get() on a missing index yields undefined),
@@ -550,7 +584,12 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
         let key_f64 = nanbox_string_f64(idx_ptr);
 
         let elem_after_to_json = apply_to_json_keyed(elem, key_f64);
-        let replaced = call_replacer(replacer, key_f64, elem_after_to_json, holder_value(ptr));
+        let replaced = call_replacer(
+            replacer,
+            key_f64,
+            elem_after_to_json,
+            holder_value(arr_root.get_raw_const_ptr::<u8>()),
+        );
         let replaced_bits = replaced.to_bits();
 
         // Array holes / undefined / functions become null (per JSON spec).
@@ -776,6 +815,14 @@ pub(crate) unsafe fn stringify_value_pretty(
         // `{"field0":null}`. Detected by the header magic (never a raw deref).
         if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
             buf.push_str("{}");
+            return;
+        }
+        // #6519: a nested WHATWG `URL` must serialize as its `href` string, not
+        // be walked as a plain object (its `searchParams` back-reference trips
+        // the circular-structure detector). Mirrors the compact-path branch in
+        // `stringify_object_inner`; see `write_url_href_json`.
+        if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+            super::stringify::write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
             return;
         }
         if matches!(

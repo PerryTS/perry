@@ -8,11 +8,14 @@ try {
   let pending: Promise<unknown> | undefined;
   let synchronous = false;
   try {
-    pending = session.post("Runtime.enable", params);
-  } catch {
-    synchronous = true;
-  }
-  try {
+    try {
+      pending = session.post("Runtime.enable", params);
+    } catch (inner) {
+      // synchronous throw: record it and re-throw so the real error reaches the
+      // outer catch instead of being swallowed with pending undefined.
+      synchronous = true;
+      throw inner;
+    }
     await pending;
     console.log("unexpected resolution");
   } catch (error) {

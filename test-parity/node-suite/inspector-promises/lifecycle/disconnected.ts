@@ -9,11 +9,14 @@ for (const label of ["before", "after"] as const) {
   let pending: Promise<unknown> | undefined;
   let synchronous = false;
   try {
-    pending = session.post("Runtime.enable");
-  } catch {
-    synchronous = true;
-  }
-  try {
+    try {
+      pending = session.post("Runtime.enable");
+    } catch (inner) {
+      // synchronous throw: record it and re-throw so the real error reaches the
+      // outer catch instead of being swallowed with pending undefined.
+      synchronous = true;
+      throw inner;
+    }
     await pending;
     console.log(label, "unexpected");
   } catch (error) {
