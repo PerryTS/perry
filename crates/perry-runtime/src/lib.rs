@@ -94,6 +94,12 @@ pub mod yoga;
 pub mod node_v8;
 // #3127/#3128/#3130/#3283: public `node:vm` import/require and narrowed execution.
 pub mod node_vm;
+// #6559: scoped tree-walking interpreter behind `new Function(p1, …, body)`
+// with a runtime-constructed body (ajv / fast-json-stringify / find-my-way
+// codegen). Parses via perry-parser (SWC) and bridges into the real runtime
+// value model in both directions.
+#[cfg(feature = "dyn-eval")]
+pub mod dyn_eval;
 // #2935: surface the zlib option-level resolver at the crate root so
 // perry-stdlib's bundled codecs (and the `perry-ext-zlib` extern) can reach it.
 pub use node_submodules::{

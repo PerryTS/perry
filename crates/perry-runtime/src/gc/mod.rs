@@ -490,6 +490,12 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_class_capture_value_roots_mut);
     gc_register_mutable_root_scanner(crate::node_vm::scan_vm_roots_mut);
+    // #6559: the dyn-eval interpreter's rooted value stack (environments,
+    // temporaries, arguments of in-flight interpreted frames). Mark +
+    // REWRITE — interpreter state must survive moving collections triggered
+    // from inside interpreted code.
+    #[cfg(feature = "dyn-eval")]
+    gc_register_mutable_root_scanner(crate::dyn_eval::scan_dyn_eval_roots_mut);
     gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
     gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);

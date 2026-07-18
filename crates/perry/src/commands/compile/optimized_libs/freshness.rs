@@ -63,7 +63,7 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|dyneval={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -77,6 +77,9 @@ pub(crate) fn auto_optimized_cache_key(
         ctx.uses_intl_locale,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
+        // #6559: dyn-eval presence changes the built archive, so it must
+        // key the freshness stamp like every other runtime feature toggle.
+        perry_hir::has_deferred_dynamic_code_sites(),
         env!("CARGO_PKG_VERSION"),
     )
 }
@@ -147,6 +150,18 @@ pub(crate) fn auto_optimized_cross_features(
     }
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());
+    }
+    // #6559: a deferred dynamic-code site (`eval(...)` / `new Function(...)`
+    // with a runtime body) means the binary may construct functions from
+    // runtime strings — the optimized runtime must carry the dyn-eval
+    // interpreter. The generated code of the schema-codegen ecosystem (ajv)
+    // also leans on regex literals (`key.replace(/~/g, …)`), so the regex
+    // engine rides along even when the program's own source never uses one.
+    if perry_hir::has_deferred_dynamic_code_sites() {
+        cross_features.push("perry-runtime/dyn-eval".to_string());
+        if !ctx.uses_regex {
+            cross_features.push("perry-runtime/regex-engine".to_string());
+        }
     }
     // Compile OUT perry-runtime's no-op fetch stubs (`js_fetch_with_options` /
     // `js_headers_new` / `js_request_new`, gated `#[cfg(not(feature =

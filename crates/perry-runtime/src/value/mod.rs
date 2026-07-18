@@ -103,8 +103,9 @@ pub use nanbox::{
 // ----- Dynamic arithmetic dispatch (BigInt vs float) -----
 pub use dynamic_arith::{
     js_dynamic_add, js_dynamic_bitand, js_dynamic_bitor, js_dynamic_bitxor, js_dynamic_div,
-    js_dynamic_mod, js_dynamic_mul, js_dynamic_neg, js_dynamic_shl, js_dynamic_shr,
-    js_dynamic_string_or_number_add, js_dynamic_sub, js_numeric_step, js_to_numeric,
+    js_dynamic_mod, js_dynamic_mul, js_dynamic_neg, js_dynamic_pow, js_dynamic_shl,
+    js_dynamic_shr, js_dynamic_string_or_number_add, js_dynamic_sub, js_dynamic_ushr,
+    js_numeric_step, js_to_numeric,
 };
 
 // ----- Dynamic index get/set + bare-NaN check -----

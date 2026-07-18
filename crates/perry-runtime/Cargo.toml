@@ -19,7 +19,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "dyn-eval"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -120,6 +120,17 @@ ohos-napi = []
 # this on only when the user's program references `WebAssembly.*`, so non-wasm
 # programs don't pay an unresolvable-symbol penalty at link time.
 wasm-host = []
+# #6559: runtime dynamic-code evaluation — `new Function(p1, …, body)` with a
+# RUNTIME-constructed body parses the generated source with perry-parser (SWC)
+# and runs it through a scoped tree-walking interpreter (`src/dyn_eval/`).
+# This is what the schema-codegen ecosystem (ajv compiled validators,
+# fast-json-stringify serializers, find-my-way router matchers — i.e. every
+# fastify app) requires: those libraries have NO non-codegen fallback.
+# Pulls the SWC parser tree into libperry_runtime.a, so it is a gated feature:
+# default builds carry it; the auto-optimize path enables it only when the
+# program contains a deferred dynamic-eval site (the #5206 notice machinery
+# already counts them).
+dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 
 [dependencies]
 thiserror.workspace = true
@@ -137,6 +148,11 @@ base64 = "0.22"
 hostname = { version = "0.4", optional = true }
 dirs = { version = "6", optional = true }
 lazy_static = "1.4"
+# #6559 `dyn-eval`: reuse the compiler's own SWC-based parser for runtime-
+# generated `new Function` bodies (no second parser). perry-parser depends
+# only on swc + perry-diagnostics — no cycle back into perry-runtime.
+perry-parser = { path = "../perry-parser", optional = true }
+perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 
 # TC39 Temporal API (#4686). Pure-Rust date/time engine (the same one V8
 # uses). We write no calendar/duration/timezone math — temporal_rs owns it;
