@@ -9,20 +9,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Write a `compilePackages`-shaped package that ships `dist/index.js` +
-/// `dist/index.d.ts` alongside the original `src/index.ts`. Map files are added
-/// per-test. Returns the package dir and the canonical original source path.
-fn write_dist_package(root: &Path) -> (PathBuf, PathBuf) {
+/// `dist/index.d.ts`, but NO source file — each test writes the source it
+/// needs. Deliberately writes no `src/index.ts`, so the positive map tests
+/// below fail unless map-guided resolution actually fires (a `src/index.ts`
+/// would let the legacy naming convention pass them regardless).
+fn write_dist_package(root: &Path) -> PathBuf {
     let package_dir = root.join("node_modules").join("typed-dist");
     fs::create_dir_all(package_dir.join("dist")).expect("mkdir dist");
-    fs::create_dir_all(package_dir.join("src")).expect("mkdir src");
     fs::write(package_dir.join("dist/index.js"), "export class Codex {}\n").expect("js");
     fs::write(
         package_dir.join("dist/index.d.ts"),
         "export declare class Codex {}\n",
     )
     .expect("dts");
-    let original = package_dir.join("src/index.ts");
-    fs::write(&original, "export class Codex {}\n").expect("ts");
     fs::write(
         package_dir.join("package.json"),
         serde_json::json!({
@@ -35,7 +34,16 @@ fn write_dist_package(root: &Path) -> (PathBuf, PathBuf) {
         .to_string(),
     )
     .expect("package.json");
-    (package_dir, original.canonicalize().expect("canonical src"))
+    package_dir
+}
+
+/// Write a TypeScript source at `package_dir/rel` (creating parents) and return
+/// its canonical path.
+fn write_source(package_dir: &Path, rel: &str) -> PathBuf {
+    let path = package_dir.join(rel);
+    fs::create_dir_all(path.parent().expect("source parent")).expect("mkdir source parent");
+    fs::write(&path, "export class Codex {}\n").expect("write source");
+    path.canonicalize().expect("canonical source")
 }
 
 /// Canonicalize the result so the assertion is robust both to the naming-
@@ -49,14 +57,17 @@ fn resolved_source(package_dir: &Path) -> Option<PathBuf> {
 #[test]
 fn declaration_map_redirects_to_original_typescript_source() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (package_dir, original) = write_dist_package(dir.path());
+    let package_dir = write_dist_package(dir.path());
+    // Source lives at a non-conventional path the naming heuristics can't find
+    // (not `src/`, not a `dist/ → src/` mirror) — only the map records it.
+    let original = write_source(&package_dir, "internal/entry.ts");
     fs::write(
         package_dir.join("dist/index.d.ts.map"),
         serde_json::json!({
             "version": 3,
             "file": "index.d.ts",
             "sourceRoot": "",
-            "sources": ["../src/index.ts"],
+            "sources": ["../internal/entry.ts"],
             "names": []
         })
         .to_string(),
@@ -69,13 +80,14 @@ fn declaration_map_redirects_to_original_typescript_source() {
 #[test]
 fn source_map_redirects_when_no_declaration_map() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (package_dir, original) = write_dist_package(dir.path());
+    let package_dir = write_dist_package(dir.path());
+    let original = write_source(&package_dir, "internal/entry.ts");
     fs::write(
         package_dir.join("dist/index.js.map"),
         serde_json::json!({
             "version": 3,
             "file": "index.js",
-            "sources": ["../src/index.ts"],
+            "sources": ["../internal/entry.ts"],
             "names": [],
             "mappings": ""
         })
@@ -89,15 +101,16 @@ fn source_map_redirects_when_no_declaration_map() {
 #[test]
 fn source_root_is_prepended_to_map_sources() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (package_dir, original) = write_dist_package(dir.path());
-    // sourceRoot "../src" + source "index.ts", both relative to dist/.
+    let package_dir = write_dist_package(dir.path());
+    let original = write_source(&package_dir, "internal/entry.ts");
+    // sourceRoot "../internal" + source "entry.ts", both relative to dist/.
     fs::write(
         package_dir.join("dist/index.js.map"),
         serde_json::json!({
             "version": 3,
             "file": "index.js",
-            "sourceRoot": "../src",
-            "sources": ["index.ts"],
+            "sourceRoot": "../internal",
+            "sources": ["entry.ts"],
             "names": [],
             "mappings": ""
         })
@@ -146,16 +159,18 @@ fn bundled_multi_source_map_is_not_redirected() {
 #[test]
 fn map_pointing_at_missing_source_falls_back_to_convention() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (package_dir, original) = write_dist_package(dir.path());
-    // A dist-only tarball: the map still records `../original/index.ts`, but
+    let package_dir = write_dist_package(dir.path());
+    // The convention target that must win when the map is unusable.
+    let convention = write_source(&package_dir, "src/index.ts");
+    // A dist-only tarball: the map still records `../original/missing.ts`, but
     // that file was never published. Resolution must not break — it falls
-    // through to the `src/index.ts` naming convention, which is present.
+    // through to the `src/index.ts` naming convention.
     fs::write(
         package_dir.join("dist/index.js.map"),
         serde_json::json!({
             "version": 3,
             "file": "index.js",
-            "sources": ["../original/index.ts"],
+            "sources": ["../original/missing.ts"],
             "names": [],
             "mappings": ""
         })
@@ -163,7 +178,7 @@ fn map_pointing_at_missing_source_falls_back_to_convention() {
     )
     .expect("write js.map");
 
-    assert_eq!(resolved_source(&package_dir), Some(original));
+    assert_eq!(resolved_source(&package_dir), Some(convention));
 }
 
 #[test]
@@ -171,6 +186,7 @@ fn no_map_uses_existing_src_index_convention() {
     // With no map at all, behavior is unchanged: the `src/index.ts` convention
     // still wins. Guards against a regression in the reorder.
     let dir = tempfile::tempdir().expect("tempdir");
-    let (package_dir, original) = write_dist_package(dir.path());
-    assert_eq!(resolved_source(&package_dir), Some(original));
+    let package_dir = write_dist_package(dir.path());
+    let convention = write_source(&package_dir, "src/index.ts");
+    assert_eq!(resolved_source(&package_dir), Some(convention));
 }
