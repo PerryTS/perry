@@ -116,6 +116,15 @@ struct LiveChild {
     abort_listener_bits: u64,
     /// Signal number used when `options.signal` aborts this child.
     abort_kill_signal: i32,
+    /// Windows: the signal number of a successful `kill()` / timeout / abort
+    /// termination. On Windows the child dies via `TerminateProcess(h, 1)`, so
+    /// the waiter's `Child::wait()` reports the synthetic exit code 1 and no
+    /// signal; Node (via libuv's `uv_process_kill`) instead reports
+    /// `code: null, signal: <requested>`. Recording the requested signal here
+    /// lets the pump substitute the Node shape when the `Exited` event
+    /// arrives, keeping the JS-visible exit identical to the unix arm's.
+    #[cfg(windows)]
+    win_kill_signal: Option<i32>,
     /// #4912: present for children launched by the async `exec`/`execFile`
     /// callback form. When set, the pump buffers stdout/stderr instead of
     /// emitting stream events and fires this single `(err, stdout, stderr)`
@@ -364,6 +373,8 @@ pub(super) fn cp_register_live_child(
                 abort_signal_bits: 0,
                 abort_listener_bits: 0,
                 abort_kill_signal: libc_sigterm(),
+                #[cfg(windows)]
+                win_kill_signal: None,
                 exec: None,
             },
         );
@@ -443,8 +454,11 @@ fn cp_signal_number_from_value(signal: f64) -> i32 {
     }
     #[cfg(not(unix))]
     {
-        let _ = signal;
-        libc_sigterm()
+        // Windows: parse names/numbers with the shared cross-platform mapper
+        // so `killSignal: 'SIGKILL'` round-trips into the exit event's
+        // `signal` field. The number is only a reporting token — every
+        // terminating signal degrades to `TerminateProcess` at the kill site.
+        cp_signal_from_value(signal)
     }
 }
 
@@ -837,6 +851,8 @@ pub(super) fn cp_exec_async(
                         abort_signal_bits: 0,
                         abort_listener_bits: 0,
                         abort_kill_signal: libc_sigterm(),
+                        #[cfg(windows)]
+                        win_kill_signal: None,
                         exec: Some(exec),
                     },
                 );
@@ -1072,6 +1088,17 @@ fn cp_reactor_pump_inner() {
             } => {
                 if let Some(map) = cp_live_lock().as_mut() {
                     if let Some(lc) = map.get_mut(&handle) {
+                        // Windows: a kill()/timeout/abort termination surfaces
+                        // here as the synthetic `TerminateProcess` exit code
+                        // with no signal. Substitute the signal recorded at
+                        // kill time so the exit event carries Node's
+                        // `(code: null, signal: <requested>)` shape — see
+                        // `LiveChild::win_kill_signal`.
+                        #[cfg(windows)]
+                        let (code, signal) = match lc.win_kill_signal {
+                            Some(sig) if signal.is_none() => (None, Some(sig)),
+                            _ => (code, signal),
+                        };
                         lc.exited = Some((code, signal));
                     }
                 }
@@ -1259,6 +1286,67 @@ pub(super) fn cp_live_stdin_close(handle: u64) {
     }
 }
 
+/// Terminate (or probe) a process by pid on Windows — the structural analogue
+/// of the unix arm's `libc::kill(pid, sig)`. The reactor cannot reach the
+/// `Child` here (the waiter thread owns it, blocked in `Child::wait()`), so it
+/// acts on the pid alone, the way libuv's `uv_kill` does:
+///
+/// * `signum == 0` — the POSIX existence probe: no side effect, just "is the
+///   process still alive?" (`GetExitCodeProcess` still reporting
+///   `STILL_ACTIVE` on a `PROCESS_QUERY_LIMITED_INFORMATION` handle).
+/// * any other signal — degrades to `TerminateProcess(handle, 1)`, exactly
+///   like Node on Windows (there are no POSIX signals to deliver).
+///
+/// Returns whether the operation succeeded (the `libc::kill(..) == 0`
+/// analogue). The terminated child is reaped by the waiter thread as usual —
+/// `Child::wait()` returns once the process dies — so the existing
+/// Eof → Exited → exit/close pipeline completes naturally.
+#[cfg(windows)]
+fn cp_win_kill(pid: i32, signum: i32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_TERMINATE,
+    };
+    if pid <= 0 {
+        return false;
+    }
+    if signum == 0 {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+        if handle.is_null() {
+            return false;
+        }
+        let mut code: u32 = 0;
+        let alive =
+            unsafe { GetExitCodeProcess(handle, &mut code) } != 0 && code == STILL_ACTIVE as u32;
+        unsafe { CloseHandle(handle) };
+        return alive;
+    }
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid as u32) };
+    if handle.is_null() {
+        return false;
+    }
+    let ok = unsafe { TerminateProcess(handle, 1) } != 0;
+    unsafe { CloseHandle(handle) };
+    ok
+}
+
+/// Record a successful Windows termination so the waiter's eventual `Exited`
+/// event reports Node's `(code: null, signal: <requested>)` shape instead of
+/// the synthetic `TerminateProcess` exit code — see
+/// `LiveChild::win_kill_signal`.
+#[cfg(windows)]
+fn cp_note_win_kill(handle: u64, signum: i32) {
+    if signum == 0 {
+        return; // sig-0 probe — nothing was terminated
+    }
+    if let Some(map) = cp_live_lock().as_mut() {
+        if let Some(lc) = map.get_mut(&handle) {
+            lc.win_kill_signal = Some(signum);
+        }
+    }
+}
+
 fn cp_live_kill_signum(handle: u64, signum: i32) -> Option<u64> {
     let (pid, cp_bits) = {
         let guard = cp_live_lock();
@@ -1276,7 +1364,16 @@ fn cp_live_kill_signum(handle: u64, signum: i32) -> Option<u64> {
             None
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        if cp_win_kill(pid, signum) {
+            cp_note_win_kill(handle, signum);
+            Some(cp_bits)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (pid, signum, cp_bits);
         None
@@ -1304,7 +1401,16 @@ fn cp_live_kill_signal(handle: u64, signum: i32) -> bool {
     {
         unsafe { libc::kill(pid, signum) == 0 }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        if cp_win_kill(pid, signum) {
+            cp_note_win_kill(handle, signum);
+            true
+        } else {
+            false
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (pid, signum);
         false
@@ -1388,5 +1494,116 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 visitor.visit_nanbox_u64_slot(&mut exec.cb_bits);
             }
         }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+/// Windows termination tests. `child.kill()`, spawn `{ timeout }`,
+/// `AbortSignal`, and the exec `maxBuffer` breach all funnel through
+/// `cp_live_kill_signum` / `cp_live_kill_signal` → `cp_win_kill`, so
+/// terminating one live child through the shared path exercises the machinery
+/// all of them rely on.
+#[cfg(all(test, windows))]
+mod windows_kill_tests {
+    use super::*;
+
+    /// Raw `cp_win_kill`: sig-0 existence probe on a live child, terminate on
+    /// a real signal, probe failure after death.
+    #[test]
+    fn win_kill_probe_and_terminate() {
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let pid = child.id() as i32;
+
+        // POSIX `kill(pid, 0)` analogue: existence probe, no side effect.
+        assert!(cp_win_kill(pid, 0), "probe should see the live child");
+
+        // Any terminating signal degrades to `TerminateProcess(handle, 1)`.
+        assert!(cp_win_kill(pid, 15), "terminate should succeed");
+        let status = child.wait().expect("wait after TerminateProcess");
+        assert_eq!(status.code(), Some(1), "TerminateProcess exit code");
+
+        // `child` still holds a process handle, so the pid cannot have been
+        // recycled: the probe now deterministically reports "not alive".
+        assert!(!cp_win_kill(pid, 0), "probe should fail once terminated");
+    }
+
+    /// Registry-level liveness: the pump removes the entry once the child has
+    /// fully closed (exit reported + both streams at EOF).
+    fn handle_is_live(handle: u64) -> bool {
+        cp_live_lock()
+            .as_ref()
+            .is_some_and(|map| map.contains_key(&handle))
+    }
+
+    /// End-to-end through the reactor: spawn a long-running child via the
+    /// spawn FFI, terminate it through the same shared path `child.kill()` /
+    /// `{ timeout }` / `AbortSignal` use, and drive the pump until the exit
+    /// machinery completes. Asserts the Node-shaped exit for a Windows kill:
+    /// `exitCode: null`, `signalCode: 'SIGTERM'`.
+    #[test]
+    fn reactor_kill_terminates_live_child() {
+        // `ping -n 30 127.0.0.1` runs ~29s if not killed — long enough that a
+        // pass can only come from the kill path, short enough to bound a
+        // failure without hanging the suite.
+        let cmd = "ping";
+        let cmd_ptr = crate::string::js_string_from_bytes(cmd.as_ptr(), cmd.len() as u32);
+        let mut args = crate::array::js_array_alloc(3);
+        for a in ["-n", "30", "127.0.0.1"] {
+            let s = crate::string::js_string_from_bytes(a.as_ptr(), a.len() as u32);
+            args = crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(s as i64));
+        }
+        let start = std::time::Instant::now();
+        let cp = js_child_process_spawn_streams(cmd_ptr as i64, args as i64, 0);
+
+        let pid = cp_get_field(cp, b"pid");
+        assert!(pid > 0.0, "spawn should set a real pid, got {pid}");
+        let handle = cp_get_field(cp, b"__cpHandle") as u64;
+        assert!(handle_is_live(handle));
+
+        // Phase 0 marks `spawned` — Phase B refuses to close before that.
+        cp_reactor_pump();
+
+        // Kill through the shared path (undefined signal → SIGTERM).
+        assert!(
+            cp_live_kill(handle, cp_undefined()),
+            "kill should be delivered"
+        );
+
+        // Drive the pump until the exit machinery completes: waiter reaps →
+        // `Exited` event → exit/close emitted → registry entry removed.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while handle_is_live(handle) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child did not close within 15s of kill()"
+            );
+            cp_reactor_pump();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Well under ping's ~29s natural runtime — it died from the kill.
+        assert!(start.elapsed() < Duration::from_secs(20));
+
+        // Node's Windows kill shape: exitCode null, signalCode 'SIGTERM'
+        // (the requested signal, not TerminateProcess's synthetic exit code).
+        assert_eq!(
+            cp_get_field(cp, b"exitCode").to_bits(),
+            TAG_NULL_F64.to_bits(),
+            "exitCode should be null after a signal kill"
+        );
+        assert_eq!(
+            cp_value_to_string(cp_get_field(cp, b"signalCode")).as_deref(),
+            Some("SIGTERM")
+        );
+
+        // The child is reaped and deregistered — a second kill reports false.
+        assert!(!cp_live_kill(handle, cp_undefined()));
     }
 }
