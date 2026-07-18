@@ -2,25 +2,26 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2834 entries across 119 modules.
+Total: 2855 entries across 121 modules.
 
 ## Modules
 
-- [`@lydell/node-pty`](#-lydell-node-pty)
-- [`@perryts/pdf`](#-perryts-pdf)
-- [`__disposable__`](#--disposable--)
+- [`@lydell/node-pty`](#lydellnode-pty)
+- [`@perryts/pdf`](#perrytspdf)
+- [`__disposable__`](#__disposable__)
 - [`argon2`](#argon2)
 - [`assert`](#assert)
-- [`assert/strict`](#assert-strict)
-- [`async_hooks`](#async-hooks)
+- [`assert/strict`](#assertstrict)
+- [`async_hooks`](#async_hooks)
 - [`axios`](#axios)
 - [`bcrypt`](#bcrypt)
 - [`better-sqlite3`](#better-sqlite3)
-- [`bignumber.js`](#bignumber-js)
+- [`bignumber.js`](#bignumberjs)
 - [`buffer`](#buffer)
-- [`bun:ffi`](#bun-ffi)
+- [`bun`](#bun)
+- [`bun:ffi`](#bunffi)
 - [`cheerio`](#cheerio)
-- [`child_process`](#child-process)
+- [`child_process`](#child_process)
 - [`cluster`](#cluster)
 - [`commander`](#commander)
 - [`console`](#console)
@@ -29,11 +30,11 @@ Total: 2834 entries across 119 modules.
 - [`crypto`](#crypto)
 - [`date-fns`](#date-fns)
 - [`dayjs`](#dayjs)
-- [`decimal.js`](#decimal-js)
+- [`decimal.js`](#decimaljs)
 - [`dgram`](#dgram)
-- [`diagnostics_channel`](#diagnostics-channel)
+- [`diagnostics_channel`](#diagnostics_channel)
 - [`dns`](#dns)
-- [`dns/promises`](#dns-promises)
+- [`dns/promises`](#dnspromises)
 - [`domain`](#domain)
 - [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
@@ -42,12 +43,12 @@ Total: 2834 entries across 119 modules.
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`fs`](#fs)
-- [`fs/promises`](#fs-promises)
+- [`fs/promises`](#fspromises)
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
 - [`inspector`](#inspector)
-- [`inspector/promises`](#inspector-promises)
+- [`inspector/promises`](#inspectorpromises)
 - [`ioredis`](#ioredis)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
@@ -57,7 +58,7 @@ Total: 2834 entries across 119 modules.
 - [`moment`](#moment)
 - [`mongodb`](#mongodb)
 - [`mysql2`](#mysql2)
-- [`mysql2/promise`](#mysql2-promise)
+- [`mysql2/promise`](#mysql2promise)
 - [`nanoid`](#nanoid)
 - [`net`](#net)
 - [`node-cron`](#node-cron)
@@ -66,35 +67,35 @@ Total: 2834 entries across 119 modules.
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
-- [`path/posix`](#path-posix)
-- [`path/win32`](#path-win32)
-- [`perf_hooks`](#perf-hooks)
+- [`path/posix`](#pathposix)
+- [`path/win32`](#pathwin32)
+- [`perf_hooks`](#perf_hooks)
 - [`perry`](#perry)
-- [`perry/ads`](#perry-ads)
-- [`perry/audio`](#perry-audio)
-- [`perry/background`](#perry-background)
-- [`perry/compose`](#perry-compose)
-- [`perry/container`](#perry-container)
-- [`perry/container-compose`](#perry-container-compose)
-- [`perry/gc`](#perry-gc)
-- [`perry/i18n`](#perry-i18n)
-- [`perry/media`](#perry-media)
-- [`perry/plugin`](#perry-plugin)
-- [`perry/system`](#perry-system)
-- [`perry/thread`](#perry-thread)
-- [`perry/tui`](#perry-tui)
-- [`perry/ui`](#perry-ui)
-- [`perry/updater`](#perry-updater)
-- [`perry/widget`](#perry-widget)
-- [`perry/workloads`](#perry-workloads)
-- [`perry/yoga`](#perry-yoga)
+- [`perry/ads`](#perryads)
+- [`perry/audio`](#perryaudio)
+- [`perry/background`](#perrybackground)
+- [`perry/compose`](#perrycompose)
+- [`perry/container`](#perrycontainer)
+- [`perry/container-compose`](#perrycontainer-compose)
+- [`perry/gc`](#perrygc)
+- [`perry/i18n`](#perryi18n)
+- [`perry/media`](#perrymedia)
+- [`perry/plugin`](#perryplugin)
+- [`perry/system`](#perrysystem)
+- [`perry/thread`](#perrythread)
+- [`perry/tui`](#perrytui)
+- [`perry/ui`](#perryui)
+- [`perry/updater`](#perryupdater)
+- [`perry/widget`](#perrywidget)
+- [`perry/workloads`](#perryworkloads)
+- [`perry/yoga`](#perryyoga)
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
 - [`querystring`](#querystring)
 - [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
-- [`readline/promises`](#readline-promises)
+- [`readline/promises`](#readlinepromises)
 - [`redis`](#redis)
 - [`repl`](#repl)
 - [`sea`](#sea)
@@ -102,28 +103,28 @@ Total: 2834 entries across 119 modules.
 - [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
 - [`stream`](#stream)
-- [`stream/consumers`](#stream-consumers)
-- [`stream/promises`](#stream-promises)
-- [`stream/web`](#stream-web)
+- [`stream/consumers`](#streamconsumers)
+- [`stream/promises`](#streampromises)
+- [`stream/web`](#streamweb)
 - [`streams`](#streams)
-- [`string_decoder`](#string-decoder)
+- [`string_decoder`](#string_decoder)
 - [`sys`](#sys)
 - [`test`](#test)
-- [`test/reporters`](#test-reporters)
+- [`test/reporters`](#testreporters)
 - [`timers`](#timers)
-- [`timers/promises`](#timers-promises)
+- [`timers/promises`](#timerspromises)
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
 - [`url`](#url)
 - [`util`](#util)
-- [`util/types`](#util-types)
+- [`util/types`](#utiltypes)
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
 - [`vm`](#vm)
 - [`wasi`](#wasi)
-- [`worker_threads`](#worker-threads)
+- [`worker_threads`](#worker_threads)
 - [`ws`](#ws)
 - [`zlib`](#zlib)
 
@@ -340,20 +341,37 @@ Total: 2834 entries across 119 modules.
 - `kMaxLength`
 - `kStringMaxLength`
 
+## `bun`
+
+### Methods
+
+- `file` — module
+- `fileURLToPath` — module
+- `hash` — module
+- `pathToFileURL` — module
+- `stringWidth` — module
+- `write` — module
+
+### Properties
+
+- `stderr`
+- `stdin`
+- `stdout`
+
 ## `bun:ffi`
 
 ### Methods
 
-- `CFunction` — module
+- `CFunction` — module ⚠ **stub** — stage 3 — not yet implemented, throws at runtime (#6562)
 - `CString` — module
-- `JSCallback` — module
+- `JSCallback` — module ⚠ **stub** — stage 3 — not yet implemented, throws at runtime (#6562)
 - `dlopen` — module
-- `linkSymbols` — module
+- `linkSymbols` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
 - `ptr` — module
-- `read` — module
-- `toArrayBuffer` — module
-- `toBuffer` — module
-- `viewSource` — module
+- `read` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
+- `toArrayBuffer` — module ⚠ **stub** — stage 2 — not yet implemented, throws at runtime (#6562)
+- `toBuffer` — module ⚠ **stub** — stage 2 — not yet implemented, throws at runtime (#6562)
+- `viewSource` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
 
 ### Properties
 

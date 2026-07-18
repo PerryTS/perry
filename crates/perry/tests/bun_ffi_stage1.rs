@@ -90,10 +90,15 @@ EXPORT int32_t ffi_void_calls(void) { return g_void_calls; }
 EXPORT bool ffi_not(bool v) { return !v; }
 EXPORT bool ffi_is_forty_two(int32_t v) { return v == 42; }
 
-EXPORT int8_t  ffi_i8_add1(int8_t v)  { return (int8_t)(v + 1); }
-EXPORT int16_t ffi_i16_add1(int16_t v) { return (int16_t)(v + 1); }
-EXPORT int32_t ffi_i32_add1(int32_t v) { return v + 1; }
-EXPORT int64_t ffi_i64_add1(int64_t v) { return v + 1; }
+/* Unsigned internal arithmetic so the wraparound at the type max is
+ * well-defined (signed overflow is C UB — e.g. INT32_MAX + 1). The cast
+ * back to the signed type is the implementation-defined 2's-complement
+ * reinterpretation every real target uses, which is exactly the
+ * wraparound the JS side asserts. */
+EXPORT int8_t  ffi_i8_add1(int8_t v)  { return (int8_t)((uint8_t)v + 1u); }
+EXPORT int16_t ffi_i16_add1(int16_t v) { return (int16_t)((uint16_t)v + 1u); }
+EXPORT int32_t ffi_i32_add1(int32_t v) { return (int32_t)((uint32_t)v + 1u); }
+EXPORT int64_t ffi_i64_add1(int64_t v) { return (int64_t)((uint64_t)v + 1u); }
 EXPORT uint8_t  ffi_u8_add1(uint8_t v)  { return (uint8_t)(v + 1); }
 EXPORT uint16_t ffi_u16_add1(uint16_t v) { return (uint16_t)(v + 1); }
 EXPORT uint32_t ffi_u32_add1(uint32_t v) { return v + 1; }
@@ -494,9 +499,14 @@ console.log("spawned:", handle >= 0);
 const pid = s.bun_pty_get_pid(handle);
 console.log("pid-positive:", pid > 0);
 
-// write/read round-trip: echo a marker through the real pty
-const marker = "FFI_PTY_ROUNDTRIP_OK";
-const cmd = Buffer.from("echo " + marker + "\n", "utf8");
+// write/read round-trip: the pty has terminal echo ON, so the INPUT line is
+// echoed back verbatim. To prove the SHELL actually ran (not just that our
+// keystrokes bounced), send a command the shell must EVALUATE — arithmetic
+// expansion — and assert on its *result*. The input echo shows the literal
+// `echo FFI_$((40+2))_OK`, which does not contain `FFI_42_OK`; only the
+// shell's computed output does.
+const expected = "FFI_42_OK";
+const cmd = Buffer.from("echo FFI_$((40+2))_OK\n", "utf8");
 s.bun_pty_write(handle, ptr(cmd), cmd.length);
 
 const readBuf = Buffer.allocUnsafe(4096);
@@ -506,10 +516,7 @@ while (Date.now() < deadline) {
   const n = s.bun_pty_read(handle, ptr(readBuf), readBuf.length);
   if (n > 0) {
     collected += readBuf.subarray(0, n).toString("utf8");
-    // the echo output (not just the input echo-back) proves the shell ran
-    const echoAt = collected.indexOf(marker + "\r");
-    const echoAtNl = collected.indexOf(marker + "\n");
-    if (echoAt !== -1 || echoAtNl !== -1) break;
+    if (collected.includes(expected)) break;
   } else if (n === -2) {
     break; // child exited
   } else if (n < 0) {
@@ -520,7 +527,7 @@ while (Date.now() < deadline) {
     while (Date.now() < until) {}
   }
 }
-console.log("roundtrip:", collected.includes(marker));
+console.log("roundtrip:", collected.includes(expected));
 
 console.log("resize:", s.bun_pty_resize(handle, 120, 40) === 0);
 

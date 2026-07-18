@@ -1,4 +1,5 @@
-//! Typed C-ABI calls: argument marshalling + the register-image trampoline.
+//! Typed C-ABI calls: argument marshalling + exact-arity register-image
+//! call shims.
 //!
 //! ## Why not libffi
 //!
@@ -6,44 +7,59 @@
 //! full generality of libffi (struct classification, closures) buys nothing
 //! here, while costing a new native library on every final link (perry's
 //! driver links user binaries with `cc`; libffi would have to be added to
-//! every platform link line and vendored for cross builds). Instead we
-//! exploit how the two supported ABIs assign scalar arguments:
+//! every platform link line and vendored for cross builds — including the
+//! HarmonyOS/cross targets, where a prebuilt `libffi` is not a given).
+//! Instead we exploit how the two supported ABIs assign scalar arguments:
 //!
 //! - **SysV x86-64**: integer-class args take rdi, rsi, rdx, rcx, r8, r9 in
 //!   order (then the stack, left to right); float-class args take xmm0–xmm7
-//!   in order. The two files are assigned INDEPENDENTLY.
+//!   in order. The two register files are assigned INDEPENDENTLY.
 //! - **AAPCS64 (incl. Apple arm64)**: integer-class args take x0–x7; float
 //!   args take v0–v7. Also independent.
 //!
-//! So for any callee prototype made of scalars with ≤ 8 integer-class and
-//! ≤ 8 float-class parameters, calling through the fixed "maximal"
-//! signature
+//! So for a callee prototype made of scalars, packing the marshalled values
+//! densely per class and calling through a signature with exactly that many
+//! integer-class then float-class parameters reproduces the callee's own
+//! register/stack image — integer-class args land in the same integer
+//! registers/stack slots and float-class args in the same vector registers,
+//! regardless of the callee's original interleaving.
 //!
-//! ```text
-//! extern "C" fn(usize×8, f64×8) -> {u64 | f64 | f32}
-//! ```
+//! ### Exact arity (no over-calling)
 //!
-//! with the marshalled values packed densely per class produces exactly the
-//! register/stack image the callee expects: the callee reads only the
-//! registers its own prototype names, and unused slots are ignored. On
-//! x86-64 the 7th/8th integer slots become the first two stack slots — the
-//! same positions a 7/8-integer-arg callee reads its stack args from. Note
-//! this is also why **variadic** callees are NOT supported (Apple arm64
-//! passes variadic args on the stack) — a limitation shared with Bun's
-//! documented FFI surface.
+//! A previous revision transmuted every symbol to one fixed 16-parameter
+//! `fn(usize×8, f64×8)` and relied on the callee ignoring the extra
+//! registers/stack. That is an ABI-level truth but NOT blessed by Rust's
+//! abstract machine (calling a function pointer whose arity exceeds the real
+//! definition's is UB, and the surplus x86-64 stack slots are written into
+//! the callee's frame). This revision instead dispatches on the marshalled
+//! `(n_int, n_float)` and transmutes to a signature with EXACTLY `n_int`
+//! `usize` params followed by `n_float` `f64` params (9 × 9 monomorphic
+//! shims per return class, macro-generated below). The callee is therefore
+//! never over-called.
 //!
-//! Two care points:
-//! - **f32 args** are passed in the low 32 bits of a vector register. An
-//!   `f32` value `v` is therefore smuggled as `f64::from_bits(v.to_bits()
-//!   as u64)` — the callee's `s`/`xmm` read sees the correct f32 bit
-//!   pattern. (Passing `v as f64` would be wrong: the callee would read
-//!   the low half of a double.)
-//! - **narrow returns** (bool/i8/u8/i16/u16/i32/u32): only the low bits of
-//!   the return register are specified; we truncate to the declared width
+//! ### Residual assumptions (documented, not eliminated)
+//!
+//! - **Wide-register int passing**: narrower integer-class args
+//!   (bool/i8/i16/i32/char/ptr/cstring) are passed through `usize` (64-bit)
+//!   slots, zero/sign-extended to 64 bits during marshalling. On both ABIs a
+//!   narrow integer arg occupies a full integer register and the callee
+//!   reads the low bits, so this matches the C prototype at the ABI level —
+//!   but it is a `fn(usize)` ⇄ `fn(int32_t)` type pun that only a native-ABI
+//!   FFI (or libffi) can make. This is the fundamental FFI assumption; the
+//!   full-blessing alternative is libffi, deferred (see above).
+//! - **f32 args** are passed in the low 32 bits of a vector register, so an
+//!   `f32` value `v` is smuggled through an `f64` slot as
+//!   `f64::from_bits(v.to_bits() as u64)`; the callee's `s`/`xmm` read sees
+//!   the correct single-precision pattern. (`v as f64` would be wrong.)
+//! - **Narrow returns** (bool/i8/u8/i16/u16/i32/u32): only the low bits of
+//!   the return register are specified, so we truncate to the declared width
 //!   before boxing.
+//! - **Variadics** are unsupported (Apple arm64 passes variadic args on the
+//!   stack) — a limitation shared with Bun's documented FFI surface.
 //!
-//! `dlopen` enforces the ≤ 8 + ≤ 8 limit (and rejects unsupported targets)
-//! up front, so a mis-sized signature can never reach `raw_call_*`.
+//! `dlopen` enforces the ≤ 8-int / ≤ 8-float limit and rejects unsupported
+//! targets up front, so an out-of-range `(n_int, n_float)` can never reach a
+//! shim (the `_` fallbacks below are unreachable in practice).
 
 use super::types::*;
 use crate::value::JSValue;
@@ -58,6 +74,10 @@ pub(crate) const MAX_ARGS: usize = 16;
 pub(crate) struct ArgImage {
     pub ints: [usize; MAX_INT_ARGS],
     pub floats: [f64; MAX_FLOAT_ARGS],
+    /// Number of populated integer-class / float-class slots — the exact
+    /// arity the call shim transmutes to.
+    pub n_int: usize,
+    pub n_float: usize,
     /// NUL-terminated temporaries for `cstring` args passed as JS strings.
     /// Kept alive until after the native call returns.
     pub temps: Vec<Vec<u8>>,
@@ -75,88 +95,100 @@ pub(crate) const fn platform_supported() -> bool {
 
 #[cfg(all(unix, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod raw {
-    //! The only three transmutes in the module. `#[inline(never)]` keeps the
-    //! full 16-slot call sequence intact exactly as written — the register
-    //! image must not be "optimized" against a narrower inferred signature.
-    #[allow(clippy::type_complexity)]
-    #[inline(never)]
-    pub(crate) unsafe fn call_int(f: usize, i: &[usize; 8], d: &[f64; 8]) -> u64 {
-        let g: unsafe extern "C" fn(
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-        ) -> u64 = std::mem::transmute(f);
-        g(
-            i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7], d[0], d[1], d[2], d[3], d[4], d[5],
-            d[6], d[7],
-        )
+    //! Exact-arity call shims. `call_{int,f64,f32}` dispatch on
+    //! `(n_int, n_float)` and transmute the symbol to a signature with
+    //! precisely `n_int` `usize` params then `n_float` `f64` params — never
+    //! more than the callee actually declares.
+
+    // Map an index token to the slot's Rust ABI type (value ignored).
+    macro_rules! ty_usize {
+        ($t:tt) => {
+            usize
+        };
+    }
+    macro_rules! ty_f64 {
+        ($t:tt) => {
+            f64
+        };
     }
 
-    #[allow(clippy::type_complexity)]
-    #[inline(never)]
-    pub(crate) unsafe fn call_f64(f: usize, i: &[usize; 8], d: &[f64; 8]) -> f64 {
-        let g: unsafe extern "C" fn(
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-        ) -> f64 = std::mem::transmute(f);
-        g(
-            i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7], d[0], d[1], d[2], d[3], d[4], d[5],
-            d[6], d[7],
-        )
+    /// Transmute `$f` to `extern "C" fn(usize×|ints| , f64×|floats|) -> $ret`
+    /// and call it with exactly those slots. Trailing commas make the empty
+    /// list (`fn() -> $ret`) valid.
+    macro_rules! call_exact {
+        ($f:expr, $i:ident, $d:ident, $ret:ty, [$($ix:tt)*], [$($fx:tt)*]) => {{
+            let g: unsafe extern "C" fn($(ty_usize!($ix),)* $(ty_f64!($fx),)*) -> $ret =
+                ::core::mem::transmute($f);
+            g($($i[$ix],)* $($d[$fx],)*)
+        }};
     }
 
-    #[allow(clippy::type_complexity)]
+    /// Inner dispatch over the float-arg count for a fixed int-index list.
+    macro_rules! inner_floats {
+        ($f:expr, $i:ident, $d:ident, $ret:ty, [$($ix:tt)*], $nf:expr) => {
+            match $nf {
+                0 => call_exact!($f, $i, $d, $ret, [$($ix)*], []),
+                1 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0]),
+                2 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1]),
+                3 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1 2]),
+                4 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1 2 3]),
+                5 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1 2 3 4]),
+                6 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1 2 3 4 5]),
+                7 => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1 2 3 4 5 6]),
+                _ => call_exact!($f, $i, $d, $ret, [$($ix)*], [0 1 2 3 4 5 6 7]),
+            }
+        };
+    }
+
+    /// Outer dispatch over the int-arg count, then the float count. Expands to
+    /// 81 exact-arity transmute+call sites for the given return type.
+    macro_rules! dispatch_exact {
+        ($f:expr, $i:ident, $d:ident, $ret:ty, $ni:expr, $nf:expr) => {
+            match $ni {
+                0 => inner_floats!($f, $i, $d, $ret, [], $nf),
+                1 => inner_floats!($f, $i, $d, $ret, [0], $nf),
+                2 => inner_floats!($f, $i, $d, $ret, [0 1], $nf),
+                3 => inner_floats!($f, $i, $d, $ret, [0 1 2], $nf),
+                4 => inner_floats!($f, $i, $d, $ret, [0 1 2 3], $nf),
+                5 => inner_floats!($f, $i, $d, $ret, [0 1 2 3 4], $nf),
+                6 => inner_floats!($f, $i, $d, $ret, [0 1 2 3 4 5], $nf),
+                7 => inner_floats!($f, $i, $d, $ret, [0 1 2 3 4 5 6], $nf),
+                _ => inner_floats!($f, $i, $d, $ret, [0 1 2 3 4 5 6 7], $nf),
+            }
+        };
+    }
+
     #[inline(never)]
-    pub(crate) unsafe fn call_f32(f: usize, i: &[usize; 8], d: &[f64; 8]) -> f32 {
-        let g: unsafe extern "C" fn(
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-            f64,
-        ) -> f32 = std::mem::transmute(f);
-        g(
-            i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7], d[0], d[1], d[2], d[3], d[4], d[5],
-            d[6], d[7],
-        )
+    pub(crate) unsafe fn call_int(
+        f: usize,
+        ni: usize,
+        i: &[usize; 8],
+        nf: usize,
+        d: &[f64; 8],
+    ) -> u64 {
+        dispatch_exact!(f, i, d, u64, ni, nf)
+    }
+
+    #[inline(never)]
+    pub(crate) unsafe fn call_f64(
+        f: usize,
+        ni: usize,
+        i: &[usize; 8],
+        nf: usize,
+        d: &[f64; 8],
+    ) -> f64 {
+        dispatch_exact!(f, i, d, f64, ni, nf)
+    }
+
+    #[inline(never)]
+    pub(crate) unsafe fn call_f32(
+        f: usize,
+        ni: usize,
+        i: &[usize; 8],
+        nf: usize,
+        d: &[f64; 8],
+    ) -> f32 {
+        dispatch_exact!(f, i, d, f32, ni, nf)
     }
 }
 
@@ -164,13 +196,31 @@ mod raw {
 mod raw {
     // `dlopen` refuses before any symbol closure can exist on these targets;
     // these stubs keep the module compiling.
-    pub(crate) unsafe fn call_int(_f: usize, _i: &[usize; 8], _d: &[f64; 8]) -> u64 {
+    pub(crate) unsafe fn call_int(
+        _f: usize,
+        _ni: usize,
+        _i: &[usize; 8],
+        _nf: usize,
+        _d: &[f64; 8],
+    ) -> u64 {
         unreachable!("bun:ffi call on unsupported target")
     }
-    pub(crate) unsafe fn call_f64(_f: usize, _i: &[usize; 8], _d: &[f64; 8]) -> f64 {
+    pub(crate) unsafe fn call_f64(
+        _f: usize,
+        _ni: usize,
+        _i: &[usize; 8],
+        _nf: usize,
+        _d: &[f64; 8],
+    ) -> f64 {
         unreachable!("bun:ffi call on unsupported target")
     }
-    pub(crate) unsafe fn call_f32(_f: usize, _i: &[usize; 8], _d: &[f64; 8]) -> f32 {
+    pub(crate) unsafe fn call_f32(
+        _f: usize,
+        _ni: usize,
+        _i: &[usize; 8],
+        _nf: usize,
+        _d: &[f64; 8],
+    ) -> f32 {
         unreachable!("bun:ffi call on unsupported target")
     }
 }
@@ -383,6 +433,8 @@ pub(crate) unsafe fn marshal_args(arg_types: &[u8], js_args: &[f64]) -> ArgImage
             }
         }
     }
+    image.n_int = ii;
+    image.n_float = fi;
     image
 }
 
@@ -431,17 +483,18 @@ pub(crate) unsafe fn read_cstring_value(addr: usize) -> f64 {
 /// `fn_ptr` must be a callable C function whose true prototype is scalar,
 /// non-variadic, and within the marshalled image's class limits.
 pub(crate) unsafe fn call_and_convert(fn_ptr: usize, ret_type: u8, image: &ArgImage) -> f64 {
+    let (ni, nf) = (image.n_int, image.n_float);
     let result = match ret_type {
         T_F64 => {
-            let r = raw::call_f64(fn_ptr, &image.ints, &image.floats);
+            let r = raw::call_f64(fn_ptr, ni, &image.ints, nf, &image.floats);
             super::number_value(r)
         }
         T_F32 => {
-            let r = raw::call_f32(fn_ptr, &image.ints, &image.floats);
+            let r = raw::call_f32(fn_ptr, ni, &image.ints, nf, &image.floats);
             super::number_value(r as f64)
         }
         _ => {
-            let r = raw::call_int(fn_ptr, &image.ints, &image.floats);
+            let r = raw::call_int(fn_ptr, ni, &image.ints, nf, &image.floats);
             convert_int_return(ret_type, r)
         }
     };
@@ -501,8 +554,9 @@ fn convert_int_return(ret_type: u8, r: u64) -> f64 {
 mod tests {
     use super::*;
 
-    // Callee prototypes deliberately narrower than the 16-slot trampoline —
-    // exactly the situation at a real dlopen'd symbol.
+    // Callee prototypes deliberately narrower than the shim table's max —
+    // exactly the situation at a real dlopen'd symbol. Each test calls
+    // through the EXACT arity (n_int, n_float) the callee declares.
 
     extern "C" fn sum8_i32(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32) -> i64 {
         a as i64 + b as i64 + c as i64 + d as i64 + e as i64 + f as i64 + g as i64 + h as i64
@@ -536,20 +590,38 @@ mod tests {
         let mut image = ArgImage::default();
         image.ints[..ints.len()].copy_from_slice(ints);
         image.floats[..floats.len()].copy_from_slice(floats);
+        image.n_int = ints.len();
+        image.n_float = floats.len();
         image
     }
 
     #[test]
     fn register_image_reaches_eight_int_args() {
         let image = image_from(&[1, 2, 3, 4, 5, 6, 7, 8], &[]);
-        let r = unsafe { raw::call_int(sum8_i32 as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_int(
+                sum8_i32 as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         assert_eq!(r as i64, 36);
     }
 
     #[test]
     fn register_image_reaches_eight_float_args() {
         let image = image_from(&[], &[0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]);
-        let r = unsafe { raw::call_f64(dsum8 as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_f64(
+                dsum8 as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         assert_eq!(r, 32.0);
     }
 
@@ -559,34 +631,133 @@ mod tests {
         //   ints  → [a, c, e], floats → [b, d, f32-image(f)]
         let f_img = f64::from_bits((1.5f32).to_bits() as u64);
         let image = image_from(&[10, 20, 30], &[2.0, 4.0, f_img]);
-        let r = unsafe { raw::call_f64(mixed as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_f64(
+                mixed as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         assert_eq!(r, 10.0 + 4.0 + 60.0 + 16.0 + 150.0 + 9.0);
     }
 
     #[test]
     fn f32_return_and_f32_bit_image_arg() {
         let image = image_from(&[], &[f64::from_bits((21.0f32).to_bits() as u64)]);
-        let r = unsafe { raw::call_f32(f32_half as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_f32(
+                f32_half as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         assert_eq!(r, 10.5f32);
     }
 
     #[test]
     fn u64_roundtrip_keeps_all_bits() {
         let image = image_from(&[u64::MAX as usize], &[]);
-        let r = unsafe { raw::call_int(u64_id as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_int(
+                u64_id as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         assert_eq!(r, u64::MAX);
     }
 
     #[test]
     fn narrow_returns_truncate_to_declared_width() {
         let image = image_from(&[1], &[]);
-        let r = unsafe { raw::call_int(bool_not as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_int(
+                bool_not as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         // Only the low byte is specified; the converter masks it.
         assert!(!((r as u8) != 0));
 
         let image = image_from(&[5], &[]);
-        let r = unsafe { raw::call_int(i8_neg as usize, &image.ints, &image.floats) };
+        let r = unsafe {
+            raw::call_int(
+                i8_neg as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
         assert_eq!(r as u8 as i8, -5);
+    }
+
+    // Exact-arity dispatch must select the right shim for a callee that uses
+    // FEWER than the max args — the case the previous over-call trampoline
+    // got away with only by ABI luck.
+    extern "C" fn add3(a: i32, b: i32, c: i32) -> i64 {
+        a as i64 + b as i64 + c as i64
+    }
+    extern "C" fn noargs() -> i32 {
+        1234
+    }
+
+    #[test]
+    fn exact_arity_three_ints() {
+        let image = image_from(&[100, 20, 3], &[]);
+        let r = unsafe {
+            raw::call_int(
+                add3 as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
+        assert_eq!(r, 123);
+    }
+
+    #[test]
+    fn exact_arity_zero_args() {
+        let image = image_from(&[], &[]);
+        let r = unsafe {
+            raw::call_int(
+                noargs as usize,
+                image.n_int,
+                &image.ints,
+                image.n_float,
+                &image.floats,
+            )
+        };
+        assert_eq!(r as u32, 1234);
+    }
+
+    #[test]
+    fn marshal_records_class_counts() {
+        // (i32, f64, i32, f32, ptr) → 3 int-class, 2 float-class
+        let image = unsafe {
+            marshal_args(
+                &[T_I32, T_F64, T_I32, T_F32, T_PTR],
+                &[
+                    super::super::number_value(1.0),
+                    super::super::number_value(2.0),
+                    super::super::number_value(3.0),
+                    super::super::number_value(4.0),
+                    super::super::number_value(0.0),
+                ],
+            )
+        };
+        assert_eq!(image.n_int, 3);
+        assert_eq!(image.n_float, 2);
     }
 
     #[test]

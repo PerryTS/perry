@@ -337,55 +337,163 @@ fn throw_dlopen_failed(name: &str, detail: &str) -> ! {
     )
 }
 
-/// Validate one symbol signature at dlopen time so a bad signature can
-/// never reach the trampoline. Returns (int_class_count, float_class_count).
-fn validate_signature(sym: &str, args: &[u8], ret: u8) -> (usize, usize) {
-    let reject = |what: &str| -> ! {
-        crate::fs::validate::throw_type_error_with_code(
-            &format!("bun:ffi: symbol \"{sym}\": {what}"),
-            "ERR_INVALID_ARG_TYPE",
-        )
-    };
+/// Validate one symbol signature. Returns `Err(message)` (never throws) so
+/// `dlopen` can roll back its transaction before throwing at a single site.
+fn validate_signature_checked(sym: &str, args: &[u8], ret: u8) -> Result<(), String> {
+    let reject = |what: &str| -> String { format!("bun:ffi: symbol \"{sym}\": {what}") };
     let mut ints = 0usize;
     let mut floats = 0usize;
     for &t in args {
         match t {
-            T_FUNCTION => reject(
-                "FFIType.function / JSCallback arguments are not yet supported \
-                 in perry (bun:ffi stage 1, #6562)",
-            ),
-            T_NAPI_ENV | T_NAPI_VALUE => reject("napi types are not supported"),
-            T_BUFFER => reject("FFIType.buffer is not yet supported (use ptr)"),
-            T_VOID => reject("void is not a valid argument type"),
+            T_FUNCTION => {
+                return Err(reject(
+                    "FFIType.function / JSCallback arguments are not yet supported \
+                     in perry (bun:ffi stage 1, #6562)",
+                ))
+            }
+            T_NAPI_ENV | T_NAPI_VALUE => return Err(reject("napi types are not supported")),
+            T_BUFFER => return Err(reject("FFIType.buffer is not yet supported (use ptr)")),
+            T_VOID => return Err(reject("void is not a valid argument type")),
             t if types::is_float_class(t) => floats += 1,
             _ => ints += 1,
         }
     }
     match ret {
-        T_FUNCTION => reject(
-            "FFIType.function / JSCallback returns are not yet supported \
-             in perry (bun:ffi stage 1, #6562)",
-        ),
-        T_NAPI_ENV | T_NAPI_VALUE => reject("napi types are not supported"),
-        T_BUFFER => reject("FFIType.buffer is not yet supported (use ptr / toArrayBuffer)"),
+        T_FUNCTION => {
+            return Err(reject(
+                "FFIType.function / JSCallback returns are not yet supported \
+                 in perry (bun:ffi stage 1, #6562)",
+            ))
+        }
+        T_NAPI_ENV | T_NAPI_VALUE => return Err(reject("napi types are not supported")),
+        T_BUFFER => {
+            return Err(reject(
+                "FFIType.buffer is not yet supported (use ptr / toArrayBuffer)",
+            ))
+        }
         _ => {}
     }
     if args.len() > MAX_ARGS {
-        reject(&format!("more than {MAX_ARGS} arguments are not supported"));
+        return Err(reject(&format!(
+            "more than {MAX_ARGS} arguments are not supported"
+        )));
     }
     if ints > MAX_INT_ARGS {
-        reject(&format!(
+        return Err(reject(&format!(
             "more than {MAX_INT_ARGS} integer/pointer arguments are not supported \
              by perry's stage-1 call stubs"
-        ));
+        )));
     }
     if floats > MAX_FLOAT_ARGS {
-        reject(&format!(
+        return Err(reject(&format!(
             "more than {MAX_FLOAT_ARGS} float arguments are not supported \
              by perry's stage-1 call stubs"
+        )));
+    }
+    Ok(())
+}
+
+/// A fully validated + resolved symbol, held locally until the whole table
+/// is known good. Only then are `LibRecord`/`SymRecord` committed.
+struct PreparedSym {
+    name: String,
+    fn_ptr: usize,
+    ret: u8,
+    argc: usize,
+    args: [u8; MAX_ARGS],
+}
+
+/// Walk + validate + resolve every symbol WITHOUT mutating any global
+/// registry. Returns `Err((message, code))` on the first problem so the
+/// caller can `dlclose` and throw. This makes `dlopen` transactional:
+/// repeated malformed calls can't grow `LIBS`/`SYMS`/leaked-name state,
+/// because nothing is committed until this returns `Ok`.
+unsafe fn prepare_symbols(
+    handle: usize,
+    path: &str,
+    table: *mut crate::object::ObjectHeader,
+) -> Result<Vec<PreparedSym>, (String, &'static str)> {
+    let type_err = |m: String| (m, "ERR_INVALID_ARG_TYPE");
+
+    let keys = crate::object::js_object_keys(table);
+    let key_count = crate::array::js_array_length(keys);
+    if key_count == 0 {
+        return Err((
+            format!("Failed to open library \"{path}\": Expected at least 1 symbol"),
+            "ERR_DLOPEN_FAILED",
         ));
     }
-    (ints, floats)
+
+    let mut prepared: Vec<PreparedSym> = Vec::with_capacity(key_count as usize);
+    for i in 0..key_count {
+        let key_value = crate::array::js_array_get(keys, i);
+        let name = match value_to_owned_string(f64::from_bits(key_value.bits())) {
+            Some(n) => n,
+            None => continue,
+        };
+        let Some(entry) = object_ptr_of(get_field(table, &name)) else {
+            return Err(type_err(format!(
+                "bun:ffi: symbol \"{name}\": expected {{ args, returns }}"
+            )));
+        };
+
+        // args: optional array of FFIType values; returns: optional FFIType
+        // (missing → void), both exactly as Bun accepts them.
+        let mut args = [0u8; MAX_ARGS];
+        let mut argc = 0usize;
+        let args_value = get_field(entry, "args");
+        let args_jv = JSValue::from_bits(args_value.to_bits());
+        if !args_jv.is_undefined() && !args_jv.is_null() {
+            // #6580(CodeRabbit): verify the value is genuinely an Array before
+            // reading it as an ArrayHeader — a non-array object/closure would
+            // otherwise be misinterpreted (arbitrary-memory read).
+            if !JSValue::from_bits(crate::array::js_array_is_array(args_value).to_bits()).as_bool()
+            {
+                return Err(type_err(format!(
+                    "bun:ffi: symbol \"{name}\": args must be an array"
+                )));
+            }
+            let arr = crate::value::js_nanbox_get_pointer(args_value) as usize
+                as *const crate::array::ArrayHeader;
+            let len = crate::array::js_array_length(arr);
+            if len as usize > MAX_ARGS {
+                return Err(type_err(format!(
+                    "bun:ffi: symbol \"{name}\": more than {MAX_ARGS} arguments \
+                     are not supported"
+                )));
+            }
+            for j in 0..len {
+                let t = crate::array::js_array_get(arr, j);
+                args[argc] = types::parse_ffi_type_checked(f64::from_bits(t.bits()))
+                    .map_err(|m| type_err(format!("bun:ffi: symbol \"{name}\": {m}")))?;
+                argc += 1;
+            }
+        }
+        let returns_value = get_field(entry, "returns");
+        let returns_jv = JSValue::from_bits(returns_value.to_bits());
+        let ret = if returns_jv.is_undefined() || returns_jv.is_null() {
+            T_VOID
+        } else {
+            types::parse_ffi_type_checked(returns_value)
+                .map_err(|m| type_err(format!("bun:ffi: symbol \"{name}\": {m}")))?
+        };
+        validate_signature_checked(&name, &args[..argc], ret).map_err(type_err)?;
+
+        let Some(fn_ptr) = find_symbol(handle, &name) else {
+            return Err(type_err(format!(
+                "Symbol \"{name}\" not found in \"{path}\""
+            )));
+        };
+
+        prepared.push(PreparedSym {
+            name,
+            fn_ptr,
+            ret,
+            argc,
+            args,
+        });
+    }
+    Ok(prepared)
 }
 
 /// `dlopen(path, symbolTable)` → `{ symbols: { <name>: fn }, close(): void }`.
@@ -414,6 +522,20 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
         Ok(h) => h,
         Err(msg) => throw_dlopen_failed(&path, &msg),
     };
+
+    // TRANSACTIONAL: validate + resolve the whole table into locals first. On
+    // ANY failure, dlclose the freshly-opened handle and throw — nothing was
+    // committed to LIBS/SYMS, so a repeatedly-malformed dlopen cannot grow
+    // loader mappings or registry/leak state.
+    let prepared = match prepare_symbols(handle, &path, table) {
+        Ok(p) => p,
+        Err((message, code)) => {
+            close_library(handle);
+            crate::fs::validate::throw_error_with_code(&message, code);
+        }
+    };
+
+    // Commit: register the library, then the symbols, then build JS.
     let lib_index = {
         let mut libs = LIBS.lock().unwrap();
         libs.push(LibRecord {
@@ -424,110 +546,38 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
         libs.len() - 1
     };
 
-    // Walk the symbol table BEFORE building any JS result, so an invalid
-    // entry throws without leaking half-built objects (the lib handle stays
-    // registered; dlopen handles are refcounted by the loader and this
-    // mirrors Bun, which also leaves the library mapped on validation
-    // throws).
-    let keys = crate::object::js_object_keys(table);
-    let key_count = crate::array::js_array_length(keys);
-    if key_count == 0 {
-        throw_dlopen_failed(&path, "Expected at least 1 symbol");
-    }
-
-    struct Prepared {
+    struct Committed {
         name: String,
         sym_index: usize,
         argc: u32,
     }
-    let mut prepared: Vec<Prepared> = Vec::with_capacity(key_count as usize);
-
-    for i in 0..key_count {
-        let key_value = crate::array::js_array_get(keys, i);
-        let name = match value_to_owned_string(f64::from_bits(key_value.bits())) {
-            Some(n) => n,
-            None => continue,
-        };
-        let Some(entry) = object_ptr_of(get_field(table, &name)) else {
-            crate::fs::validate::throw_type_error_with_code(
-                &format!("bun:ffi: symbol \"{name}\": expected {{ args, returns }}"),
-                "ERR_INVALID_ARG_TYPE",
-            );
-        };
-
-        // args: optional array of FFIType values; returns: optional FFIType
-        // (missing → void), both exactly as Bun accepts them.
-        let mut args = [0u8; MAX_ARGS];
-        let mut argc = 0usize;
-        let args_value = get_field(entry, "args");
-        let args_jv = JSValue::from_bits(args_value.to_bits());
-        if !args_jv.is_undefined() && !args_jv.is_null() {
-            let arr_addr = crate::value::js_nanbox_get_pointer(args_value);
-            if arr_addr == 0 {
-                crate::fs::validate::throw_type_error_with_code(
-                    &format!("bun:ffi: symbol \"{name}\": args must be an array"),
-                    "ERR_INVALID_ARG_TYPE",
-                );
-            }
-            let arr = arr_addr as usize as *const crate::array::ArrayHeader;
-            let len = crate::array::js_array_length(arr);
-            if len as usize > MAX_ARGS {
-                crate::fs::validate::throw_type_error_with_code(
-                    &format!(
-                        "bun:ffi: symbol \"{name}\": more than {MAX_ARGS} arguments \
-                         are not supported"
-                    ),
-                    "ERR_INVALID_ARG_TYPE",
-                );
-            }
-            for j in 0..len {
-                let t = crate::array::js_array_get(arr, j);
-                args[argc] = types::parse_ffi_type(f64::from_bits(t.bits()));
-                argc += 1;
-            }
-        }
-        let returns_value = get_field(entry, "returns");
-        let returns_jv = JSValue::from_bits(returns_value.to_bits());
-        let ret = if returns_jv.is_undefined() || returns_jv.is_null() {
-            T_VOID
-        } else {
-            types::parse_ffi_type(returns_value)
-        };
-        validate_signature(&name, &args[..argc], ret);
-
-        let Some(fn_ptr) = find_symbol(handle, &name) else {
-            crate::fs::validate::throw_type_error_with_code(
-                &format!("Symbol \"{name}\" not found in \"{path}\""),
-                "ERR_INVALID_ARG_TYPE",
-            );
-        };
-
-        let leaked_name: &'static str = name.clone().leak();
-        let sym_index = {
-            let mut syms = SYMS.lock().unwrap();
+    let mut committed: Vec<Committed> = Vec::with_capacity(prepared.len());
+    {
+        let mut syms = SYMS.lock().unwrap();
+        for p in prepared {
+            let leaked_name: &'static str = p.name.clone().leak();
             syms.push(SymRecord {
-                fn_ptr,
+                fn_ptr: p.fn_ptr,
                 lib: lib_index,
-                ret,
-                argc: argc as u8,
-                args,
+                ret: p.ret,
+                argc: p.argc as u8,
+                args: p.args,
                 name: leaked_name,
             });
-            syms.len() - 1
-        };
-        prepared.push(Prepared {
-            name,
-            sym_index,
-            argc: argc as u32,
-        });
+            committed.push(Committed {
+                name: p.name,
+                sym_index: syms.len() - 1,
+                argc: p.argc as u32,
+            });
+        }
     }
 
     // Build `{ symbols, close }` with every intermediate rooted across the
     // remaining allocations.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let symbols_obj = crate::object::js_object_alloc(0, prepared.len() as u32);
+    let symbols_obj = crate::object::js_object_alloc(0, committed.len() as u32);
     let symbols_handle = scope.root_raw_mut_ptr(symbols_obj);
-    for p in &prepared {
+    for p in &committed {
         let value = index_closure(sym_thunk_for(p.argc as usize), p.sym_index, p.argc, &p.name);
         let value_handle = scope.root_nanbox_f64(value);
         set_field(
@@ -604,21 +654,28 @@ pub(crate) unsafe fn ptr_value(view_arg: f64, offset_arg: f64) -> f64 {
 /// conversion.
 pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f64) -> f64 {
     let jv = JSValue::from_bits(ptr_arg.to_bits());
-    let base = if jv.is_undefined() || jv.is_null() {
-        0usize
+    // `managed_end`: exclusive upper bound of the SOURCE's managed storage,
+    // when we know it (a Buffer / TypedArray / ArrayBuffer / DataView). For a
+    // raw numeric/bigint pointer there is no managed length — like Bun, we
+    // then trust the caller. When it IS a managed buffer, every read below is
+    // clamped to `[base, managed_end)` so a bogus offset/length can't scan or
+    // slice past the buffer's own bytes.
+    let (base, managed_end): (usize, Option<usize>) = if jv.is_undefined() || jv.is_null() {
+        (0, None)
     } else if jv.is_int32() {
-        jv.as_int32() as i64 as usize
+        (jv.as_int32() as i64 as usize, None)
     } else if jv.is_number() {
-        jv.as_number() as i64 as usize
+        (jv.as_number() as i64 as usize, None)
     } else if jv.is_bigint() {
         let b = crate::value::js_nanbox_get_bigint(ptr_arg);
-        if b == 0 {
+        let addr = if b == 0 {
             0
         } else {
             (*(b as usize as *const crate::bigint::BigIntHeader)).limbs[0] as usize
-        }
-    } else if let Some((data, _)) = call::value_buffer_span(ptr_arg) {
-        data as usize
+        };
+        (addr, None)
+    } else if let Some((data, len)) = call::value_buffer_span(ptr_arg) {
+        (data as usize, Some(data as usize + len))
     } else {
         crate::fs::validate::throw_type_error_with_code(
             "CString(ptr) expects a pointer",
@@ -637,6 +694,13 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
         0
     };
     let start = (base as i64 + offset.max(0)) as usize;
+    // Clamp the start into the managed storage (a start past the end yields an
+    // empty read rather than an OOB scan).
+    if let Some(end) = managed_end {
+        if start > end {
+            return super::string_value("");
+        }
+    }
     let length_jv = JSValue::from_bits(length_arg.to_bits());
     let explicit_len = if length_jv.is_int32() {
         Some(length_jv.as_int32() as i64)
@@ -647,12 +711,101 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
     };
     match explicit_len {
         Some(n) if n >= 0 => {
-            let bytes = std::slice::from_raw_parts(start as *const u8, n as usize);
+            let mut len = n as usize;
+            if let Some(end) = managed_end {
+                len = len.min(end - start); // never slice past the buffer
+            }
+            let bytes = std::slice::from_raw_parts(start as *const u8, len);
             match std::str::from_utf8(bytes) {
                 Ok(s) => super::string_value(s),
                 Err(_) => super::string_value(&String::from_utf8_lossy(bytes)),
             }
         }
-        _ => call::read_cstring_value(start),
+        // NUL-terminated scan: bounded to the managed storage when known.
+        _ => match managed_end {
+            Some(end) => {
+                let max = end - start;
+                let base_ptr = start as *const u8;
+                let mut len = 0usize;
+                while len < max && *base_ptr.add(len) != 0 {
+                    len += 1;
+                }
+                let bytes = std::slice::from_raw_parts(base_ptr, len);
+                match std::str::from_utf8(bytes) {
+                    Ok(s) => super::string_value(s),
+                    Err(_) => super::string_value(&String::from_utf8_lossy(bytes)),
+                }
+            }
+            None => call::read_cstring_value(start),
+        },
+    }
+}
+
+// ── tests ───────────────────────────────────────────────────────────────────
+//
+// Cargo-visible on every PR: the dlopen-time signature-validation ERROR
+// CONTRACT (the same rejections the e2e drives through a compiled binary,
+// but reachable without `cc` + a dylib). `validate_signature_checked` is a
+// pure function over the marshalled type bytes, so no runtime init is needed.
+
+#[cfg(test)]
+mod tests {
+    // T_BUFFER / T_FUNCTION / T_NAPI_* / T_VOID come in via `use super::*`
+    // (re-exported from the module-level `use super::types::{...}`); pull the
+    // remaining constants the tests need directly.
+    use super::super::types::{T_CSTRING, T_F64, T_I32, T_PTR, T_U64};
+    use super::*;
+
+    #[test]
+    fn accepts_a_valid_scalar_signature() {
+        // bun-pty's spawn: (cstring, cstring, cstring, i32, i32) -> i32.
+        let args = [T_CSTRING, T_CSTRING, T_CSTRING, T_I32, T_I32];
+        assert!(validate_signature_checked("bun_pty_spawn", &args, T_I32).is_ok());
+        // void return is valid.
+        assert!(validate_signature_checked("f", &[T_PTR, T_I32], T_VOID).is_ok());
+        // zero-arg is valid.
+        assert!(validate_signature_checked("f", &[], T_U64).is_ok());
+    }
+
+    #[test]
+    fn rejects_callback_types_with_a_stage1_message() {
+        let e = validate_signature_checked("f", &[T_FUNCTION], T_VOID).unwrap_err();
+        assert!(e.contains("not yet supported"), "{e}");
+        let e = validate_signature_checked("f", &[T_I32], T_FUNCTION).unwrap_err();
+        assert!(e.contains("not yet supported"), "{e}");
+    }
+
+    #[test]
+    fn rejects_napi_buffer_and_void_arg() {
+        assert!(validate_signature_checked("f", &[T_NAPI_ENV], T_VOID).is_err());
+        assert!(validate_signature_checked("f", &[T_NAPI_VALUE], T_VOID).is_err());
+        assert!(validate_signature_checked("f", &[T_BUFFER], T_VOID).is_err());
+        // void is a valid RETURN but never a valid ARGUMENT.
+        let e = validate_signature_checked("f", &[T_VOID], T_I32).unwrap_err();
+        assert!(e.contains("void is not a valid argument"), "{e}");
+    }
+
+    #[test]
+    fn rejects_over_register_class_limits() {
+        // 9 integer-class args > MAX_INT_ARGS (8).
+        let nine_ints = [T_I32; 9];
+        let e = validate_signature_checked("f", &nine_ints, T_VOID).unwrap_err();
+        assert!(e.contains("integer/pointer arguments"), "{e}");
+        // 9 float-class args > MAX_FLOAT_ARGS (8).
+        let nine_floats = [T_F64; 9];
+        let e = validate_signature_checked("f", &nine_floats, T_VOID).unwrap_err();
+        assert!(e.contains("float arguments"), "{e}");
+        // But 8 + 8 mixed is fine.
+        let mut mixed = [T_I32; 16];
+        for m in mixed.iter_mut().take(8) {
+            *m = T_F64;
+        }
+        assert!(validate_signature_checked("f", &mixed, T_VOID).is_ok());
+    }
+
+    #[test]
+    fn error_messages_name_the_symbol() {
+        let e = validate_signature_checked("my_symbol", &[T_FUNCTION], T_VOID).unwrap_err();
+        assert!(e.contains("my_symbol"), "{e}");
     }
 }

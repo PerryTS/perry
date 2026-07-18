@@ -214,13 +214,24 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("bun:ffi", "CString", false, None),
     property("bun:ffi", "FFIType"),
     property("bun:ffi", "suffix"),
-    method("bun:ffi", "toArrayBuffer", false, None),
-    method("bun:ffi", "toBuffer", false, None),
-    method("bun:ffi", "JSCallback", false, None),
-    method("bun:ffi", "CFunction", false, None),
-    method("bun:ffi", "linkSymbols", false, None),
-    method("bun:ffi", "viewSource", false, None),
-    method("bun:ffi", "read", false, None),
+    // Stage ≥2 surface: declared so feature-probes get a clear error rather
+    // than `undefined is not a function`, but NOT implemented yet — each
+    // throws at runtime. Marked `.stub_note` so the generated `.d.ts` /
+    // `reference.md` say so instead of reading as usable APIs (#6562).
+    method("bun:ffi", "toArrayBuffer", false, None)
+        .stub_note("stage 2 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "toBuffer", false, None)
+        .stub_note("stage 2 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "JSCallback", false, None)
+        .stub_note("stage 3 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "CFunction", false, None)
+        .stub_note("stage 3 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "linkSymbols", false, None)
+        .stub_note("stage ≥2 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "viewSource", false, None)
+        .stub_note("stage ≥2 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "read", false, None)
+        .stub_note("stage ≥2 — not yet implemented, throws at runtime (#6562)"),
     class("sqlite", "DatabaseSync"),
     class("sqlite", "Session"),
     class("sqlite", "SQLTagStore"),

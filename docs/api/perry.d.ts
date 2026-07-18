@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1959 entries across 117 modules
+// Coverage: 1980 entries across 119 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -271,30 +271,51 @@ declare module "buffer" {
   export function transcode(...args: any[]): any;
 }
 
+declare module "bun" {
+  /** stdlib */
+  export const stderr: any;
+  /** stdlib */
+  export const stdin: any;
+  /** stdlib */
+  export const stdout: any;
+  /** stdlib */
+  export function file(...args: any[]): any;
+  /** stdlib */
+  export function fileURLToPath(...args: any[]): any;
+  /** stdlib */
+  export function hash(...args: any[]): any;
+  /** stdlib */
+  export function pathToFileURL(...args: any[]): any;
+  /** stdlib */
+  export function stringWidth(...args: any[]): any;
+  /** stdlib */
+  export function write(...args: any[]): any;
+}
+
 declare module "bun:ffi" {
   /** stdlib */
   export const FFIType: any;
   /** stdlib */
   export const suffix: any;
-  /** stdlib */
+  /** stdlib @perryStub stage 3 — not yet implemented, throws at runtime (#6562) */
   export function CFunction(...args: any[]): any;
   /** stdlib */
   export function CString(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub stage 3 — not yet implemented, throws at runtime (#6562) */
   export function JSCallback(...args: any[]): any;
   /** stdlib */
   export function dlopen(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
   export function linkSymbols(...args: any[]): any;
   /** stdlib */
   export function ptr(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
   export function read(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub stage 2 — not yet implemented, throws at runtime (#6562) */
   export function toArrayBuffer(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub stage 2 — not yet implemented, throws at runtime (#6562) */
   export function toBuffer(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub stage ≥2 — not yet implemented, throws at runtime (#6562) */
   export function viewSource(...args: any[]): any;
 }
 
