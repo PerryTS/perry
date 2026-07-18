@@ -875,21 +875,17 @@ pub unsafe extern "C" fn js_native_call_method(
             | "sort"
             | "forEach"
     ) {
-        // Only a pointer-shaped receiver can be the URLSearchParams heap
-        // object: a NaN-boxed pointer above the handle band, or a raw
-        // (untagged) heap address. A plain double must NOT have its low 48
-        // bits reinterpreted as an address — a Web Streams handle id
-        // (`1049102.0`, bits `0x4130_020E_0000_0000`) extracts to
-        // `(id - 2^20) * 2^32`, which crosses the macOS heap floor
-        // (`is_valid_obj_ptr`'s 2 TB) once ~512 stream ids are live and the
-        // shape probe then dereferences unmapped memory. That is the
-        // gscmaster request-12 SIGSEGV: React's render-stream `for await`
-        // resolves `@@asyncIterator` to a bound `values` re-dispatch that
-        // lands here with the numeric handle as receiver. On Linux the heap
-        // floor is 0x1000, so the very first dynamic stream call would probe
-        // low memory. Gated the same way as the AbortSignal block below;
-        // numeric stream receivers fall through to the primitive-methods
-        // stream dispatch (`stream_handle_probe`) that owns them.
+        // Only a pointer-shaped receiver (NaN-boxed pointer above the handle
+        // band, or a raw untagged heap address) may be shape-probed. A plain
+        // double must NOT have its low 48 bits read as an address: a Web
+        // Streams handle id (`1049102.0`) extracts to `(id - 2^20) * 2^32`,
+        // which passes the macOS 2 TB heap floor once ~512 stream ids are
+        // live and the probe then dereferences unmapped memory — the
+        // gscmaster request-12 SIGSEGV (`for await` resolves @@asyncIterator
+        // to a bound `values` re-dispatch landing here with the numeric
+        // handle as receiver; Linux's 0x1000 floor probes low memory from
+        // id 1). Numeric stream receivers fall through to the
+        // primitive-methods stream dispatch that owns them.
         let bits = object.to_bits();
         let top16 = bits >> 48;
         let payload = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
