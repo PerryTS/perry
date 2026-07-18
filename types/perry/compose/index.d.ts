@@ -89,6 +89,11 @@ export interface Service {
   cap_add?: string[];
   /** Linux capabilities to drop (e.g. `["ALL"]`) */
   cap_drop?: string[];
+  /** Security options (compose-spec § service.security_opt), e.g.
+   *  `["seccomp=default", "no-new-privileges"]`. Parsed into the
+   *  engine's `SecurityProfile`; entries a backend can't honor are
+   *  dropped with a warning. */
+  security_opt?: string[];
 }
 
 /**
@@ -124,6 +129,16 @@ export interface ComposeVolume {
  * Root Compose file structure (docker-compose.yaml / compose.yaml).
  */
 export interface ComposeSpec {
+  /**
+   * Compose project name. Scopes everything the engine creates:
+   * containers get the `perry.compose.project=<name>` label (used by
+   * `down()` and `perry/container.downByProject()`), and non-external
+   * volumes / networks are namespaced `<name>_<declared-name>` so two
+   * stacks declaring the same volume key don't collide and corrupt
+   * each other's data. Defaults to `"perry-stack"` when omitted — set
+   * it whenever more than one stack can run on the same host.
+   */
+  name?: string;
   version?: string;
   services: Record<string, Service>;
   networks?: Record<string, ComposeNetwork>;
@@ -151,6 +166,15 @@ export interface UpOptions {
 export interface DownOptions {
   /** Remove named volumes */
   volumes?: boolean;
+  /**
+   * Remove orphaned containers: containers that still carry this
+   * stack's project label (`perry.compose.project`) but whose service
+   * key is no longer present in the spec — typically left behind when
+   * a service was renamed or deleted between deploys. Containers
+   * belonging to other projects (or without Perry's compose labels)
+   * are never touched. Default false.
+   */
+  removeOrphans?: boolean;
 }
 
 export interface LogsOptions {

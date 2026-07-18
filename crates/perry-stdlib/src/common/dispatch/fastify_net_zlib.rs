@@ -186,7 +186,11 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         // chunk (NA_JSV bits) so `socket.end(data)` writes before FIN.
         fn js_ext_net_socket_end(handle: i64, chunk_bits: i64);
         fn js_ext_net_destroy_socket(handle: i64);
-        fn js_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64);
+        // #5021 (listener half): the shared `js_net_socket_*` listener names
+        // have bundled-stdlib twins that bind to an EMPTY registry in a
+        // both-archives link — the registration is dropped and the socket's
+        // 'data' events never reach JS. Use ext-net's distinct symbols.
+        fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64);
         fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64);
         fn js_net_socket_upgrade_tls(
             handle: i64,
@@ -199,9 +203,9 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         // socket arg of `server.on('connection', sock => …)` after
         // codegen loses the static class) to them.
         fn js_net_socket_address(handle: i64) -> *mut perry_runtime::StringHeader;
-        fn js_net_socket_once(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
-        fn js_net_socket_remove_listener(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
-        fn js_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
+        fn js_ext_net_socket_remove_listener(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
+        fn js_ext_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
         fn js_net_socket_event_names(handle: i64) -> *mut perry_runtime::StringHeader;
         fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
@@ -250,7 +254,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = unbox_to_i64(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
-            js_net_socket_on(handle, event_ptr, cb_ptr);
+            js_ext_net_socket_on(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
         }
         "connect" if args.len() >= 2 => {
@@ -272,13 +276,13 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         "once" if args.len() >= 2 => {
             let event_ptr = unbox_to_i64(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
-            js_net_socket_once(handle, event_ptr, cb_ptr);
+            js_ext_net_socket_once(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
             let event_ptr = unbox_to_i64(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
-            js_net_socket_remove_listener(handle, event_ptr, cb_ptr);
+            js_ext_net_socket_remove_listener(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
         }
         "removeAllListeners" => {
@@ -286,7 +290,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             // `undefined`; the FFI treats a null/non-string ptr as
             // "drain every event".
             let event_ptr = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            js_net_socket_remove_all_listeners(handle, event_ptr);
+            js_ext_net_socket_remove_all_listeners(handle, event_ptr);
             nanbox_handle(handle)
         }
         "listenerCount" if !args.is_empty() => {

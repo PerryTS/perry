@@ -177,10 +177,23 @@ fn put_value_static_property_fast_path(
     target: &Expr,
     key: &Expr,
     receiver: &Expr,
+    strict: bool,
 ) -> Option<String> {
     let Expr::String(property) = key else {
         return None;
     };
+    // #6542: this fast path lowers to `js_object_set_field_by_name`, which has
+    // no `strict` parameter and throws unconditionally when the field is
+    // non-writable (frozen/sealed object, `writable: false` descriptor). That
+    // matches spec `[[Set]]`+`PutValue` only in STRICT mode; a SLOPPY store to
+    // a non-writable property must be a silent no-op (`OrdinarySet` returns
+    // `false`, sloppy `PutValue` ignores it). So a heap object instance in
+    // sloppy code must stay on the strict-aware `js_put_value_set` path (which
+    // honors `strict = 0`). This gate only affects the class-instance arms
+    // below: a POD-layout / scalar-replaced object never escapes, so it can
+    // never have been passed to `Object.freeze` and can never be frozen —
+    // those keep the fast path in both modes (and diverting them to the
+    // pointer-taking `js_put_value_set` would break their fieldless storage).
     match (target, receiver) {
         (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) if id == receiver_id => {
             let pod_field = ctx.pod_records.get(id).is_some_and(|local| {
@@ -197,6 +210,9 @@ fn put_value_static_property_fast_path(
             if pod_field || scalar_field {
                 return Some(property.clone());
             }
+            if !strict {
+                return None;
+            }
             receiver_class_name(ctx, target)
                 .and_then(|class_name| {
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
@@ -212,6 +228,9 @@ fn put_value_static_property_fast_path(
             {
                 return Some(property.clone());
             }
+            if !strict {
+                return None;
+            }
             receiver_class_name(ctx, target)
                 .and_then(|class_name| {
                     crate::type_analysis::class_field_global_index(ctx, &class_name, property)
@@ -219,6 +238,9 @@ fn put_value_static_property_fast_path(
                 .map(|_| property.clone())
         }
         _ if same_side_effect_free_receiver(target, receiver) => {
+            if !strict {
+                return None;
+            }
             let class_name = receiver_class_name(ctx, target)?;
             crate::type_analysis::class_field_global_index(ctx, &class_name, property)
                 .map(|_| property.clone())
@@ -613,7 +635,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                 }
             }
-            if let Some(property) = put_value_static_property_fast_path(ctx, target, key, receiver)
+            if let Some(property) =
+                put_value_static_property_fast_path(ctx, target, key, receiver, *strict)
             {
                 return super::property_set::lower(
                     ctx,

@@ -305,12 +305,26 @@ pub(super) fn try_url_date_weakref_instance(
                         return Ok(Ok(Expr::DateToUTCString(Box::new(date_expr))));
                     }
                     "toLocaleDateString" => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::DateToLocaleDateString(Box::new(date_expr))));
+                        // Only the zero-arg call folds to the fast default-format
+                        // path. With a locale/options argument the call must fall
+                        // through so the args reach the real Intl formatter (the
+                        // `date_to_locale_date_string_opts` prototype thunk),
+                        // otherwise e.g. `d.toLocaleDateString("en-US",
+                        // {month:"short",day:"numeric"})` silently ignores the
+                        // options and prints the numeric default. Mirrors
+                        // `toLocaleString` (#5800).
+                        if args.is_empty() {
+                            let date_expr = lower_expr(ctx, &member.obj)?;
+                            return Ok(Ok(Expr::DateToLocaleDateString(Box::new(date_expr))));
+                        }
+                        // fall through to generic method call with args intact
                     }
                     "toLocaleTimeString" => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::DateToLocaleTimeString(Box::new(date_expr))));
+                        if args.is_empty() {
+                            let date_expr = lower_expr(ctx, &member.obj)?;
+                            return Ok(Ok(Expr::DateToLocaleTimeString(Box::new(date_expr))));
+                        }
+                        // fall through to generic method call with args intact
                     }
                     "toLocaleString" => {
                         // Only fold zero-arg calls to the fast DateToLocaleString

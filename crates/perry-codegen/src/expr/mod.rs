@@ -997,6 +997,12 @@ pub(crate) struct FnCtx<'a> {
     /// Benchmark/debug switch that forces tracked buffers through the existing
     /// helper fallback instead of native GEP/load/store lowering.
     pub disable_buffer_fast_path: bool,
+    /// #6405: this module assigns a Buffer numeric read-method name as an own
+    /// property somewhere (`buf.readUInt8 = fn`), so an own prop may shadow the
+    /// prototype method. When set, `try_emit_buffer_read_intrinsic` deopts the
+    /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
+    /// every program that never shadows a Buffer method (the common case).
+    pub program_shadows_buffer_read_method: bool,
     /// LocalId facts of the form `n = min(src.length, dst.length)`.
     pub min_length_bounds: std::collections::HashMap<u32, Vec<u32>>,
     /// Loop-local facts proving a buffer index is bounded inside the current

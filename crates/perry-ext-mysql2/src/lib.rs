@@ -87,6 +87,40 @@ unsafe fn jsvalue_to_string(value: JsValue) -> Option<String> {
     None
 }
 
+/// Percent-decode a URI component (`%25` → `%`, `%40` → `@`, …). A lone `%`
+/// not followed by two hex digits is kept verbatim. Node's `mysql2` decodes the
+/// credentials it takes out of a connection URL, so a password written as
+/// `p%25ss` (a literal `%`) authenticates as `p%ss`. Perry used the raw
+/// substring and then RE-encoded it for sqlx, double-encoding every reserved
+/// character — so a `%`/`@`/`:` in the password produced a wrong password and
+/// the server rejected the connection with `1045 Access denied`. Decode here so
+/// the round-trip through `to_url` reproduces the real credential.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let hex = |b: u8| -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    };
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn parse_mysql_uri(uri: &str) -> Option<MySqlConfig> {
     let uri = uri.strip_prefix("mysql://")?;
     let (credentials, host_part) = if let Some(idx) = uri.rfind('@') {
@@ -96,11 +130,11 @@ fn parse_mysql_uri(uri: &str) -> Option<MySqlConfig> {
     };
     let (user, password) = if let Some(idx) = credentials.find(':') {
         (
-            credentials[..idx].to_string(),
-            credentials[idx + 1..].to_string(),
+            percent_decode(&credentials[..idx]),
+            percent_decode(&credentials[idx + 1..]),
         )
     } else {
-        (credentials.to_string(), String::new())
+        (percent_decode(credentials), String::new())
     };
     let (host_port, database) = if let Some(idx) = host_part.find('/') {
         (&host_part[..idx], Some(host_part[idx + 1..].to_string()))
@@ -1166,6 +1200,28 @@ mod tests {
         assert_eq!(p.user, "root");
         assert_eq!(p.password, "secret");
         assert_eq!(p.database.as_deref(), Some("mydb"));
+    }
+
+    #[test]
+    fn percent_decode_credentials() {
+        // Reserved characters in a percent-encoded password round-trip to the
+        // literal value the server actually expects.
+        assert_eq!(percent_decode("p%40ss"), "p@ss");
+        assert_eq!(percent_decode("a%25b%2Fc%23"), "a%b/c#");
+        assert_eq!(percent_decode("plain"), "plain");
+        // A lone `%` (or one not followed by two hex digits) is kept verbatim.
+        assert_eq!(percent_decode("50%off"), "50%off");
+        assert_eq!(percent_decode("trailing%"), "trailing%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn parse_uri_percent_encoded_password() {
+        // `@` inside the password is `%40`; the last `@` still splits creds/host.
+        let p = parse_mysql_uri("mysql://user:p%40ss%2Fword@db.example.com/mydb").unwrap();
+        assert_eq!(p.user, "user");
+        assert_eq!(p.password, "p@ss/word");
+        assert_eq!(p.host, "db.example.com");
     }
 
     #[test]
