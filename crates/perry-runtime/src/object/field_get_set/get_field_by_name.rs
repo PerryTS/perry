@@ -1056,8 +1056,7 @@ pub extern "C" fn js_object_get_field_by_name(
                         let mut child = class_id;
                         let mut depth = 0usize;
                         while depth < 32 {
-                            let proto =
-                                super::super::class_registry::class_prototype_object(child);
+                            let proto = super::super::class_registry::class_prototype_object(child);
                             if !proto.is_null() {
                                 let v = js_object_get_field_by_name(proto as *const _, key);
                                 // Return a value present on the pinned object even
