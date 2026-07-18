@@ -1397,6 +1397,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #5389 Tier 2: synchronous ambient require(spec) resolution — the codegen
     // fallthrough when a computed require() didn't const-fold to a compiled target.
     module.declare_function("js_module_ambient_require_apply", DOUBLE, &[DOUBLE]);
+    // #6644: `module.createRequire(...)` devirt entry — arms the nm/submod
+    // install-all hooks before delegating (see js_process_get_builtin_module_devirt).
+    module.declare_function("js_module_create_require_devirt", DOUBLE, &[DOUBLE]);
     // Non-throwing global read for `typeof <unresolved>` + global read-modify-
     // write for `i++`/`i--` on a sloppy implicit global (#3575).
     module.declare_function("js_global_get_optional", DOUBLE, &[DOUBLE]);

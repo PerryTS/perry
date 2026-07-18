@@ -105,7 +105,13 @@ fn supported_require_builtin(specifier: &str) -> Option<&str> {
         // allowlist (they have runtime registry buckets + dispatch, but
         // `require('tls')` etc. via createRequire was rejected as "package/file").
         | "dgram" | "domain" | "inspector" | "inspector/promises" | "repl"
-        | "sqlite" => Some(name),
+        | "sqlite"
+        // #6644: implemented as a node_submodules spec (real pub/sub channel
+        // registry in node_submodules/diagnostics.rs) but missing here, so
+        // `require('node:diagnostics_channel')` through createRequire (the
+        // esbuild banner shim in any ESM bundle of CJS deps — lru-cache's node
+        // build in the pi bundle) was rejected as "package/file".
+        | "diagnostics_channel" => Some(name),
         _ => None,
     }
 }
@@ -120,6 +126,19 @@ fn require_builtin_value(module_name: &str) -> f64 {
             crate::node_submodules::js_node_submodule_namespace(
                 b"timers_promises".as_ptr(),
                 "timers_promises".len() as u32,
+            )
+        };
+    }
+    // #6644: diagnostics_channel lives in the node_submodules registry (not a
+    // native-module dispatch bucket); route it there like timers/promises so
+    // `require('diagnostics_channel')` / `require('node:diagnostics_channel')`
+    // return the real channel/subscribe/tracingChannel exports instead of an
+    // empty native-module namespace.
+    if module_name == "diagnostics_channel" {
+        return unsafe {
+            crate::node_submodules::js_node_submodule_namespace(
+                b"diagnostics_channel".as_ptr(),
+                "diagnostics_channel".len() as u32,
             )
         };
     }
@@ -221,6 +240,24 @@ fn make_require(main_value: f64) -> f64 {
 pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
     make_require(undefined())
+}
+
+/// Devirt codegen entry for `module.createRequire(...)` (#6644). The require
+/// closure it returns resolves builtins from a RUNTIME string, so — exactly like
+/// `js_process_get_builtin_module_devirt` — codegen could not emit the precise
+/// per-module dispatch installs. Arm both install-all hooks so a dynamically
+/// required module's methods (`require('node:diagnostics_channel').channel(...)`,
+/// `require('tls').connect(...)`) can dispatch. Codegen targets THIS symbol, so
+/// the all-buckets `js_nm_install_all` / `js_node_submod_install_all` are
+/// referenced only by programs whose source actually calls `createRequire`; the
+/// plain `js_module_create_require` (reachable from the always-pinned ambient
+/// require keepalives via the module dispatch bucket) stays free of that
+/// reference, preserving per-module stripping.
+#[no_mangle]
+pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
+    crate::object::js_nm_enable_install_all();
+    crate::node_submodules::js_node_submod_enable_install_all();
+    js_module_create_require(filename_or_url)
 }
 
 /// Next.js wall 54: registry mapping an AOT-compiled CJS module's absolute

@@ -50,6 +50,67 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
+/// #6644 (pi wall #3): `require('node:diagnostics_channel')` through
+/// `createRequire` threw `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` — the module is
+/// implemented as a node_submodules spec (real pub/sub channel registry) but was
+/// missing from the `supported_require_builtin` allowlist and never routed to
+/// `js_node_submodule_namespace`. lru-cache's node build requires it through the
+/// esbuild createRequire banner shim, so any ESM bundle of CJS deps hit this.
+/// Covers both the `node:`-prefixed and bare spellings, real pub/sub between
+/// handles from each spelling, the tracingChannel shape, another
+/// `node:`-prefixed builtin (`node:path`) through the same require, and the
+/// `process.getBuiltinModule` sibling path.
+#[test]
+fn createrequire_resolves_diagnostics_channel_and_node_prefixed_builtins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+
+const dc1 = require("node:diagnostics_channel");
+const dc2 = require("diagnostics_channel");
+console.log("shapes:", typeof dc1.channel, typeof dc1.subscribe, typeof dc1.unsubscribe, typeof dc1.hasSubscribers, typeof dc1.tracingChannel);
+console.log("fresh:", dc1.hasSubscribers("never-subscribed"));
+
+const seen: string[] = [];
+const onMsg = (message: any, name: string) => { seen.push(`${name}:${JSON.stringify(message)}`); };
+dc1.subscribe("pi.test", onMsg);
+console.log("subscribed:", dc2.hasSubscribers("pi.test"));
+const ch = dc2.channel("pi.test");
+console.log("channel.hasSubscribers:", ch.hasSubscribers);
+ch.publish({ n: 1 });
+dc1.channel("pi.test").publish({ n: 2 });
+console.log("seen:", seen.join(" | "));
+console.log("unsubscribe:", dc2.unsubscribe("pi.test", onMsg));
+console.log("after:", dc1.hasSubscribers("pi.test"));
+
+const tc = dc1.tracingChannel("pi.trace");
+console.log("tracing:", typeof tc.traceSync, typeof tc.tracePromise, typeof tc.traceCallback, tc.hasSubscribers);
+
+const path = require("node:path");
+console.log("path:", typeof path.join, path.join("a", "b"));
+
+const gbm = process.getBuiltinModule("node:diagnostics_channel");
+console.log("getBuiltinModule:", typeof gbm.channel, gbm.hasSubscribers("z"));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "shapes: function function function function function\n\
+         fresh: false\n\
+         subscribed: true\n\
+         channel.hasSubscribers: true\n\
+         seen: pi.test:{\"n\":1} | pi.test:{\"n\":2}\n\
+         unsubscribe: true\n\
+         after: false\n\
+         tracing: function function function false\n\
+         path: function a/b\n\
+         getBuiltinModule: function false\n"
+    );
+}
+
 #[test]
 fn createrequire_resolves_tls_and_other_implemented_builtins() {
     let dir = tempfile::tempdir().expect("tempdir");

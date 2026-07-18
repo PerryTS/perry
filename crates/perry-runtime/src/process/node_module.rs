@@ -856,6 +856,17 @@ pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {
             )
         };
     }
+    // #6644: diagnostics_channel is a node_submodules spec, not a native-module
+    // dispatch bucket — route it there (mirrors createRequire's
+    // require_builtin_value).
+    if module_name == "diagnostics_channel" {
+        return unsafe {
+            crate::node_submodules::js_node_submodule_namespace(
+                b"diagnostics_channel".as_ptr(),
+                "diagnostics_channel".len() as u32,
+            )
+        };
+    }
     crate::object::native_module_get_builtin_module_value(module_name)
 }
 
