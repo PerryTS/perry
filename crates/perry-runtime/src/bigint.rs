@@ -542,8 +542,11 @@ pub extern "C" fn js_bigint_from_string_radix(
                 }
                 *limb = value;
             }
-            // Any hex digits beyond the low 1024 bits overflow (#6073).
-            if chars.any(|c| c.is_ascii_hexdigit()) {
+            // The reversed stream fed the low 16 limbs first, so any leftover
+            // chars are the high-order digits. Only a *nonzero* hex digit there
+            // sets a bit at or above 2^1024 — excess leading zeros are harmless
+            // (`0x0…0<256 digits>` still fits), so ignore '0' and non-hex chars (#6073).
+            if chars.any(|c| matches!(c, '1'..='9' | 'a'..='f' | 'A'..='F')) {
                 throw_bigint_overflow();
             }
         } else {
@@ -2143,6 +2146,27 @@ mod tests {
             assert_eq!(limbs[1022 / 64], 1u64 << (1022 % 64));
             assert!(!is_negative(&limbs));
         }
+    }
+
+    #[test]
+    fn from_string_radix_hex_ignores_excess_leading_zeros() {
+        // 304 hex digits: 300 leading zeros + "beef". More than 256 digits, but
+        // the excess are all zero, so the value (0xbeef) fits and must NOT
+        // false-throw on the >1024-bit stream (regression for the CodeRabbit
+        // finding on #6073 — leftover high-order zeros are harmless).
+        let s = format!("{}beef", "0".repeat(300));
+        let bi = js_bigint_from_string_radix(s.as_ptr(), s.len() as u32, 16);
+        unsafe {
+            let limbs = (*bi).limbs;
+            assert_eq!(limbs[0], 0xbeef);
+            for &l in &limbs[1..] {
+                assert_eq!(l, 0);
+            }
+        }
+
+        // Decimal leading zeros likewise must not throw (the long-mult path
+        // never carries out of the top limb while the magnitude stays small).
+        assert_eq!(parse("000000123").unwrap(), 123);
     }
 }
 
