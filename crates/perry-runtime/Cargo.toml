@@ -19,7 +19,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "dyn-eval"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "dyn-eval"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -29,6 +29,18 @@ default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize",
 # the first instance of a general per-module gating pattern; more modules can
 # follow the same shape.)
 mod-dgram = []
+# Per-module Node-API gate (binary-size, issue #6468): compiles the
+# `node:http2` module-level constant tables (`crate::node_http2_constants` —
+# the NGHTTP2_*/HTTP_STATUS_* number tables, the `http2.constants`
+# sub-namespace key list, and the lazily-materialized `sensitiveHeaders`
+# symbol, ~20 KB of otherwise-unreachable cold data) only when the program
+# imports `node:http2`. The compiler enables it on `http2` in
+# `native_module_imports` (see `auto_optimized_cross_features`), so a program
+# that never imports `http2` links none of these tables and macOS
+# `-dead_strip` recovers the space. Pure cfg gate, no extra deps. This gates
+# only the constant tables — the HTTP/2 server surface (`js_node_http2_*`) is
+# unaffected (it lives in perry-ext-http-server, routed via `http-client`).
+mod-http2-constants = []
 # Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
 # (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8

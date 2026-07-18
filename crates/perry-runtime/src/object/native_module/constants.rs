@@ -1462,6 +1462,13 @@ pub(crate) unsafe fn get_native_module_constant(
         // `createSecureServer` exports are handled elsewhere (#1651).
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
+            // #6468: `sensitiveHeaders` / `http2.constants` are the only http2
+            // props backed by `crate::node_http2_constants`, gated behind
+            // `mod-http2-constants`. This whole `"http2"` arm is only reached
+            // through the http2 namespace object, which materializes on a
+            // `node:http2` import — the same signal that enables the gate — so
+            // the `None` fallback when the gate is off is never observed.
+            #[cfg(feature = "mod-http2-constants")]
             "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
             // `Http2ServerRequest` / `Http2ServerResponse` imported as VALUES are
             // used by libraries purely for `req instanceof Http2ServerRequest`
@@ -1483,6 +1490,7 @@ pub(crate) unsafe fn get_native_module_constant(
             "default" => Some(native_namespace_or_create("http2", namespace_obj)),
             _ => None,
         },
+        #[cfg(feature = "mod-http2-constants")]
         "http2.constants" => crate::node_http2_constants::constant(property),
         "dns" => dns_const(property),
         // node:cluster — primary-side settings and Worker handles are backed

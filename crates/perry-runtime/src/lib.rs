@@ -84,6 +84,11 @@ pub mod native_arena;
 pub mod native_handle;
 pub mod navigator;
 pub mod net_validate;
+// #6468: the `node:http2` constant tables are only reachable through the
+// `http2` native-module namespace, so a program that never imports `node:http2`
+// links none of them. The auto-optimizer enables `mod-http2-constants` on an
+// `http2` import; every callsite has a benign `None`/no-op fallback when off.
+#[cfg(feature = "mod-http2-constants")]
 pub mod node_http2_constants;
 pub mod node_inspector;
 pub mod node_repl;

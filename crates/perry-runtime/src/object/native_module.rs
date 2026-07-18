@@ -235,6 +235,10 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             visitor.visit_nanbox_u64_slot(value_bits);
         }
     });
+    // #6468: only present when the program imports `node:http2`; when the gate
+    // is off the `sensitiveHeaders` symbol slot doesn't exist, so there's no
+    // root to scan.
+    #[cfg(feature = "mod-http2-constants")]
     crate::node_http2_constants::scan_roots_mut(visitor);
     scan_stream_event_emitter_prototype_roots_mut(visitor);
 }
