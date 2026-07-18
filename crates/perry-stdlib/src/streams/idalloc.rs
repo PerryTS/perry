@@ -278,7 +278,11 @@ pub(super) fn retire_writable_terminal(stream_id: usize) {
     }
     let transform_id = TRANSFORM_PAIRS.lock().unwrap().get(&stream_id).copied();
     if let Some(transform_id) = transform_id {
-        if TRANSFORM_STREAMS.lock().unwrap().contains_key(&transform_id) {
+        if TRANSFORM_STREAMS
+            .lock()
+            .unwrap()
+            .contains_key(&transform_id)
+        {
             retire(transform_id);
         }
     }
