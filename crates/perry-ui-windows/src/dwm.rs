@@ -36,6 +36,11 @@ const DWMWCP_ROUND: i32 = 2;
 /// silently ignore that, so requesting it unconditionally is safe.
 const DWMSBT_MAINWINDOW: i32 = 2;
 
+// `#[link]` so the import resolves for EVERY link of this crate — the final
+// app link always adds dwmapi.lib explicitly, but the in-crate `cargo test`
+// harness link did not, failing with LNK2019 and silently blocking the
+// crate's whole unit-test suite from ever running.
+#[link(name = "dwmapi")]
 extern "system" {
     fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const i32, size: u32) -> i32;
 }

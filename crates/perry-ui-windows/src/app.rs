@@ -874,6 +874,9 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
                     crate::dwm::set_attr_i32(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, 1);
 
                     // Extend client area into frame for borderless mica/acrylic
+                    // #[link] so the cargo-test harness link resolves too
+                    // (the final app link adds dwmapi.lib itself).
+                    #[link(name = "dwmapi")]
                     extern "system" {
                         fn DwmExtendFrameIntoClientArea(
                             hwnd: isize,

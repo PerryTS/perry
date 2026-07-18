@@ -218,7 +218,7 @@ fn layout_stack(handle: i64, width: i32, height: i32, vertical: bool) {
                     .as_ref()
                     .is_some_and(|ci| matches!(ci.kind, WidgetKind::Picker | WidgetKind::Combobox))
                 {
-                    h.max(28) + 200
+                    h.max(dpi(28)) + dpi(200)
                 } else {
                     h
                 };
@@ -335,6 +335,30 @@ fn layout_navstack(handle: i64, width: i32, height: i32) {
     }
 }
 
+/// Scale a logical (96-DPI) pixel constant by the current DPI factor.
+///
+/// The intrinsic control sizes below are authored at 96 DPI. Fonts, the
+/// window size, stack spacing, and explicit setSize dimensions are all
+/// scaled at their entry points (app.rs / widget_create.rs /
+/// widget_layout_extras.rs) — but these layout-engine constants never
+/// were, so on a 125–200% display every fixed-height control (TextField,
+/// Toggle, Picker, …) clipped its own DPI-scaled font (the #5884 family
+/// of bugs). Measured text extents are already physical pixels and must
+/// NOT pass through this.
+fn dpi(px: i32) -> i32 {
+    scale_by(px, crate::app::get_dpi_scale())
+}
+
+/// Pure scaling core, unit-testable without the process-global DPI state.
+/// A scale of exactly 1.0 (or an unset/degenerate reading ≤ 1.0 — Windows
+/// never scales below 100%) returns the constant unchanged.
+fn scale_by(px: i32, scale: f64) -> i32 {
+    if scale <= 1.0 {
+        return px;
+    }
+    (px as f64 * scale).round() as i32
+}
+
 /// Measure the intrinsic size of a widget along the main axis.
 fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size: i32) -> i32 {
     // Check fixed dimensions first — they override intrinsic measurement
@@ -358,9 +382,9 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
                 }
             }
             if vertical {
-                20
+                dpi(20)
             } else {
-                100
+                dpi(100)
             }
         }
         WidgetKind::Button => {
@@ -368,42 +392,46 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
             {
                 if let Some(hwnd) = widgets::get_hwnd_safe(handle) {
                     let size = measure_text_height(hwnd, cross_size, vertical);
-                    // Add padding: 8px vertical, 16px horizontal
-                    return if vertical { size + 16 } else { size + 32 };
+                    // Add padding: 8px vertical, 16px horizontal (logical)
+                    return if vertical {
+                        size + dpi(16)
+                    } else {
+                        size + dpi(32)
+                    };
                 }
             }
             if vertical {
-                34
+                dpi(34)
             } else {
-                100
+                dpi(100)
             }
         }
         WidgetKind::TextField => {
             if vertical {
-                30
+                dpi(30)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::Toggle => {
             if vertical {
-                24
+                dpi(24)
             } else {
-                100
+                dpi(100)
             }
         }
         WidgetKind::Slider => {
             if vertical {
-                24
+                dpi(24)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::Divider => {
             if vertical {
-                2
+                dpi(2)
             } else {
-                2
+                dpi(2)
             }
         }
         WidgetKind::Spacer => 0, // handled separately
@@ -413,23 +441,23 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
         WidgetKind::ScrollView | WidgetKind::LazyVStack => {
             // ScrollView/LazyVStack takes all available space
             if vertical {
-                200
+                dpi(200)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::SecureField => {
             if vertical {
-                24
+                dpi(24)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::ProgressView => {
             if vertical {
-                20
+                dpi(20)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::Form | WidgetKind::Section => {
@@ -438,80 +466,80 @@ fn measure_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross_size:
         WidgetKind::ZStack | WidgetKind::NavStack => {
             // ZStack/NavStack takes all available space
             if vertical {
-                200
+                dpi(200)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::Picker => {
             if vertical {
-                28
+                dpi(28)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::Canvas => {
             if vertical {
-                200
+                dpi(200)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::Image => {
             if vertical {
-                24
+                dpi(24)
             } else {
-                24
+                dpi(24)
             }
         }
         WidgetKind::Calendar => {
             if vertical {
-                240
+                dpi(240)
             } else {
-                280
+                dpi(280)
             }
         }
         WidgetKind::DatePicker => {
             // Compact date field — a single row, narrow like a textfield.
             if vertical {
-                28
+                dpi(28)
             } else {
-                160
+                dpi(160)
             }
         }
         WidgetKind::Combobox => {
             if vertical {
-                28
+                dpi(28)
             } else {
-                200
+                dpi(200)
             }
         }
         WidgetKind::TreeView => {
             if vertical {
-                200
+                dpi(200)
             } else {
-                240
+                dpi(240)
             }
         }
         WidgetKind::RichText => {
             if vertical {
-                200
+                dpi(200)
             } else {
-                240
+                dpi(240)
             }
         }
         WidgetKind::Chart => {
             if vertical {
-                200
+                dpi(200)
             } else {
-                240
+                dpi(240)
             }
         }
         WidgetKind::TextArea => {
             if vertical {
-                120
+                dpi(120)
             } else {
-                280
+                dpi(280)
             }
         }
     }
@@ -576,13 +604,13 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
     unsafe {
         let hdc = GetDC(Some(hwnd));
         if hdc.is_invalid() {
-            return if vertical { 20 } else { 100 };
+            return if vertical { dpi(20) } else { dpi(100) };
         }
 
         let text_len = GetWindowTextLengthW(hwnd);
         if text_len == 0 {
             let _ = ReleaseDC(Some(hwnd), hdc);
-            return if vertical { 20 } else { 100 };
+            return if vertical { dpi(20) } else { dpi(100) };
         }
 
         let mut buf = vec![0u16; (text_len + 1) as usize];
@@ -616,7 +644,7 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
             }
             let _ = ReleaseDC(Some(hwnd), hdc);
 
-            (rect.bottom - rect.top).max(16)
+            (rect.bottom - rect.top).max(dpi(16))
         } else {
             let mut size = SIZE::default();
             GetTextExtentPoint32W(hdc, &buf[..text_len as usize], &mut size);
@@ -626,8 +654,35 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
             }
             let _ = ReleaseDC(Some(hwnd), hdc);
 
-            size.cx.max(20)
+            size.cx.max(dpi(20))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_by;
+
+    #[test]
+    fn identity_at_100_percent() {
+        assert_eq!(scale_by(30, 1.0), 30);
+        assert_eq!(scale_by(200, 1.0), 200);
+    }
+
+    #[test]
+    fn degenerate_scale_is_identity() {
+        // An unset/zeroed DPI reading must never shrink controls.
+        assert_eq!(scale_by(30, 0.0), 30);
+        assert_eq!(scale_by(30, 0.5), 30);
+    }
+
+    #[test]
+    fn scales_and_rounds_at_common_factors() {
+        assert_eq!(scale_by(30, 1.25), 38); // 37.5 rounds up
+        assert_eq!(scale_by(30, 1.5), 45);
+        assert_eq!(scale_by(30, 2.0), 60);
+        assert_eq!(scale_by(2, 1.5), 3); // Divider stays visible
+        assert_eq!(scale_by(28, 1.75), 49);
     }
 }
 
