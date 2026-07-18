@@ -930,6 +930,9 @@ unsafe fn try_concat_all_dense(
             if arg.to_bits() >> 48 == 0x7FFF {
                 crate::string::js_string_addref_if_heap_string(arg);
             }
+            // GC_STORE_AUDIT(BARRIERED): scalar concat arg into the result;
+            // same single exact layout/barrier rebuild as the bulk copy above
+            // runs after all elements are in place.
             std::ptr::write(dst.add(off), arg);
             off += 1;
         }
