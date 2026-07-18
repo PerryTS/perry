@@ -106,6 +106,7 @@ pub mod perf_hooks;
 pub mod pointer_event;
 pub mod process;
 pub mod promise;
+pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
 pub mod regex;
@@ -406,6 +407,10 @@ mod stdlib_pump {
         // so it runs even when perry-stdlib isn't linked. Zero-cost (one relaxed
         // atomic load) when there are no live children.
         crate::child_process::reactor::cp_reactor_pump();
+        // #6563: drive the node-pty reactor — deliver pending onData/onExit
+        // for live ptys. Zero-cost (one relaxed load) when none are live.
+        #[cfg(unix)]
+        crate::pty::reactor::pty_reactor_pump();
         // #4911: deliver queued UDP datagrams as `'message'` events. Lives in
         // perry-runtime so node:dgram works without perry-stdlib linked.
         // Zero-cost (one relaxed load) when no sockets are bound.
@@ -445,6 +450,12 @@ mod stdlib_pump {
         // #1934: a live spawn-reactor child keeps the event loop alive even when
         // perry-stdlib isn't linked (or reports no handles).
         if crate::child_process::reactor::cp_reactor_has_live() {
+            return 1;
+        }
+        // #6563: a live pty keeps the event loop alive (its onData/onExit
+        // handlers are still pending), like a live spawn-reactor child.
+        #[cfg(unix)]
+        if crate::pty::reactor::pty_reactor_has_live() {
             return 1;
         }
         // #4911: a bound + `ref`'d node:dgram socket keeps the loop alive.

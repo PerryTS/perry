@@ -270,6 +270,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // #3687: cluster default-import method calls (`cluster.fork()`,
         // `cluster.emit(...)`) dispatch against the base `cluster` arms.
         "cluster.default" => ("cluster", false),
+        // #6563: `(await import("node-pty")).default.spawn(...)` — the CJS
+        // interop shape esbuild-bundled consumers produce.
+        "node-pty.default" => ("node-pty", false),
         "os.default" => ("os", false),
         "path.default" => ("path", false),
         "path.posix.default" => ("path.posix", false),
@@ -318,8 +321,8 @@ pub(crate) use dispatch_d_i::{
     nm_dispatch_http, nm_dispatch_inspector,
 };
 pub(crate) use dispatch_m_p::{
-    nm_dispatch_module, nm_dispatch_net, nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf,
-    nm_dispatch_process,
+    nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty, nm_dispatch_os, nm_dispatch_path,
+    nm_dispatch_perf, nm_dispatch_process,
 };
 pub(crate) use dispatch_q_u::{
     nm_dispatch_punycode, nm_dispatch_querystring, nm_dispatch_readline, nm_dispatch_repl,

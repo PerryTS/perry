@@ -333,6 +333,8 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
             | "listenerCount",
         ) => Some(2),
         ("cluster", "removeAllListeners") => Some(1),
+        // #6563: node-pty `spawn(file, args, options)`.
+        ("node-pty", "spawn") => Some(3),
         ("events", "EventEmitter") => Some(1),
         ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),

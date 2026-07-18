@@ -1260,6 +1260,14 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     // value-read passes the #463 surface gate and resolves to `undefined`.
     class("child_process", "ChildProcess"),
     internal_property("child_process", "Stream"),
+    // --- node-pty (#6563: runtime-native pty; `spawn` is the whole module
+    //     surface — the IPty methods live on the returned object). The
+    //     @lydell fork is API-identical; both rows exist so either import
+    //     name passes the #463 surface gate. ---
+    method("node-pty", "spawn", false, None),
+    property("node-pty", "default"),
+    method("@lydell/node-pty", "spawn", false, None),
+    property("@lydell/node-pty", "default"),
     // --- tty ---
     method("tty", "isatty", false, None),
     class("tty", "ReadStream"),
