@@ -1034,4 +1034,19 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("perry/ads", "js_ads_banner_create", false, None),
     method("perry/ads", "js_ads_banner_destroy", false, None),
     method("perry/ads", "js_ads_request_consent", false, None),
+    // --- "bun" module / Bun globals shim pack (issue #6560) ---
+    // Tier 0 of Bun-app support (driver: opencode). `Bun.stringWidth`,
+    // `Bun.file` / `Bun.write`, `Bun.stdin/stdout/stderr`, `Bun.hash`
+    // (Zig-std wyhash, BigInt result), and the module-level
+    // `pathToFileURL` / `fileURLToPath` aliases of node:url.
+    // Implementation: perry-runtime `bun_compat`.
+    method("bun", "stringWidth", false, None),
+    method("bun", "hash", false, None),
+    method("bun", "file", false, None),
+    method("bun", "write", false, None),
+    method("bun", "pathToFileURL", false, None),
+    method("bun", "fileURLToPath", false, None),
+    property("bun", "stdin"),
+    property("bun", "stdout"),
+    property("bun", "stderr"),
 ];

@@ -58,6 +58,41 @@ pub(super) fn try_module_static_methods(
     has_spread: bool,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(member) = expr {
+        // #6560: `Bun.<method>(...)` — the Bun global shim pack, member
+        // position only (mirrors the `WebAssembly` receiver pattern below:
+        // an unshadowed bare `Bun` ident). Bare `Bun` / `typeof Bun` stay
+        // untouched so node-targeting bundles that feature-detect Bun via
+        // `typeof Bun !== "undefined"` keep taking their node paths. Only
+        // the implemented surface lowers natively; unknown members fall
+        // through to the ordinary (undefined-global) lowering.
+        if !has_spread {
+            if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident)) =
+                (member.obj.as_ref(), &member.prop)
+            {
+                if obj_ident.sym.as_ref() == "Bun"
+                    && ctx.lookup_local("Bun").is_none()
+                    && ctx.lookup_native_module("Bun").is_none()
+                    && matches!(
+                        method_ident.sym.as_ref(),
+                        "stringWidth"
+                            | "hash"
+                            | "file"
+                            | "write"
+                            | "pathToFileURL"
+                            | "fileURLToPath"
+                    )
+                {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "bun".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: method_ident.sym.as_ref().to_string(),
+                        args,
+                    }));
+                }
+            }
+        }
+
         // WebAssembly.Module.* metadata statics. This is intentionally a
         // direct-call lowering so it does not duplicate the runtime namespace
         // descriptor work handled separately in #3635.

@@ -155,6 +155,10 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/ads",
     // #2513: deprecated Punycode/IDNA conversion module.
     "punycode",
+    // #6560 — Bun compatibility: the `"bun"` module specifier (named
+    // aliases `pathToFileURL` / `fileURLToPath` + type-only exports).
+    // The `Bun.*` globals dispatch through the same "bun" module tag.
+    "bun",
 ];
 
 /// Node built-in submodules that Perry routes through the
@@ -232,6 +236,8 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "perf_hooks",
     "v8",
     "repl",
+    // #6560 — Bun globals shim pack lives in perry-runtime `bun_compat`.
+    "bun",
 ];
 
 const fn method(

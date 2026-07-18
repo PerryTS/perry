@@ -788,6 +788,16 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     if module_name == "url" && property_name == "URLPattern" {
         return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
     }
+    // #6560 — Bun globals shim pack: `Bun.stdin` / `Bun.stdout` / `Bun.stderr`
+    // are object-valued reads (BunFile-like handles built by `bun_compat`).
+    if module_name == "bun" {
+        match property_name {
+            "stdin" => return crate::bun_compat::js_bun_stdin(),
+            "stdout" => return crate::bun_compat::js_bun_stdout(),
+            "stderr" => return crate::bun_compat::js_bun_stderr(),
+            _ => {}
+        }
+    }
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
             return value;
