@@ -9268,6 +9268,7 @@ fn scalar_method_summary_module() -> Module {
                     args: vec![number(1.25), number(2.75)],
                     type_args: Vec::new(),
                     byte_offset: 0,
+                    cap_args_appended: 0,
                 }),
             },
             Stmt::Return(Some(Expr::Call {
@@ -9353,6 +9354,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                 args: vec![number(1.25), number(2.75)],
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             }),
         },
         Stmt::Return(Some(Expr::Call {
@@ -9394,6 +9396,7 @@ fn scalar_method_boolean_predicate_module() -> Module {
                 args: vec![number(4.0), number(2.0)],
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             }),
         },
         Stmt::Return(Some(Expr::Call {
@@ -9441,6 +9444,7 @@ fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> 
                 args: vec![number(4.0), number(2.0)],
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             }),
         },
         Stmt::Return(Some(Expr::Call {
@@ -9474,6 +9478,7 @@ fn scalar_method_boolean_public_numeric_expr_arg_module() -> Module {
                 args: vec![number(4.0), number(2.0)],
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             }),
         },
         Stmt::Return(Some(Expr::Call {
@@ -9594,6 +9599,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                     args: vec![int(42), int(7)],
                     type_args: Vec::new(),
                     byte_offset: 0,
+                    cap_args_appended: 0,
                 }),
             },
             Stmt::Return(Some(Expr::Call {
@@ -9805,6 +9811,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                         args: vec![number(4.0), number(2.0)],
                         type_args: Vec::new(),
                         byte_offset: 0,
+                        cap_args_appended: 0,
                     }),
                 },
                 Stmt::Return(Some(Expr::Call {
@@ -9831,6 +9838,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                         args: vec![number(4.0), number(2.0)],
                         type_args: Vec::new(),
                         byte_offset: 0,
+                        cap_args_appended: 0,
                     }),
                 },
                 Stmt::Return(Some(Expr::Call {

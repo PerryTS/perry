@@ -3,10 +3,13 @@
 //!
 //! Holds the inline-ctor param binding/restore scope, the user-arg vs
 //! synthesized `__perry_cap_<id>` tail split (`CaptureFill`,
-//! `inline_constructor_param_values_with_class`,
-//! `new_site_args_carry_appended_caps` — #6530), rest/`arguments` packing,
+//! `inline_constructor_param_values_with_class`), rest/`arguments` packing,
 //! imported-ctor arg marshaling, and the standalone
 //! `<class>_constructor`-symbol call path.
+//!
+//! #6538: the presence of appended cap forwards is now carried explicitly by
+//! `Expr::New::cap_args_appended` (consumed in `new.rs::lower_new`), replacing
+//! the former `new_site_args_carry_appended_caps` arg-shape heuristic.
 
 use anyhow::Result;
 use perry_hir::{Expr, Param};
@@ -229,45 +232,6 @@ fn inline_constructor_param_values_with_class(
         }
     }
     out
-}
-
-/// #6530: true when the trailing args of a bare-identifier `new C(...)` site
-/// are the HIR-appended capture forwards for `class`'s synthesized
-/// `__perry_cap_<id>` constructor params. The HIR `Expr::New` arm appends
-/// `LocalGet(cid)` per captured id, in cap-param order, ONLY where those
-/// locals are in scope (the class's declaring function) — so each trailing
-/// arg must be a `LocalGet` whose id equals the id embedded in the matching
-/// param name. Any mismatch (a sibling-class method's `new ZodEffects({...})`
-/// carries only user args) means the caps are absent and the tail-split must
-/// not steal user args as cap fallbacks.
-///
-/// Soundness of the id match: `LocalId`s come from a single MODULE-WIDE
-/// counter (`LoweringContext::fresh_local` — never reset per function), so
-/// `LocalGet(id)` anywhere in the module denotes the one local with that id.
-/// A user expression can therefore only produce the cap-matching ids (all of
-/// them, in declaration order) by referencing the captured locals themselves
-/// — possible only in scopes where they are visible, which are exactly the
-/// scopes where the HIR appends the caps anyway (and there the appended tail
-/// follows the user args, so the tail-split still binds correctly).
-pub(super) fn new_site_args_carry_appended_caps(class: &perry_hir::Class, args: &[Expr]) -> bool {
-    let Some(ctor) = class.constructor.as_ref() else {
-        return false;
-    };
-    let cap_params: Vec<&Param> = ctor
-        .params
-        .iter()
-        .filter(|p| {
-            p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
-        })
-        .collect();
-    if cap_params.is_empty() || args.len() < cap_params.len() {
-        return false;
-    }
-    let tail = &args[args.len() - cap_params.len()..];
-    tail.iter().zip(cap_params.iter()).all(|(arg, p)| {
-        matches!(arg, Expr::LocalGet(id)
-            if perry_hir::cap_fields::cap_field_outer_id(&p.name) == Some(*id))
-    })
 }
 
 fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {

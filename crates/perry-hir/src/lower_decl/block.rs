@@ -1891,6 +1891,7 @@ fn lower_stmts_using_aware_inner(
                                 ],
                                 type_args: Vec::new(),
                                 byte_offset: 0,
+                                cap_args_appended: 0,
                             }),
                         ))],
                         else_branch: Some(vec![

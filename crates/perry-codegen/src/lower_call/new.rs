@@ -13,8 +13,7 @@ use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;
 use super::new_ctor_args::{
     bind_inline_constructor_params, call_local_constructor_symbol, lower_constructor_arg,
-    marshal_imported_ctor_args, new_site_args_carry_appended_caps,
-    restore_inline_constructor_scope, CaptureFill,
+    marshal_imported_ctor_args, restore_inline_constructor_scope, CaptureFill,
 };
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
@@ -101,11 +100,24 @@ pub(crate) use super::capture_writeback::emit_class_capture_writeback;
 /// - Constructor cannot use `return <expr>` (would terminate the
 ///   enclosing function, not the constructor body)
 /// - No method dispatch or vtables — those land in Phase C.2/C.3
-pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) -> Result<String> {
-    // Bare-identifier `new C(...)` path: the HIR `Expr::New` arm appended the
-    // class captures as trailing `LocalGet` args, so caps are PRESENT in
-    // `args`.
-    lower_new_impl(ctx, class_name, args, false)
+pub(crate) fn lower_new(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    cap_args_appended: u32,
+) -> Result<String> {
+    // #6538: the HIR bare-identifier / anonymous-class `Expr::New` arms append
+    // the class's captures as trailing `LocalGet` args ONLY where the captured
+    // locals are in scope (the declaring function), recording the count in
+    // `Expr::New::cap_args_appended`. Zero means no cap forwards were appended
+    // here — a non-capturing class, or a bare `new C(...)` reached from a
+    // sibling scope (bundled zod's `ZodType.transform() { new ZodEffects(...) }`)
+    // where the trailing args are USER args, NOT caps. The provenance is now
+    // explicit, so the codegen no longer infers it from the arg shape (the old
+    // `new_site_args_carry_appended_caps` heuristic, which could misfire on a
+    // forward-referenced capture class whose user args happened to equal its
+    // captured locals).
+    lower_new_impl(ctx, class_name, args, cap_args_appended == 0)
 }
 
 /// Member-callee `new ns.C(...)` construct (#5437): the captures were NOT
@@ -302,21 +314,15 @@ fn lower_new_impl(
         }
     };
 
-    // #6530: the HIR bare-identifier `Expr::New` arm appends the class's
-    // captures as trailing `LocalGet(<cap_id>)` args only where the captured
-    // locals are IN SCOPE (the class's declaring function). Inside a SIBLING
-    // class's method nothing is appended — bundled zod's
-    // `ZodType.transform() { return new ZodEffects({...}) }` — but this path
-    // assumed the bare form always carries them, so the tail-split treated
-    // the trailing USER args as cap fallbacks: the synthesized ctor received
-    // an empty rest array, `super(...[])` ran the parent ctor with no `def`,
-    // and every base-ctor field (`_def`, the bound methods) stayed
-    // undefined. The appended form is exactly `LocalGet(id)` paired with the
-    // synthesized trailing param `__perry_cap_<id>` (same id, same order —
-    // `expr_new.rs` pushes `LocalGet(cid)` per captured id), so verify the
-    // tail matches before treating it as appended caps.
-    let caps_absent_from_args =
-        caps_absent_from_args || !new_site_args_carry_appended_caps(class, args);
+    // #6538: `caps_absent_from_args` is now authoritative. The bare-identifier
+    // path (`lower_new`) derives it from `Expr::New::cap_args_appended` — the
+    // explicit count of trailing cap forwards the HIR appended at THIS site —
+    // and the member-callee path (`lower_new_member_captured`) passes `true`
+    // unconditionally. This replaced the old `new_site_args_carry_appended_caps`
+    // shape check, which inferred presence from the arg tail matching
+    // `LocalGet(<cap_id>)` against the synthesized `__perry_cap_<id>` params
+    // (#6530) and could misfire on a forward-referenced capture class whose
+    // user args happened to equal its captured locals.
 
     // Lower the args first (constructor params).
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
