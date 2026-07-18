@@ -2480,10 +2480,16 @@ pub fn run_with_parse_cache(
                                     .unwrap_or_else(|| "default".to_string());
                                 import_function_prefixes
                                     .entry(local.clone())
-                                    .or_insert(default_prefix);
+                                    .or_insert(default_prefix.clone());
                                 import_function_origin_names
                                     .entry(local.clone())
                                     .or_insert(default_suffix.clone());
+                                // The metadata maps are keyed by
+                                // (declaring-path, exported-name); the default
+                                // is declared at `default_origin_path` under
+                                // `default_suffix` (== "default" unless a
+                                // re-export renamed it).
+                                let key = (default_origin_path.clone(), default_suffix);
                                 // A CJS `module.exports = <expr>` becomes a
                                 // var-shaped default: a value binding emitted as
                                 // a zero-arg getter. A direct call must fetch the
@@ -2494,14 +2500,57 @@ pub fn run_with_parse_cache(
                                 // result and `equal(1, 1)` yields the function
                                 // itself instead of `true`. Mirrors the
                                 // Default-import var classification below.
-                                if exported_var_names
-                                    .contains(&(default_origin_path.clone(), default_suffix))
+                                if exported_var_names.contains(&key)
                                     || exported_var_names.contains(&(
                                         resolved_path_str.clone(),
                                         "default".to_string(),
                                     ))
                                 {
                                     imported_vars.insert(local.clone());
+                                }
+                                // A non-var-shaped default — a `module.exports =
+                                // function foo(){}` static-function or a
+                                // `module.exports = class Foo{}` — is called /
+                                // instantiated through the direct
+                                // `perry_fn_<mod>__default` symbol, so it needs
+                                // the same arity / rest / synthetic-arguments /
+                                // return-type / async / class / enum metadata the
+                                // Default specifier propagates below. Without it a
+                                // rest-param default mis-bundles its trailing args
+                                // and a class default has no ImportedClass entry
+                                // (so `new ns()` can't resolve). Key everything by
+                                // the namespace LOCAL, the name the consumer's
+                                // ExternFuncRef carries.
+                                if let Some(&param_count) = exported_func_param_counts.get(&key) {
+                                    imported_param_counts.insert(local.clone(), param_count);
+                                }
+                                if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
+                                    imported_has_rest.insert(local.clone());
+                                }
+                                if exported_func_synthetic_arguments.contains(&key) {
+                                    imported_synthetic_arguments.insert(local.clone());
+                                }
+                                if let Some(return_type) = exported_func_return_types.get(&key) {
+                                    imported_return_types.insert(local.clone(), return_type.clone());
+                                }
+                                if exported_async_funcs.contains(&key) {
+                                    imported_async_set.insert(local.clone());
+                                }
+                                if let Some(class) = exported_classes.get(&key) {
+                                    let class_prefix = canonical_class_source_prefix(
+                                        class,
+                                        &class_canonical_path,
+                                        &ctx.project_root,
+                                        &default_prefix,
+                                    );
+                                    imported_classes.push(imported_class_from_hir(
+                                        class,
+                                        class_prefix,
+                                        Some(local.clone()),
+                                    ));
+                                }
+                                if let Some(members) = exported_enums.get(&key) {
+                                    imported_enums.push((local.clone(), members.clone()));
                                 }
                             }
                         }

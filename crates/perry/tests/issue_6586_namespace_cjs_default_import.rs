@@ -40,8 +40,8 @@ fn namespace_import_of_cjs_default_function_links_and_calls() {
   "name": "ns-cjs-default",
   "private": true,
   "perry": {
-    "compilePackages": ["fakeequal", "faketraverse"],
-    "allow": { "compilePackages": ["fakeequal", "faketraverse"] }
+    "compilePackages": ["fakeequal", "faketraverse", "fakecls"],
+    "allow": { "compilePackages": ["fakeequal", "faketraverse", "fakecls"] }
   }
 }"#,
     )
@@ -77,6 +77,23 @@ fn namespace_import_of_cjs_default_function_links_and_calls() {
     )
     .expect("write faketraverse index.js");
 
+    // A CJS default that is a CLASS (`module.exports = class Foo {}`) —
+    // exercises the class/metadata propagation for the namespace binding so
+    // `new ns(...)` resolves an ImportedClass entry instead of a phantom
+    // `perry_fn_<mod>__default` function wrapper.
+    let cls_pkg = root.join("node_modules").join("fakecls");
+    std::fs::create_dir_all(&cls_pkg).expect("mkdir fakecls");
+    std::fs::write(
+        cls_pkg.join("package.json"),
+        r#"{ "name": "fakecls", "version": "1.0.0", "main": "index.js" }"#,
+    )
+    .expect("write fakecls package.json");
+    std::fs::write(
+        cls_pkg.join("index.js"),
+        "'use strict';\nmodule.exports = class Box { constructor(x) { this.x = x; } doubled() { return this.x * 2; } };\n",
+    )
+    .expect("write fakecls index.js");
+
     // Consumer imports both as namespaces and CALLS them directly — the exact
     // ajv `resolve.ts` shape.
     let entry = root.join("main.ts");
@@ -85,6 +102,7 @@ fn namespace_import_of_cjs_default_function_links_and_calls() {
         r#"
 import * as equal from "fakeequal";
 import * as traverse from "faketraverse";
+import * as Box from "fakecls";
 
 const eq: boolean = (equal as any)({ a: 1 }, { a: 1 } as any) === false;
 console.log("equal:", (equal as any)(1, 1), (equal as any)(1, 2));
@@ -93,6 +111,10 @@ let seen = 0;
 const doubled: number = (traverse as any)({ n: 21 }, (_s: any) => { seen++; });
 console.log("traverse:", doubled, "seen:", seen);
 console.log("eq_ref:", eq);
+
+// `new` through a namespace binding whose CJS default is a class.
+const b: any = new (Box as any)(21);
+console.log("box:", b.doubled());
 "#,
     )
     .expect("write entry");
@@ -123,7 +145,7 @@ console.log("eq_ref:", eq);
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(
-        stdout, "equal: true false\ntraverse: 42 seen: 1\neq_ref: true\n",
-        "namespace import of a CJS default function must call the default export"
+        stdout, "equal: true false\ntraverse: 42 seen: 1\neq_ref: true\nbox: 42\n",
+        "namespace import of a CJS default function/class must resolve the default export"
     );
 }
