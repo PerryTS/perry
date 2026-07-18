@@ -246,6 +246,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
+    # `Win32_System_Threading` powers the Windows arm of `process.kill`
+    # (`OpenProcess` / `TerminateProcess` / `GetExitCodeProcess`, mirroring
+    # libuv's `uv_kill`) in `src/os/signal.rs`.
     "Win32_System_Threading",
 ] }
 
