@@ -602,19 +602,35 @@ fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
     extern "C" {
         fn js_object_get_prototype_of(obj_value: f64) -> f64;
     }
-    // OrdinaryHasInstance(C, O) step 5 (ECMA-262 7.3.20): "If Type(O) is not
-    // Object, return false." A `null`/`undefined` left operand is not an
-    // object, so it is never `instanceof` anything. Guard here BEFORE the
-    // `js_object_get_prototype_of(value)` walk below, which would instead throw
-    // `TypeError: Cannot convert undefined or null to object` on such a value.
-    // #6587: `FindMyWay(opts)` (find-my-way@9) is called without `new`, so its
-    // `Router` body evaluates `this instanceof Router` with `this === undefined`
-    // — a dynamic (function-value) RHS routes through `js_instanceof_dynamic`'s
-    // synthetic-class-id tail into this walk, and the unguarded getPrototypeOf
-    // aborted module init before any route was registered.
+    // OrdinaryHasInstance(C, O) step 3 (ECMA-262 7.3.21): "If Type(O) is not
+    // Object, return false." A primitive left operand is never `instanceof`
+    // anything, so guard it here BEFORE the `js_object_get_prototype_of(value)`
+    // walk below. Routing a primitive into that walk is wrong two ways:
+    //   * `null`/`undefined` THROW `TypeError: Cannot convert undefined or null
+    //     to object` (#6587: find-my-way@9's `FindMyWay(opts)` is called without
+    //     `new`, so its `Router` body evaluates `this instanceof Router` with
+    //     `this === undefined` — a function-value RHS routes through
+    //     `js_instanceof_dynamic`'s synthetic-class-id tail into this walk, and
+    //     the unguarded getPrototypeOf aborted module init before any route was
+    //     registered);
+    //   * a heap-allocated string/bigint/symbol gets ToObject-wrapped by
+    //     getPrototypeOf, so the walk climbs the wrapper chain and can spuriously
+    //     match (`Symbol() instanceof Object` wrongly returned `true`).
+    // Every tag below is checked without dereferencing. Real f64 numbers are
+    // already answered `false` by the primitive fast paths before this point and
+    // share tag-space with raw heap pointers (a bare `is_number()` would
+    // misclassify a module-level object var), so they are intentionally left to
+    // those paths rather than guarded here.
     {
         let jv = crate::value::JSValue::from_bits(value.to_bits());
-        if jv.is_null() || jv.is_undefined() {
+        if jv.is_null()
+            || jv.is_undefined()
+            || jv.is_bool()
+            || jv.is_int32()
+            || jv.is_any_string()
+            || jv.is_bigint()
+            || unsafe { crate::symbol::js_is_symbol(value) != 0 }
+        {
             return false;
         }
     }
@@ -1307,6 +1323,13 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
     if class_id == CLASS_ID_OBJECT {
         if jsval.is_pointer() {
+            // A Symbol is a POINTER_TAG heap allocation but a PRIMITIVE, not an
+            // object, so `Symbol() instanceof Object` is false (the comment
+            // above says "any non-primitive"). Every other primitive is
+            // non-pointer-tagged and already falls through below. #6587 review.
+            if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
+                return false_val;
+            }
             // Covers every heap object, including a Date (now a NaN-boxed
             // `DateCell` pointer — #2089) and an Invalid Date.
             return true_val;
@@ -1523,18 +1546,36 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 mod null_lhs_tests {
     use super::*;
 
-    /// #6587: `OrdinaryHasInstance` with a `null`/`undefined` left operand must
-    /// answer `false`, NOT throw `Cannot convert undefined or null to object`.
-    /// The guard short-circuits before any prototype access, so the RHS is
-    /// irrelevant and no arena/runtime state is touched — this exercises the
-    /// exact path find-my-way@9 hits when `FindMyWay(opts)` is called without
-    /// `new` and its `Router` body evaluates `this instanceof Router`.
+    /// `OrdinaryHasInstance` with a primitive left operand must answer `false`,
+    /// never throw or spuriously match. The guard is purely tag-based and
+    /// short-circuits before any prototype access, so the RHS is irrelevant and
+    /// no arena/runtime state is touched.
+    ///
+    /// * `null`/`undefined` — #6587: previously threw `Cannot convert undefined
+    ///   or null to object` (find-my-way@9's `FindMyWay(opts)` called without
+    ///   `new` evaluates `this instanceof Router` with `this === undefined`).
+    /// * boolean / int32 / string / bigint — a primitive is never `instanceof`
+    ///   anything; a string's ToObject wrapper chain must not spuriously match.
+    ///
+    /// (Symbols are also guarded, but constructing one needs the runtime arena,
+    /// so that arm is covered by the behavioral e2e/compiled tests instead.)
     #[test]
-    fn ordinary_has_instance_walk_is_false_for_null_and_undefined_lhs() {
-        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-        let null = f64::from_bits(crate::value::TAG_NULL);
-        // A dummy non-object RHS is never consulted for a non-object LHS.
-        assert!(!ordinary_has_instance_prototype_walk(undefined, 0.0));
-        assert!(!ordinary_has_instance_prototype_walk(null, 0.0));
+    fn ordinary_has_instance_walk_is_false_for_primitive_lhs() {
+        let cases = [
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::INT32_TAG | 5), // int32 5
+            f64::from_bits(crate::value::STRING_TAG | 0x1000), // string tag (addr never deref'd)
+            f64::from_bits(crate::value::BIGINT_TAG | 0x1000), // bigint tag (addr never deref'd)
+        ];
+        for lhs in cases {
+            // A dummy non-object RHS is never consulted for a non-object LHS.
+            assert!(
+                !ordinary_has_instance_prototype_walk(lhs, 0.0),
+                "primitive LHS {:#018x} must not be instanceof anything",
+                lhs.to_bits()
+            );
+        }
     }
 }
