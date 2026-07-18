@@ -378,16 +378,29 @@ unsafe fn route_iter_obj_receiver(arr: *const ArrayHeader, kind: u8) -> IterRece
     let bits = arr as u64;
     let top16 = bits >> 48;
     if top16 == 0 {
-        return IterReceiver::Ptr(arr);
+        // Runtime-internal callers (and objects from pre-change codegen)
+        // pass raw heap pointers here. `0.0` and denormal-range doubles
+        // share the untagged shape — only a plausible heap address may be
+        // treated as a pointer, so `(0 as any).entries()` reaches the
+        // TypeError below instead of dereferencing null (#6599 review).
+        if crate::value::addr_class::is_plausible_heap_addr(bits as usize) {
+            return IterReceiver::Ptr(arr);
+        }
     }
     let masked = (bits & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
     if top16 == 0x7FFD {
         return IterReceiver::Ptr(masked);
     }
     if top16 == 0x7FFC {
-        // undefined / null / booleans: keep the small payload so
+        // undefined (1) / null (2): keep the small payload so
         // `guard_coercible_this` renders its coercibility TypeError.
-        return IterReceiver::Ptr(masked);
+        // Booleans (3/4) are ordinary non-iterable primitives — they used
+        // to fall through to the junk-pointer deref path; route them to
+        // the TypeError below instead (#6599 review).
+        let payload = masked as usize;
+        if payload == 1 || payload == 2 {
+            return IterReceiver::Ptr(masked);
+        }
     }
     let method: &[u8] = match kind {
         1 => b"keys",

@@ -27,6 +27,31 @@ async function main() {
     console.log("number entries throws TypeError:", e instanceof TypeError);
   }
 
+  // Zero and booleans share dangerous bit shapes (top16 == 0 → "raw
+  // pointer" null; 0x7FFC payloads 3/4 → tiny "pointers") — all three
+  // iterator names must throw TypeError, matching Node (#6599 review).
+  // Direct `.entries()` syntax so the #597 any-typed fold fires.
+  const zero: any = 0;
+  const t: any = true;
+  const f: any = false;
+  const check = (label: string, fn: () => void) => {
+    try {
+      fn();
+      console.log(`${label}: no throw`);
+    } catch (e) {
+      console.log(`${label} throws TypeError:`, e instanceof TypeError);
+    }
+  };
+  check("0.entries()", () => zero.entries());
+  check("0.keys()", () => zero.keys());
+  check("0.values()", () => zero.values());
+  check("true.entries()", () => t.entries());
+  check("true.keys()", () => t.keys());
+  check("true.values()", () => t.values());
+  check("false.entries()", () => f.entries());
+  check("false.keys()", () => f.keys());
+  check("false.values()", () => f.values());
+
   function makeStream(i: number): ReadableStream {
     return new ReadableStream({
       start(controller) {
