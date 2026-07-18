@@ -8,6 +8,9 @@ use std::sync::RwLock;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
+    // Parent linking changes what a class chain can intercept — flush cached
+    // store plans (`object::prop_plan`).
+    crate::object::prop_plan::prop_plan_epoch_bump();
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
@@ -199,6 +202,119 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     }
 }
 
+/// Own-property key under which a per-evaluation class object
+/// (`ClassExprFresh`) pins ITS OWN parent class value. See
+/// `js_class_object_pin_parent`.
+pub(crate) const CLASS_OBJECT_PARENT_KEY: &str = "__perry_parent_class";
+
+/// #6438: pin THIS evaluation's parent onto a per-evaluation class object.
+///
+/// `CLASS_DYNAMIC_PARENT_VALUE` is keyed by the child's **class id**, i.e. by
+/// the compile-time template — so a class expression evaluated N times with a
+/// DIFFERENT parent each time (effect's
+/// `class DeclareClass extends make(ast) { … }`, where `make(ast)` returns a
+/// fresh class per call) collapses to last-wins: every DeclareClass would walk
+/// to the LAST `make(ast)` and read that evaluation's `static ast`.
+///
+/// Codegen calls this immediately after `RegisterClassParentDynamic` in the
+/// same lowered Sequence, so the table still holds *this* evaluation's parent.
+/// Copy it onto the class object as an own property; later evaluations
+/// overwrite the table but each object already carries its own edge. Same
+/// write-right-before-use shape the capture snapshot already uses.
+///
+/// A no-parent class expression pins nothing (the getter yields undefined or a
+/// static ClassRef fallback, which the field walk treats as "no own edge").
+#[no_mangle]
+pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if obj == 0 || template_class_id == 0 {
+        return;
+    }
+    let parent = js_get_dynamic_parent_value(template_class_id);
+    if parent.to_bits() == TAG_UNDEFINED {
+        return;
+    }
+    let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    crate::object::js_object_set_field_by_name(
+        obj as *mut crate::object::ObjectHeader,
+        key,
+        parent,
+    );
+}
+
+/// Read back the parent pinned by `js_class_object_pin_parent`, or `None` when
+/// this class object has no own parent edge.
+///
+/// Scans the keys array DIRECTLY rather than going through the by-name read
+/// path: that path consults the pinned parent itself (that is the whole point
+/// of the edge), so reading the marker through it re-enters this function and
+/// recurses until the stack guard page — an immediate SIGSEGV. A re-entrancy
+/// flag is not an option either: it would abort the legitimate
+/// parent→grandparent walk of a multi-level factory chain. An own-only scan has
+/// neither problem, and it is cheap: the pinned key sits among a handful of own
+/// statics on a class object.
+pub(crate) fn class_object_pinned_parent(obj: *const crate::object::ObjectHeader) -> Option<f64> {
+    class_object_own_field_bytes(obj, CLASS_OBJECT_PARENT_KEY.as_bytes())
+}
+
+/// OWN-ONLY field read on a class object: scans the keys array directly and
+/// consults no prototype chain, no registry, and no pinned parent.
+///
+/// Needed because `get_field_by_name_object_tail` folds the own lookup together
+/// with a class_id-keyed prototype-chain walk. For a per-evaluation class object
+/// that chain resolves through the TEMPLATE's parent edge — which is last-wins —
+/// so it answers with a sibling evaluation's inherited value instead of this
+/// object's. Callers that must order "own, then MY pinned parent, then the
+/// generic tail" need the own half in isolation.
+pub(crate) fn class_object_own_field_bytes(
+    obj: *const crate::object::ObjectHeader,
+    want: &[u8],
+) -> Option<f64> {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    // `is_valid_obj_ptr` alone does not reject the fetch/zlib/proxy handle
+    // bands, and dereferencing a handle id as an ObjectHeader segfaults on Linux
+    // (macOS hides it). Gate on `is_above_handle_band` first — a real class
+    // object is always a heap allocation above the band.
+    if obj.is_null()
+        || !crate::value::addr_class::is_above_handle_band(obj as usize)
+        || !crate::object::is_valid_obj_ptr(obj as *const u8)
+    {
+        return None;
+    }
+    unsafe {
+        let keys = (*obj).keys_array;
+        if keys.is_null() {
+            return None;
+        }
+        let len = (*keys).length;
+        for i in 0..len {
+            let k = crate::array::js_array_get_f64(keys, i);
+            let sp = crate::value::js_get_string_pointer_unified(k) as *const crate::StringHeader;
+            if sp.is_null() {
+                continue;
+            }
+            let blen = (*sp).byte_len as usize;
+            if blen != want.len() {
+                continue;
+            }
+            let bytes = std::slice::from_raw_parts(
+                (sp as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                blen,
+            );
+            if bytes != want {
+                continue;
+            }
+            let v = crate::object::js_object_get_field(obj, i);
+            if v.bits() == TAG_UNDEFINED {
+                return None;
+            }
+            return Some(f64::from_bits(v.bits()));
+        }
+    }
+    None
+}
+
 /// Read back the parent constructor value stashed at class-definition time by
 /// `js_register_class_parent_dynamic` (see `CLASS_DYNAMIC_PARENT_VALUE`).
 /// `super()` in a `class X extends <runtime-value>` body uses this so the
@@ -249,6 +365,12 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
         unsafe {
             (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
+            // #6530: record cid → class object so `instance.constructor`
+            // resolves to the SAME value the module scope/exports hold (see
+            // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
+            // `js_object_alloc(cid, …)` call directly preceding this mark.
+            let cid = (*(obj as *const ObjectHeader)).class_id;
+            super::class_object_value_root_store(cid, obj as *mut ObjectHeader);
         }
     }
 }
@@ -357,6 +479,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if sym_key == 0 {
             return;
         }
+        crate::symbol::note_symbol_key_installed(sym_key);
         {
             let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
             if guard.is_none() {
@@ -493,6 +616,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         if sym_key == 0 {
             return;
         }
+        crate::symbol::note_symbol_key_installed(sym_key);
         let mut guard = CLASS_SYMBOL_ACCESSORS.write().unwrap();
         if guard.is_none() {
             *guard = Some(HashMap::new());
@@ -1325,6 +1449,41 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // constructs the subclass.
             let prev_this = crate::object::js_implicit_this_set(receiver);
             let result = crate::closure::js_native_call_value(static_val, args_ptr, args_len);
+            crate::object::js_implicit_this_set(prev_this);
+            return result;
+        }
+    }
+    // #6475: `class X extends <function value>() {}` — a static member
+    // INHERITED from the parent FUNCTION's own properties, invoked as a call
+    // (`X.use(f)`, effect's `HttpRouter.Tag(id)().use`/`unwrap`/`serve`). The
+    // field-GET path already walks the parent closure
+    // (`get_field_by_name.rs` #36/#321: `closure_get_dynamic_prop(parent,
+    // name)`), so `typeof X.use === "function"` — but the fused static-CALL
+    // lowering routes here, and this helper only consulted CLASS_DYNAMIC_PROPS
+    // (which holds statics of a CLASS parent, not the own props of a runtime
+    // FUNCTION parent stored in the closure-props table). So the call missed,
+    // fell to the receiver fallback below, and effect's `X.use(f)` returned the
+    // class ref (`1`) instead of running the inherited arrow — every Tag-based
+    // Layer built through `.use`/`.serve` silently became the class itself.
+    // Walk the parent-closure chain and invoke the resolved callable with `this`
+    // bound to the receiver, mirroring the GET path.
+    if let Some(closure_ptr) = parent_closure_in_chain(class_id) {
+        let closure_val = f64::from_bits(
+            crate::value::POINTER_TAG | (closure_ptr as u64 & crate::value::POINTER_MASK),
+        );
+        let member = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+        let mv = crate::value::JSValue::from_bits(member.to_bits());
+        if !mv.is_undefined()
+            && !mv.is_null()
+            && crate::collection_iter::is_callable(member)
+            // Guard against the closure_get_dynamic_prop fallback returning the
+            // closure itself for an unknown key (it never should for a miss,
+            // but be defensive): a member equal to the parent closure value is
+            // not a real inherited member.
+            && member.to_bits() != closure_val.to_bits()
+        {
+            let prev_this = crate::object::js_implicit_this_set(receiver);
+            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
             crate::object::js_implicit_this_set(prev_this);
             return result;
         }

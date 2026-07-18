@@ -249,6 +249,18 @@ pub(crate) fn build_and_run_link(
         } else {
             // Native macOS/iOS via clang driver
             cmd.arg("-Wl,-dead_strip");
+            // A perry executable exports every external Rust/codegen symbol by
+            // default — a large app binary carries a 300k-entry export trie
+            // with WEAK_DEFINES set, and dyld spends ~0.9s of EVERY launch on
+            // weak-def coalescing + bind resolution against it (profiled:
+            // `--version` was ~80% dyld). Nothing consumes those exports —
+            // plugins dlopen their own dylibs and resolve from their own
+            // handle (never `dlsym(RTLD_DEFAULT/SELF)` into the host) — except
+            // the plugin-host mode, which force-exports its API via `-u` and
+            // must keep the trie.
+            if !ctx.needs_plugins {
+                cmd.arg("-Wl,-no_exported_symbols");
+            }
         }
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on

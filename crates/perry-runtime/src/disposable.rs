@@ -129,7 +129,14 @@ pub const CLASS_ID_DISPOSABLE_STACK: u32 = 0xFFFF_003C;
 pub const CLASS_ID_ASYNC_DISPOSABLE_STACK: u32 = 0xFFFF_003D;
 /// Reserved class id for a `SuppressedError` instance. Registered as an
 /// Error subclass at first construction so `instanceof Error` holds.
-pub const CLASS_ID_SUPPRESSED_ERROR: u32 = 0xFFFF_003B;
+///
+/// #6364 — must stay OUT of the typed-array reserved range
+/// (`0xFFFF0030..=0xFFFF003B`, Int8Array..Float16Array). This previously read
+/// `0xFFFF_003B`, colliding with `CLASS_ID_FLOAT16_ARRAY`, which made
+/// `err instanceof Float16Array` (and the reverse) true once `SuppressedError`
+/// was wired into the codegen `instanceof` table. `0xFFFF_003E` is the first
+/// free id after the DisposableStack/AsyncDisposableStack block below.
+pub const CLASS_ID_SUPPRESSED_ERROR: u32 = 0xFFFF_003E;
 
 const FIELD_DISPOSERS: u32 = 0;
 const FIELD_DISPOSED: u32 = 1;

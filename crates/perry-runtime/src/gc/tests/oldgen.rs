@@ -332,6 +332,52 @@ fn test_dirty_page_scan_accounts_old_page_dirty_slots() {
 }
 
 #[test]
+fn test_old_page_dirty_slots_reset_lazily_across_cycles() {
+    // #6181: `old_pages_begin_gc_cycle` no longer walks every old page to zero
+    // `dirty_slots` — it bumps a per-cycle epoch, so last cycle's count reads
+    // as zero without any per-page work, and the next dirty slot re-stamps
+    // from 1. This asserts that epoch-scoped equivalence directly.
+    let _isolation = copying_nursery_isolation_lock();
+    reset_remembered_set();
+    clear_marks();
+    clear_mark_seeds();
+
+    let (_old_obj, fields) = unsafe { alloc_old_test_object(1) };
+    let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
+
+    // Cycle A: two dirty-slot accountings land on the page.
+    crate::arena::old_pages_begin_gc_cycle();
+    crate::arena::old_page_account_dirty_slot(fields as usize);
+    crate::arena::old_page_account_dirty_slot(fields as usize);
+    let meta_a = crate::arena::old_page_meta_for_tests(dirty_page)
+        .expect("old page should have metadata after allocation");
+    assert_eq!(meta_a.dirty_slots, 2, "both accountings counted in cycle A");
+    assert_eq!(crate::arena::old_page_summary().dirty_slots, 2);
+
+    // Cycle B: a bare epoch bump (no per-page reset walk) must invalidate the
+    // prior count — the page reads zero dirty slots even though nothing
+    // touched its metadata.
+    crate::arena::old_pages_begin_gc_cycle();
+    let meta_b = crate::arena::old_page_meta_for_tests(dirty_page)
+        .expect("old page metadata should persist across cycles");
+    assert_eq!(
+        meta_b.dirty_slots, 0,
+        "epoch bump alone resets last cycle's dirty-slot count"
+    );
+    assert_eq!(crate::arena::old_page_summary().dirty_slots, 0);
+
+    // A fresh dirty slot in cycle B re-stamps the page and counts from 1.
+    crate::arena::old_page_account_dirty_slot(fields as usize);
+    let meta_b2 = crate::arena::old_page_meta_for_tests(dirty_page)
+        .expect("old page metadata should persist");
+    assert_eq!(meta_b2.dirty_slots, 1, "re-stamp starts a fresh count");
+    assert_eq!(crate::arena::old_page_summary().dirty_slots, 1);
+
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
 fn test_old_page_sweep_accounting_trace_json_includes_summary() {
     let _isolation = copying_nursery_isolation_lock();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -402,6 +448,7 @@ fn test_old_page_defrag_policy_selection_prefers_fragmented_unpinned_pages() {
             pinned_bytes,
             pinned_object_count: usize::from(pinned_bytes > 0),
             dirty_slots: 0,
+            dirty_slots_epoch: 0,
             dirty: false,
             evacuation_eligible: false,
         }

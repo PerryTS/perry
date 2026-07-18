@@ -10,7 +10,12 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "chrono"] }
+# `mysql-rsa` enables the RSA public-key auth exchange MySQL 8's default
+# `caching_sha2_password` / `sha256_password` need over a NON-TLS connection.
+# Without it every query against such a server fails at connect with
+# "RSA auth backend disabled" — which broke `pool.execute`/`query` (e.g. an
+# Auth.js credentials `authorize` DB lookup, surfaced as a CallbackRouteError).
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "mysql-rsa", "chrono"] }
 tokio = { workspace = true }
 chrono = "0.4"
 

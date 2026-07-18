@@ -73,6 +73,22 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         return js_nanbox_pointer(arr_i64);
     }
 
+    // #6454: a class DECLARATION is an INT32-tagged ClassRef whose low bits are
+    // the class id — `js_nanbox_get_pointer` below would misread that id as a
+    // heap address and the GC-header sniff would dereference `id - 8`. Resolve
+    // its (possibly inherited, #36/#321) `[Symbol.iterator]` and drive it;
+    // a class with none is not iterable, exactly like node
+    // (`for (const x of Plain) {}` → TypeError). Must run BEFORE the raw-pointer
+    // logic below.
+    if crate::object::class_ref_id(val_f64).is_some() {
+        if crate::symbol::class_ref_resolves_iterator(val_f64) {
+            let iter = crate::symbol::js_get_iterator(val_f64);
+            let arr = js_iterator_to_array(iter);
+            return js_nanbox_pointer(arr as i64);
+        }
+        throw_not_iterable(val_f64);
+    }
+
     // Non-pointer scalars (number/bool/null/undefined/symbol) are not
     // iterable. Per ECMA-262 §13.7.5.13 (ForIn/OfHeadEvaluation →
     // GetIterator → ToObject/GetMethod) these MUST throw a TypeError:
@@ -701,6 +717,18 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         let str_ptr = crate::value::js_get_string_pointer_unified(value);
         let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
         return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
+    }
+
+    // #6454: `[...SomeClass]` / `fn(...SomeClass)` on a class DECLARATION — an
+    // INT32-tagged ClassRef. Drive its (possibly inherited) `[Symbol.iterator]`;
+    // with none it is not iterable, like node. Must run before the raw-pointer
+    // reads below, which would misread the class id as a heap address.
+    if crate::object::class_ref_id(value).is_some() {
+        if crate::symbol::class_ref_resolves_iterator(value) {
+            let iter = crate::symbol::js_get_iterator(value);
+            return js_iterator_to_array(iter);
+        }
+        throw_not_iterable(value);
     }
 
     let raw_ptr = js_nanbox_get_pointer(value) as usize;

@@ -705,6 +705,13 @@ pub struct LoweringContext {
     /// field layout. Dedup is per-module only; cross-module dedup would need
     /// a stable hash and is deferred.
     pub(crate) anon_shape_classes: HashMap<String, String>,
+    /// Reverse of `anon_shape_classes`: synthetic `__AnonShape_*` class name ->
+    /// its field names in source-declared order. A closed-shape object literal
+    /// lowers to `New { class_name, args }` with the KEYS stripped into the
+    /// shape class, so a call-site that needs to inspect a config object's keys
+    /// (e.g. recognizing a bundled mysql2 `createPool(config)` by its option
+    /// names) recovers them here.
+    pub(crate) anon_shape_fields: HashMap<String, Vec<String>>,
     /// Class DECLARATION names at the top level of the function body
     /// currently being lowered. JS resolves a method-body reference to a
     /// sibling class declared LATER in the same function at call time

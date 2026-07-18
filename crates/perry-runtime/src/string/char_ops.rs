@@ -133,6 +133,24 @@ pub extern "C" fn js_string_index_get(s: *const StringHeader, key: f64) -> f64 {
     if !is_valid_string_ptr(s) {
         return UNDEFINED;
     }
+    // The receiver can be a NON-string heap object: codegen's name-only type
+    // heuristics (e.g. `.message`/`.name` → String, the Error-field assumption
+    // in type_analysis/strings.rs) route `X.message[k]` here even when the
+    // property actually holds an object. The `statuses` npm package does
+    // exactly that — `status.message = { 100: "Continue", ... }` is a map
+    // stored as a function static, so http-errors' `statuses.message[code]`
+    // was char-at-indexed and every lookup returned `undefined`;
+    // `toIdentifier(undefined)` then threw at Next.js server BOOT. JS
+    // semantics for `obj[k]` on an object are an ordinary property lookup —
+    // sniff the GC header and delegate non-string receivers to the
+    // polymorphic index-get (which is fully guarded for every receiver kind,
+    // and which routes genuine GC_TYPE_STRING receivers back here, so the
+    // `!= GC_TYPE_STRING` gate below is also the recursion breaker).
+    if let Some(h) = unsafe { crate::value::addr_class::try_read_gc_header(s as usize) } {
+        if h.obj_type != crate::gc::GC_TYPE_STRING {
+            return crate::object::js_object_get_index_polymorphic(s as i64, key);
+        }
+    }
     let len = unsafe { (*s).utf16_len } as u64;
     let jsval = crate::value::JSValue::from_bits(key.to_bits());
 

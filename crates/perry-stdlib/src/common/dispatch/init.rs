@@ -266,6 +266,61 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             perry_runtime::js_nanbox_pointer(handle)
         };
     }
+    // `net.connect` / `net.createConnection` reached as a bound VALUE —
+    // mysql2 (bundled by turbopack) does `const net = require('net');
+    // net.connect(port, host)` through the externals wrapper, so the call
+    // arrives here instead of the static codegen table. Route to the same
+    // event-driven socket factory the static path uses. Same cfg gate as the
+    // `net` module itself (the auto-opt stdlib is feature-pruned) — and
+    // deliberately OUTSIDE the `external-http-client-pump` block below, which
+    // is not enabled for every build that has sockets.
+    if module == "net" && matches!(method, "connect" | "createConnection") {
+        // Route to the net implementation that OWNS the handle-dispatch
+        // registries in this build: crate-path under bundled-net, the
+        // DISTINCT `js_ext_net_socket_connect` symbol under the well-known
+        // ext-net flip. The shared `js_net_socket_connect` name has twins in
+        // both archives, and binding to the wrong one splits the socket
+        // registry from the `.on('data')` listener registry — the mysql2
+        // handshake then times out with the bytes silently dropped (#5021's
+        // twin-symbol disease).
+        #[cfg(all(
+            feature = "bundled-net",
+            not(target_os = "ios"),
+            not(target_os = "android")
+        ))]
+        let handle = crate::net::js_net_socket_connect(arg(0), arg(1), arg(2));
+        #[cfg(all(
+            not(feature = "bundled-net"),
+            feature = "external-net-pump",
+            not(target_os = "ios"),
+            not(target_os = "android")
+        ))]
+        let handle = {
+            extern "C" {
+                fn js_ext_net_socket_connect(arg1: f64, arg2: f64, arg3: f64) -> i64;
+            }
+            js_ext_net_socket_connect(arg(0), arg(1), arg(2))
+        };
+        #[cfg(not(any(
+            all(
+                feature = "bundled-net",
+                not(target_os = "ios"),
+                not(target_os = "android")
+            ),
+            all(
+                not(feature = "bundled-net"),
+                feature = "external-net-pump",
+                not(target_os = "ios"),
+                not(target_os = "android")
+            )
+        )))]
+        let handle: i64 = 0;
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
     #[cfg(feature = "external-http-client-pump")]
     {
         extern "C" {

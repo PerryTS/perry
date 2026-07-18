@@ -827,11 +827,15 @@ fn sweep_with_age_bump_and_old_reclaim_targets(
     targeted_old_blocks: Option<&crate::fast_hash::PtrHashSet<usize>>,
     sweep_malloc: bool,
 ) -> SweepTraceStats {
+    // These synchronous wrappers age-bump exactly when sweeping a MINOR
+    // trace, so `do_age_bump` doubles as the minor-ness signal for the
+    // forwarded-stub retention rule (see `retain_all_forwarded_stubs`).
     let mut state = IncrementalSweepState::new(
         do_age_bump,
         reclaim_dead_old_blocks,
         targeted_old_blocks.cloned(),
         sweep_malloc,
+        do_age_bump,
     );
     state.finish_unbounded()
 }
@@ -985,7 +989,10 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             // them pins one object in nearly every JSON-churn block and prevents
             // RSS from falling after sweep.
             if flags & GC_FLAG_FORWARDED != 0 {
-                let retain_stub = flags & GC_FLAG_MARKED != 0
+                // Parity with ArenaSweepObjectsState::process_forwarded_object:
+                // a minor sweep (do_age_bump) cannot prove a stub unreferenced.
+                let retain_stub = do_age_bump
+                    || flags & GC_FLAG_MARKED != 0
                     || (block_idx < resettable_general_n
                         && crate::arena::general_block_in_recent_window(block_idx));
                 if retain_stub {
@@ -1191,6 +1198,7 @@ impl IncrementalSweepState {
         reclaim_dead_old_blocks: bool,
         targeted_old_blocks: Option<crate::fast_hash::PtrHashSet<usize>>,
         sweep_malloc: bool,
+        retain_all_forwarded_stubs: bool,
     ) -> Self {
         Self {
             subphase: SweepCycleSubphase::Malloc,
@@ -1199,7 +1207,11 @@ impl IncrementalSweepState {
             dead_buffers: Vec::new(),
             dead_typed_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
-            arena: ArenaSweepObjectsState::new(do_age_bump, reclaim_dead_old_blocks),
+            arena: ArenaSweepObjectsState::new(
+                do_age_bump,
+                reclaim_dead_old_blocks,
+                retain_all_forwarded_stubs,
+            ),
             cleanup: None,
             reclaim_dead_old_blocks,
             targeted_old_blocks,
@@ -1329,13 +1341,28 @@ struct ArenaSweepObjectsState {
     overflow_active: bool,
     do_age_bump: bool,
     reclaim_dead_old_blocks: bool,
+    /// Minor sweeps must retain EVERY forwarding stub: array growth installs
+    /// PERMANENT stubs (#6228 — stale pre-growth pointers keep resolving for
+    /// reads, references are never rewritten), and a minor treats old-gen
+    /// parents as black leaves whose slots are only visited via dirty pages.
+    /// An old parent (e.g. a long-lived Map's entries buffer) whose page is
+    /// no longer dirty never marks the stub its slot points at, so
+    /// "unmarked stub" does NOT imply "unreferenced" in a minor — reclaiming
+    /// it is a use-after-free (reads through the stale pointer return
+    /// reused-memory garbage). Full traces DO visit every live parent, so
+    /// mark-based stub reclaim stays sound (and bounds the accumulation).
+    retain_all_forwarded_stubs: bool,
     freed_bytes: u64,
     retained_forwarded_stub_objects: usize,
     retained_forwarded_stub_bytes: usize,
 }
 
 impl ArenaSweepObjectsState {
-    fn new(do_age_bump: bool, reclaim_dead_old_blocks: bool) -> Self {
+    fn new(
+        do_age_bump: bool,
+        reclaim_dead_old_blocks: bool,
+        retain_all_forwarded_stubs: bool,
+    ) -> Self {
         let n_blocks = crate::arena::arena_block_count();
         let block_snapshots = crate::arena::arena_block_snapshots();
         crate::arena::old_pages_reset_sweep_accounting();
@@ -1351,6 +1378,7 @@ impl ArenaSweepObjectsState {
                 || crate::closure::closure_dynamic_side_tables_nonempty(),
             do_age_bump,
             reclaim_dead_old_blocks,
+            retain_all_forwarded_stubs,
             freed_bytes: 0,
             retained_forwarded_stub_objects: 0,
             retained_forwarded_stub_bytes: 0,
@@ -1462,7 +1490,11 @@ impl ArenaSweepObjectsState {
         block_idx: usize,
         flags: u8,
     ) {
-        let retain_stub = flags & GC_FLAG_MARKED != 0
+        // See `retain_all_forwarded_stubs`: a minor cannot prove a stub
+        // unreferenced (old-gen parents are black leaves), so it must keep
+        // them all; a full trace reclaims the genuinely unreferenced ones.
+        let retain_stub = self.retain_all_forwarded_stubs
+            || flags & GC_FLAG_MARKED != 0
             || (block_idx < self.resettable_general_n
                 && crate::arena::general_block_in_recent_window(block_idx));
         if retain_stub {

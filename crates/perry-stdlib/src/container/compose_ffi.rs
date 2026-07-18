@@ -287,7 +287,7 @@ pub unsafe extern "C" fn js_container_compose_down(
     let handle_id = handle_id_from_f64(handle);
 
     let opts_json = unsafe { string_from_header(opts_ptr) };
-    let (remove_volumes, _remove_orphans) = match opts_json.as_deref() {
+    let (remove_volumes, remove_orphans) = match opts_json.as_deref() {
         Some(s) if !s.is_empty() && s != "undefined" && s != "null" => {
             let v: serde_json::Value = serde_json::from_str(s).unwrap_or(serde_json::Value::Null);
             (
@@ -316,7 +316,7 @@ pub unsafe extern "C" fn js_container_compose_down(
             Err(e) => return Err::<u64, String>(e.to_string()),
         };
         let wrapper = compose::ComposeWrapper::new_from_engine(engine);
-        match wrapper.down(remove_volumes).await {
+        match wrapper.down(remove_volumes, remove_orphans).await {
             Ok(()) => Ok(PROMISE_VOID_BITS),
             Err(e) => Err::<u64, String>(e.to_string()),
         }

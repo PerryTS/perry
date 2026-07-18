@@ -29,13 +29,19 @@ thread_local! {
     /// this side table keyed by the array allocation address. Numeric array
     /// indices remain in element storage; canonical non-indices such as
     /// `"4294967295"` are stored here per ECMA-262.
-    static ARRAY_NAMED_PROPS: RefCell<HashMap<usize, Vec<ArrayNamedProperty>>> =
-        RefCell::new(HashMap::new());
+    /// Address-keyed `PtrHashMap` (#6386): probed on every exec-array
+    /// decoration (regex match/exec) and every `ArraySpeciesCreate`
+    /// own-`constructor` check; SipHash dominated those probes.
+    static ARRAY_NAMED_PROPS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<ArrayNamedProperty>>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 #[derive(Clone)]
 struct ArrayNamedProperty {
-    name: String,
+    // `Cow` so the per-match exec-array keys (`index`/`input`/`groups`,
+    // #6386) borrow statically instead of allocating three `String`s per
+    // regex match; dynamically named expandos still own their key.
+    name: std::borrow::Cow<'static, str>,
     value: f64,
 }
 
@@ -235,7 +241,7 @@ fn barrier_array_named_props(owner: usize, props: &mut [ArrayNamedProperty]) {
 }
 
 fn merge_array_named_props(
-    props: &mut HashMap<usize, Vec<ArrayNamedProperty>>,
+    props: &mut crate::fast_hash::PtrHashMap<usize, Vec<ArrayNamedProperty>>,
     owner: usize,
     owner_props: Vec<ArrayNamedProperty>,
 ) {
@@ -319,9 +325,43 @@ pub(crate) unsafe fn array_named_property_set(
             prop.value = value;
         } else {
             props.push(ArrayNamedProperty {
-                name: name.to_string(),
+                name: std::borrow::Cow::Owned(name.to_string()),
                 value,
             });
+        }
+        barrier_array_named_props(owner, props);
+    });
+}
+
+/// Batched named-prop install for a FRESHLY built array (#6386): one
+/// side-table probe for all entries and `&str` keys (no key `StringHeader`
+/// allocations). Callers must guarantee the array was allocated in the same
+/// runtime helper invocation — a fresh array has no accessor descriptors, no
+/// property attributes, and no freeze/seal state, which is what makes
+/// bypassing `js_array_set_string_key`'s guard ladder sound. Keys must not be
+/// numeric index strings or `"length"` (those live in element storage /
+/// the header, not this side table).
+pub(crate) unsafe fn array_named_props_install_fresh(
+    arr: *mut ArrayHeader,
+    entries: &[(&'static str, f64)],
+) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return;
+    }
+    let owner = arr as usize;
+    ARRAY_NAMED_PROPS.with(|m| {
+        let mut map = m.borrow_mut();
+        let props = map.entry(owner).or_default();
+        for (name, value) in entries {
+            if let Some(prop) = props.iter_mut().find(|prop| prop.name == *name) {
+                prop.value = *value;
+            } else {
+                props.push(ArrayNamedProperty {
+                    name: std::borrow::Cow::Borrowed(*name),
+                    value: *value,
+                });
+            }
         }
         barrier_array_named_props(owner, props);
     });
@@ -393,7 +433,7 @@ pub(crate) unsafe fn array_named_property_names(
                                 .map(|attrs| attrs.enumerable())
                                 .unwrap_or(true)
                     })
-                    .map(|prop| prop.name.clone())
+                    .map(|prop| prop.name.to_string())
                     .collect()
             })
             .unwrap_or_default()

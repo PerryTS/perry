@@ -133,6 +133,7 @@ pub(super) fn try_global_builtins(
                     args,
                     type_args: Vec::new(),
                     byte_offset: 0,
+                    cap_args_appended: 0,
                 }));
             }
             // A missing argument to these is NOT an error in JS — the parameter is

@@ -681,6 +681,12 @@ pub struct CompilationContext {
     /// structural parser). A program that never canonicalizes a locale links a
     /// lighter hand-rolled fallback instead.
     pub uses_intl_locale: bool,
+    /// Whether any TS module localizes a date/time — `Intl.DateTimeFormat`, or
+    /// `Date.prototype.toLocale{,Date,Time}String`. Gates
+    /// `perry-runtime/intl-datetime` (`icu_datetime` + its bundled CLDR
+    /// date-time patterns, for byte-parity locale formatting). When absent the
+    /// runtime links the lighter hand-rolled numeric fallback instead.
+    pub uses_intl_datetime: bool,
     /// Whether any TS module uses a heap-snapshot API (`v8.getHeapSnapshot` /
     /// `v8.writeHeapSnapshot`) or `process.report`. Gates
     /// `perry-runtime/diagnostics` (the cold-path JSON serializers + the
@@ -1019,6 +1025,7 @@ impl CompilationContext {
             uses_string_normalize: false,
             uses_intl_segmenter: false,
             uses_intl_locale: false,
+            uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
             needs_thread: false,

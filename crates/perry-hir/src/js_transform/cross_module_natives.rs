@@ -315,7 +315,22 @@ pub fn scan_for_native_func_returns(
                 }
             }
         }
-        Stmt::While { body, .. } | Stmt::For { body, .. } => {
+        // `Labeled`/`DoWhile` are how async/generator lowering builds its state
+        // machine (`Try { Labeled { __step_done: DoWhile { switch on __gen_state } } }`),
+        // so without these arms the scan stops at the first `await` boundary and
+        // every native instance inside an async function stays untagged — while
+        // `fix_native_instance_stmt` below *does* walk both. Keep the two
+        // traversals in sync: a shape the fixer rewrites but the scan never
+        // reaches produces no diagnostic, just a silently untyped receiver.
+        Stmt::Labeled { body, .. } => {
+            scan_for_native_func_returns(
+                body,
+                func_return_instances,
+                local_native_instances,
+                local_id_native_instances,
+            );
+        }
+        Stmt::While { body, .. } | Stmt::For { body, .. } | Stmt::DoWhile { body, .. } => {
             for s in body {
                 scan_for_native_func_returns(
                     s,
@@ -605,6 +620,34 @@ pub fn scan_expr_for_closure_returns(
             local_native_instances,
             local_id_native_instances,
         ),
+        // `app = buildServer()` as an *assignment* rather than a `let` with an
+        // initializer. Async/generator lowering rewrites
+        //   const app = buildServer();  await app.listen(...)
+        // into a hoisted box plus `Expr(LocalSet(0, Call(buildServer)))` inside
+        // the step closure, so the `Stmt::Let { init: Some(call) }` arm above
+        // never sees it and `app` stays untagged — `app.listen(...)` then lowers
+        // to a generic property call, hits codegen's unknown-native-method arm,
+        // and silently no-ops. Tag by LocalId here (the name is gone by this
+        // point; LocalId is what `LocalGet`-based dispatch resolves against).
+        Expr::LocalSet(id, value) => {
+            let call_expr = match value.as_ref() {
+                Expr::Await(inner) => inner.as_ref(),
+                other => other,
+            };
+            if let Expr::Call { callee, .. } = call_expr {
+                if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                    if let Some((module, class)) = func_return_instances.get(name.as_str()) {
+                        local_id_native_instances.insert(*id, (module.clone(), class.clone()));
+                    }
+                }
+            }
+            scan_expr_for_closure_returns(
+                value,
+                func_return_instances,
+                local_native_instances,
+                local_id_native_instances,
+            );
+        }
         _ => {}
     }
 }

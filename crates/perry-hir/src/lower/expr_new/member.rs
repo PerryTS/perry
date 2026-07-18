@@ -50,6 +50,7 @@ pub(crate) fn lower_new_member_native(
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         type_args: Vec::new(),
                         byte_offset: new_byte_offset,
+                        cap_args_appended: 0,
                     }));
                 }
                 if let Some(expr) =
@@ -68,6 +69,7 @@ pub(crate) fn lower_new_member_native(
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
                     byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
                 }));
             }
 
@@ -398,6 +400,7 @@ pub(crate) fn lower_new_member_native(
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
                     byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
                 }));
             }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
@@ -424,6 +427,7 @@ pub(crate) fn lower_new_member_native(
                         args,
                         type_args: Vec::new(),
                         byte_offset: new_byte_offset,
+                        cap_args_appended: 0,
                     }));
                 }
             }

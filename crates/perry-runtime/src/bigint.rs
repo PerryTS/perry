@@ -40,6 +40,41 @@ fn throw_bigint_syntax_error(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// V8 caps BigInt precision and throws `RangeError: Maximum BigInt size
+/// exceeded` past it. Perry's representation is a fixed 1024-bit two's
+/// complement value (issue #6073); rather than silently wrapping past
+/// ±2^1023 like an `i1024`, arithmetic that would overflow throws this same
+/// `RangeError` — a loud, catchable failure until true arbitrary precision
+/// lands. Its threshold is lower than V8's, but the observable shape matches.
+const MAX_BIGINT_SIZE_MESSAGE: &str = "Maximum BigInt size exceeded";
+
+/// Throw the "Maximum BigInt size exceeded" `RangeError` (#6073). Never returns.
+#[cold]
+#[inline(never)]
+fn throw_bigint_overflow() -> ! {
+    throw_bigint_range_error(MAX_BIGINT_SIZE_MESSAGE);
+}
+
+/// A signed 1024-bit BigInt spans `[-2^1023, 2^1023 - 1]`. Given a
+/// non-negative magnitude in little-endian limbs (`mag.len() >= BIGINT_LIMBS`)
+/// and the sign the value will carry, report whether it is representable
+/// without wrapping. Any set bit at or above 2^1024 (a nonzero limb past the
+/// low 16) never fits; a magnitude in `[2^1023, 2^1024)` fits only when it is
+/// exactly `2^1023` *and* negative — the single `-2^1023` endpoint.
+fn magnitude_fits_1024(mag: &[u64], negative: bool) -> bool {
+    debug_assert!(mag.len() >= BIGINT_LIMBS);
+    if mag[BIGINT_LIMBS..].iter().any(|&l| l != 0) {
+        return false;
+    }
+    let top = mag[BIGINT_LIMBS - 1];
+    if top >> 63 == 0 {
+        // magnitude < 2^1023 — representable with either sign.
+        return true;
+    }
+    // magnitude >= 2^1023 — only exactly -2^1023 is representable.
+    negative && top == 1u64 << 63 && mag[..BIGINT_LIMBS - 1].iter().all(|&l| l == 0)
+}
+
 /// Build a 1024-bit two's-complement limb array from a finite-integer f64.
 /// Node converts any finite integer Number to a BigInt of the same value,
 /// not just those that fit in i64. Caller must have already verified the
@@ -59,6 +94,13 @@ fn limbs_from_integer_f64(value: f64) -> [u64; BIGINT_LIMBS] {
         limbs[i] = limb as u64;
         mag = (mag / two_pow_64).floor();
         i += 1;
+    }
+    // Overflow (#6073): either the magnitude needed more than 16 limbs (`mag`
+    // is still >= 1 after the loop) or it landed in [2^1023, 2^1024) with a
+    // sign that cannot represent it. `BigInt(1e309)` and friends throw instead
+    // of silently truncating to the low 1024 bits.
+    if mag >= 1.0 || !magnitude_fits_1024(&limbs, negative) {
+        throw_bigint_overflow();
     }
     if negative {
         negate_limbs(&limbs)
@@ -429,6 +471,16 @@ fn parse_radix_digits(
             *limb = product as u64;
             carry = (product >> 64) as u64;
         }
+        // A carry out of the top limb means the magnitude passed 2^1024 —
+        // a literal too large for the fixed representation (#6073).
+        if carry != 0 {
+            throw_bigint_overflow();
+        }
+    }
+    // The magnitude fits in 16 limbs but may still exceed the signed range
+    // (e.g. a positive literal in [2^1023, 2^1024) would read back negative).
+    if !magnitude_fits_1024(&limbs, is_negative) {
+        throw_bigint_overflow();
     }
     if is_negative && !limbs.iter().all(|&l| l == 0) {
         limbs = negate_limbs(&limbs);
@@ -490,6 +542,13 @@ pub extern "C" fn js_bigint_from_string_radix(
                 }
                 *limb = value;
             }
+            // The reversed stream fed the low 16 limbs first, so any leftover
+            // chars are the high-order digits. Only a *nonzero* hex digit there
+            // sets a bit at or above 2^1024 — excess leading zeros are harmless
+            // (`0x0…0<256 digits>` still fits), so ignore '0' and non-hex chars (#6073).
+            if chars.any(|c| matches!(c, '1'..='9' | 'a'..='f' | 'A'..='F')) {
+                throw_bigint_overflow();
+            }
         } else {
             // General radix parsing using long multiplication
             for c in s.chars() {
@@ -508,9 +567,17 @@ pub extern "C" fn js_bigint_from_string_radix(
                     *limb = product as u64;
                     carry = (product >> 64) as u64;
                 }
+                // Carry out of the top limb → magnitude passed 2^1024 (#6073).
+                if carry != 0 {
+                    throw_bigint_overflow();
+                }
             }
         }
 
+        // The magnitude fits in 16 limbs but may still exceed the signed range.
+        if !magnitude_fits_1024(&limbs, is_negative) {
+            throw_bigint_overflow();
+        }
         if is_negative && !limbs.iter().all(|&l| l == 0) {
             limbs = negate_limbs(&limbs);
         }
@@ -578,6 +645,13 @@ pub extern "C" fn js_bigint_neg(a: *const BigIntHeader) -> *mut BigIntHeader {
         carry = (sum >> 64) as u64;
     }
 
+    // -2^1023 is the sole nonzero value whose two's-complement negation is
+    // itself; its true negation (+2^1023) is out of range, so throw rather
+    // than silently returning -2^1023 unchanged (#6073).
+    if result == a_limbs && a_limbs != ZERO_LIMBS {
+        throw_bigint_overflow();
+    }
+
     bigint_alloc_with_limbs(result)
 }
 
@@ -635,6 +709,14 @@ pub extern "C" fn js_bigint_add(
         result[i] = sum as u64;
         carry = (sum >> 64) as u64;
     }
+    // Signed overflow (#6073): equal-signed operands whose sum takes the
+    // opposite sign wrapped past ±2^1023. Throw rather than return the ring
+    // value. (Opposite-signed operands can never overflow.)
+    if is_negative(&a_limbs) == is_negative(&b_limbs)
+        && is_negative(&result) != is_negative(&a_limbs)
+    {
+        throw_bigint_overflow();
+    }
     bigint_alloc_with_limbs(result)
 }
 
@@ -667,6 +749,14 @@ pub extern "C" fn js_bigint_sub(
             borrow = 0;
         }
     }
+    // Signed overflow (#6073): opposite-signed operands whose difference takes
+    // the sign opposite the minuend wrapped past ±2^1023. (Equal-signed
+    // operands can never overflow — this also catches negating -2^1023.)
+    if is_negative(&a_limbs) != is_negative(&b_limbs)
+        && is_negative(&result) != is_negative(&a_limbs)
+    {
+        throw_bigint_overflow();
+    }
     bigint_alloc_with_limbs(result)
 }
 
@@ -688,50 +778,71 @@ pub extern "C" fn js_bigint_mul(
         return bigint_alloc_with_limbs(result);
     }
 
-    // Slow path: unsigned schoolbook multiplication on the magnitudes, then
-    // apply the sign. Using two's-complement limbs directly would require
-    // carrying the sign-extension words through every row of the accumulation,
-    // which is subtle to get right — sign-and-magnitude is cleaner.
-    let a_neg = is_negative(&a_limbs);
-    let b_neg = is_negative(&b_limbs);
+    // Slow path: sign-and-magnitude schoolbook multiply that retains the full
+    // 2N-limb product so overflow past ±2^1023 is detected, not wrapped (#6073).
+    bigint_alloc_with_limbs(mul_limbs_checked(&a_limbs, &b_limbs))
+}
+
+/// Multiply two two's-complement limb arrays, throwing `RangeError` when the
+/// product exceeds the signed 1024-bit range (#6073). Shared by
+/// `js_bigint_mul`'s slow path and `js_bigint_pow`.
+///
+/// Multiplies the magnitudes (so the sign-extension words never pollute the
+/// schoolbook rows) into a `2 * BIGINT_LIMBS` accumulator, checks the result
+/// fits, then re-applies the sign. Using two's-complement limbs directly would
+/// require carrying the sign extension through every row — sign-and-magnitude
+/// is cleaner.
+fn mul_limbs_checked(
+    a_limbs: &[u64; BIGINT_LIMBS],
+    b_limbs: &[u64; BIGINT_LIMBS],
+) -> [u64; BIGINT_LIMBS] {
+    let a_neg = is_negative(a_limbs);
+    let b_neg = is_negative(b_limbs);
     let a_mag = if a_neg {
-        negate_limbs(&a_limbs)
+        negate_limbs(a_limbs)
     } else {
-        a_limbs
+        *a_limbs
     };
     let b_mag = if b_neg {
-        negate_limbs(&b_limbs)
+        negate_limbs(b_limbs)
     } else {
-        b_limbs
+        *b_limbs
     };
 
-    // Skip trailing all-zero limbs so e.g. multiplying a value that uses 3
-    // limbs by one that uses 2 only does 3×2 = 6 word multiplies.
+    // Skip trailing all-zero limbs so e.g. a 3-limb value times a 2-limb value
+    // only does 3×2 word multiplies. `effective_limb_len` never under-counts an
+    // in-range magnitude (<= 2^1023), so no significant limb is dropped.
     let a_len = effective_limb_len(&a_mag);
     let b_len = effective_limb_len(&b_mag);
-    let mut result = ZERO_LIMBS;
+    // The full product of two <2^1024 magnitudes is <2^2048 — it fits in the
+    // 2N-limb accumulator, and the carry never escapes index `a_len+b_len-1`.
+    let mut wide = [0u64; 2 * BIGINT_LIMBS];
     for i in 0..a_len {
         let mut carry = 0u128;
-        let inner_max = b_len.min(BIGINT_LIMBS - i);
-        for j in 0..inner_max {
-            let product = (a_mag[i] as u128) * (b_mag[j] as u128) + (result[i + j] as u128) + carry;
-            result[i + j] = product as u64;
+        for j in 0..b_len {
+            let product = (a_mag[i] as u128) * (b_mag[j] as u128) + (wide[i + j] as u128) + carry;
+            wide[i + j] = product as u64;
             carry = product >> 64;
         }
-        // Propagate the final carry across any zero upper limbs that
-        // remain in the result row, until it dies.
-        let mut k = i + inner_max;
-        while carry != 0 && k < BIGINT_LIMBS {
-            let sum = (result[k] as u128) + carry;
-            result[k] = sum as u64;
+        let mut k = i + b_len;
+        while carry != 0 && k < 2 * BIGINT_LIMBS {
+            let sum = (wide[k] as u128) + carry;
+            wide[k] = sum as u64;
             carry = sum >> 64;
             k += 1;
         }
     }
-    if a_neg != b_neg {
+
+    let negative = a_neg != b_neg;
+    if !magnitude_fits_1024(&wide, negative) {
+        throw_bigint_overflow();
+    }
+    let mut result = ZERO_LIMBS;
+    result.copy_from_slice(&wide[..BIGINT_LIMBS]);
+    if negative {
         result = negate_limbs(&result);
     }
-    bigint_alloc_with_limbs(result)
+    result
 }
 
 /// Magnitude of significant limbs for an unsigned-style limb pattern.
@@ -942,49 +1053,67 @@ pub extern "C" fn js_bigint_pow(
 
     while e > 0 {
         if e & 1 == 1 {
-            result = mul_limbs(&result, &base);
+            result = mul_limbs_checked(&result, &base);
         }
-        base = mul_limbs(&base, &base);
         e >>= 1;
+        // Square only while another bit remains. The final squaring after the
+        // top set bit is never used, and squaring it could overflow past a
+        // result that itself still fits (e.g. (2^300)^3) — a false throw (#6073).
+        if e > 0 {
+            base = mul_limbs_checked(&base, &base);
+        }
     }
 
     bigint_alloc_with_limbs(result)
 }
 
-/// Multiply two limb arrays (helper for pow)
-fn mul_limbs(a: &[u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) -> [u64; BIGINT_LIMBS] {
-    let mut result = ZERO_LIMBS;
-    for i in 0..BIGINT_LIMBS {
-        let mut carry = 0u128;
-        for j in 0..(BIGINT_LIMBS - i) {
-            let product = (a[i] as u128) * (b[j] as u128) + (result[i + j] as u128) + carry;
-            result[i + j] = product as u64;
-            carry = product >> 64;
-        }
+/// Left-shift a two's-complement BigInt by `shift` bits (`a << shift`),
+/// throwing `RangeError` when the result exceeds the signed 1024-bit range
+/// (#6073). Shifting a magnitude left by N bits multiplies it by 2^N, so any
+/// significant bit pushed to >= 2^1023 (positive) / > 2^1023 (negative)
+/// overflows instead of silently falling off the top.
+fn shl_checked(a_limbs: &[u64; BIGINT_LIMBS], shift: usize) -> [u64; BIGINT_LIMBS] {
+    if shift == 0 || a_limbs == &ZERO_LIMBS {
+        return *a_limbs;
     }
-    result
-}
-
-/// Left-shift a limb array by `shift` bits (magnitude only).
-fn shl_limbs(a_limbs: &[u64; BIGINT_LIMBS], shift: usize) -> [u64; BIGINT_LIMBS] {
+    // A shift of >= 1024 bits pushes even the lowest set bit of a nonzero
+    // magnitude to >= 2^1024, which never fits.
     if shift >= BIGINT_BITS {
-        return ZERO_LIMBS;
+        throw_bigint_overflow();
     }
-    let mut result = ZERO_LIMBS;
+
+    let a_neg = is_negative(a_limbs);
+    let mag = if a_neg {
+        negate_limbs(a_limbs)
+    } else {
+        *a_limbs
+    };
+
+    // shift < 1024 and mag < 2^1023 → product < 2^2046, always within the
+    // 2N-limb buffer: the top written index is <= 30, plus one carry limb.
+    let mut wide = [0u64; 2 * BIGINT_LIMBS];
     let limb_shift = shift / 64;
     let bit_shift = (shift % 64) as u32;
-    if bit_shift == 0 {
-        for i in limb_shift..BIGINT_LIMBS {
-            result[i] = a_limbs[i - limb_shift];
+    for i in 0..BIGINT_LIMBS {
+        if mag[i] == 0 {
+            continue;
         }
-    } else {
-        for i in limb_shift..BIGINT_LIMBS {
-            let src_idx = i - limb_shift;
-            result[i] = a_limbs[src_idx] << bit_shift;
-            if src_idx > 0 {
-                result[i] |= a_limbs[src_idx - 1] >> (64 - bit_shift);
-            }
+        let dst = i + limb_shift;
+        if bit_shift == 0 {
+            wide[dst] |= mag[i];
+        } else {
+            wide[dst] |= mag[i] << bit_shift;
+            wide[dst + 1] |= mag[i] >> (64 - bit_shift);
         }
+    }
+
+    if !magnitude_fits_1024(&wide, a_neg) {
+        throw_bigint_overflow();
+    }
+    let mut result = ZERO_LIMBS;
+    result.copy_from_slice(&wide[..BIGINT_LIMBS]);
+    if a_neg {
+        result = negate_limbs(&result);
     }
     result
 }
@@ -1051,7 +1180,7 @@ pub extern "C" fn js_bigint_shl(
     let result = if negative {
         shr_limbs(&a_limbs, shift)
     } else {
-        shl_limbs(&a_limbs, shift)
+        shl_checked(&a_limbs, shift)
     };
     bigint_alloc_with_limbs(result)
 }
@@ -1068,7 +1197,7 @@ pub extern "C" fn js_bigint_shr(
     let b_limbs = bigint_limbs_or_zero(b);
     let (shift, negative) = shift_count(&b_limbs);
     let result = if negative {
-        shl_limbs(&a_limbs, shift)
+        shl_checked(&a_limbs, shift)
     } else {
         shr_limbs(&a_limbs, shift)
     };
@@ -1919,6 +2048,125 @@ mod tests {
                 "i64::MAX + 1 should not fit in i64"
             );
         }
+    }
+
+    // -- #6073: fixed 1024-bit range — overflow detection --
+    //
+    // The throwing side aborts the test process (`js_throw` with no active try
+    // frame calls `std::process::exit`), so these cover the pure fit predicate
+    // and that large-but-in-range arithmetic still succeeds without a false
+    // overflow. End-to-end `RangeError` behavior is exercised by a `.ts` probe.
+
+    /// Build 2^n (n < 1023 so it stays representable).
+    fn pow2(n: i64) -> *mut BigIntHeader {
+        js_bigint_pow(js_bigint_from_i64(2), js_bigint_from_i64(n))
+    }
+
+    #[test]
+    fn magnitude_fits_1024_boundaries() {
+        let mut m = [0u64; 2 * BIGINT_LIMBS];
+        // magnitude < 2^1023 → representable with either sign.
+        m[BIGINT_LIMBS - 1] = 0x7fff_ffff_ffff_ffff;
+        assert!(magnitude_fits_1024(&m, false));
+        assert!(magnitude_fits_1024(&m, true));
+
+        // magnitude == 2^1023 → only the negative endpoint (-2^1023) fits.
+        let mut m = [0u64; 2 * BIGINT_LIMBS];
+        m[BIGINT_LIMBS - 1] = 1u64 << 63;
+        assert!(!magnitude_fits_1024(&m, false));
+        assert!(magnitude_fits_1024(&m, true));
+
+        // magnitude in (2^1023, 2^1024) → fits neither sign.
+        m[0] = 1;
+        assert!(!magnitude_fits_1024(&m, false));
+        assert!(!magnitude_fits_1024(&m, true));
+
+        // any bit at or above 2^1024 → never fits.
+        let mut m = [0u64; 2 * BIGINT_LIMBS];
+        m[BIGINT_LIMBS] = 1;
+        assert!(!magnitude_fits_1024(&m, false));
+        assert!(!magnitude_fits_1024(&m, true));
+    }
+
+    #[test]
+    fn pow_large_in_range_no_false_overflow() {
+        // 2^1000 < 2^1023: single bit at index 1000, positive.
+        let p = pow2(1000);
+        unsafe {
+            let limbs = (*p).limbs;
+            assert_eq!(limbs[1000 / 64], 1u64 << (1000 % 64));
+            assert!(!is_negative(&limbs));
+            for (i, &l) in limbs.iter().enumerate() {
+                if i != 1000 / 64 {
+                    assert_eq!(l, 0, "limb {i} should be zero");
+                }
+            }
+        }
+        // (2^300)^3 = 2^900: the guarded loop must not throw on the final
+        // unused base squaring (2^300)^4 = 2^1200.
+        let cube = js_bigint_pow(pow2(300), js_bigint_from_i64(3));
+        unsafe {
+            assert_eq!((*cube).limbs[900 / 64], 1u64 << (900 % 64));
+        }
+    }
+
+    #[test]
+    fn mul_large_in_range_no_false_overflow() {
+        // (2^500) * (2^500) = 2^1000 via the schoolbook slow path.
+        let c = js_bigint_mul(pow2(500), pow2(500));
+        unsafe {
+            assert_eq!((*c).limbs[1000 / 64], 1u64 << (1000 % 64));
+        }
+    }
+
+    #[test]
+    fn add_sub_large_in_range_no_false_overflow() {
+        // 2^1000 + 2^999 = bits 1000 and 999 set (both in limb 15).
+        let sum = js_bigint_add(pow2(1000), pow2(999));
+        unsafe {
+            let limbs = (*sum).limbs;
+            assert_eq!(
+                limbs[999 / 64],
+                (1u64 << (999 % 64)) | (1u64 << (1000 % 64))
+            );
+        }
+        // 2^1000 - 2^999 = 2^999.
+        let diff = js_bigint_sub(pow2(1000), pow2(999));
+        unsafe {
+            assert_eq!((*diff).limbs[999 / 64], 1u64 << (999 % 64));
+        }
+    }
+
+    #[test]
+    fn shl_large_in_range_no_false_overflow() {
+        // 1n << 1022n = 2^1022, still positive and in range.
+        let r = js_bigint_shl(js_bigint_from_i64(1), js_bigint_from_i64(1022));
+        unsafe {
+            let limbs = (*r).limbs;
+            assert_eq!(limbs[1022 / 64], 1u64 << (1022 % 64));
+            assert!(!is_negative(&limbs));
+        }
+    }
+
+    #[test]
+    fn from_string_radix_hex_ignores_excess_leading_zeros() {
+        // 304 hex digits: 300 leading zeros + "beef". More than 256 digits, but
+        // the excess are all zero, so the value (0xbeef) fits and must NOT
+        // false-throw on the >1024-bit stream (regression for the CodeRabbit
+        // finding on #6073 — leftover high-order zeros are harmless).
+        let s = format!("{}beef", "0".repeat(300));
+        let bi = js_bigint_from_string_radix(s.as_ptr(), s.len() as u32, 16);
+        unsafe {
+            let limbs = (*bi).limbs;
+            assert_eq!(limbs[0], 0xbeef);
+            for &l in &limbs[1..] {
+                assert_eq!(l, 0);
+            }
+        }
+
+        // Decimal leading zeros likewise must not throw (the long-mult path
+        // never carries out of the top limb while the magnitude stays small).
+        assert_eq!(parse("000000123").unwrap(), 123);
     }
 }
 

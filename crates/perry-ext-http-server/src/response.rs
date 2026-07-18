@@ -233,6 +233,15 @@ pub struct ServerResponse {
     pub needs_drain: bool,
     /// Event-name → list of registered listener closure pointers.
     pub listeners: HashMap<String, Vec<i64>>,
+    /// Event-name → one-shot (`res.once(event, cb)`) listener closure
+    /// pointers. Drained by every event-consumption site after firing so a
+    /// `once` listener fires exactly once — Node's `EventEmitter.once`
+    /// contract. Kept separate from `listeners` so persistent `on` listeners
+    /// survive the drain. The critical caller is Perry's own `createReadStream`
+    /// → `.pipe(res)` pump, which re-arms `res.once('drain')` after each
+    /// backpressure pause; without one-shot semantics the pump stalls after the
+    /// first 64 KB chunk (static files truncate).
+    pub once_listeners: HashMap<String, Vec<i64>>,
     /// #4904: true for `new http.ServerResponse(req)` instances (and any
     /// response wired through `assignSocket`) — `.end()` flushes through
     /// `standalone_socket` instead of the hyper oneshot.
@@ -398,6 +407,7 @@ impl ServerResponse {
             stream_in_flight: None,
             needs_drain: false,
             listeners: HashMap::new(),
+            once_listeners: HashMap::new(),
             standalone: false,
             standalone_socket: f64::from_bits(TAG_UNDEFINED),
             standalone_req_method: None,
@@ -1340,8 +1350,8 @@ fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)
         sr.writable_ended = true;
         sr.writable_finished = true;
         sr.needs_drain = false;
-        let finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
-        let close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
+        let finish_listeners = take_event_listeners(sr, "finish");
+        let close_listeners = take_event_listeners(sr, "close");
         return Some((finish_listeners, close_listeners));
     }
 
@@ -1361,8 +1371,8 @@ fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)
         trailers,
         body: ShapeBody::Full(body),
     };
-    let finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
-    let close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
+    let finish_listeners = take_event_listeners(sr, "finish");
+    let close_listeners = take_event_listeners(sr, "close");
     if let Some(tx) = sr.response_tx.take() {
         let _ = tx.send(shape);
     }
@@ -1461,7 +1471,7 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
         return Vec::new();
     }
     sr.needs_drain = false;
-    sr.listeners.get("drain").cloned().unwrap_or_default()
+    take_event_listeners(sr, "drain")
 }
 
 /// True when a streaming response's connection died under it (hyper
@@ -1608,6 +1618,58 @@ pub unsafe extern "C" fn js_node_http_res_on(
         }
     }
     handle_to_pointer_f64(handle)
+}
+
+/// `res.once(event, cb)` — register a one-shot listener. Mirrors
+/// `js_node_http_res_on` but stores into `once_listeners`, which every
+/// event-consumption site drains via [`take_event_listeners`] after firing so
+/// the listener runs exactly once (Node's `EventEmitter.once` contract).
+///
+/// Without this the `once` dispatch arm did not exist at all: `res.once(...)`
+/// fell through to a no-op, so Perry's `createReadStream().pipe(res)` pump —
+/// which re-arms `res.once('drain')` after each backpressure pause — never got
+/// its drain callback and stalled after the first 64 KB chunk, truncating every
+/// static file larger than the high-water mark.
+///
+/// # Safety
+/// FFI entry; `event_name_ptr` must be a valid `StringHeader` for its length.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_res_once(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+    callback: i64,
+) -> f64 {
+    let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    let mut should_fire_now = false;
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        // `finish`/`close` already fired: run immediately without storing,
+        // matching the late-registration behavior of `js_node_http_res_on`.
+        if sr.writable_finished && (event == "finish" || event == "close") {
+            should_fire_now = true;
+        } else {
+            sr.once_listeners.entry(event).or_default().push(callback);
+        }
+    } else {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    if should_fire_now && callback != 0 {
+        let raw = callback as *const RawClosureHeader;
+        let closure = JsClosure::from_raw(raw);
+        if !closure.is_null() {
+            let _ = closure.call0();
+        }
+    }
+    handle_to_pointer_f64(handle)
+}
+
+/// Listeners to fire for `event`: persistent `on` listeners (cloned, retained)
+/// followed by one-shot `once` listeners (removed, so they fire exactly once).
+pub(crate) fn take_event_listeners(sr: &mut ServerResponse, event: &str) -> Vec<i64> {
+    let mut out = sr.listeners.get(event).cloned().unwrap_or_default();
+    if let Some(once) = sr.once_listeners.remove(event) {
+        out.extend(once);
+    }
+    out
 }
 
 // ============================================================================
@@ -1828,8 +1890,8 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         payload = bytes;
         socket = sr.standalone_socket;
         write_cbs = std::mem::take(&mut sr.pending_write_callbacks);
-        finish_listeners = sr.listeners.get("finish").cloned().unwrap_or_default();
-        close_listeners = sr.listeners.get("close").cloned().unwrap_or_default();
+        finish_listeners = take_event_listeners(sr, "finish");
+        close_listeners = take_event_listeners(sr, "close");
         sr.writable_finished = true;
     }
     if !JsValue::from_bits(socket.to_bits()).is_undefined() {
@@ -1902,99 +1964,5 @@ pub(crate) fn _force_link_helpers(v: f64) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn empty_response() -> ServerResponse {
-        let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
-        ServerResponse::new(tx)
-    }
-
-    #[test]
-    fn write_head_headers_json_merges_and_preserves_case() {
-        // #2132: a `writeHead(status, headers)` object is JSON-serialized and
-        // merged here; the lookup key is lowercase but the original case is
-        // retained for `getHeaderNames()`.
-        let mut sr = empty_response();
-        apply_headers_json(&mut sr, r#"{"Content-Type":"text/plain","X-Custom":"abc"}"#);
-        assert_eq!(
-            sr.headers.get("content-type").map(String::as_str),
-            Some("text/plain")
-        );
-        assert_eq!(sr.headers.get("x-custom").map(String::as_str), Some("abc"));
-        assert_eq!(
-            sr.raw_header_names.get("content-type").map(String::as_str),
-            Some("Content-Type")
-        );
-        assert_eq!(
-            sr.raw_header_names.get("x-custom").map(String::as_str),
-            Some("X-Custom")
-        );
-    }
-
-    #[test]
-    fn write_head_headers_json_stringifies_non_string_values() {
-        let mut sr = empty_response();
-        apply_headers_json(&mut sr, r#"{"Content-Length":42,"X-Flag":true}"#);
-        assert_eq!(
-            sr.headers.get("content-length").map(String::as_str),
-            Some("42")
-        );
-        assert_eq!(sr.headers.get("x-flag").map(String::as_str), Some("true"));
-    }
-
-    #[test]
-    fn write_head_headers_json_ignores_empty_and_sentinels() {
-        let mut sr = empty_response();
-        apply_headers_json(&mut sr, "");
-        apply_headers_json(&mut sr, "null");
-        apply_headers_json(&mut sr, "undefined");
-        assert!(sr.headers.is_empty());
-    }
-
-    // #4965 — `setHeaders` entries normalizer output.
-
-    #[test]
-    fn apply_headers_entries_lowercases_and_preserves_case() {
-        let mut sr = empty_response();
-        apply_headers_entries(&mut sr, r#"[["Foo","1"],["Bar","2"]]"#);
-        assert_eq!(sr.headers.get("foo").map(String::as_str), Some("1"));
-        assert_eq!(sr.headers.get("bar").map(String::as_str), Some("2"));
-        assert_eq!(
-            sr.raw_header_names.get("foo").map(String::as_str),
-            Some("Foo")
-        );
-    }
-
-    #[test]
-    fn apply_headers_entries_set_cookie_array_keeps_per_element_list() {
-        let mut sr = empty_response();
-        apply_headers_entries(&mut sr, r#"[["set-cookie",["a=b","c=d"]]]"#);
-        assert_eq!(
-            sr.header_value_lists.get("set-cookie").map(Vec::as_slice),
-            Some(["a=b".to_string(), "c=d".to_string()].as_slice())
-        );
-        assert_eq!(
-            sr.headers.get("set-cookie").map(String::as_str),
-            Some("a=b, c=d")
-        );
-    }
-
-    #[test]
-    fn apply_headers_entries_ignores_non_array_and_short_pairs() {
-        let mut sr = empty_response();
-        apply_headers_entries(&mut sr, r#"[{"foo":"1"},["only-name"],["k","v"]]"#);
-        assert_eq!(sr.headers.get("k").map(String::as_str), Some("v"));
-        assert_eq!(sr.headers.len(), 1);
-    }
-
-    #[test]
-    fn write_head_flat_array_applies_pairs_and_overrides() {
-        let mut sr = empty_response();
-        sr.headers.insert("foo".into(), "1".into());
-        apply_headers_flat_array(&mut sr, r#"["foo","3","X-New","z"]"#);
-        // even/odd offsets are name/value; `foo` overrides the prior value.
-        assert_eq!(sr.headers.get("foo").map(String::as_str), Some("3"));
-        assert_eq!(sr.headers.get("x-new").map(String::as_str), Some("z"));
-    }
-}
+#[path = "response_tests.rs"]
+mod tests;
