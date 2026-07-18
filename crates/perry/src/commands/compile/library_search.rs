@@ -298,12 +298,12 @@ fn versioned_llvm_bin_dirs(parent: &str, prefix: &str, names: &[String]) -> Vec<
         .iter()
         .filter_map(|name| {
             let ver = name.strip_prefix(prefix)?;
-            let major: String = ver.chars().take_while(|c| c.is_ascii_digit()).collect();
-            let n = major.parse::<u32>().ok()?;
+            let end = ver.find(|c: char| !c.is_ascii_digit()).unwrap_or(ver.len());
+            let n = ver[..end].parse::<u32>().ok()?;
             Some((n, Path::new(parent).join(name).join("bin")))
         })
         .collect();
-    versioned.sort_by(|a, b| b.0.cmp(&a.0));
+    versioned.sort_by_key(|k| std::cmp::Reverse(k.0));
     versioned.into_iter().map(|(_, p)| p).collect()
 }
 
