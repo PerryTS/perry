@@ -52,15 +52,18 @@ pub(crate) struct ViewInfo {
 }
 
 thread_local! {
-    /// `view_ptr → ViewInfo`.  Lookups during writes are O(1).
-    static VIEW_REGISTRY: RefCell<HashMap<usize, ViewInfo>> =
-        RefCell::new(HashMap::with_capacity(64));
+    /// `view_ptr → ViewInfo`.  Lookups during writes are O(1). Address-keyed
+    /// `PtrHashMap` (#6386): both maps are probed on EVERY DataView/typed
+    /// view write via `propagate_written_range_from_receiver`, and SipHash
+    /// dominated those probes.
+    static VIEW_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, ViewInfo>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
     /// `backing_ptr → Vec<view_ptr>`.  Backing-side writes walk this
     /// list to mirror bytes into every aliased view.  Vector entries
     /// are tombstoned (set to 0) on view drop rather than removed so
     /// hot-path iteration stays branch-light.
-    static BACKING_TO_VIEWS: RefCell<HashMap<usize, Vec<usize>>> =
-        RefCell::new(HashMap::with_capacity(64));
+    static BACKING_TO_VIEWS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<usize>>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 #[inline]
@@ -77,6 +80,46 @@ pub(crate) fn backing_of(buf_ptr: usize) -> usize {
 #[inline]
 pub(crate) fn byte_offset_of(buf_ptr: usize) -> u32 {
     lookup(buf_ptr).map(|v| v.offset).unwrap_or(0)
+}
+
+/// Resolve `buf_ptr` to the canonical data pointer for its bytes.
+///
+/// A registered view (`Buffer.prototype.slice`/`subarray`,
+/// `new Uint8Array(arrayBuffer)`, `new Uint8Array(ab, off, len)`) keeps its
+/// own *copy* of the bytes so the codegen fast path can `gep+load` against the
+/// view pointer, but the ultimate backing buffer is the source of truth:
+/// `read_buffer_byte` reads and `js_buffer_set` writes `backing_data + offset`,
+/// and a direct fast-path store to the backing never refreshes the view's
+/// local copy. Any code that hands a raw span to a native callee must resolve
+/// through here too — otherwise a native write lands in the view's stale local
+/// copy while JS reads come from the backing (or vice-versa), a silent
+/// corruption with no null and no error (#6515).
+///
+/// Falls back to the buffer's own inline storage for a plain (non-view) buffer,
+/// or for a view whose recorded window no longer fits inside the backing (a
+/// backing that was detached or shrunk since the view was registered). The
+/// native callee consumes `(*buf_ptr).length` bytes — the byte-length half of
+/// the ABI — so the whole `[offset, offset + length)` span must fit in the
+/// current backing before we hand back a backing pointer; otherwise it could
+/// read/write past the backing's end. The view's own storage is always sized
+/// to its own length, so the fallback stays in bounds. The `<=` boundary lets a
+/// zero-length view sitting exactly at `backing.length` still resolve to the
+/// backing edge rather than falling back.
+///
+/// SAFETY: `buf_ptr` must be a live `BufferHeader`; a registered view's backing
+/// is kept in the registry only while it is live (see
+/// `remove_entries_for_dead_buffer`), the same invariant `read_buffer_byte`
+/// and `js_buffer_set` already rely on.
+pub(crate) unsafe fn resolve_data_ptr(buf_ptr: *const BufferHeader) -> *const u8 {
+    if let Some(info) = lookup(buf_ptr as usize) {
+        let backing_ptr = info.backing as *const BufferHeader;
+        if !backing_ptr.is_null()
+            && info.offset.saturating_add((*buf_ptr).length) <= (*backing_ptr).length
+        {
+            return buffer_data(backing_ptr).add(info.offset as usize);
+        }
+    }
+    buffer_data(buf_ptr)
 }
 
 #[inline]

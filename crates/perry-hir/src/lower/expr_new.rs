@@ -120,6 +120,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
                     byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
                 });
             }
         }
@@ -282,6 +283,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
                     byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
                 });
             }
 
@@ -1142,6 +1144,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             args,
                             type_args,
                             byte_offset: new_byte_offset,
+                            cap_args_appended: 0,
                         });
                     }
                 }
@@ -1295,6 +1298,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .lookup_class_captures(&lookup_name)
                 .map(|c| c.to_vec())
                 .unwrap_or_default();
+            // #6538: record how many trailing cap forwards we append so codegen
+            // reads the provenance explicitly instead of inferring it from the
+            // arg shape.
+            let cap_args_appended = class_captures.len() as u32;
             for cid in class_captures {
                 args.push(Expr::LocalGet(cid));
             }
@@ -1303,6 +1310,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args,
                 type_args,
                 byte_offset: new_byte_offset,
+                cap_args_appended,
             })
         }
         // Non-identifier callee (e.g., new (condition ? A : B)() or new someVar()).

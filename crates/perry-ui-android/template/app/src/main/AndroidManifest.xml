@@ -27,6 +27,13 @@
     <!-- perry/system hapticPlay — Vibrator / VibrationEffect. Normal
          permission (granted at install, no runtime prompt). -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- perry/system notifications (#96/#97): Android 13+ requires an
+         explicit runtime grant before an app may post notifications.
+         PerryActivity requests every ungranted dangerous permission
+         declared here at launch, so this line is what surfaces the
+         prompt; if the user denies it, notificationSend / schedules log
+         a warning and drop the banner instead of crashing. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -58,5 +65,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- perry/system scheduled notifications (#96): AlarmManager fires
+             into this receiver, which posts the notification (waking the
+             process if it died in the meantime). Not exported — the only
+             sender is our own PendingIntent. Fully qualified for the same
+             reason as PerryActivity above (#1528). -->
+        <receiver
+            android:name="com.perry.app.PerryNotificationReceiver"
+            android:exported="false" />
     </application>
 </manifest>

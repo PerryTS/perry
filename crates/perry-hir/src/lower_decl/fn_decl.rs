@@ -3,7 +3,7 @@ use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower::{capture_function_source, LoweringContext};
+use crate::lower::{capture_function_source, native_instance_from_return_type, LoweringContext};
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
@@ -276,17 +276,14 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                 ));
             }
         } else {
-            // Bare type name check (e.g., `Redis` instead of `ioredis.Redis`)
-            let module_info = match type_name.as_str() {
-                "Redis" => Some(("ioredis", "Redis")),
-                "EventEmitter" => Some(("events", "EventEmitter")),
-                "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
-                "Pool" => Some(("mysql2/promise", "Pool")),
-                "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
-                "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
-                _ => None,
-            };
-            if let Some((module, class)) = module_info {
+            // Bare type name check (e.g., `Redis` instead of `ioredis.Redis`).
+            // Delegates to the shared table in `lower/misc.rs` rather than a
+            // local copy: this list had drifted behind the parameter paths and
+            // the local-`const`/factory paths (which already knew Socket and the
+            // Fastify types), so an exported `function buildServer():
+            // FastifyInstance` was never recorded as returning a native
+            // instance. Keep new native return types in that one table.
+            if let Some((module, class)) = native_instance_from_return_type(&return_type) {
                 ctx.push_func_return_native_instance((
                     name.clone(),
                     module.to_string(),

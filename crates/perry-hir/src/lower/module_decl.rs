@@ -1102,43 +1102,22 @@ pub(crate) fn lower_module_decl(
                                         other => other,
                                     };
                                     if let Type::Named(type_name) = check_type {
-                                        let module_info = match type_name.as_str() {
-                                            "Redis" => Some(("ioredis", "Redis")),
-                                            "EventEmitter" => Some(("events", "EventEmitter")),
-                                            "EventEmitterAsyncResource" => {
-                                                Some(("events", "EventEmitterAsyncResource"))
-                                            }
-                                            "Pool" => Some(("mysql2/promise", "Pool")),
-                                            "PoolConnection" => {
-                                                Some(("mysql2/promise", "PoolConnection"))
-                                            }
-                                            "WebSocket" | "WebSocketServer" => {
-                                                Some(("ws", type_name.as_str()))
-                                            }
-                                            // perry-stdlib net.Socket: lets library wrappers like
-                                            //   export function openSocket(host, port): Socket { ... }
-                                            // propagate native-instance tagging to callers, so
-                                            //   const sock = openSocket(...);
-                                            //   sock.on(...);   // dispatches to js_net_socket_on
-                                            // works without ceremony.
-                                            "Socket" => Some(("net", "Socket")),
-                                            _ => {
-                                                // Also check dotted names (e.g., mysql.Pool)
-                                                if let Some(dot_pos) = type_name.find('.') {
-                                                    let module_alias = &type_name[..dot_pos];
-                                                    let class_name = &type_name[dot_pos + 1..];
-                                                    if let Some((module_name, _)) =
-                                                        ctx.lookup_native_module(module_alias)
-                                                    {
-                                                        Some((module_name, class_name))
-                                                    } else {
-                                                        None
-                                                    }
-                                                } else {
-                                                    None
-                                                }
-                                            }
-                                        };
+                                        // Bare names (Redis, Socket, FastifyInstance, …) come from
+                                        // the shared table in `misc.rs` — keeping a second copy here
+                                        // is what let the Fastify types reach the parameter paths
+                                        // but never the return paths (silent no-op `listen`).
+                                        let module_info = native_instance_from_return_type(
+                                            &return_type,
+                                        )
+                                        .or_else(|| {
+                                            // Also check dotted names (e.g., mysql.Pool)
+                                            let dot_pos = type_name.find('.')?;
+                                            let module_alias = &type_name[..dot_pos];
+                                            let class_name = &type_name[dot_pos + 1..];
+                                            let (module_name, _) =
+                                                ctx.lookup_native_module(module_alias)?;
+                                            Some((module_name, class_name))
+                                        });
                                         if let Some((module, class)) = module_info {
                                             ctx.push_func_return_native_instance((
                                                 name.clone(),

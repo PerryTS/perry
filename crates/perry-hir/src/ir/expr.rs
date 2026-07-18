@@ -319,6 +319,23 @@ pub enum Expr {
         /// location, falling back to `<anonymous>`. Mirrors `Call.byte_offset`
         /// (#5247) and is excluded from stable-hashing.
         byte_offset: u32,
+        /// #6538: how many of the TRAILING `args` are compiler-appended
+        /// class-capture forwards, NOT user arguments. When a class nested in
+        /// a function captures enclosing-scope locals, `lower_class_decl`
+        /// synthesizes one `__perry_cap_<id>` constructor param per captured
+        /// id, and the bare-identifier `new C(...)` / anonymous-class arms
+        /// (`expr_new.rs`, `expr_new/non_ident.rs`) push one `LocalGet(<id>)`
+        /// per captured id after the user args. This count records that
+        /// provenance EXPLICITLY so codegen no longer has to infer it from the
+        /// arg shape (the old `new_site_args_carry_appended_caps` heuristic,
+        /// which could misfire on a forward-referenced capture class whose
+        /// user args happened to be exactly its captured locals). `0` for
+        /// every other `new` site — non-capturing classes, member-callee
+        /// `new ns.C(...)` (caps filled from the decl-site snapshot instead),
+        /// synthesized options-object shapes, and transform-created nodes.
+        /// Excluded from stable-hashing (derived metadata, like `byte_offset`;
+        /// the appended `LocalGet` args it counts are themselves hashed).
+        cap_args_appended: u32,
     },
 
     /// Dynamic new expression (new with non-identifier callee)

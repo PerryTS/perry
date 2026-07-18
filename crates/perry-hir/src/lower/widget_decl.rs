@@ -14,271 +14,8 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-/// Walk an AST expression and collect identifiers used as `<ident>.value`
-/// where `<ident>` resolves to a `perry/ui` State native instance. Callers
-/// use the collected names to register `stateOnChange` subscribers.
-///
-/// Covers the expression shapes most commonly found in animation arguments:
-/// ternaries, binary/logical ops, parens, template literals, unary,
-/// assignment RHS, call args, array/object literals, and member reads. The
-/// catch-all silently skips unhandled shapes — worst case, a state read
-/// inside an exotic expression just won't trigger reactivity (same
-/// conservative failure mode as #104's template walker).
-fn collect_state_value_reads(ctx: &LoweringContext, expr: &ast::Expr, out: &mut Vec<String>) {
-    match expr {
-        ast::Expr::Member(member) => {
-            // `<ident>.value` where ident is a registered State.
-            if let ast::MemberProp::Ident(prop) = &member.prop {
-                if prop.sym.as_ref() == "value" {
-                    if let ast::Expr::Ident(obj) = member.obj.as_ref() {
-                        let name = obj.sym.to_string();
-                        if matches!(
-                            ctx.lookup_native_instance(&name),
-                            Some(("perry/ui", "State"))
-                        ) && !out.contains(&name)
-                        {
-                            out.push(name);
-                            return;
-                        }
-                    }
-                }
-            }
-            collect_state_value_reads(ctx, member.obj.as_ref(), out);
-        }
-        ast::Expr::Paren(p) => collect_state_value_reads(ctx, &p.expr, out),
-        ast::Expr::Cond(c) => {
-            collect_state_value_reads(ctx, &c.test, out);
-            collect_state_value_reads(ctx, &c.cons, out);
-            collect_state_value_reads(ctx, &c.alt, out);
-        }
-        ast::Expr::Bin(b) => {
-            collect_state_value_reads(ctx, &b.left, out);
-            collect_state_value_reads(ctx, &b.right, out);
-        }
-        ast::Expr::Unary(u) => collect_state_value_reads(ctx, &u.arg, out),
-        ast::Expr::Tpl(t) => {
-            for e in &t.exprs {
-                collect_state_value_reads(ctx, e, out);
-            }
-        }
-        ast::Expr::Call(c) => {
-            if let ast::Callee::Expr(ce) = &c.callee {
-                collect_state_value_reads(ctx, ce, out);
-            }
-            for a in &c.args {
-                collect_state_value_reads(ctx, &a.expr, out);
-            }
-        }
-        ast::Expr::Array(a) => {
-            for el in a.elems.iter().flatten() {
-                collect_state_value_reads(ctx, &el.expr, out);
-            }
-        }
-        ast::Expr::Seq(s) => {
-            for e in &s.exprs {
-                collect_state_value_reads(ctx, e, out);
-            }
-        }
-        ast::Expr::TsNonNull(n) => collect_state_value_reads(ctx, &n.expr, out),
-        ast::Expr::TsAs(a) => collect_state_value_reads(ctx, &a.expr, out),
-        ast::Expr::TsTypeAssertion(a) => collect_state_value_reads(ctx, &a.expr, out),
-        _ => {}
-    }
-}
-
-/// Desugar `widget.animateOpacity(<expr>, dur)` / `.animatePosition(...)`
-/// into an IIFE that runs the initial animation and registers a
-/// `stateOnChange` subscriber per `State` read in the args, so toggling the
-/// state re-fires the animation.
-///
-/// Generated HIR shape (animateOpacity with one state dependency):
-/// ```text
-/// (() => {
-///     const __h = <widget>;
-///     widgetAnimateOpacity(__h, target, dur);       // initial
-///     stateOnChange(state1, (__v) => widgetAnimateOpacity(__h, fresh_target, dur));
-///     return undefined;
-/// })()
-/// ```
-///
-/// Like the reactive-Text desugar (#104), the target expression is re-lowered
-/// for the subscriber body so it reads the *current* state value at fire time.
-pub(super) fn try_desugar_reactive_animate(
-    ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
-) -> Result<Option<Expr>> {
-    let ast::Callee::Expr(callee_expr) = &call.callee else {
-        return Ok(None);
-    };
-    let ast::Expr::Member(member) = callee_expr.as_ref() else {
-        return Ok(None);
-    };
-    let ast::MemberProp::Ident(prop) = &member.prop else {
-        return Ok(None);
-    };
-    let (method_name, expected_arity) = match prop.sym.as_ref() {
-        "animateOpacity" => ("widgetAnimateOpacity", 2),
-        "animatePosition" => ("widgetAnimatePosition", 3),
-        _ => return Ok(None),
-    };
-    if call.args.iter().any(|a| a.spread.is_some()) {
-        return Ok(None);
-    }
-    if call.args.len() != expected_arity {
-        return Ok(None);
-    }
-
-    // Collect unique state names whose `.value` is read anywhere in the args.
-    // Preserving insertion order keeps subscriber registration deterministic.
-    let mut state_names: Vec<String> = Vec::new();
-    for arg in &call.args {
-        collect_state_value_reads(ctx, &arg.expr, &mut state_names);
-    }
-    if state_names.is_empty() {
-        return Ok(None);
-    }
-
-    // Lower the receiver once; store in an IIFE local so the initial call and
-    // every subscriber share the same widget handle without re-evaluating
-    // side-effectful receiver expressions.
-    let widget_expr = lower_expr(ctx, member.obj.as_ref())?;
-
-    let outer_func_id = ctx.fresh_func();
-    let outer_scope = ctx.enter_scope();
-    let widget_id = ctx.define_local("__perry_anim_widget".to_string(), Type::Any);
-
-    let mut outer_body: Vec<Stmt> = Vec::new();
-    outer_body.push(Stmt::Let {
-        id: widget_id,
-        name: "__perry_anim_widget".to_string(),
-        ty: Type::Any,
-        mutable: false,
-        init: Some(widget_expr),
-    });
-
-    let mut initial_args: Vec<Expr> = Vec::with_capacity(expected_arity + 1);
-    initial_args.push(Expr::LocalGet(widget_id));
-    for a in &call.args {
-        initial_args.push(lower_expr(ctx, &a.expr)?);
-    }
-    outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
-        module: "perry/ui".to_string(),
-        method: method_name.to_string(),
-        object: None,
-        args: initial_args,
-        class_name: None,
-    }));
-
-    for state_name in &state_names {
-        let state_local = ctx
-            .lookup_local(state_name)
-            .ok_or_else(|| anyhow!("reactive animate: state '{}' not in scope", state_name))?;
-
-        let inner_func_id = ctx.fresh_func();
-        let inner_scope = ctx.enter_scope();
-        let v_param_id = ctx.define_local("__v".to_string(), Type::Any);
-        let v_param = Param {
-            id: v_param_id,
-            name: "__v".to_string(),
-            ty: Type::Any,
-            default: None,
-            decorators: Vec::new(),
-            is_rest: false,
-            arguments_object: None,
-        };
-
-        let mut fresh_args: Vec<Expr> = Vec::with_capacity(expected_arity + 1);
-        fresh_args.push(Expr::LocalGet(widget_id));
-        for a in &call.args {
-            fresh_args.push(lower_expr(ctx, &a.expr)?);
-        }
-        let animate_call = Expr::NativeMethodCall {
-            module: "perry/ui".to_string(),
-            method: method_name.to_string(),
-            object: None,
-            args: fresh_args,
-            class_name: None,
-        };
-        let inner_body = vec![Stmt::Expr(animate_call)];
-        ctx.exit_scope(inner_scope);
-
-        let mut inner_refs = Vec::new();
-        let mut inner_visited = std::collections::HashSet::new();
-        for stmt in &inner_body {
-            collect_local_refs_stmt(stmt, &mut inner_refs, &mut inner_visited);
-        }
-        let mut inner_captures: Vec<LocalId> = inner_refs
-            .into_iter()
-            .filter(|id| *id != v_param_id)
-            .collect();
-        inner_captures.sort();
-        inner_captures.dedup();
-        inner_captures = ctx.filter_module_level_captures(inner_captures);
-
-        let inner_closure = Expr::Closure {
-            func_id: inner_func_id,
-            params: vec![v_param],
-            return_type: Type::Any,
-            body: inner_body,
-            captures: inner_captures,
-            mutable_captures: Vec::new(),
-            captures_this: false,
-            captures_new_target: false,
-            enclosing_class: None,
-            is_arrow: false,
-            is_async: false,
-            is_generator: false,
-            is_strict: ctx.current_strict,
-        };
-
-        outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
-            module: "perry/ui".to_string(),
-            method: "stateOnChange".to_string(),
-            object: None,
-            args: vec![Expr::LocalGet(state_local), inner_closure],
-            class_name: None,
-        }));
-    }
-
-    outer_body.push(Stmt::Return(Some(Expr::Undefined)));
-    ctx.exit_scope(outer_scope);
-
-    let mut outer_refs = Vec::new();
-    let mut outer_visited = std::collections::HashSet::new();
-    for stmt in &outer_body {
-        collect_local_refs_stmt(stmt, &mut outer_refs, &mut outer_visited);
-    }
-    let mut outer_captures: Vec<LocalId> = outer_refs
-        .into_iter()
-        .filter(|id| *id != widget_id)
-        .collect();
-    outer_captures.sort();
-    outer_captures.dedup();
-    outer_captures = ctx.filter_module_level_captures(outer_captures);
-
-    let outer_closure = Expr::Closure {
-        func_id: outer_func_id,
-        params: vec![],
-        return_type: Type::Any,
-        body: outer_body,
-        captures: outer_captures,
-        mutable_captures: Vec::new(),
-        captures_this: false,
-        captures_new_target: false,
-        enclosing_class: None,
-        is_arrow: false,
-        is_async: false,
-        is_generator: false,
-        is_strict: ctx.current_strict,
-    };
-
-    Ok(Some(Expr::Call {
-        callee: Box::new(outer_closure),
-        args: vec![],
-        type_args: vec![],
-        byte_offset: 0,
-    }))
-}
+mod reactive_animate;
+pub(crate) use reactive_animate::try_desugar_reactive_animate;
 
 /// Try to lower a Widget({...}) call from perry/widget into a WidgetDecl.
 /// Returns Some(WidgetDecl) if this is a widget declaration, None otherwise.
@@ -325,7 +62,11 @@ pub(crate) fn try_lower_widget_decl(
     let mut placeholder: Option<Vec<(String, WidgetPlaceholderValue)>> = None;
     let mut family_param_name: Option<String> = None;
     let mut app_group: Option<String> = None;
-    let reload_after_seconds: Option<u32> = None;
+    // Compile-time `reloadPolicy: { after: { minutes: N } }` literals found in
+    // the provider's return statements (converted to seconds), plus a flag for
+    // `reloadPolicy` values that exist but aren't statically parseable.
+    let mut reload_policy_seconds: Vec<u32> = Vec::new();
+    let mut reload_policy_unparsed = false;
 
     for prop in &config_obj.props {
         let kv = match prop {
@@ -361,6 +102,13 @@ pub(crate) fn try_lower_widget_decl(
                         // Provider as method: provider(config) { ... }
                         let func_name = format!("__widget_provider_{}", kind);
                         provider_func_name = Some(func_name);
+                        if let Some(body) = &method.function.body {
+                            scan_provider_stmts_for_reload_policy(
+                                &body.stmts,
+                                &mut reload_policy_seconds,
+                                &mut reload_policy_unparsed,
+                            );
+                        }
                     }
                     continue;
                 }
@@ -419,7 +167,7 @@ pub(crate) fn try_lower_widget_decl(
             }
             "provider" => {
                 // Arrow function provider: provider: async (config) => { ... }
-                if let ast::Expr::Arrow(_arrow) = kv.value.as_ref() {
+                if let ast::Expr::Arrow(arrow) = kv.value.as_ref() {
                     let func_name = if kind.is_empty() {
                         "__widget_provider_widget".to_string()
                     } else {
@@ -427,6 +175,22 @@ pub(crate) fn try_lower_widget_decl(
                         format!("__widget_provider_{}", safe)
                     };
                     provider_func_name = Some(func_name);
+                    match arrow.body.as_ref() {
+                        ast::BlockStmtOrExpr::BlockStmt(block) => {
+                            scan_provider_stmts_for_reload_policy(
+                                &block.stmts,
+                                &mut reload_policy_seconds,
+                                &mut reload_policy_unparsed,
+                            );
+                        }
+                        ast::BlockStmtOrExpr::Expr(expr) => {
+                            scan_provider_return_expr_for_reload_policy(
+                                expr,
+                                &mut reload_policy_seconds,
+                                &mut reload_policy_unparsed,
+                            );
+                        }
+                    }
                 }
             }
             "placeholder" => {
@@ -515,6 +279,45 @@ pub(crate) fn try_lower_widget_decl(
             *pfn = format!("__widget_provider_{}", safe);
         }
     }
+
+    // Resolve the compile-time reload policy. The refresh interval is a single
+    // compile-time constant per widget: if the provider returns several
+    // distinct literal policies (e.g. a short error-retry interval and a
+    // longer happy-path one), use the smallest so the most urgent request
+    // wins, and tell the user.
+    let reload_after_seconds: Option<u32> = if reload_policy_unparsed {
+        // A policy the compiler can't read makes the whole widget's
+        // interval indeterminate: honoring some *other* return path's
+        // literal would silently apply that branch's interval to every
+        // branch, including the unreadable one. Fall back to the platform
+        // default for the widget, which is what this warning promises.
+        eprintln!(
+            "[perry] warning: widget '{}': `reloadPolicy` must be a literal \
+`{{ after: {{ minutes: N }} }}` for the compiler to read it; a non-literal \
+value was ignored and the platform default refresh interval applies \
+(see docs/src/widgets/data-fetching.md)",
+            kind
+        );
+        None
+    } else {
+        reload_policy_seconds.sort_unstable();
+        reload_policy_seconds.dedup();
+        match reload_policy_seconds.as_slice() {
+            [] => None,
+            [only] => Some(*only),
+            many => {
+                eprintln!(
+                    "[perry] warning: widget '{}': provider returns {} distinct \
+compile-time `reloadPolicy` values; the refresh interval is a single \
+compile-time constant per widget — using the smallest ({} seconds)",
+                    kind,
+                    many.len(),
+                    many[0]
+                );
+                Some(many[0])
+            }
+        }
+    };
 
     Some(WidgetDecl {
         kind,
@@ -1666,6 +1469,163 @@ fn parse_widget_config_param(name: &str, value: &ast::Expr) -> Option<WidgetConf
     }
 }
 
+/// Strip semantically transparent wrappers (parens, TS casts) so return-value
+/// scanning sees the underlying object literal in shapes like
+/// `return ({ ... } as ProviderResult)`.
+fn strip_expr_wrappers(expr: &ast::Expr) -> &ast::Expr {
+    match expr {
+        ast::Expr::Paren(p) => strip_expr_wrappers(&p.expr),
+        ast::Expr::TsAs(a) => strip_expr_wrappers(&a.expr),
+        ast::Expr::TsNonNull(n) => strip_expr_wrappers(&n.expr),
+        ast::Expr::TsTypeAssertion(a) => strip_expr_wrappers(&a.expr),
+        ast::Expr::TsConstAssertion(a) => strip_expr_wrappers(&a.expr),
+        ast::Expr::TsSatisfies(s) => strip_expr_wrappers(&s.expr),
+        _ => expr,
+    }
+}
+
+/// Parse a `reloadPolicy` value literal into whole seconds. The single
+/// documented form is `{ after: { minutes: N } }` with a numeric literal `N`
+/// (`N` may be fractional; the result is rounded to the nearest second).
+/// Returns `None` for anything else — non-literal shapes can't be read at
+/// compile time.
+fn parse_reload_policy_seconds(expr: &ast::Expr) -> Option<u32> {
+    let obj = match strip_expr_wrappers(expr) {
+        ast::Expr::Object(obj) => obj,
+        _ => return None,
+    };
+    for prop in &obj.props {
+        let ast::PropOrSpread::Prop(p) = prop else {
+            continue;
+        };
+        let ast::Prop::KeyValue(kv) = p.as_ref() else {
+            continue;
+        };
+        if prop_name_to_string(&kv.key) != "after" {
+            continue;
+        }
+        let after_obj = match strip_expr_wrappers(kv.value.as_ref()) {
+            ast::Expr::Object(o) => o,
+            _ => return None,
+        };
+        for after_prop in &after_obj.props {
+            let ast::PropOrSpread::Prop(ap) = after_prop else {
+                continue;
+            };
+            let ast::Prop::KeyValue(akv) = ap.as_ref() else {
+                continue;
+            };
+            if prop_name_to_string(&akv.key) != "minutes" {
+                continue;
+            }
+            let ast::Expr::Lit(ast::Lit::Num(n)) = strip_expr_wrappers(akv.value.as_ref()) else {
+                return None;
+            };
+            let minutes = n.value;
+            if !minutes.is_finite() || minutes <= 0.0 {
+                return None;
+            }
+            let seconds = (minutes * 60.0).round();
+            if seconds < 1.0 {
+                return Some(1);
+            }
+            if seconds >= u32::MAX as f64 {
+                return Some(u32::MAX);
+            }
+            return Some(seconds as u32);
+        }
+        return None;
+    }
+    None
+}
+
+/// Inspect one provider return-value expression for a `reloadPolicy`
+/// property. Literal policies are appended to `found` (in seconds); a
+/// `reloadPolicy` that exists but isn't a readable literal sets `unparsed`.
+fn scan_provider_return_expr_for_reload_policy(
+    expr: &ast::Expr,
+    found: &mut Vec<u32>,
+    unparsed: &mut bool,
+) {
+    let obj = match strip_expr_wrappers(expr) {
+        ast::Expr::Object(obj) => obj,
+        _ => return,
+    };
+    for prop in &obj.props {
+        let ast::PropOrSpread::Prop(p) = prop else {
+            continue;
+        };
+        let ast::Prop::KeyValue(kv) = p.as_ref() else {
+            continue;
+        };
+        if prop_name_to_string(&kv.key) != "reloadPolicy" {
+            continue;
+        }
+        match parse_reload_policy_seconds(kv.value.as_ref()) {
+            Some(seconds) => found.push(seconds),
+            None => *unparsed = true,
+        }
+    }
+}
+
+/// Walk a provider function body and collect every compile-time
+/// `reloadPolicy` from its `return` statements, recursing through the
+/// statement shapes a provider realistically uses (blocks, if/else, loops,
+/// try/catch, switch, labels).
+fn scan_provider_stmts_for_reload_policy(
+    stmts: &[ast::Stmt],
+    found: &mut Vec<u32>,
+    unparsed: &mut bool,
+) {
+    for stmt in stmts {
+        scan_provider_stmt_for_reload_policy(stmt, found, unparsed);
+    }
+}
+
+fn scan_provider_stmt_for_reload_policy(
+    stmt: &ast::Stmt,
+    found: &mut Vec<u32>,
+    unparsed: &mut bool,
+) {
+    match stmt {
+        ast::Stmt::Return(ret) => {
+            if let Some(arg) = &ret.arg {
+                scan_provider_return_expr_for_reload_policy(arg, found, unparsed);
+            }
+        }
+        ast::Stmt::Block(block) => {
+            scan_provider_stmts_for_reload_policy(&block.stmts, found, unparsed);
+        }
+        ast::Stmt::If(if_stmt) => {
+            scan_provider_stmt_for_reload_policy(&if_stmt.cons, found, unparsed);
+            if let Some(alt) = &if_stmt.alt {
+                scan_provider_stmt_for_reload_policy(alt, found, unparsed);
+            }
+        }
+        ast::Stmt::While(w) => scan_provider_stmt_for_reload_policy(&w.body, found, unparsed),
+        ast::Stmt::DoWhile(d) => scan_provider_stmt_for_reload_policy(&d.body, found, unparsed),
+        ast::Stmt::For(f) => scan_provider_stmt_for_reload_policy(&f.body, found, unparsed),
+        ast::Stmt::ForIn(f) => scan_provider_stmt_for_reload_policy(&f.body, found, unparsed),
+        ast::Stmt::ForOf(f) => scan_provider_stmt_for_reload_policy(&f.body, found, unparsed),
+        ast::Stmt::Try(t) => {
+            scan_provider_stmts_for_reload_policy(&t.block.stmts, found, unparsed);
+            if let Some(handler) = &t.handler {
+                scan_provider_stmts_for_reload_policy(&handler.body.stmts, found, unparsed);
+            }
+            if let Some(finalizer) = &t.finalizer {
+                scan_provider_stmts_for_reload_policy(&finalizer.stmts, found, unparsed);
+            }
+        }
+        ast::Stmt::Switch(s) => {
+            for case in &s.cases {
+                scan_provider_stmts_for_reload_policy(&case.cons, found, unparsed);
+            }
+        }
+        ast::Stmt::Labeled(l) => scan_provider_stmt_for_reload_policy(&l.body, found, unparsed),
+        _ => {}
+    }
+}
+
 /// Parse a placeholder value from an expression
 fn parse_placeholder_value(expr: &ast::Expr) -> WidgetPlaceholderValue {
     match expr {
@@ -1702,297 +1662,4 @@ fn parse_placeholder_value(expr: &ast::Expr) -> WidgetPlaceholderValue {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use swc_common::DUMMY_SP;
-    use swc_ecma_ast as ast;
-
-    fn str_lit(value: &str) -> ast::Expr {
-        ast::Expr::Lit(ast::Lit::Str(ast::Str {
-            span: DUMMY_SP,
-            value: value.into(),
-            raw: None,
-        }))
-    }
-
-    fn key_value(key: &str, value: ast::Expr) -> ast::PropOrSpread {
-        ast::PropOrSpread::Prop(Box::new(ast::Prop::KeyValue(ast::KeyValueProp {
-            key: ast::PropName::Ident(ast::IdentName {
-                span: DUMMY_SP,
-                sym: key.into(),
-            }),
-            value: Box::new(value),
-        })))
-    }
-
-    fn array_lit(elems: Vec<ast::Expr>) -> ast::Expr {
-        ast::Expr::Array(ast::ArrayLit {
-            span: DUMMY_SP,
-            elems: elems
-                .into_iter()
-                .map(|e| {
-                    Some(ast::ExprOrSpread {
-                        spread: None,
-                        expr: Box::new(e),
-                    })
-                })
-                .collect(),
-        })
-    }
-
-    fn object_lit(props: Vec<ast::PropOrSpread>) -> ast::Expr {
-        ast::Expr::Object(ast::ObjectLit {
-            span: DUMMY_SP,
-            props,
-        })
-    }
-
-    #[test]
-    fn primitive_spec_recognized_scalars() {
-        assert!(matches!(
-            parse_entry_field_primitive_spec("number"),
-            WidgetFieldType::Number
-        ));
-        assert!(matches!(
-            parse_entry_field_primitive_spec("boolean"),
-            WidgetFieldType::Boolean
-        ));
-        assert!(matches!(
-            parse_entry_field_primitive_spec("string"),
-            WidgetFieldType::String
-        ));
-    }
-
-    #[test]
-    fn primitive_spec_unknown_falls_back_to_string() {
-        assert!(matches!(
-            parse_entry_field_primitive_spec("Date"),
-            WidgetFieldType::String
-        ));
-        assert!(matches!(
-            parse_entry_field_primitive_spec(""),
-            WidgetFieldType::String
-        ));
-    }
-
-    #[test]
-    fn primitive_spec_optional_and_array_suffixes() {
-        assert!(matches!(
-            parse_entry_field_primitive_spec("number?"),
-            WidgetFieldType::Optional(inner) if matches!(*inner, WidgetFieldType::Number)
-        ));
-        assert!(matches!(
-            parse_entry_field_primitive_spec("string[]"),
-            WidgetFieldType::Array(inner) if matches!(*inner, WidgetFieldType::String)
-        ));
-        // `'boolean[]?'` — array suffix is parsed first, then optional.
-        let nested = parse_entry_field_primitive_spec("boolean[]?");
-        let WidgetFieldType::Optional(o) = nested else {
-            panic!("expected Optional, got {:?}", nested);
-        };
-        let WidgetFieldType::Array(a) = *o else {
-            panic!("expected Optional<Array>, got Optional<other>");
-        };
-        assert!(matches!(*a, WidgetFieldType::Boolean));
-    }
-
-    #[test]
-    fn entry_field_value_spec_object_literal_becomes_object() {
-        // Inline `{ url: 'string', clicks: 'number' }`.
-        let expr = object_lit(vec![
-            key_value("url", str_lit("string")),
-            key_value("clicks", str_lit("number")),
-        ]);
-        let ty = parse_entry_field_value_spec(&expr);
-        let WidgetFieldType::Object(fields) = ty else {
-            panic!("expected Object, got {:?}", ty);
-        };
-        assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0].0, "url");
-        assert!(matches!(fields[0].1, WidgetFieldType::String));
-        assert_eq!(fields[1].0, "clicks");
-        assert!(matches!(fields[1].1, WidgetFieldType::Number));
-    }
-
-    #[test]
-    fn entry_field_value_spec_array_of_objects_does_not_collapse_to_string() {
-        // Inline `[{ url: 'string', clicks: 'number' }]`. This is the
-        // exact shape that used to collapse to `String` in the old
-        // parser, breaking SwiftUI `ForEach` over the field.
-        let inner = object_lit(vec![
-            key_value("url", str_lit("string")),
-            key_value("clicks", str_lit("number")),
-        ]);
-        let expr = array_lit(vec![inner]);
-        let ty = parse_entry_field_value_spec(&expr);
-        let WidgetFieldType::Array(elem) = ty else {
-            panic!("expected Array, got {:?}", ty);
-        };
-        let WidgetFieldType::Object(fields) = *elem else {
-            panic!("expected Array<Object>, got Array<other>");
-        };
-        assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0].0, "url");
-        assert_eq!(fields[1].0, "clicks");
-    }
-
-    fn ident_expr(name: &str) -> ast::Expr {
-        ast::Expr::Ident(ast::Ident {
-            span: DUMMY_SP,
-            ctxt: Default::default(),
-            sym: name.into(),
-            optional: false,
-        })
-    }
-
-    fn member_expr(obj: ast::Expr, prop: &str) -> ast::Expr {
-        ast::Expr::Member(ast::MemberExpr {
-            span: DUMMY_SP,
-            obj: Box::new(obj),
-            prop: ast::MemberProp::Ident(ast::IdentName {
-                span: DUMMY_SP,
-                sym: prop.into(),
-            }),
-        })
-    }
-
-    fn call_expr(callee: ast::Expr, args: Vec<ast::Expr>) -> ast::Expr {
-        ast::Expr::Call(ast::CallExpr {
-            span: DUMMY_SP,
-            ctxt: Default::default(),
-            callee: ast::Callee::Expr(Box::new(callee)),
-            args: args
-                .into_iter()
-                .map(|e| ast::ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(e),
-                })
-                .collect(),
-            type_args: None,
-        })
-    }
-
-    fn num_lit(n: f64) -> ast::Expr {
-        ast::Expr::Lit(ast::Lit::Num(ast::Number {
-            span: DUMMY_SP,
-            value: n,
-            raw: None,
-        }))
-    }
-
-    #[test]
-    fn format_expr_recognizes_string_cast() {
-        // `String(entry.totalClicks)`
-        let expr = call_expr(
-            ident_expr("String"),
-            vec![member_expr(ident_expr("entry"), "totalClicks")],
-        );
-        let fmt = try_parse_widget_format_expr(&expr).expect("expected Formatted match");
-        assert!(matches!(fmt.call, WidgetFormatCall::StringCast));
-        assert!(matches!(
-            fmt.arg,
-            WidgetFormatArg::Field(ref f) if f == "totalClicks"
-        ));
-    }
-
-    #[test]
-    fn format_expr_recognizes_math_round_floor_ceil() {
-        for (method, expected) in [
-            ("round", WidgetFormatCall::Round),
-            ("floor", WidgetFormatCall::Floor),
-            ("ceil", WidgetFormatCall::Ceil),
-        ] {
-            let callee = member_expr(ident_expr("Math"), method);
-            let expr = call_expr(
-                callee,
-                vec![member_expr(ident_expr("entry"), "totalClicks")],
-            );
-            let fmt =
-                try_parse_widget_format_expr(&expr).expect("expected Math.* to match whitelist");
-            assert!(
-                std::mem::discriminant(&fmt.call) == std::mem::discriminant(&expected),
-                "method `{}` produced {:?}, want {:?}",
-                method,
-                fmt.call,
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn format_expr_recognizes_to_fixed_with_digits_literal() {
-        // `entry.totalClicks.toFixed(2)`
-        let target = member_expr(ident_expr("entry"), "totalClicks");
-        let callee = member_expr(target, "toFixed");
-        let expr = call_expr(callee, vec![num_lit(2.0)]);
-        let fmt = try_parse_widget_format_expr(&expr).expect("expected toFixed match");
-        assert!(matches!(fmt.call, WidgetFormatCall::ToFixed { digits: 2 }));
-        assert!(matches!(
-            fmt.arg,
-            WidgetFormatArg::Field(ref f) if f == "totalClicks"
-        ));
-    }
-
-    #[test]
-    fn format_expr_rejects_unknown_call_shape() {
-        // `fmt(entry.totalClicks)` — user-defined function, not in
-        // the whitelist; must return None (caller falls back to an
-        // empty literal rather than producing broken output).
-        let expr = call_expr(
-            ident_expr("fmt"),
-            vec![member_expr(ident_expr("entry"), "totalClicks")],
-        );
-        assert!(try_parse_widget_format_expr(&expr).is_none());
-    }
-
-    #[test]
-    fn parse_text_content_call_path_collapses_for_unknown() {
-        // Same as above but exercising the public entrypoint — verifies
-        // that the call falls through to Literal("") rather than
-        // silently dropping into Field("").
-        let expr = call_expr(
-            ident_expr("fmt"),
-            vec![member_expr(ident_expr("entry"), "totalClicks")],
-        );
-        match parse_text_content(&expr) {
-            WidgetTextContent::Literal(ref s) if s.is_empty() => {}
-            other => panic!("expected Literal(\"\"), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_text_content_call_path_recognized_call_becomes_formatted() {
-        // `Math.round(entry.totalClicks)` — the user's actual bug
-        // shape. Must produce Formatted, not the catch-all empty
-        // literal that lost the call body.
-        let expr = call_expr(
-            member_expr(ident_expr("Math"), "round"),
-            vec![member_expr(ident_expr("entry"), "totalClicks")],
-        );
-        match parse_text_content(&expr) {
-            WidgetTextContent::Formatted(fmt) => {
-                assert!(matches!(fmt.call, WidgetFormatCall::Round));
-                assert!(matches!(
-                    fmt.arg,
-                    WidgetFormatArg::Field(ref f) if f == "totalClicks"
-                ));
-            }
-            other => panic!("expected Formatted, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn entry_field_value_spec_array_with_string_suffix_spec() {
-        // `'string[]'` and `['string']` both resolve to `Array<String>`.
-        let by_suffix = parse_entry_field_value_spec(&str_lit("string[]"));
-        let by_literal = parse_entry_field_value_spec(&array_lit(vec![str_lit("string")]));
-        assert!(matches!(
-            by_suffix,
-            WidgetFieldType::Array(inner) if matches!(*inner, WidgetFieldType::String)
-        ));
-        assert!(matches!(
-            by_literal,
-            WidgetFieldType::Array(inner) if matches!(*inner, WidgetFieldType::String)
-        ));
-    }
-}
+mod tests;
