@@ -825,7 +825,38 @@ pub(crate) unsafe fn stringify_object(ptr: *const u8, buf: &mut String) {
     stringify_object_inner(ptr, buf, 0)
 }
 
+/// #6519: emit a WHATWG `URL` instance as its `href` string — Node serializes a
+/// URL through `URL.prototype.toJSON()`. A URL is a plain `GC_TYPE_OBJECT` whose
+/// `searchParams` field points back at the URL, so the generic object walk trips
+/// the circular-structure detector; every stringify walker (compact, pretty, and
+/// replacer, in both `stringify.rs` and `replacer.rs`) short-circuits URL objects
+/// through here. Callers must have confirmed `crate::url::is_url_object_shape`.
+/// `href` is a string by construction, so this never recurses into an object and
+/// is depth-independent (emitting it just escapes + quotes the string).
+#[inline]
+pub(crate) unsafe fn write_url_href_json(url: *mut crate::ObjectHeader, buf: &mut String) {
+    let href = crate::url::url_class::js_url_get_href(url);
+    stringify_value(href, TYPE_UNKNOWN, buf);
+}
+
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // #6519: a WHATWG `URL` instance is a plain `GC_TYPE_OBJECT` (class_id 0)
+    // whose `searchParams` field points back at the URL — walking its fields
+    // trips the circular-structure detector. Node serializes a URL via
+    // `URL.prototype.toJSON()`, i.e. its `href` string. Top-level
+    // `JSON.stringify(url)` is intercepted at HIR-lowering time
+    // (`UrlInstanceToJSON`, module_static.rs), but a URL *nested* inside another
+    // object/array is invisible to that interception and only reaches this
+    // runtime walker — so detect the URL shape here and emit its href. This is
+    // the single chokepoint every object walk funnels through (the direct
+    // dispatch arms, the array slow loop, and per-field descent all land here);
+    // `is_url_object_shape` validates the GC header before reading any field, so
+    // it is safe to call on the non-object pointers that reach the `TYPE_OBJECT`
+    // hint / catch-all callers.
+    if crate::url::is_url_object_shape(ptr as *mut crate::ObjectHeader) {
+        write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
+        return;
+    }
     // #1704: an object with a null `keys_array` has no own enumerable
     // properties — empty objects come out of `js_object_alloc` with
     // `keys_array == null` and only get one once a field is set. This is the
@@ -1289,6 +1320,14 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // array of `class { toJSON() {…} }` instances must honour the prototype
     // `toJSON`.)
     if (*obj).class_id != 0 {
+        return None;
+    }
+    // #6519: a URL instance is a class_id-0 object but must serialize as its
+    // `href` string (handled by `stringify_object_inner`'s URL branch), never
+    // as a templated dump of its 12 internal fields (which would also walk the
+    // `searchParams` back-reference and throw). Bail so an array whose first
+    // element is a URL routes every element through the per-element slow path.
+    if crate::url::is_url_object_shape(obj as *mut crate::ObjectHeader) {
         return None;
     }
     let keys_arr = (*obj).keys_array;

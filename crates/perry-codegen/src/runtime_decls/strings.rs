@@ -209,6 +209,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `TypeError: value is not a function` instead of masking a
     // non-pointer value's low 48 bits into a wild closure pointer.
     module.declare_function("js_closure_unbox_callee_checked", I64, &[DOUBLE]);
+    // #6475: receiver-aware variant for member-shaped fused calls — rebinds an
+    // object-literal method's baked `this` slot to the receiver before unboxing.
+    module.declare_function(
+        "js_closure_unbox_callee_checked_rebind",
+        I64,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
@@ -758,6 +765,19 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_util_types_is_map_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_util_types_is_set_iterator", DOUBLE, &[DOUBLE]);
     module.declare_function("js_data_view_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    // #6386: direct DataView accessor entries for statically-typed receivers
+    // (kind codes = `DataViewKind` repr(i32) discriminants; trailing i32 is
+    // the source-level argc, forwarded for the generic-dispatch fallback).
+    module.declare_function(
+        "js_data_view_get_direct",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32, I32],
+    );
+    module.declare_function(
+        "js_data_view_set_direct",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32, I32],
+    );
     module.declare_function("js_getenv", I64, &[I64]);
     module.declare_function("js_getenv_value", DOUBLE, &[I64]);
     // #1344: process.env.X = v / delete process.env.X.

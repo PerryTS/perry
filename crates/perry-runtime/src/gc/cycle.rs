@@ -892,8 +892,11 @@ impl GcCycleState {
         // (the longest phase), so an object born during a build slice and
         // installed via a runtime-internal raw store would be swept live
         // (measured: identical 2,890-node loss with barrier-window-only
-        // birth flags). Cleared in the outcome finalizer / Drop, NOT at
-        // barrier disable — sweeping runs after the barrier is off.
+        // birth flags). Cleared when the barrier disables at sweep entry
+        // (post-snapshot births cannot be reached by the in-flight sweep,
+        // and a mark they carried would leak into the next cycle as
+        // "already traced"). Every black birth is also pushed as a mark
+        // seed — see `gc_note_black_birth`.
         super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
         Self {
             collection_kind: GcCollectionKind::Full,
@@ -941,8 +944,11 @@ impl GcCycleState {
         // (the longest phase), so an object born during a build slice and
         // installed via a runtime-internal raw store would be swept live
         // (measured: identical 2,890-node loss with barrier-window-only
-        // birth flags). Cleared in the outcome finalizer / Drop, NOT at
-        // barrier disable — sweeping runs after the barrier is off.
+        // birth flags). Cleared when the barrier disables at sweep entry
+        // (post-snapshot births cannot be reached by the in-flight sweep,
+        // and a mark they carried would leak into the next cycle as
+        // "already traced"). Every black birth is also pushed as a mark
+        // seed — see `gc_note_black_birth`.
         super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(GC_FLAG_MARKED));
         Self {
             collection_kind: GcCollectionKind::Minor,
@@ -1415,14 +1421,26 @@ impl GcCycleState {
                 // leave `live_old_to_young_sticky` None; reclaim then restores
                 // only `evacuation_sticky` + the pre-clear dirty snapshot.
                 if self.minor.is_some() {
-                    // Barrier off for the minor: first drain any seeds the
-                    // barrier pushed since BarrierSeedDrain completed (late
-                    // stores mark the child but its children still need the
-                    // trace), then disable. Bounded by late-store volume.
+                    // Drain any seeds the barrier pushed since
+                    // BarrierSeedDrain completed (late stores mark the child
+                    // but its children still need the trace). Bounded by
+                    // late-store volume.
+                    //
+                    // The barrier deliberately STAYS ENABLED here: the sweep
+                    // state (and its per-block fill snapshot) is only built
+                    // on the next step_sweep slice, and the mutator runs in
+                    // between. With the barrier (and its allocate-black birth
+                    // flags) off in that window, an object allocated and
+                    // linked there is WHITE yet INSIDE the sweep snapshot —
+                    // it gets freed live (observed: React fibers created
+                    // during a render burst between finalize and sweep lost
+                    // their side-table fields; the compiled TUI's
+                    // pendingProps/lanes/slice crashes). step_sweep drains
+                    // the gap's seeds and disables the barrier in the same
+                    // slice that takes the snapshot.
                     let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                     let mut final_drain = TraceWorklistCycleState::new(true);
                     while !final_drain.step(valid_ptrs, usize::MAX) {}
-                    incremental_mark_barrier_disable();
                     self.atomic_finalize = None;
                     self.phase = GcCyclePhase::Sweep;
                     return;
@@ -1462,13 +1480,13 @@ impl GcCycleState {
                 // Same late-seed closure as the minor path: trace anything
                 // the barrier shaded after BarrierSeedDrain completed, so no
                 // marked-but-untraced object reaches Sweep with unmarked
-                // children.
+                // children. The barrier stays enabled until step_sweep takes
+                // the block snapshot (see the minor arm's gap comment).
                 {
                     let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                     let mut final_drain = TraceWorklistCycleState::new(false);
                     while !final_drain.step(valid_ptrs, usize::MAX) {}
                 }
-                incremental_mark_barrier_disable();
                 if let Some(state) = self.atomic_finalize.as_mut() {
                     state.subphase = AtomicFinalizeSubphase::Done;
                 }
@@ -1588,6 +1606,19 @@ impl GcCycleState {
         let phase_start = trace_phase_start(&self.trace);
         if self.sweep_state.is_none() {
             let full_trace = self.minor.is_none();
+            // Close the finalize->sweep gap: the barrier stayed enabled across
+            // the mutator windows since AtomicFinalize ended. Trace whatever
+            // it shaded there (so gap-born objects' children are live too),
+            // then disable it — in the SAME slice that builds the sweep
+            // state's block/fill snapshot below, so no mutator window exists
+            // between barrier-off and snapshot.
+            if incremental_mark_barrier_active() {
+                let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                let mut gap_drain = TraceWorklistCycleState::new(!full_trace);
+                while !gap_drain.step(valid_ptrs, usize::MAX) {}
+                incremental_mark_barrier_disable();
+            }
+
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
                 if let Some(minor) = self.minor.as_ref() {
                     let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)

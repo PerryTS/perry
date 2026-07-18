@@ -55,3 +55,15 @@ report(
     stdio: ["ignore", "ignore", "pipe"],
   }),
 );
+
+report(
+  "null entries",
+  spawnSync(
+    "node",
+    [
+      "-e",
+      "process.stdout.write('null-out'); process.stderr.write('null-err')",
+    ],
+    { encoding: "utf8", stdio: [null, null, null] },
+  ),
+);

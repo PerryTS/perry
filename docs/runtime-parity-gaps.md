@@ -1,13 +1,17 @@
 # Perry Runtime Parity Gap List
 
 > **Generated** by `scripts/gen_parity_gaps.py` from `docs/runtime-parity.md`
-> (the API inventory) reconciled against Perry's coverage sources. Do not
-> edit by hand — re-run the script to refresh.
+> (the API inventory) reconciled against Perry's coverage sources. Normally
+> do not edit by hand — re-run the script to refresh. **As of 2026-07-17 the
+> script's worst bug (a stale single-file manifest path) is fixed** — see the
+> audit note under Summary — but a dry run still undercounts by a handful of
+> rows relative to this file, so it still carries a small set of
+> hand-corrections instead of being freshly emitted.
 
 This is a structured gap analysis comparing the public Node.js API surface
 against the APIs Perry can dispatch. Coverage is derived from four sources:
-the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`,
-`method`/`property` rows), compound `Expr::*` HIR variants
+the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`
+and `entries/*.rs`, `method`/`property` rows), compound `Expr::*` HIR variants
 (`crates/perry-hir/src/ir/`), `js_*` FFI exports across `perry-runtime` /
 `perry-stdlib` / `perry-ext-*`, and module-gated method-dispatch literals.
 
@@ -21,7 +25,40 @@ the unimplemented-API gate manifest (`crates/perry-api-manifest/src/entries.rs`,
 
 ## Summary
 
-Across 49 `node:*` modules: **2222 covered / 296 gap** of 2518 catalogued APIs.
+Across 49 `node:*` modules: **2238 covered / 280 gap** of 2518 catalogued APIs.
+
+> **Audit note (2026-07-16, updated 2026-07-17):** spot-checking ~10 "gap"
+> entries against the current source turned up 16 false positives (below)
+> that the generator missed. Two distinct root causes:
+>
+> 1. `crates/perry-api-manifest/src/entries.rs` was split into
+>    `entries/part_1.rs`..`part_4.rs` (2026-07-03) after this file's last
+>    regeneration (2026-06-15); `scripts/gen_parity_gaps.py`'s `MANIFEST`
+>    constant still pointed at the now-mostly-empty `entries.rs`, so a
+>    dry run showed 1750 covered / 768 gap (e.g. `node:os` swinging from 0
+>    gaps to 143) — most of the manifest was invisible to the script. **This
+>    is now fixed**: the script globs `entries.rs` + `entries/*.rs` and fails
+>    loudly if the parsed entry count looks implausibly low (guards against a
+>    future re-split doing this again silently).
+> 2. The remaining 13 of the 16 false positives are still invisible to a
+>    fresh run even with the manifest path fixed — a dry run with the fixed
+>    script lands at **2232 covered / 286 gap**, close to but not identical
+>    to the 2238/280 below. Root cause: those 13 rows (the four
+>    `new URLSearchParams(...)` overloads, `Buffer.allocUnsafeSlow`, the six
+>    `stats.*` numeric fields, `new Worker(filename)`, `new AsyncLocalStorage()`)
+>    are declared via the manifest's `class(...)`/`internal_method(...)`
+>    macros or dispatched through code paths outside the script's four
+>    recognized coverage sources (a dynamic-callee constructor path in
+>    `class_registry/construct.rs`, and packed-key-array object shapes like
+>    `fs`'s `STATS_KEYS_REGULAR`) — `MANIFEST_RE` only matches bare
+>    `method(`/`property(` calls, not `class(`/`internal_method(`/
+>    `internal_property(`/`internal_class(`. That's a separate, pre-existing
+>    matcher gap, not the file-split bug, and is out of scope for the
+>    manifest-path fix; the other 3 false positives (`params.entries()`/
+>    `.keys()`/`.values()` on `node:url`) *are* recovered by the path fix.
+>    The counts below stay hand-corrected for all 16 until the matcher gap
+>    has its own fix; the rest of the list has not been re-audited and may
+>    contain further stale entries.
 
 > Web / global APIs and Bun-only APIs are tracked separately in
 > `runtime-parity.md`; their coverage is curated, not recomputed here.
@@ -39,11 +76,11 @@ Across 49 `node:*` modules: **2222 covered / 296 gap** of 2518 catalogued APIs.
 | `node:inspector` | 10 | 9 | 19 |
 | `node:module` | 41 | 9 | 50 |
 | `node:timers` | 8 | 9 | 17 |
-| `node:url` | 40 | 9 | 49 |
-| `node:fs` | 174 | 8 | 182 |
+| `node:url` | 47 | 2 | 49 |
+| `node:fs` | 180 | 2 | 182 |
 | `node:readline/promises` | 0 | 7 | 7 |
 | `node:assert` | 21 | 6 | 27 |
-| `node:buffer` | 102 | 6 | 108 |
+| `node:buffer` | 103 | 5 | 108 |
 | `node:cluster` | 29 | 6 | 35 |
 | `node:events` | 35 | 6 | 41 |
 | `node:trace_events` | 0 | 6 | 6 |
@@ -54,8 +91,8 @@ Across 49 `node:*` modules: **2222 covered / 296 gap** of 2518 catalogued APIs.
 | `node:readline` | 27 | 2 | 29 |
 | `node:sqlite` | 50 | 2 | 52 |
 | `node:timers/promises` | 3 | 2 | 5 |
-| `node:worker_threads` | 62 | 2 | 64 |
-| `node:async_hooks` | 28 | 1 | 29 |
+| `node:worker_threads` | 63 | 1 | 64 |
+| `node:async_hooks` | 29 | 0 | 29 |
 | `node:console` | 22 | 1 | 23 |
 | `node:dgram` | 27 | 1 | 28 |
 | `node:fs/promises` | 60 | 1 | 61 |
@@ -77,7 +114,7 @@ Across 49 `node:*` modules: **2222 covered / 296 gap** of 2518 catalogued APIs.
 | `node:string_decoder` | 6 | 0 | 6 |
 | `node:vm` | 32 | 0 | 32 |
 | `node:wasi` | 6 | 0 | 6 |
-| **Total** | **2222** | **296** | **2518** |
+| **Total** | **2238** | **280** | **2518** |
 
 ## Per-module gaps
 
@@ -353,30 +390,32 @@ gap-size order. Modules omitted here have **zero** catalogued gaps.
 
 ### node:url
 
-**Covered: 40 · Gap: 9**
+**Covered: 47 · Gap: 2**
 
 - `url.toJSON()`
-- `new URLSearchParams()`
-- `new URLSearchParams(string)`
-- `new URLSearchParams(obj)`
-- `new URLSearchParams(iterable)`
-- `params.entries()`
-- `params.keys()`
-- `params.values()`
 - `params[Symbol.iterator]()`
+
+> `new URLSearchParams()` (all four init-shape overloads) and
+> `params.entries()`/`.keys()`/`.values()` are implemented
+> (`crates/perry-runtime/src/url/search_params.rs`: `js_url_search_params_new_any`/
+> `_new_empty`, dispatched from `object/class_registry/construct.rs`;
+> `js_url_search_params_entries_arr`/`_keys_arr`/`_values_arr`) — removed
+> from this list 2026-07-16. `params[Symbol.iterator]()` specifically
+> wasn't found wired to a distinct dispatch path in a quick check, so it's
+> left as an unverified gap.
 
 ### node:fs
 
-**Covered: 174 · Gap: 8**
+**Covered: 180 · Gap: 2**
 
 - `fs.realpath.native(path[, options], callback)`
 - `fs.realpathSync.native(path[, options])`
-- `stats.dev`
-- `stats.ino`
-- `stats.nlink`
-- `stats.rdev`
-- `stats.size`
-- `stats.blksize`
+
+> `stats.dev`/`.ino`/`.nlink`/`.rdev`/`.size`/`.blksize` are all populated
+> fields on the `Stats` object (`crates/perry-runtime/src/fs/stats.rs`
+> `STATS_KEYS_REGULAR`/`STATS_KEYS_BIGINT` include all six) — removed from
+> this list 2026-07-16. The `fs.realpath.native`/`realpathSync.native`
+> entries are unverified; left as-is.
 
 ### node:readline/promises
 
@@ -403,14 +442,19 @@ gap-size order. Modules omitted here have **zero** catalogued gaps.
 
 ### node:buffer
 
-**Covered: 102 · Gap: 6**
+**Covered: 103 · Gap: 5**
 
-- `Buffer.allocUnsafeSlow(size)`
 - `Buffer.poolSize`
 - `buf[index]`
 - `buf.parent`
 - `new buffer.Blob([sources[, options]])`
 - `new buffer.File(sources, fileName[, options])`
+
+> `Buffer.allocUnsafeSlow(size)` is implemented
+> (`crates/perry-runtime/src/object/native_module_dispatch/dispatch_a_c.rs`
+> `("buffer.Buffer", "allocUnsafeSlow")`, backed by
+> `crates/perry-runtime/src/buffer/validate.rs`) — removed from this list
+> 2026-07-16.
 
 ### node:cluster
 
@@ -502,16 +546,14 @@ gap-size order. Modules omitted here have **zero** catalogued gaps.
 
 ### node:worker_threads
 
-**Covered: 62 · Gap: 2**
+**Covered: 63 · Gap: 1**
 
-- `new Worker(filename[, options])`
 - `worker[Symbol.asyncDispose]()`
 
-### node:async_hooks
-
-**Covered: 28 · Gap: 1**
-
-- `new AsyncLocalStorage()`
+> `new Worker(filename[, options])` is implemented — dedicated
+> `Expr::WorkerNew` HIR variant (`crates/perry-hir/src/lower/expr_new.rs`),
+> `js_worker_threads_worker_new` runtime function — removed from this list
+> 2026-07-16.
 
 ### node:console
 

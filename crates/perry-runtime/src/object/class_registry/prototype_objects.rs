@@ -142,6 +142,9 @@ pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
 /// when a class extends `func` via the #711 dynamic-parent path.
 #[no_mangle]
 pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
+    // `F.prototype = obj` re-shapes the chain of every future instance —
+    // flush cached store plans (`object::prop_plan`).
+    crate::object::prop_plan::prop_plan_epoch_bump();
     let func_bits = func.to_bits();
     let func_tag = func_bits & 0xFFFF_0000_0000_0000;
     let proto_bits = proto.to_bits();

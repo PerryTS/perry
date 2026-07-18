@@ -54,5 +54,9 @@ perry-ffi = { workspace = true, features = ["runtime-link"] }
 # BODY — so the degraded copy silently ToString-coerces a RegExp argument and
 # searches for it literally instead of matching it (str.replace(re, fn) never fires
 # its callback). Keep `"default"` in lock-step with perry-runtime's default feature
-# list; `manifest_ext_runtime_features.rs` guards it.
-perry-runtime = { workspace = true, features = ["default", "external-ws-symbols"] }
+# list; the `ext_crates_bundle_a_full_featured_perry_runtime` test (well_known.rs) guards it.
+# #6314: `stdlib` drops the bundled no-op `stdlib_stubs` (js_stdlib_init_dispatch,
+# ...) from this staticlib's perry-runtime copy. Linked before stdlib, the no-op
+# `js_stdlib_init_dispatch` otherwise wins first-definition and never registers
+# the tokio reactor — every node:http server dies on its first accept.
+perry-runtime = { workspace = true, features = ["default", "external-ws-symbols", "stdlib"] }

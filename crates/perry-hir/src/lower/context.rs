@@ -1149,6 +1149,13 @@ impl LoweringContext {
             .map(|(_, params, ret)| (params, ret))
     }
 
+    /// Stable per-module salt for class-capture field names (see
+    /// `crate::cap_fields`). Reuses the tagged-template site salt — a stable
+    /// hash of the module's source path.
+    pub(crate) fn cap_salt(&self) -> u64 {
+        self.tagged_template_site_salt
+    }
+
     pub(crate) fn register_native_module(
         &mut self,
         local_name: String,

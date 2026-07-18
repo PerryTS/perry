@@ -40,9 +40,16 @@ The full `ContainerSpec` accepts:
 | `workdir` | `string` | Working directory inside the container. |
 | `cap_add` | `string[]` | Linux capabilities to add (e.g. `["NET_BIND_SERVICE"]`). |
 | `cap_drop` | `string[]` | Linux capabilities to drop (e.g. `["ALL"]`). |
-| `seccomp` | `string` | Seccomp profile path or `"default"`. |
+| `seccomp` | `string` | Seccomp profile path or `"default"` (the runtime's default profile). |
+| `no_new_privileges` | `boolean` | Sets `--security-opt no-new-privileges` — SUID/SGID binaries inside the container can't gain privileges via execve. |
 
-See [Security](./security.md) for the security knobs in depth.
+When `seccomp` or `no_new_privileges` is set, `run()`/`create()`
+automatically route through the engine's security-aware launch path
+(the same one `perry/compose` uses), which also normalizes the spec
+against the detected backend's capabilities — on apple/container the
+two flags have no equivalent and are dropped with a warning instead of
+crashing the CLI. See [Security](./security.md) for the security knobs
+in depth.
 
 ### Hardened single-container run
 

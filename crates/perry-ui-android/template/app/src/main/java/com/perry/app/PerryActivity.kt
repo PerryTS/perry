@@ -105,6 +105,12 @@ class PerryActivity : Activity() {
         // URL until the JS module's `appOnOpenUrl` registers its handler.
         intent?.data?.toString()?.let { PerryBridge.onDeepLinkColdStart(it) }
 
+        // Notification tap (#97): a banner tap launches us with the
+        // notification id as an Intent extra. On a cold start the native
+        // library isn't loaded yet, so the bridge logs and skips (no JS
+        // callback can be registered before the app has run).
+        PerryBridge.handleNotificationTapIntent(intent)
+
         // Request any dangerous runtime permissions declared in the manifest
         // before starting native code, so they're available when needed.
         val needed = getDangerousPermissionsToRequest()
@@ -172,6 +178,10 @@ class PerryActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.data?.toString()?.let { PerryBridge.onDeepLinkForeground(it) }
+        // Notification tap while the app is alive (#97): the tap
+        // PendingIntent uses FLAG_ACTIVITY_SINGLE_TOP, so it lands here
+        // rather than in a fresh onCreate.
+        PerryBridge.handleNotificationTapIntent(intent)
     }
 
     @Deprecated("Required to wire pre-existing file dialog and the issue #552 image picker")

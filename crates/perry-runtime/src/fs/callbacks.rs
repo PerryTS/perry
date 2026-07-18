@@ -131,10 +131,54 @@ fn catch_callback_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
     }
 }
 
-pub(crate) fn call_cb0(callback: *const ClosureHeader) {
-    if !callback.is_null() {
-        crate::closure::js_closure_call1(callback, f64::from_bits(0x7FFC_0000_0000_0002));
+/// Trampoline body for a deferred single-arg fs completion callback. Invoked
+/// with no JS args from the microtask drain (`js_closure_call0`); the real
+/// callback and its single argument travel as tag-aware capture slots so the
+/// GC keeps them live — and rewrites their addresses — across any collection
+/// that lands between the enqueue and the drain. Slot 0 is the callback
+/// NaN-boxed as a POINTER value, slot 1 the argument (an error value or `null`).
+extern "C" fn deferred_fs_cb1_impl(closure: *const ClosureHeader) -> f64 {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    let cb = extract_closure_ptr(crate::closure::js_closure_get_capture_f64(closure, 0));
+    let arg0 = crate::closure::js_closure_get_capture_f64(closure, 1);
+    if !cb.is_null() {
+        crate::closure::js_closure_call1(cb, arg0);
     }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Deliver a void fs op's completion callback on a LATER tick instead of
+/// synchronously (#6401). Node's async `fs.*` functions dispatch to the libuv
+/// threadpool and never invoke the callback in the same turn they were called;
+/// firing it inline reorders execution — code that runs `main()` from an fs
+/// callback would then observe module-top-level `const`s that Node has already
+/// initialized as still-uninitialized. We still run the syscall eagerly (as
+/// before) and only defer the `(err)` / `(null)` delivery, mirroring the
+/// already-deferred `fs.opendir`/`Dir.read` path (`dir_schedule_read_callback`).
+fn defer_fs_cb1(callback: *const ClosureHeader, arg0: f64) {
+    if callback.is_null() {
+        return;
+    }
+    // Register the trampoline's arity (0 JS params) before it can first be
+    // dispatched, so `resolve_strategy` doesn't cache a stale strategy (#6475).
+    thread_local! {
+        static ARITY_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    ARITY_REGISTERED.with(|r| {
+        if !r.get() {
+            crate::closure::js_register_closure_arity(deferred_fs_cb1_impl as *const u8, 0);
+            r.set(true);
+        }
+    });
+    let cb_boxed = crate::value::js_nanbox_pointer(callback as i64);
+    let closure = crate::closure::js_closure_alloc(deferred_fs_cb1_impl as *const u8, 2);
+    crate::closure::js_closure_set_capture_f64(closure, 0, cb_boxed);
+    crate::closure::js_closure_set_capture_f64(closure, 1, arg0);
+    crate::builtins::js_queue_microtask(closure as i64);
+}
+
+pub(crate) fn call_cb0(callback: *const ClosureHeader) {
+    defer_fs_cb1(callback, f64::from_bits(0x7FFC_0000_0000_0002));
 }
 
 /// Invoke a 2-arg callback with (err, undefined). Used by read-style ops
@@ -149,9 +193,7 @@ pub(crate) unsafe fn call_cb_err2(callback: *const ClosureHeader, err_val: f64) 
 /// Invoke a 1-arg callback with (err). Used by void ops (mkdir/unlink/rm/…)
 /// when the pre-flight probe detected an io::Error.
 pub(crate) unsafe fn call_cb_err1(callback: *const ClosureHeader, err_val: f64) {
-    if !callback.is_null() {
-        crate::closure::js_closure_call1(callback, err_val);
-    }
+    defer_fs_cb1(callback, err_val);
 }
 
 /// `fs.writeFile(path, data, callback)` — sync write + immediate callback.

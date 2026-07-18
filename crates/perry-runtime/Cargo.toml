@@ -93,7 +93,22 @@ intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:ic
 # ioredis.rs is the live Redis path). Removing them drops ~1.5+ MB from every
 # Perry binary that links libperry_runtime.a.
 full = ["dep:hostname", "dep:dirs"]
-# When perry-stdlib is the consumer, exclude no-op stubs to avoid duplicate symbols
+# Exclude perry-runtime's no-op `stdlib_stubs` module (js_stdlib_init_dispatch,
+# js_stdlib_process_pending, the fetch/ws/readline no-ops). Enabled by any crate
+# that BUNDLES perry-runtime into a staticlib AND is always co-linked with the
+# real perry-stdlib: perry-stdlib itself, and every perry-ext-* wrapper (#6314).
+# Those wrappers are `crate-type = ["staticlib", ...]`, so `libperry_ext_*.a`
+# physically contains a copy of perry-runtime, and perry links the ext archives
+# BEFORE stdlib (`prefer_well_known_before_stdlib`) — so the bundled no-op stub
+# would win first-definition over perry-stdlib's real symbol (e.g. a node:http
+# server's `js_stdlib_init_dispatch` binds to the no-op and never registers the
+# tokio reactor). Dropping the whole module from those copies removes the
+# shadow. The shipped standalone `libperry_runtime.a` is built WITHOUT this
+# feature, so it keeps the stubs and runtime-only builds still link.
+# The `ext_crates_bundle_a_full_featured_perry_runtime` test (well_known.rs)
+# guards that every runtime-bundling ext crate sets it. NOTE: this is a pure
+# symbol-suppression gate; it must NOT be confused
+# with the behavioral `external-fetch-symbols` (fetch dispatch routing) below.
 stdlib = []
 # Extension-crate test binaries that link the real perry-ext-ws symbols still
 # need runtime-link for perry-ffi helpers, but must not also export runtime-only
