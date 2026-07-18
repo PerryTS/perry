@@ -813,23 +813,33 @@ fn run_root_health_check() {
         return;
     }
 
-    // No modal on screen. Replay rebuilds deferred while one was up — on the
-    // dismissal edge, or if a defer/dismiss slipped between throttled samples.
-    if was || crate::state::has_deferred_rebuilds() {
-        crate::state::replay_deferred_rebuilds();
+    // No modal on screen. Recover only when there is evidence of modal-related
+    // work: a modal we observed going away (`was`), or a rebuild deferred while
+    // one was up. The defer-and-dismiss race can slip a modal entirely between
+    // throttled samples (state_set checks live, every tick), so a queued
+    // deferral is the more reliable "a modal was just up" signal than `was`
+    // alone. Without such evidence, leave the window alone — don't resurrect an
+    // unrelated hidden window and break the no-modal behavior contract.
+    if !was && !crate::state::has_deferred_rebuilds() {
+        return;
     }
-    // Re-assert the window if a dismissed modal left it detached. `force` on
-    // the dismissal edge recovers the ASWebAuthenticationSession "white/frozen"
-    // case; otherwise only a definitively hidden window is recovered.
-    reassert_root_window(was);
+    crate::state::replay_deferred_rebuilds();
+    // A dismissed modal can leave the window visible but no longer key (the
+    // ASWebAuthenticationSession "white/frozen" case), not just hidden — so
+    // recover both here, unconditionally, now that we know a modal was up.
+    reassert_root_window();
 }
 
-/// Issue #5203 — re-make the app's window key & visible if it has become
-/// detached. `force` (set on a modal-dismissal edge) also recovers a window
-/// that is merely no longer key; otherwise only a hidden window is recovered,
-/// to avoid fighting legitimate key changes (e.g. iPad multi-window). Only
-/// while the app is foreground-active, so we don't fight background transitions.
-fn reassert_root_window(force: bool) {
+/// Issue #5203 — re-make the app's window key & visible if a dismissed modal
+/// left it detached (hidden, or visible-but-no-longer-key). Only called from
+/// the recovery path (a modal was just up), and only while the app is
+/// foreground-active so we don't fight background/inactive transitions.
+///
+/// Iterating every `APPS` entry is exact rather than approximate here: Perry's
+/// generated Info.plist sets `UIApplicationSupportsMultipleScenes=false`
+/// (`bundle_ios.rs`), so there is a single scene/window and this loop touches
+/// exactly the window whose modal just dismissed.
+fn reassert_root_window() {
     unsafe {
         let app_cls = match AnyClass::get(c"UIApplication") {
             Some(c) => c,
@@ -849,7 +859,7 @@ fn reassert_root_window(force: bool) {
                 let win: &UIWindow = &entry.window;
                 let hidden: bool = msg_send![win, isHidden];
                 let is_key: bool = msg_send![win, isKeyWindow];
-                if hidden || (force && !is_key) {
+                if hidden || !is_key {
                     win.makeKeyAndVisible();
                 }
             }
