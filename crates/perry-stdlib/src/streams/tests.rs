@@ -22,6 +22,9 @@ fn alloc_closed_readable() -> usize {
 
 #[test]
 fn stream_ids_live_outside_pointer_tag_small_handle_band() {
+    // Allocates from the shared pools — serialize so this can't steal the
+    // free-list id the recycle test below asserts on.
+    let _serial = serial_guard();
     let id = next_stream_id();
     assert!(
         (STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id),
@@ -73,9 +76,8 @@ fn retire_is_idempotent_per_id() {
     let id = alloc_closed_readable();
     idalloc::retire_readable_terminal(id);
     idalloc::retire_readable_terminal(id);
-    // The unregistered-id path must also skip it: the registry entry is still
-    // present in quarantine.
-    idalloc::retire_unregistered_id(id);
+    // The pipe-lock path must also skip it: it carries no ownership mark.
+    idalloc::retire_pipe_lock_id(id);
     assert_eq!(
         idalloc::test_pool_occurrences(id),
         1,
@@ -89,7 +91,7 @@ fn live_stream_ids_never_enter_the_pool() {
     idalloc::test_reset_pools();
     let id = alloc_readable(0, 0, 0, 1.0);
     idalloc::retire_readable_terminal(id); // Readable → not terminal
-    idalloc::retire_unregistered_id(id); // registered → guarded
+    idalloc::retire_pipe_lock_id(id); // no ownership mark → guarded
     assert_eq!(idalloc::test_pool_occurrences(id), 0);
     {
         // Closed but undrained (slow consumer with queued chunks) stays live.
@@ -100,6 +102,21 @@ fn live_stream_ids_never_enter_the_pool() {
     }
     idalloc::retire_readable_terminal(id);
     assert_eq!(idalloc::test_pool_occurrences(id), 0);
+}
+
+#[test]
+fn pipe_lock_ids_retire_once_via_ownership_mark() {
+    let _serial = serial_guard();
+    idalloc::test_reset_pools();
+    let id = idalloc::next_pipe_lock_id();
+    idalloc::retire_pipe_lock_id(id);
+    idalloc::retire_pipe_lock_id(id); // stale duplicate release: mark gone
+    assert_eq!(idalloc::test_pool_occurrences(id), 1);
+    // A live registered id is untouchable through the pipe path even though
+    // it, too, has no ownership mark.
+    let live = alloc_readable(0, 0, 0, 1.0);
+    idalloc::retire_pipe_lock_id(live);
+    assert_eq!(idalloc::test_pool_occurrences(live), 0);
 }
 
 #[test]

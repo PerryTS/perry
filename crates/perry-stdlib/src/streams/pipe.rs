@@ -1,9 +1,9 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::{
-    box_promise, idalloc, js_writable_stream_close, maybe_pull, next_stream_id, reject_type_error,
-    transform_close, writable_stream_write, ReadableState, READABLE_STREAMS, TAG_UNDEFINED,
-    TRANSFORM_PAIRS, WRITABLE_STREAMS,
+    box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error, transform_close,
+    writable_stream_write, ReadableState, READABLE_STREAMS, TAG_UNDEFINED, TRANSFORM_PAIRS,
+    WRITABLE_STREAMS,
 };
 use perry_runtime::{
     js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
@@ -20,11 +20,12 @@ struct PipeLockIds {
 }
 
 fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLockIds, &'static str> {
-    let reader_id = next_stream_id();
-    let writer_id = next_stream_id();
+    let reader_id = idalloc::next_pipe_lock_id();
+    let writer_id = idalloc::next_pipe_lock_id();
     // #6602: on failure the two freshly minted ids were never stamped (or were
-    // just unstamped) — recycle them. Runs after every registry guard above is
-    // released; `retire_unregistered_id` takes those locks itself.
+    // just unstamped) — recycle them. Runs after every registry guard in
+    // `try_acquire_pipe_locks` is released; a quarantine overflow inside the
+    // retire takes registry locks for eviction cleanup.
     if let Err(message) = try_acquire_pipe_locks(readable_id, writable_id, reader_id, writer_id) {
         retire_pipe_lock_ids(reader_id, writer_id);
         return Err(message);
@@ -80,10 +81,12 @@ fn try_acquire_pipe_locks(
 
 /// #6602: pipe lock ids are stamped as lock markers but never own a registry
 /// entry, so nothing else retires them — without this every pipeTo burned two
-/// band ids for the life of the process.
+/// band ids for the life of the process. Retirement keys on the allocator's
+/// ownership mark, so a duplicate release (close-fulfilled then a late
+/// rejection) is a no-op.
 fn retire_pipe_lock_ids(reader_id: usize, writer_id: usize) {
-    idalloc::retire_unregistered_id(reader_id);
-    idalloc::retire_unregistered_id(writer_id);
+    idalloc::retire_pipe_lock_id(reader_id);
+    idalloc::retire_pipe_lock_id(writer_id);
 }
 
 fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds) {

@@ -161,19 +161,33 @@ fn tee_unlink(source: usize, a: usize, b: usize) {
     idalloc::retire_readable_terminal(source);
 }
 
-/// #6602: eviction hook — drop any tee links keyed by an evicted id.
+/// #6602: eviction hook — scrub BOTH directions of every tee relationship an
+/// evicted id participates in. A one-directional key removal would leave a
+/// `TEE_SOURCE_BRANCHES` tuple naming an evicted branch (a cancelled branch
+/// keeps its links), and once that id is reused the source's fan-out would
+/// deliver chunks into an unrelated new stream. An evicted branch slot is
+/// zeroed (0 never matches a registry entry) so the live sibling keeps
+/// receiving; the entry drops when both slots are dead.
 pub(super) fn evict_ids(batch: &[usize]) {
+    let dead: HashSet<usize> = batch.iter().copied().collect();
     {
         let mut g = TEE_SOURCE_BRANCHES.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
+        g.retain(|source, (a, b)| {
+            if dead.contains(source) {
+                return false;
+            }
+            if dead.contains(a) {
+                *a = 0;
+            }
+            if dead.contains(b) {
+                *b = 0;
+            }
+            *a != 0 || *b != 0
+        });
     }
     {
         let mut g = TEE_BRANCH_SOURCE.lock().unwrap();
-        for id in batch {
-            g.remove(id);
-        }
+        g.retain(|branch, source| !dead.contains(branch) && !dead.contains(source));
     }
     {
         let mut g = TEE_PULLING.lock().unwrap();
@@ -463,6 +477,13 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
         let mut bs = TEE_BRANCH_SOURCE.lock().unwrap();
         bs.insert(id_a, id);
         bs.insert(id_b, id);
+    } else {
+        // #6602: born-Errored branches have no tee lifecycle (no links) and no
+        // error_pending ever fires for them — retire now so repeatedly teeing
+        // an errored stream can't exhaust the band. Quarantine keeps their
+        // registry entries, so reads still reject with the source's error.
+        idalloc::retire_readable_terminal(id_a);
+        idalloc::retire_readable_terminal(id_b);
     }
 
     let arr = js_array_alloc(2);

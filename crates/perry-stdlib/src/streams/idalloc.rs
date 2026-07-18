@@ -53,6 +53,13 @@ struct IdAlloc {
     /// Every id currently in `retired` or `free` — the double-retire /
     /// double-free guard. Ids leave on allocation.
     pooled: HashSet<usize>,
+    /// Live pipeTo lock ids. Pipe lock ids never own a registry entry, so the
+    /// allocator itself tracks their ownership: marked atomically at
+    /// allocation, unmarked exactly once at retire. A stale duplicate release
+    /// finds no mark and can never touch the id's next life (a registry-
+    /// absence probe instead would race the alloc→register window of a reused
+    /// id).
+    pipe_ids: HashSet<usize>,
 }
 
 lazy_static::lazy_static! {
@@ -61,6 +68,7 @@ lazy_static::lazy_static! {
         free: VecDeque::new(),
         retired: VecDeque::new(),
         pooled: HashSet::new(),
+        pipe_ids: HashSet::new(),
     });
 }
 
@@ -112,13 +120,11 @@ pub(super) fn test_reset_pools() {
     evict_ids(&retired);
 }
 
-/// Allocate a stream-family handle id. Prefers recycled ids (their previous
-/// registry entries were fully evicted), then fresh monotonic ids. May be
-/// called with registry locks held — takes only the allocator (leaf) lock.
-pub(super) fn next_stream_id() -> usize {
-    let mut a = IDALLOC.lock().unwrap();
+fn alloc_locked(a: &mut IdAlloc) -> usize {
     if let Some(id) = a.free.pop_front() {
         a.pooled.remove(&id);
+        // Free ids are never marked (the mark clears at retire) — defensive.
+        a.pipe_ids.remove(&id);
         return id;
     }
     if a.next >= STREAM_HANDLE_ID_END {
@@ -133,30 +139,58 @@ pub(super) fn next_stream_id() -> usize {
     id
 }
 
+/// Allocate a stream-family handle id. Prefers recycled ids (their previous
+/// registry entries were fully evicted), then fresh monotonic ids. May be
+/// called with registry locks held — takes only the allocator (leaf) lock.
+pub(super) fn next_stream_id() -> usize {
+    alloc_locked(&mut IDALLOC.lock().unwrap())
+}
+
+/// Allocate a pipeTo lock id and mark its ownership in the same lock section,
+/// so retirement can key on the mark instead of probing registries.
+pub(super) fn next_pipe_lock_id() -> usize {
+    let mut a = IDALLOC.lock().unwrap();
+    let id = alloc_locked(&mut a);
+    a.pipe_ids.insert(id);
+    id
+}
+
+/// Under the allocator lock: pool `id` into quarantine. Returns the overflow
+/// batch whose eviction the caller must finish AFTER dropping the lock; the
+/// drained ids stay in `pooled` until they reach `free`.
+fn pool_retired(a: &mut IdAlloc, id: usize) -> Option<Vec<usize>> {
+    if !a.pooled.insert(id) {
+        return None;
+    }
+    a.retired.push_back(id);
+    let limit = quarantine_limit();
+    if a.retired.len() <= limit {
+        return None;
+    }
+    let n = a.retired.len() - limit;
+    Some(a.retired.drain(..n).collect())
+}
+
+/// Registry cleanup + free-list handoff for a quarantine overflow batch.
+/// Must run with NO locks held (takes registry locks, then the allocator).
+fn finish_eviction(evicted: Option<Vec<usize>>) {
+    let Some(evicted) = evicted else { return };
+    evict_ids(&evicted);
+    IDALLOC.lock().unwrap().free.extend(evicted);
+}
+
 /// Move `id` into quarantine; once it ages past the quarantine window, evict
 /// its registry footprint and hand the id to the free list. Callers must hold
-/// NO streams locks and must have verified the id's terminal state (or, for
-/// pipe lock ids, that it is registered nowhere).
+/// NO streams locks and must have verified the id's terminal state.
 fn retire(id: usize) {
     if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return;
     }
     let evicted = {
         let mut a = IDALLOC.lock().unwrap();
-        if !a.pooled.insert(id) {
-            return;
-        }
-        a.retired.push_back(id);
-        let limit = quarantine_limit();
-        if a.retired.len() <= limit {
-            return;
-        }
-        let n = a.retired.len() - limit;
-        a.retired.drain(..n).collect::<Vec<_>>()
-        // The drained ids stay in `pooled` until they reach `free` below.
+        pool_retired(&mut a, id)
     };
-    evict_ids(&evicted);
-    IDALLOC.lock().unwrap().free.extend(evicted);
+    finish_eviction(evicted);
 }
 
 /// Remove every registry and side-table trace of the batch. After this the
@@ -318,12 +352,20 @@ pub(super) fn retire_writer_if_released(writer_id: usize) {
 
 /// Retire a pipeTo lock id. These ids are stamped into `reader_handle` /
 /// `writer_handle` as lock markers but never own a registry entry, so the
-/// terminal-state retires above can't see them. The kind check keeps a stale
-/// duplicate release from retiring the id's NEXT life: once recycled into a
-/// real stream/reader/writer, the id has a registry entry again and is
-/// skipped here.
-pub(super) fn retire_unregistered_id(id: usize) {
-    if super::subclass::js_stream_handle_kind(id) == 0 {
-        retire(id);
+/// terminal-state retires above can't see them. Retirement keys on the
+/// ownership mark set by [`next_pipe_lock_id`]: the mark clears exactly once,
+/// so a stale duplicate release is a no-op and can never retire the id's
+/// next life, however far allocation has moved on.
+pub(super) fn retire_pipe_lock_id(id: usize) {
+    if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
+        return;
     }
+    let evicted = {
+        let mut a = IDALLOC.lock().unwrap();
+        if !a.pipe_ids.remove(&id) {
+            return;
+        }
+        pool_retired(&mut a, id)
+    };
+    finish_eviction(evicted);
 }
