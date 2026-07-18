@@ -190,12 +190,20 @@ fn ensure_stdin_reader() {
             let _guard = ReaderGuard;
             let stdin = std::io::stdin();
             let mut handle = stdin.lock();
-            let mut byte = [0u8; 1];
+            // Read in chunks, not one byte at a time. A paste or a fast-typed
+            // burst arrives as many bytes; the old `[0u8; 1]` read did one
+            // `read` syscall + one STDIN_BUFFER lock + one main-thread notify
+            // (and thus one event-loop wake + pump) PER BYTE, so an N-byte
+            // burst paid N round trips. `read` still returns as soon as any
+            // bytes are available (it does not wait to fill the buffer), so a
+            // lone keystroke is unaffected — it returns 1 byte immediately —
+            // while a burst collapses into one lock + one notify.
+            let mut buf = [0u8; 4096];
             loop {
                 if stdin_is_detached() {
                     break;
                 }
-                match handle.read(&mut byte) {
+                match handle.read(&mut buf) {
                     Ok(0) => {
                         // EOF: record it so the main-thread pump can fire JS
                         // `'end'`/`'close'` listeners after the buffer drains,
@@ -205,9 +213,9 @@ fn ensure_stdin_reader() {
                         crate::event_pump::js_notify_main_thread();
                         break;
                     }
-                    Ok(_) => {
+                    Ok(n) => {
                         if let Ok(mut q) = STDIN_BUFFER.lock() {
-                            q.push(byte[0]);
+                            q.extend_from_slice(&buf[..n]);
                         }
                         crate::event_pump::js_notify_main_thread();
                     }
