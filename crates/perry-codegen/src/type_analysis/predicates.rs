@@ -43,7 +43,10 @@ pub(crate) fn is_global_builtin_named(expr: &Expr, name: &str) -> bool {
     if matches!(expr, Expr::GlobalGet(_)) {
         return true;
     }
-    if let Expr::PropertyGet { object, property } = expr {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
         if matches!(object.as_ref(), Expr::GlobalGet(_)) && property == name {
             return true;
         }
@@ -74,7 +77,9 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         },
         // Promise.resolve / reject / all / race / allSettled / any
         Expr::Call { callee, .. } => match callee.as_ref() {
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 // `Promise.resolve(...)` etc. The receiver `Promise` can
                 // appear in two shapes:
                 //   - Legacy: bare ident → `Expr::GlobalGet(_)` directly.
@@ -308,7 +313,9 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // `this.field` or `obj.field` where the field's declared type
         // is a class. Walk the class definition to find the field's
         // type. Honors the parent inheritance chain.
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             let owner_class_name = receiver_class_name(ctx, object)?;
             let class = ctx.classes.get(&owner_class_name)?;
             // Look in own fields, then walk parent chain.
@@ -454,7 +461,9 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             })
             .map(|method| method.return_type.clone()),
         e if net_result_type(e).is_some() => net_result_type(e),
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             if property == "length" && expression_has_numeric_length(ctx, object) {
                 return Some(HirType::Number);
             }
@@ -570,7 +579,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Call { callee, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { property, object } if matches!(
+                Expr::PropertyGet { property, object, .. } if matches!(
                     property.as_str(), "split" | "match"
                 ) && is_string_expr(ctx, object)
             ) =>
@@ -594,7 +603,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         Expr::Call { callee, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { property, object }
+                Expr::PropertyGet { property, object, .. }
                     if matches!(object.as_ref(), Expr::NativeModuleRef(m) if m == "crypto")
                         && matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves")
             ) =>

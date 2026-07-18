@@ -1006,6 +1006,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     for member in &members {
                         let member_get = Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::ExternFuncRef {
                                 name: name.clone(),
                                 param_types: Vec::new(),

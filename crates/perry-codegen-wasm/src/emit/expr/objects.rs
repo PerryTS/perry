@@ -105,7 +105,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 // Namespace-import member read (`import * as W; W.MEMBER`):
                 // the object lowers to ExternFuncRef("W"), which as a value is
                 // undefined — resolve the member against the source module's
@@ -420,7 +422,9 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_expr(func, object);
             }
             Expr::Delete(expr) => match expr.as_ref() {
-                Expr::PropertyGet { object, property } => {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => {
                     self.emit_expr(func, object);
                     let key_id = self
                         .emitter

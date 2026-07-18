@@ -46,6 +46,7 @@ pub(crate) fn lower_member_tail(
                 let obj_name = obj_ident.sym.as_ref();
                 if crate::analysis::is_builtin_global_value_name(obj_name) {
                     object_expr = Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::GlobalGet(0)),
                         property: obj_name.to_string(),
                     };
@@ -105,6 +106,7 @@ pub(crate) fn lower_member_tail(
     if let Expr::PropertyGet {
         object: inner,
         property,
+        ..
     } = &object_expr
     {
         if matches!(inner.as_ref(), Expr::GlobalGet(0))
@@ -426,9 +428,9 @@ pub(crate) fn lower_member_tail(
                 // so the fold is correctly skipped.
                 let is_global_builtin = match &object_expr {
                     Expr::GlobalGet(0) => true,
-                    Expr::PropertyGet { object, property } => {
-                        matches!(object.as_ref(), Expr::GlobalGet(0)) && property.as_str() == name
-                    }
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => matches!(object.as_ref(), Expr::GlobalGet(0)) && property.as_str() == name,
                     _ => false,
                 };
                 if is_global_builtin {
@@ -442,6 +444,7 @@ pub(crate) fn lower_member_tail(
             if let Expr::PropertyGet {
                 object: inner,
                 property,
+                ..
             } = &object_expr
             {
                 if matches!(inner.as_ref(), Expr::GlobalGet(0)) {
@@ -479,6 +482,7 @@ pub(crate) fn lower_member_tail(
                 Expr::PropertyGet {
                     object: inner,
                     property,
+                    ..
                 } => {
                     if matches!(inner.as_ref(), Expr::GlobalGet(0)) {
                         if let ast::Expr::Member(inner_member) = member.obj.as_ref() {
@@ -656,7 +660,13 @@ pub(crate) fn lower_member_tail(
     match &member.prop {
         ast::MemberProp::Ident(ident) => {
             let property = ident.sym.to_string();
-            Ok(Expr::PropertyGet { object, property })
+            Ok(Expr::PropertyGet {
+                // #5247: carry the member access's source offset so a nullish
+                // receiver ("Cannot read properties of undefined") localizes.
+                byte_offset: member.span.lo.0,
+                object,
+                property,
+            })
         }
         ast::MemberProp::Computed(computed) => {
             // #503: refuse compile-time dynamic dispatch on stdlib namespace
@@ -789,6 +799,9 @@ pub(crate) fn lower_member_tail(
                     && !(key.len() > 1 && key.starts_with('0'));
                 if !is_numeric_string {
                     return Ok(Expr::PropertyGet {
+                        // #5247: `obj["prop"]` folds to a PropertyGet — carry the
+                        // member offset so a nullish receiver localizes too.
+                        byte_offset: member.span.lo.0,
                         object,
                         property: key.clone(),
                     });
@@ -826,7 +839,13 @@ pub(crate) fn lower_member_tail(
             // member on a wrong receiver throws TypeError per spec.
             let property = format!("#{}", private.name);
             let object = wrap_private_guard(ctx, object, &property, PRIV_OP_READ);
-            Ok(Expr::PropertyGet { object, property })
+            Ok(Expr::PropertyGet {
+                // #5247: `this.#field` — carry the member offset for nullish-receiver
+                // localization (consistency with the public-property path).
+                byte_offset: member.span.lo.0,
+                object,
+                property,
+            })
         }
     }
 }

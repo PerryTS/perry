@@ -374,9 +374,9 @@ pub(crate) fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool 
     match expr {
         Expr::GlobalGet(_) => true,
         Expr::LocalGet(id) => ctx.global_this_aliases.contains(id),
-        Expr::PropertyGet { object, property } => {
-            property == "globalThis" && matches!(object.as_ref(), Expr::GlobalGet(_))
-        }
+        Expr::PropertyGet {
+            object, property, ..
+        } => property == "globalThis" && matches!(object.as_ref(), Expr::GlobalGet(_)),
         _ => false,
     }
 }

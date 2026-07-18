@@ -266,6 +266,7 @@ pub(crate) fn emit_for_of_pattern_binding(
                     ast::ObjectPatProp::Assign(assign) => {
                         let key = assign.key.sym.to_string();
                         let prop_access = Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             property: key,
                         };
@@ -300,6 +301,7 @@ pub(crate) fn emit_for_of_pattern_binding(
                             _ => continue,
                         };
                         let elem_src = Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             property: key,
                         };

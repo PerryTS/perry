@@ -79,7 +79,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // as a closure value and js_closure_call_apply_with_spread fails
             // to dispatch (issue #407). Mirrors the multi-arg console.* path
             // in the Expr::Call codegen at lower_call.rs.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
                     && matches!(
                         property.as_str(),
@@ -229,7 +232,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // NativeModuleRef (dedicated codegen elsewhere), and ExternFuncRef
             // (the previous `FuncRef` arm catches the FuncRef case; ExternFuncRef
             // here means a top-level imported function reference, not a method).
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 let mut skip = matches!(
                     object.as_ref(),
                     Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
@@ -374,7 +380,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // slot and call the symbol directly, exactly as the regular path
             // does for `fixed_count == 0`. Gated on a known rest-function
             // export, so class members and non-rest shapes are untouched.
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() {
                     if ctx.namespace_imports.contains(ns_name)
                         && ctx.imported_func_has_rest.contains(property)

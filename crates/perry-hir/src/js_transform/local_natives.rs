@@ -417,11 +417,13 @@ pub fn fix_class_field_expr(
                 Expr::PropertyGet {
                     object: outer_obj,
                     property: method_name,
+                    ..
                 } => {
                     let mut direct = None;
                     if let Expr::PropertyGet {
                         object: inner_obj,
                         property: field_name,
+                        ..
                     } = outer_obj.as_ref()
                     {
                         if let Some((module_name, class_name)) = lookup_field_native(
@@ -534,11 +536,13 @@ pub fn fix_class_field_expr(
                 if let Expr::PropertyGet {
                     object: outer_obj,
                     property: method_name,
+                    ..
                 } = callee.as_mut()
                 {
                     if let Expr::PropertyGet {
                         object: inner_obj,
                         property: field_name,
+                        ..
                     } = outer_obj.as_ref()
                     {
                         if let Some((module_name, class_name)) = lookup_field_native(
@@ -969,7 +973,10 @@ pub fn fix_native_instance_expr_with_locals(
             }
 
             // Check if this is a method call: obj.method(args)
-            if let Expr::PropertyGet { object, property } = callee.as_mut() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_mut()
+            {
                 // Check for LocalGet (local variable)
                 if let Expr::LocalGet(local_id) = object.as_ref() {
                     let found = local_id_instances.get(local_id);
@@ -1084,7 +1091,10 @@ pub fn fix_native_instance_expr_with_locals(
         Expr::Await(inner) => {
             // Handle Await(Call{PropertyGet{LocalGet...}}) pattern for async method calls
             if let Expr::Call { callee, args, .. } = inner.as_mut() {
-                if let Expr::PropertyGet { object, property } = callee.as_mut() {
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = callee.as_mut()
+                {
                     // Check for LocalGet
                     if let Expr::LocalGet(local_id) = object.as_ref() {
                         if let Some((native_module, native_class)) =
@@ -1204,7 +1214,9 @@ pub fn fix_native_instance_expr_with_locals(
                 fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
             }
         }
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
             // Recurse into the object first so any nested `$(sel)` Call has
             // been rewritten to a cheerio NativeMethodCall.
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
@@ -1362,7 +1374,10 @@ pub fn detect_native_instance_creation_with_context(
         // Handle Call expressions where the object is a known native instance
         // This is the pattern BEFORE transformation: pool.getConnection()
         Expr::Call { callee, .. } => {
-            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 // Check if object is a LocalGet of a known native instance
                 if let Expr::LocalGet(local_id) = object.as_ref() {
                     if let Some((module, class)) = local_ids.get(local_id) {

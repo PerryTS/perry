@@ -10,7 +10,10 @@ impl<'a> FuncEmitCtx<'a> {
         match expr {
             Expr::Call { callee, args, .. } => {
                 // Check for method call patterns: obj.method(args)
-                if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::PropertyGet {
+                    object, property, ..
+                } = callee.as_ref()
+                {
                     // Namespace-import member call (`import * as W from "./mod";
                     // W.fn(args)`): resolve to a DIRECT wasm call of the source
                     // module's function — the same lowering `fn(args)` gets via
@@ -22,7 +25,9 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emitter.current_mod_idx,
                             format!("{}.{}", name, property),
                         );
-                        if let Some(&idx) = self.emitter.imported_ns_funcs.get(&key).copied().as_ref() {
+                        if let Some(&idx) =
+                            self.emitter.imported_ns_funcs.get(&key).copied().as_ref()
+                        {
                             for arg in args {
                                 self.emit_expr(func, arg);
                             }
@@ -184,8 +189,7 @@ impl<'a> FuncEmitCtx<'a> {
                         // fallback, since its bare-name keys collide across
                         // modules. See FuncRef arm above for why both pad-up
                         // and drop-excess are required (#183).
-                        let consumer_key =
-                            (self.emitter.current_mod_idx, name.clone());
+                        let consumer_key = (self.emitter.current_mod_idx, name.clone());
                         if let Some(&idx) = self
                             .emitter
                             .imported_func_indices

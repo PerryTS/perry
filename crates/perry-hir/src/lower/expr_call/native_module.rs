@@ -844,6 +844,7 @@ pub(super) fn try_native_module_methods(
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),
                                 }),

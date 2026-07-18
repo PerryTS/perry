@@ -1781,6 +1781,7 @@ fn lower_stmts_using_aware_inner(
                 for &id in &decl_ids {
                     let check_call = Expr::Call {
                         callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(id)),
                             property: "__perry_using_check__".to_string(),
                         }),
@@ -1861,6 +1862,7 @@ fn lower_stmts_using_aware_inner(
                 };
                 let mut call_expr = Expr::Call {
                     callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::LocalGet(id)),
                         property: method_name.to_string(),
                     }),

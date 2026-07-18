@@ -501,7 +501,9 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(v);
                 }
             }
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
                 self.collect_strings_in_expr(object);
                 self.intern_string(property);
             }

@@ -1341,7 +1341,10 @@ fn try_strip_promise_resolve(expr: &Expr, non_promise: &HashSet<LocalId>) -> Opt
     if args.len() != 1 {
         return None;
     }
-    let Expr::PropertyGet { object, property } = callee.as_ref() else {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
         return None;
     };
     if property != "resolve" {

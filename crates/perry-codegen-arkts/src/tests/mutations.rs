@@ -279,6 +279,7 @@ fn issue_408_conditional_widget_add_child_emits_if_else() {
     // Expr::Conditional emit_widget arm).
     m.init.push(Stmt::If {
         condition: Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::LocalGet(9999)),
             property: "isMobile".to_string(),
         },

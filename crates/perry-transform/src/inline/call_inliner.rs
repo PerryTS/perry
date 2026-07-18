@@ -1517,6 +1517,7 @@ pub fn try_inline_simple_call(
         if let Expr::PropertyGet {
             object,
             property: method_name,
+            ..
         } = callee.as_ref()
         {
             // Method inlining requires an exact `let obj = new C(...)`
@@ -1771,6 +1772,7 @@ pub fn try_inline_call(
         if let Expr::PropertyGet {
             object,
             property: method_name,
+            ..
         } = callee.as_ref()
         {
             // Method inlining requires an exact `let obj = new C(...)`

@@ -74,7 +74,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // read the precomputed numeric length directly. The split part itself was
     // never observable as a string, so materializing a StringHeader would only
     // create short-lived garbage.
-    if let Expr::PropertyGet { object, property } = expr {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
         if property == "length" {
             if let Expr::IndexGet { object, index } = object.as_ref() {
                 if let (Expr::LocalGet(id), Some(index)) =
@@ -94,8 +97,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
 
     match expr {
-        Expr::PropertyGet { object, property }
-            if matches!(object.as_ref(), Expr::LocalGet(id)
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::LocalGet(id)
                 if ctx.pod_records.get(id).is_some_and(|local| local
                     .layout
                     .fields
@@ -109,12 +113,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             unreachable!("POD field guard should imply a lowered field")
         }
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && matches!(
-                    object.as_ref(),
-                    Expr::PropertyGet { property: p, .. } if p == "errors"
-                ) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length"
+            && matches!(
+                object.as_ref(),
+                Expr::PropertyGet { property: p, .. } if p == "errors"
+            ) =>
         {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
@@ -137,9 +142,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `String(f.errors)` → "[object Object]"). Non-error receivers fall
         // through to the generic property read below, which returns the
         // stored value — including `null` — correctly.
-        Expr::PropertyGet { object, property }
-            if property == "errors" && receiver_is_error_type(ctx, object) =>
-        {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "errors" && receiver_is_error_type(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
@@ -147,33 +152,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
-        Expr::PropertyGet { object, property }
-            if is_global_builtin_value_expr(object, "Promise")
-                && matches!(
-                    property.as_str(),
-                    "resolve"
-                        | "reject"
-                        | "all"
-                        | "race"
-                        | "allSettled"
-                        | "any"
-                        | "withResolvers"
-                        | "try"
-                ) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if is_global_builtin_value_expr(object, "Promise")
+            && matches!(
+                property.as_str(),
+                "resolve"
+                    | "reject"
+                    | "all"
+                    | "race"
+                    | "allSettled"
+                    | "any"
+                    | "withResolvers"
+                    | "try"
+            ) =>
         {
             Ok(lower_global_builtin_static_value(ctx, "Promise", property))
         }
 
-        Expr::PropertyGet { object, property }
-            if property == "length" && promise_static_function_length_expr(object).is_some() =>
-        {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" && promise_static_function_length_expr(object).is_some() => {
             let len = promise_static_function_length_expr(object).unwrap();
             Ok(double_literal(len as f64))
         }
 
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && matches!(object.as_ref(), Expr::LocalGet(id)
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length"
+            && matches!(object.as_ref(), Expr::LocalGet(id)
                     if ctx.buffer_data_slots.contains_key(id)) =>
         {
             let arr_id = match object.as_ref() {
@@ -228,11 +235,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // TypedArray `.length` can be shadowed by an own property, so use
         // the runtime length helper only when lowering has not already
         // registered the receiver as a native Buffer/TypedArray view above.
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && receiver_class_name(ctx, object)
-                    .as_deref()
-                    .is_some_and(is_numeric_typed_array_class) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length"
+            && receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(is_numeric_typed_array_class) =>
         {
             let recv_box = lower_expr(ctx, object)?;
             Ok(ctx
@@ -247,21 +255,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `.length` — INLINE for array, string, and interface-typed
         // receivers. Named types (interfaces, class instances) often
         // wrap strings or arrays at runtime, where length is at offset 0.
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && (is_array_expr(ctx, object)
-                    || is_string_expr(ctx, object)
-                    || match crate::type_analysis::static_type_of(ctx, object) {
-                        // A `Function`-typed receiver is a closure, not a
-                        // String/Array — its `.length` is the spec param
-                        // count, served by the runtime reflection path
-                        // (`closure_length` table). Loading a u32 from
-                        // payload offset 0 here would read 0. Let it fall
-                        // through to the generic property path.
-                        Some(HirType::Named(n)) => n != "Function",
-                        Some(HirType::Tuple(_)) => true,
-                        _ => false,
-                    }) =>
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length"
+            && (is_array_expr(ctx, object)
+                || is_string_expr(ctx, object)
+                || match crate::type_analysis::static_type_of(ctx, object) {
+                    // A `Function`-typed receiver is a closure, not a
+                    // String/Array — its `.length` is the spec param
+                    // count, served by the runtime reflection path
+                    // (`closure_length` table). Loading a u32 from
+                    // payload offset 0 here would read 0. Let it fall
+                    // through to the generic property path.
+                    Some(HirType::Named(n)) => n != "Function",
+                    Some(HirType::Tuple(_)) => true,
+                    _ => false,
+                }) =>
         {
             // Scalar-replaced array literal: length is a compile-time
             // constant — no header to load from (the heap array doesn't
@@ -418,18 +427,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `set.size` / `map.size` — route to runtime helpers. The HIR
         // doesn't synthesize SetSize/MapSize expressions for the
         // property-access form, so we recognize the pattern here.
-        Expr::PropertyGet { object, property }
-            if property == "size" && is_set_expr(ctx, object) =>
-        {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "size" && is_set_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_set_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
-        Expr::PropertyGet { object, property }
-            if property == "size" && is_map_expr(ctx, object) =>
-        {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "size" && is_map_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
@@ -443,16 +452,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // "size"). Routed via `is_url_search_params_expr` so it only
         // fires on receivers we can prove are URLSearchParams (immediate
         // ctor, typed locals, `url.searchParams` accessor).
-        Expr::PropertyGet { object, property }
-            if property == "size" && is_url_search_params_expr(ctx, object) =>
-        {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "size" && is_url_search_params_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_url_search_params_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
-        Expr::PropertyGet { object, property } => {
+        Expr::PropertyGet {
+            object,
+            property,
+            byte_offset,
+        } => {
             if property == "prototype"
                 && matches!(object.as_ref(), Expr::FuncRef(_) | Expr::Closure { .. })
             {
@@ -1504,7 +1517,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return lower_class_method_bind(ctx, object, property);
                 }
             }
-            lower_generic_property_get(ctx, object, property)
+            lower_generic_property_get(ctx, object, property, *byte_offset)
         }
 
         // -------- Ternary `cond ? a : b` (Phase B.7) --------

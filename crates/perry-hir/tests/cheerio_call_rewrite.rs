@@ -111,6 +111,7 @@ fn non_native_fluent_chains_are_walked_linearly() {
     for i in 0..32 {
         init = Expr::Call {
             callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(init),
                 property: "command".to_string(),
             }),
@@ -126,6 +127,7 @@ fn non_native_fluent_chains_are_walked_linearly() {
 
     init = Expr::Call {
         callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(init),
             property: "strict".to_string(),
         }),

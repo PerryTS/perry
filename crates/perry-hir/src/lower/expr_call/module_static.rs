@@ -1031,6 +1031,7 @@ pub(super) fn try_module_static_methods(
                             let buf_arg = args.into_iter().next().unwrap();
                             return Ok(Ok(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(buf_arg),
                                     property: "$$cryptoFillRandom".to_string(),
                                 }),
@@ -1228,6 +1229,7 @@ pub(super) fn try_module_static_methods(
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),
                                 }),

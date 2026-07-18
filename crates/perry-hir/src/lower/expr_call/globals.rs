@@ -840,6 +840,7 @@ pub(super) fn try_global_builtins(
                         }
                         return Ok(Ok(Expr::Call {
                             callee: Box::new(Expr::PropertyGet {
+                                byte_offset: 0,
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "createSecretKey".to_string(),
                             }),
@@ -860,6 +861,7 @@ pub(super) fn try_global_builtins(
                         let options_arg = iter.next().unwrap();
                         return Ok(Ok(Expr::Call {
                             callee: Box::new(Expr::PropertyGet {
+                                byte_offset: 0,
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "generateKeySync".to_string(),
                             }),

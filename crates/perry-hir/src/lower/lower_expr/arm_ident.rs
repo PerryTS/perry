@@ -205,6 +205,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // have matched `ctx.lookup_local` earlier and never reached
         // here.
         Ok(Expr::PropertyGet {
+            byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: name,
         })
@@ -280,6 +281,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                 ctx.uses_fetch = true;
             }
             return Ok(Expr::PropertyGet {
+                byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: name,
             });

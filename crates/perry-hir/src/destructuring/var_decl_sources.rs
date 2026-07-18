@@ -7,7 +7,7 @@ pub(super) fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
     matches!(expr, Expr::GlobalGet(_))
         || matches!(
             expr,
-            Expr::PropertyGet { object, property }
+            Expr::PropertyGet { object, property, .. }
                 if matches!(object.as_ref(), Expr::GlobalGet(_))
                     && property == "globalThis"
         )

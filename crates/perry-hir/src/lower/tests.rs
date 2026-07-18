@@ -172,7 +172,9 @@ fn test_native_module_binding_value_named_import() {
     );
     let value = super::lower_expr::native_module_binding_value(&ctx, "relative");
     match value {
-        crate::ir::Expr::PropertyGet { object, property } => {
+        crate::ir::Expr::PropertyGet {
+            object, property, ..
+        } => {
             assert_eq!(property, "relative");
             assert!(matches!(*object, crate::ir::Expr::NativeModuleRef(ref m) if m == "path"));
         }

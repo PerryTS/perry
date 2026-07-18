@@ -189,6 +189,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 // `new.target` is `undefined`, so the runtime read yields
                 // `undefined.<prop>` semantics via the same PropertyGet.
                 return Ok(Expr::PropertyGet {
+                    byte_offset: 0,
                     object: Box::new(Expr::NewTarget),
                     property: prop_name.to_string(),
                 });
@@ -223,6 +224,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         | "fileURLToPath"
                 ) {
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("bun".to_string())),
                         property: prop_ident.sym.as_ref().to_string(),
                     });
@@ -251,7 +253,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             if let Some(static_member) = static_member {
                 if crate::analysis::is_builtin_static_function_member("Promise", static_member) {
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Promise".to_string(),
                         }),
@@ -472,6 +476,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     Some(perry_api_manifest::ApiKind::Method { .. })
                 ) {
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("process".to_string())),
                         property: prop.to_string(),
                     });
@@ -589,6 +594,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     | "setMaxListeners"
                     | "getMaxListeners" => {
                         return Ok(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: prop_ident.sym.to_string(),
                         });
@@ -1117,6 +1123,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                     ) {
                         return Ok(Expr::PropertyGet {
+                            byte_offset: 0,
                             object: Box::new(Expr::NativeModuleRef("stream".to_string())),
                             property: class_name.to_string(),
                         });
@@ -1160,6 +1167,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 ) {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1199,6 +1207,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // (handled by `is_stream_api_member` above) keep dispatching.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1218,6 +1227,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // read, so they still dispatch.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1230,6 +1240,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // via the call path and keep dispatching.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1238,6 +1249,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1247,6 +1259,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1265,6 +1278,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1278,6 +1292,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // receiver method with no args.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1302,6 +1317,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // codegen NativeModSig table dispatches them to their FFI.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1315,6 +1331,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // can bind a callable to the socket handle.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1348,6 +1365,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1361,6 +1379,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // so runtime lookup can return a bound callable.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1385,6 +1404,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // Console / net.Socket method-value-read arms above.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1405,6 +1425,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // the native method with zero arguments.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1427,6 +1448,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // rather than invoking the native method with zero args.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1440,6 +1462,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // invoking the receiver stub as a 0-arg getter.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1453,6 +1476,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // instead of invoking the receiver stub as a getter.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1465,6 +1489,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1477,6 +1502,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // method table; only bare reads use property dispatch.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1505,6 +1531,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // lifecycle method as a zero-arg getter.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1514,6 +1541,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1526,6 +1554,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1549,6 +1578,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // keep the native getter path below.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1558,6 +1588,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // (`headers.entries()`) is handled by expr_call lowering.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1578,6 +1609,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // handle, not a real object).
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1592,6 +1624,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // the native method table.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1625,6 +1658,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // rs.getReader; f()` both work.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1634,6 +1668,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1643,6 +1678,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1652,6 +1688,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1661,6 +1698,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1670,6 +1708,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 {
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1806,6 +1845,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // persists and reads back here.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
+                        byte_offset: 0,
                         object: Box::new(object_expr),
                         property: property_name,
                     });

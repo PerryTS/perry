@@ -233,7 +233,11 @@ pub(crate) fn lower_assign_target_to_expr(
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
-                    Ok(Expr::PropertyGet { object, property })
+                    Ok(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object,
+                        property,
+                    })
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
@@ -241,7 +245,11 @@ pub(crate) fn lower_assign_target_to_expr(
                 }
                 ast::MemberProp::PrivateName(private) => {
                     let property = format!("#{}", private.name);
-                    Ok(Expr::PropertyGet { object, property })
+                    Ok(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object,
+                        property,
+                    })
                 }
             }
         }
