@@ -363,7 +363,14 @@ pub extern "C" fn js_object_set_field_by_name(
                 {
                     let o = raw as *mut ObjectHeader;
                     let class_id = (*o).class_id;
-                    if class_id != 0
+                    // #6595: a per-evaluation CLASS OBJECT must never take
+                    // this lane — it skips the #6530
+                    // `mirror_class_object_static_write` hook every in-body
+                    // completion runs, and (template cid, key) plans recorded
+                    // by instances sharing the cid would falsely certify it.
+                    // See the matching gates at the plan record sites.
+                    if (*o).object_type == crate::error::OBJECT_TYPE_REGULAR
+                        && class_id != 0
                         && class_id != NATIVE_MODULE_CLASS_ID
                         && super::prop_plan::store_plan_check(class_id, key as usize)
                     {
@@ -1035,9 +1042,14 @@ pub extern "C" fn js_object_set_field_by_name(
             | crate::gc::OBJ_FLAG_NULL_PROTO
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
         let obj_class_id = (*obj).class_id;
+        // #6595: class objects (`OBJECT_TYPE_CLASS`) are excluded — their
+        // writes must always reach the `mirror_class_object_static_write`
+        // completions, and their cid is shared with their instances so a
+        // plan keyed on it conflates two different prototype chains.
         let plan_eligible = !key.is_null()
             && obj_class_id != 0
             && obj_class_id != NATIVE_MODULE_CLASS_ID
+            && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
             && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0;
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
@@ -1203,6 +1215,7 @@ pub extern "C" fn js_object_set_field_by_name(
             if !plan_fast
                 && obj_class_id != 0
                 && obj_class_id != NATIVE_MODULE_CLASS_ID
+                && (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
             {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);

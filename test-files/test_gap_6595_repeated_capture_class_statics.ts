@@ -7,12 +7,16 @@
 // `CLASS_DYNAMIC_PROPS` mirror — sibling-method dispatch through the INT32
 // ClassRef then missed and returned the class ref itself.
 //
-// One class (test_gap_class_capture_forward_static.ts) can't catch this: the
-// first class of a shape always misses the transition cache and falls to the
-// mirroring path. Bundled zod has ~40 same-shaped classes; two suffice.
+// Every class here must be CAPTURE-CARRYING (methods referencing outer
+// locals) or it stays an INT32 ClassRef and the statics never touch the
+// heap-class-object store path. One class alone can't catch the bug either:
+// the first class of a shape misses the transition cache and falls to the
+// mirroring path. Bundled zod has ~32 same-shaped classes; two suffice.
 
 function makeModule() {
   const tag = (s: string) => "[" + s + "]";
+  const isUndef = (x: any) => typeof x === "undefined";
+  const isNull = (x: any) => x === null;
 
   class Base {
     _def: any;
@@ -41,7 +45,7 @@ function makeModule() {
 
   class SubOpt extends Base {
     _parse(ctx: any) {
-      if (typeof ctx.data === "undefined") return undefined;
+      if (isUndef(ctx.data)) return undefined;
       return "opt:" + ctx.errorMap + ":" + ctx.data;
     }
     unwrap() {
@@ -51,7 +55,7 @@ function makeModule() {
 
   class SubNull extends Base {
     _parse(ctx: any) {
-      if (ctx.data === null) return null;
+      if (isNull(ctx.data)) return null;
       return "null:" + ctx.errorMap + ":" + ctx.data;
     }
     unwrap() {
