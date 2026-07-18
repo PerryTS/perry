@@ -28,7 +28,7 @@ use crate::native_value::{
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
     is_numeric_expr, is_numeric_typed_array_class, is_set_expr, is_string_expr,
-    is_url_search_params_expr, receiver_class_name,
+    is_url_search_params_expr, receiver_class_name, receiver_is_error_type,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -129,7 +129,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // ArrayHeader pointer from the ErrorHeader struct. Returns a
         // NaN-boxed pointer so downstream length / index operations
         // see an array.
-        Expr::PropertyGet { object, property } if property == "errors" => {
+        //
+        // Gated on a statically-known Error receiver (#6588): the helper's
+        // `ArrayHeader*` return can't represent a stored `null`, so applying
+        // it to a function/plain-object `.errors` expando that holds `null`
+        // produced a bogus pointer sentinel (`f.errors === null` → false,
+        // `String(f.errors)` → "[object Object]"). Non-error receivers fall
+        // through to the generic property read below, which returns the
+        // stored value — including `null` — correctly.
+        Expr::PropertyGet { object, property }
+            if property == "errors" && receiver_is_error_type(ctx, object) =>
+        {
             let recv_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
