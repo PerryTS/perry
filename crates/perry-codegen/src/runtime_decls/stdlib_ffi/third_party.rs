@@ -262,6 +262,9 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_child_process_spawn_sync", I64, &[I64, I64, I64]);
     // #1780: streaming spawn → NaN-boxed ChildProcess pointer (returns DOUBLE).
     module.declare_function("js_child_process_spawn_streams", DOUBLE, &[I64, I64, I64]);
+    // #6563: node-pty spawn(file, args, options) — all three slots are raw
+    // NaN-box bits (NA_JSV); returns the NaN-boxed IPty object.
+    module.declare_function("js_pty_spawn", DOUBLE, &[I64, I64, I64]);
     // #1933: fork(modulePath, args, options) → NaN-boxed ChildProcess with an
     // IPC channel (send/disconnect/'message'/connected/channel).
     module.declare_function("js_child_process_fork", DOUBLE, &[I64, I64, I64]);

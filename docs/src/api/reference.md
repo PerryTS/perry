@@ -2,10 +2,11 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2842 entries across 118 modules.
+Total: 2834 entries across 119 modules.
 
 ## Modules
 
+- [`@lydell/node-pty`](#-lydell-node-pty)
 - [`@perryts/pdf`](#-perryts-pdf)
 - [`__disposable__`](#--disposable--)
 - [`argon2`](#argon2)
@@ -61,6 +62,7 @@ Total: 2842 entries across 118 modules.
 - [`net`](#net)
 - [`node-cron`](#node-cron)
 - [`node-fetch`](#node-fetch)
+- [`node-pty`](#node-pty)
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
 - [`path`](#path)
@@ -126,6 +128,16 @@ Total: 2842 entries across 118 modules.
 - [`zlib`](#zlib)
 
 ---
+
+## `@lydell/node-pty`
+
+### Methods
+
+- `spawn` — module
+
+### Properties
+
+- `default`
 
 ## `@perryts/pdf`
 
@@ -2113,6 +2125,16 @@ Total: 2842 entries across 118 modules.
 ### Methods
 
 - `default` — module
+
+## `node-pty`
+
+### Methods
+
+- `spawn` — module
+
+### Properties
+
+- `default`
 
 ## `nodemailer`
 
