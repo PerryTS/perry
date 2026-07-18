@@ -283,6 +283,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("child_process", "spawn")
             | ("child_process", "spawnSync")
             | ("child_process", "fork")
+            // #6563: `const { spawn } = await import("node-pty")` — the
+            // value-read form must be a callable bound-method closure.
+            | ("node-pty", "spawn")
             | ("events", "EventEmitter")
             | ("events", "EventEmitterAsyncResource")
             | ("events", "on")

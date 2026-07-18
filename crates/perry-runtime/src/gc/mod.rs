@@ -438,6 +438,10 @@ pub fn gc_init() {
     // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't
     // reclaim the object whose `data`/`exit` handlers are still pending.
     gc_register_mutable_root_scanner(crate::child_process::reactor::cp_reactor_scan_roots_mut);
+    // #6563: live node-pty IPty objects are likewise reachable only from the
+    // pty reactor's registry while their onData/onExit handlers are pending.
+    #[cfg(unix)]
+    gc_register_mutable_root_scanner(crate::pty::reactor::pty_reactor_scan_roots_mut);
     // #4911: a bound node:dgram socket is reachable only from the dgram
     // reactor's registry while its recv thread runs; scan + rewrite it so a GC
     // between ticks doesn't reclaim the object whose `message` handlers fire.

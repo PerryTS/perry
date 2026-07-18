@@ -691,6 +691,12 @@ const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"spawnSync",
 ];
 
+// #6563: node-pty / @lydell/node-pty — `spawn` is the entire module surface
+// the target apps touch; everything else lives on the returned IPty object.
+const NODE_PTY_DEFAULT_KEYS: &[&[u8]] = &[b"spawn"];
+
+const NODE_PTY_NAMESPACE_KEYS: &[&[u8]] = &[b"default", b"spawn"];
+
 const CLUSTER_NAMESPACE_KEYS: &[&[u8]] = &[
     b"SCHED_NONE",
     b"SCHED_RR",
@@ -1691,6 +1697,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
         "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
         "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
+        "node-pty" => Some(NODE_PTY_NAMESPACE_KEYS),
+        "node-pty.default" => Some(NODE_PTY_DEFAULT_KEYS),
         "cluster" => Some(CLUSTER_NAMESPACE_KEYS),
         "cluster.default" => Some(CLUSTER_DEFAULT_KEYS),
         "stream" => Some(STREAM_NAMESPACE_KEYS),

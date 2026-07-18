@@ -378,4 +378,18 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // ========== node-pty (#6563: runtime-native pty) ==========
+    // `spawn(file, args, options)` → IPty (already NaN-boxed by the runtime).
+    // NA_JSV keeps `undefined` slots distinguishable from numeric 0 across
+    // the FFI boundary. `@lydell/node-pty` call sites reach this row through
+    // the alias normalization in `native_module_lookup`.
+    NativeModSig {
+        module: "node-pty",
+        has_receiver: false,
+        method: "spawn",
+        class_filter: None,
+        runtime: "js_pty_spawn",
+        args: &[NA_JSV, NA_JSV, NA_JSV],
+        ret: NR_F64,
+    },
 ];

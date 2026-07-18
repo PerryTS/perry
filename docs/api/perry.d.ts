@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1955 entries across 115 modules
+// Coverage: 1959 entries across 117 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -52,6 +52,14 @@ interface NativeMemoryConstructor {
   copy(dst: NativeMemoryTypedView, src: NativeMemoryTypedView): void;
 }
 declare const NativeMemory: NativeMemoryConstructor;
+
+declare module "@lydell/node-pty" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function spawn(...args: any[]): any;
+}
 
 declare module "@perryts/pdf" {
   /** stdlib */
@@ -2114,6 +2122,14 @@ declare module "node-fetch" {
   export class Response { [key: string]: any; }
   /** stdlib */
   export default function (...args: any[]): any;
+}
+
+declare module "node-pty" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function spawn(...args: any[]): any;
 }
 
 declare module "nodemailer" {
