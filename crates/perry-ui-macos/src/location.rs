@@ -1,3 +1,5 @@
+use crate::ffi::sel_registerName;
+use crate::ffi::class_addMethod;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, Encode, Encoding, RefEncode};
@@ -18,13 +20,6 @@ extern "C" {
         extra_bytes: usize,
     ) -> *mut std::ffi::c_void;
     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-    fn class_addMethod(
-        cls: *mut std::ffi::c_void,
-        sel: *const std::ffi::c_void,
-        imp: *const std::ffi::c_void,
-        types: *const i8,
-    ) -> bool;
-    fn sel_registerName(name: *const i8) -> *const std::ffi::c_void;
     fn objc_getClass(name: *const i8) -> *const std::ffi::c_void;
 }
 

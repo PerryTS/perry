@@ -1,10 +1,10 @@
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2_app_kit::NSPasteboard;
 use objc2_foundation::NSString;
 
 extern "C" {
-    fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -18,7 +18,7 @@ pub fn read() -> f64 {
         if let Some(text) = result {
             let rust_str = text.to_string();
             let bytes = rust_str.as_bytes();
-            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
             js_nanbox_string(str_ptr as i64)
         } else {
             // Return TAG_UNDEFINED

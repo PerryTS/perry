@@ -18,6 +18,8 @@
 //! - Now Playing metadata uses `MPNowPlayingInfoCenter`. Lock-screen / Touch
 //!   Bar / Siri Remote play/pause/skip routes through `MPRemoteCommandCenter`.
 
+use crate::ffi::sel_registerName;
+use crate::ffi::js_string_from_bytes;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -32,7 +34,6 @@ extern "C" {
     // Signature matches the rest of perry-ui-macos (see audio.rs:133,
     // lib.rs:113/118/1662). Runtime returns `*mut StringHeader` which is
     // i64-sized on Apple platforms.
-    fn js_string_from_bytes(data: *const u8, len: i32) -> i64;
     fn js_string_new_sso(data: *const u8, len: u32) -> f64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
@@ -46,7 +47,6 @@ extern "C" {
         extra: usize,
     ) -> *mut std::ffi::c_void;
     fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-    fn sel_registerName(name: *const i8) -> *mut std::ffi::c_void;
     fn objc_getClass(name: *const i8) -> *const std::ffi::c_void;
 
     // class_addMethod takes a function pointer of arbitrary shape — every
@@ -347,7 +347,7 @@ pub fn get_state(handle: f64) -> i64 {
             .unwrap_or(MediaState::Idle)
     });
     let s = state.as_str();
-    unsafe { js_string_from_bytes(s.as_ptr(), s.len() as i32) }
+    unsafe { js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64 }
 }
 
 pub fn is_playing(handle: f64) -> f64 {
@@ -501,7 +501,7 @@ fn handle_to_index(handle: f64) -> Option<usize> {
 
 fn empty_state_string() -> i64 {
     let s = "idle";
-    unsafe { js_string_from_bytes(s.as_ptr(), s.len() as i32) }
+    unsafe { js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64 }
 }
 
 unsafe fn current_time_seconds(player: &AnyObject) -> f64 {
