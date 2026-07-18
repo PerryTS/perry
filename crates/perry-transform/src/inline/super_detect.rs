@@ -11,8 +11,26 @@ use std::cell::Cell;
 
 pub(crate) const MAX_INLINE_EXPR_RECURSION_DEPTH: usize = 128;
 
+/// Per-top-level-walk budget of guarded entries (see
+/// `enter_inline_expr_recursion`). The depth cap alone bounds STACK, not
+/// WORK: with candidate-subtree cloning at every Conditional/Logical/
+/// Sequence node and re-walks of freshly inlined bodies, a single huge
+/// generated function can keep the walk churning within the depth limit
+/// for hours (observed on #6593's 13.3MB esbuild bundle: the pass ran
+/// 2h45m+ CPU-bound in clone glue after the stack fix, where it previously
+/// crashed in ~90s). Once a walk has consumed this many entries, further
+/// entries bail — the identical semantics-preserving skip as the depth
+/// bail. One entry is roughly one visited stmt-list/expr node, so ordinary
+/// bodies (even tens of thousands of nodes) keep full inlining coverage;
+/// only generated-code monsters hit the cap, and those merely lose
+/// inlining of the subtrees beyond it.
+pub(crate) const MAX_INLINE_WALK_WORK: usize = 250_000;
+
 thread_local! {
     static INLINE_EXPR_RECURSION_DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// Guarded entries consumed by the current top-level walk. Reset when a
+    /// new walk starts (an entry at depth 0); never refunded on unwind.
+    static INLINE_WALK_WORK: Cell<usize> = const { Cell::new(0) };
 }
 
 pub(crate) struct InlineExprRecursionGuard;
@@ -39,12 +57,28 @@ pub(crate) fn enter_inline_expr_recursion() -> Option<InlineExprRecursionGuard> 
     // spend the refunded budget.
     INLINE_EXPR_RECURSION_DEPTH.with(|depth| {
         let current = depth.get();
-        if current >= MAX_INLINE_EXPR_RECURSION_DEPTH {
-            None
-        } else {
-            depth.set(current + 1);
-            Some(InlineExprRecursionGuard)
+        if current == 0 {
+            // New top-level walk (Phase 4 init / a Phase 5 function body / a
+            // Phase 6 method body): fresh work budget.
+            INLINE_WALK_WORK.with(|work| work.set(0));
         }
+        if current >= MAX_INLINE_EXPR_RECURSION_DEPTH {
+            return None;
+        }
+        let over_work_budget = INLINE_WALK_WORK.with(|work| {
+            let used = work.get();
+            if used >= MAX_INLINE_WALK_WORK {
+                true
+            } else {
+                work.set(used + 1);
+                false
+            }
+        });
+        if over_work_budget {
+            return None;
+        }
+        depth.set(current + 1);
+        Some(InlineExprRecursionGuard)
     })
 }
 
@@ -171,6 +205,31 @@ mod tests {
         assert!(
             enter_inline_expr_recursion().is_some(),
             "budget must be restored once real guards unwind"
+        );
+    }
+
+    /// #6593 companion: the depth cap bounds stack but not total work — a
+    /// walk that keeps entering/unwinding within the depth limit must
+    /// eventually exhaust a per-walk work budget and bail, and a NEW
+    /// top-level walk (entry at depth 0) must start with a fresh budget.
+    #[test]
+    fn work_budget_is_spent_per_walk_and_resets_at_top_level() {
+        // Hold one outer guard so the walk stays "in progress" (depth >= 1)
+        // while we burn the budget with enter/unwind churn.
+        let outer = enter_inline_expr_recursion().expect("fresh walk must enter");
+        for _ in 0..MAX_INLINE_WALK_WORK - 1 {
+            let inner = enter_inline_expr_recursion();
+            assert!(inner.is_some(), "within budget, entries must succeed");
+            drop(inner);
+        }
+        assert!(
+            enter_inline_expr_recursion().is_none(),
+            "an exhausted work budget must bail even though depth unwound"
+        );
+        drop(outer);
+        assert!(
+            enter_inline_expr_recursion().is_some(),
+            "a new top-level walk must reset the work budget"
         );
     }
 }
