@@ -1200,7 +1200,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         "default",
         false,
         None,
-        &[p_str("p0"), p_any("p1")],
+        &[
+            p_str("p0"),
+            ParamSpec::Named {
+                name: "p1",
+                ty: TypeSpec::Any,
+                optional: true,
+            },
+        ],
         TypeSpec::String,
     ),
     method_sig(
@@ -1208,7 +1215,14 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         "slugify",
         false,
         None,
-        &[p_str("p0"), p_any("p1")],
+        &[
+            p_str("p0"),
+            ParamSpec::Named {
+                name: "p1",
+                ty: TypeSpec::Any,
+                optional: true,
+            },
+        ],
         TypeSpec::String,
     ),
     method_sig(

@@ -129,7 +129,7 @@ pub unsafe extern "C" fn js_ratelimit_new_from_options(options_bits: i64) -> Han
     let jv = JsValue::from_bits(options_bits as u64);
     if jv.is_pointer() {
         let obj = jv.as_pointer::<ObjectHeader>();
-        if !obj.is_null() && (obj as usize) >= 0x1000 {
+        if !obj.is_null() && (obj as usize) >= 0x100000 {
             let field = |name: &str| -> f64 {
                 let key = alloc_string(name);
                 js_object_get_field_by_name_f64(obj, key.as_raw())
@@ -210,7 +210,7 @@ pub unsafe extern "C" fn js_ratelimit_consume(
         state.window_end = now + window;
     }
 
-    state.consumed += consume_points;
+    state.consumed = state.consumed.saturating_add(consume_points);
     let is_first = state.consumed == consume_points;
     let ms_before_next = state.window_end.duration_since(now).as_millis() as f64;
     let consumed = state.consumed as f64;
@@ -257,7 +257,14 @@ pub unsafe extern "C" fn js_ratelimit_get(
                 .duration_since(now)
                 .as_millis() as f64;
             let consumed = state.consumed as f64;
-            let remaining = (keyed.points as f64 - consumed).max(0.0);
+            // A key still inside an active block reports zero remaining
+            // points even after its normal window would have expired.
+            let blocked = state.blocked_until.is_some_and(|u| u > now);
+            let remaining = if blocked {
+                0.0
+            } else {
+                (keyed.points as f64 - consumed).max(0.0)
+            };
             let res = ratelimiter_res(remaining, ms, consumed, false);
             drop(states);
             promise.resolve(res);
@@ -369,7 +376,7 @@ pub unsafe extern "C" fn js_ratelimit_penalty(
         state.consumed = 0;
         state.window_end = now + window;
     }
-    state.consumed += n;
+    state.consumed = state.consumed.saturating_add(n);
     let consumed = state.consumed as f64;
     let ms = state.window_end.duration_since(now).as_millis() as f64;
     let remaining = (keyed.points as f64 - consumed).max(0.0);
@@ -408,6 +415,12 @@ pub unsafe extern "C" fn js_ratelimit_reward(
         window_end: now + window,
         blocked_until: None,
     });
+    // Reset an expired window before reward math so a delayed reward()
+    // cannot underflow the (now stale) window_end in `duration_since`.
+    if now >= state.window_end {
+        state.consumed = 0;
+        state.window_end = now + window;
+    }
     state.consumed = state.consumed.saturating_sub(n);
     let consumed = state.consumed as f64;
     let ms = state.window_end.duration_since(now).as_millis() as f64;
@@ -457,6 +470,9 @@ pub unsafe extern "C" fn js_ratelimit_remaining(
         let now = Instant::now();
         let states = keyed.states.lock().unwrap();
         if let Some(state) = states.get(&key) {
+            if state.blocked_until.is_some_and(|u| u > now) {
+                return 0.0;
+            }
             if now < state.window_end {
                 return (keyed.points as f64 - state.consumed as f64).max(0.0);
             }

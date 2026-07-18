@@ -238,7 +238,7 @@ unsafe fn options_from_bits(options_bits: i64) -> SlugifyOptions {
         return opts;
     }
     let obj = jv.as_pointer::<ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x1000 {
+    if obj.is_null() || (obj as usize) < 0x100000 {
         return opts;
     }
 

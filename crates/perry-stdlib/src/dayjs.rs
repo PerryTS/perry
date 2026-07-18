@@ -56,10 +56,15 @@ pub extern "C" fn js_dayjs_now() -> f64 {
 /// Create a dayjs object from a Unix timestamp (milliseconds).
 #[no_mangle]
 pub extern "C" fn js_dayjs_from_timestamp(timestamp: f64) -> f64 {
-    let secs = (timestamp / 1000.0) as i64;
-    let nanos = ((timestamp % 1000.0) * 1_000_000.0) as u32;
+    // NaN / ±∞ → Invalid Date (dayjs's invalid sentinel is `0.0`).
+    if !timestamp.is_finite() {
+        return 0.0; // Invalid timestamp
+    }
 
-    if let Some(dt) = DateTime::from_timestamp(secs, nanos) {
+    // Millisecond-safe conversion: `from_timestamp_millis` handles
+    // negative epochs correctly (the old secs/nanos split truncated
+    // negative fractions toward zero and saturated `nanos` to 0).
+    if let Some(dt) = DateTime::from_timestamp_millis(timestamp as i64) {
         let handle = register_handle(DayjsHandle::new(dt));
         handle_to_f64(handle)
     } else {

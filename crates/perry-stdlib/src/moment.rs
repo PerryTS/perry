@@ -147,8 +147,21 @@ pub unsafe extern "C" fn js_moment_factory(value_bits: i64) -> f64 {
         if n.is_finite() {
             return js_moment_from_timestamp(n);
         }
+        // NaN / ±∞ → Invalid Date.
+        return handle_to_f64(register_handle(MomentHandle {
+            datetime: Utc::now(),
+            is_valid: false,
+        }));
     }
-    js_moment_now()
+    if jv.is_undefined() {
+        return js_moment_now();
+    }
+    // `null` (and any other non-undefined, non-number, non-string input)
+    // → Invalid Date, matching moment(null); only undefined maps to now.
+    handle_to_f64(register_handle(MomentHandle {
+        datetime: Utc::now(),
+        is_valid: false,
+    }))
 }
 
 /// moment.format(formatString) -> string
@@ -192,7 +205,9 @@ pub unsafe extern "C" fn js_moment_format(
 #[no_mangle]
 pub unsafe extern "C" fn js_moment_to_iso_string(handle: i64) -> *mut StringHeader {
     if let Some(moment) = get_handle::<MomentHandle>(handle) {
-        let iso = moment.datetime.to_rfc3339();
+        let iso = moment
+            .datetime
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         return js_string_from_bytes(iso.as_ptr(), iso.len() as u32);
     }
     std::ptr::null_mut()
