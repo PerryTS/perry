@@ -1385,6 +1385,16 @@ fn shape_keyed_object_addr(source: ObservationSource, object_addr: usize) -> usi
 }
 
 fn observe_array(site_id: u64, arr: *const ArrayHeader, index: u32) {
+    // #5094: recording-only helper. When typed-feedback is off (the default),
+    // `observe` records nothing, so the whole body is dead work — and
+    // `classify_array` walks the per-object pointer-slot layout, which is O(len)
+    // for a downgraded (SIDE_MASK) array. This ran per `arr[i] = v` on a
+    // heterogeneous array (via `js_typed_feedback_array_set_index_or_string` and
+    // the polymorphic / string-key set wrappers), making the write loop
+    // quadratic. Bail before the walk, matching every other recording path.
+    if !typed_feedback_enabled() {
+        return;
+    }
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(index));
     observe(
@@ -1409,6 +1419,17 @@ pub extern "C" fn js_typed_feedback_array_get_f64(
     arr: *const ArrayHeader,
     index: u32,
 ) -> f64 {
+    // #5094: when typed-feedback recording is off (the default — `guard_observe`
+    // early-returns with no side effect), the whole classify/observe block is
+    // dead work. `classify_array` walks the per-object pointer-slot layout
+    // (`array_layout_kind` → `layout_visit_pointer_slots`), which is O(len) for a
+    // downgraded (SIDE_MASK) array — so this ran per element and made
+    // `arr[i]` on a heterogeneous array quadratic. Mirror the gate the sibling
+    // guard wrappers already carry (`plain_array_index_get_guard_impl`) and take
+    // the underlying array op directly.
+    if !typed_feedback_enabled() {
+        return crate::array::js_array_get_f64(arr, index);
+    }
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(index));
     let observation = Observation {
@@ -1846,6 +1867,13 @@ pub extern "C" fn js_typed_feedback_array_set_f64(
     index: u32,
     value: f64,
 ) {
+    // #5094: skip the dead classify/observe block when recording is off (see
+    // `js_typed_feedback_array_get_f64`). The tail array op is the only
+    // observable effect in that case.
+    if !typed_feedback_enabled() {
+        crate::array::js_array_set_f64(arr, index, value);
+        return;
+    }
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(index));
     let observation = Observation {
@@ -1877,6 +1905,12 @@ pub extern "C" fn js_typed_feedback_array_set_f64_extend(
     index: u32,
     value: f64,
 ) -> *mut ArrayHeader {
+    // #5094: skip the dead classify/observe block when recording is off (see
+    // `js_typed_feedback_array_get_f64`). Preserve the strict extend semantics
+    // documented below by routing straight to the same tail op.
+    if !typed_feedback_enabled() {
+        return crate::array::js_array_set_f64_extend_strict(arr, index, value);
+    }
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(index));
     let observation = Observation {
