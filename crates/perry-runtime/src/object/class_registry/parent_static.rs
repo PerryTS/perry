@@ -126,6 +126,44 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, parent_value: 
     const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 
+    // #5893 (ClassDefinitionEvaluation): once the superclass is confirmed a
+    // constructor (above), `Get(superclass, "prototype")` must be an Object or
+    // null, else a TypeError is thrown at class-definition time. A *bound*
+    // function (`fn.bind(...)`) has no intrinsic `.prototype`, so its
+    // `Get(_, "prototype")` yields either whatever a `defineProperty`
+    // accessor/data on the bound function provides or `undefined` — and
+    // `undefined`, a number, etc. are neither Object nor null. test262
+    // language/statements/class/definition/{constructable-but-no-prototype,
+    // prototype-getter,prototype-setter}.
+    //
+    // Scope to bound functions specifically: an ordinary function always
+    // carries a valid object prototype (even after unrelated `defineProperty`
+    // calls on it — see superclass-static-method-override), and a real class
+    // (ClassRef, INT32) or per-evaluation class object likewise. So this stays
+    // purely additive — it cannot reject anything Node accepts, since Node also
+    // throws for every `class C extends aBoundFunction` whose bound function
+    // lacks a valid `prototype`. The `prototype` read happens exactly once here
+    // — the getter-invocation count is observable (prototype-getter.js asserts
+    // the accessor runs exactly once per class definition).
+    if super::construct::is_bound_function_closure_value(parent_value) {
+        let proto = unsafe {
+            crate::value::js_get_property(
+                parent_value,
+                b"prototype".as_ptr() as i64,
+                b"prototype".len() as i64,
+            )
+        };
+        const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+        let pbits = proto.to_bits();
+        let proto_is_object_or_null =
+            pbits == TAG_NULL || (pbits & 0xFFFF_0000_0000_0000) == POINTER_TAG;
+        if !proto_is_object_or_null {
+            super::super::object_ops::throw_object_type_error(
+                b"Class extends value does not have valid prototype property",
+            );
+        }
+    }
+
     let parent_cid: u32 = if tag == INT32_TAG {
         // ClassRef: lower 32 bits are the class id. Verify it's
         // actually a registered class id before trusting it.
