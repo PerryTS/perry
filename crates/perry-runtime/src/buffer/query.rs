@@ -37,7 +37,9 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
             if !out_len.is_null() {
                 *out_len = (*buf).length;
             }
-            return buffer_data(buf);
+            // #6515: resolve a registered view to its backing window so native
+            // consumers see the bytes JS reads/writes, not the stale local copy.
+            return resolve_span_data_ptr(buf);
         }
     }
     // TypedArray? (Uint8Array etc. backing bytes)
@@ -144,8 +146,10 @@ fn native_buffer_from_value(value: f64) -> Option<*const BufferHeader> {
 
 #[no_mangle]
 pub extern "C" fn js_native_buffer_data_ptr(value: f64) -> *const u8 {
+    // #6515: a Uint8Array view over an ArrayBuffer must expose its backing
+    // window here, not its stale local copy (see `view::resolve_data_ptr`).
     native_buffer_from_value(value)
-        .map(buffer_data)
+        .map(|buf| unsafe { resolve_span_data_ptr(buf) })
         .unwrap_or(std::ptr::null())
 }
 

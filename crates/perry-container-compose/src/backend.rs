@@ -125,6 +125,17 @@ pub trait ContainerBackend: Send + Sync {
         spec: &ContainerSpec,
         profile: &SecurityProfile,
     ) -> Result<ContainerHandle>;
+    /// Security-aware variant of [`create`](Self::create): same
+    /// contract as [`run_with_security`](Self::run_with_security)
+    /// (capability normalization + `security_args` splicing) but the
+    /// container is created without being started. Exists so the
+    /// public `create()` API can honor spec-level `seccomp` /
+    /// `no_new_privileges` instead of silently dropping them.
+    async fn create_with_security(
+        &self,
+        spec: &ContainerSpec,
+        profile: &SecurityProfile,
+    ) -> Result<ContainerHandle>;
     /// Wait for a container to exit and return its exit code.
     async fn wait(&self, id: &str) -> Result<i32>;
 }
@@ -245,9 +256,10 @@ mod tests {
         let proto = DockerProtocol;
         let spec = ContainerSpec {
             image: "alpine".into(),
-            // seccomp lives on SecurityProfile, not ContainerSpec, so
-            // run_with_security applies it via security_args. Test the
-            // security_args output directly:
+            // seccomp is spec-level since the run()/create() security
+            // fix, but it still reaches the CLI via security_args
+            // (spliced in by run_with_security/create_with_security),
+            // NOT via run_args. Test the security_args output directly:
             ..Default::default()
         };
         let _ = proto.run_args(&spec); // smoke — no panic on minimal spec
@@ -261,6 +273,238 @@ mod tests {
             "expected seccomp in security args; got {:?}",
             security_args
         );
+    }
+
+    #[test]
+    fn test_container_spec_json_parses_security_fields() {
+        // Pins the FFI boundary: the TS object literal passed to
+        // `run()`/`create()` arrives as JSON and is serde-parsed into
+        // `ContainerSpec`. Pre-fix, `seccomp` / `no_new_privileges`
+        // were not fields on the struct, so serde silently dropped
+        // them and the documented hardening never reached the runtime.
+        let spec: ContainerSpec = serde_json::from_str(
+            r#"{
+                "image": "alpine:3.19",
+                "read_only": true,
+                "user": "nobody",
+                "cap_drop": ["ALL"],
+                "seccomp": "default",
+                "no_new_privileges": true
+            }"#,
+        )
+        .expect("security fields must parse");
+        assert_eq!(spec.seccomp.as_deref(), Some("default"));
+        assert_eq!(spec.no_new_privileges, Some(true));
+        assert!(spec.has_security_opts());
+
+        let profile = spec.security_profile();
+        assert!(profile.read_only_root);
+        assert_eq!(profile.seccomp.as_deref(), Some("default"));
+        assert!(profile.no_new_privileges);
+    }
+
+    #[test]
+    fn test_container_spec_without_security_fields_uses_plain_path() {
+        // `read_only` / `cap_drop` / `user` are emitted directly by
+        // run_args/create_args, so a spec using only those must NOT
+        // trigger the security-aware path (routing invariant for
+        // `js_container_run` / `js_container_create`).
+        let spec: ContainerSpec = serde_json::from_str(
+            r#"{ "image": "alpine", "read_only": true, "cap_drop": ["ALL"], "user": "nobody" }"#,
+        )
+        .expect("parse");
+        assert!(!spec.has_security_opts());
+    }
+
+    #[test]
+    fn test_docker_run_with_security_argv_from_spec() {
+        // End-to-end argv shape for the fixed `run()` path: spec-level
+        // security fields → SecurityProfile → security_args spliced
+        // before the image reference. Mirrors what
+        // `CliBackend::run_with_security` executes (minus the process
+        // spawn).
+        let proto = DockerProtocol;
+        let spec = ContainerSpec {
+            image: "alpine:3.19".into(),
+            cmd: Some(vec!["echo".into(), "hi".into()]),
+            read_only: Some(true),
+            user: Some("nobody".into()),
+            cap_drop: Some(vec!["ALL".into()]),
+            seccomp: Some("default".into()),
+            no_new_privileges: Some(true),
+            ..Default::default()
+        };
+        let args = cli_backend::splice_security_args(
+            proto.run_args(&spec),
+            &spec.image,
+            proto.security_args(&spec.security_profile()),
+        );
+
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--security-opt" && w[1] == "seccomp=default"),
+            "expected --security-opt seccomp=default; got {:?}",
+            args
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--security-opt" && w[1] == "no-new-privileges:true"),
+            "expected --security-opt no-new-privileges:true; got {:?}",
+            args
+        );
+        assert!(args.contains(&"--read-only".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--user" && w[1] == "nobody"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--cap-drop" && w[1] == "ALL"));
+
+        // Every flag must precede the image; the container command
+        // (`echo hi`) must stay after it.
+        let image_pos = args.iter().position(|a| a == "alpine:3.19").unwrap();
+        let seccomp_pos = args.iter().position(|a| a == "seccomp=default").unwrap();
+        let echo_pos = args.iter().position(|a| a == "echo").unwrap();
+        assert!(
+            seccomp_pos < image_pos && image_pos < echo_pos,
+            "flag/image/cmd ordering broken: {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn test_docker_run_with_security_argv_when_option_value_equals_image() {
+        // Regression: the image slot used to be located by string value,
+        // so a container name equal to the image reference matched the
+        // `--name` VALUE first and the security flags were spliced
+        // between `--name` and its value:
+        //   run --name --security-opt seccomp=default alpine alpine
+        // which corrupts both the name and the command. The image is now
+        // located by construction, so duplicate values are harmless.
+        let proto = DockerProtocol;
+        let spec = ContainerSpec {
+            image: "alpine".into(),
+            name: Some("alpine".into()),
+            cmd: Some(vec!["alpine".into()]),
+            seccomp: Some("default".into()),
+            ..Default::default()
+        };
+        let args = cli_backend::build_secured_args(
+            &proto,
+            &spec,
+            &spec.security_profile(),
+            /* create_only */ false,
+        );
+
+        // `--name` keeps its value, and no flag separates the two.
+        let name_pos = args.iter().position(|a| a == "--name").unwrap();
+        assert_eq!(
+            args[name_pos + 1],
+            "alpine",
+            "--name lost its value: {:?}",
+            args
+        );
+
+        // Ordering: security flag → image → command, with exactly three
+        // `alpine` tokens (name value, image, command).
+        let seccomp_pos = args.iter().position(|a| a == "seccomp=default").unwrap();
+        assert!(
+            seccomp_pos > name_pos + 1,
+            "security flags spliced into the --name pair: {:?}",
+            args
+        );
+        assert_eq!(
+            args.iter().filter(|a| *a == "alpine").count(),
+            3,
+            "expected name value + image + cmd: {:?}",
+            args
+        );
+        // The image is the token right after the last security flag.
+        assert_eq!(
+            args[seccomp_pos + 1],
+            "alpine",
+            "image must directly follow the security flags: {:?}",
+            args
+        );
+        // No sentinel may leak into the executed argv.
+        assert!(
+            !args.iter().any(|a| a.contains('\u{1}')),
+            "image sentinel leaked: {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn test_docker_create_with_security_argv_from_spec() {
+        // Same shape for the fixed `create()` path — `create` has no
+        // security-arg splice pre-fix (there was no
+        // `create_with_security` at all), so pin the argv here.
+        let proto = DockerProtocol;
+        let spec = ContainerSpec {
+            image: "nginx".into(),
+            seccomp: Some("/etc/seccomp/app.json".into()),
+            ..Default::default()
+        };
+        let args = cli_backend::splice_security_args(
+            proto.create_args(&spec),
+            &spec.image,
+            proto.security_args(&spec.security_profile()),
+        );
+        assert_eq!(args[0], "create");
+        let sec_pos = args
+            .iter()
+            .position(|a| a == "seccomp=/etc/seccomp/app.json")
+            .expect("expected seccomp security-opt in create argv");
+        let image_pos = args.iter().position(|a| a == "nginx").unwrap();
+        assert!(
+            sec_pos < image_pos,
+            "security args must precede the image; got {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn test_apple_security_argv_from_spec_drops_seccomp_keeps_read_only() {
+        // apple/container has no seccomp equivalent: the normalization
+        // layer drops the field with a warning AND the protocol's
+        // security_args ignores it (defense in depth). A spec-driven
+        // launch on apple must still emit `--read-only` but never a
+        // seccomp flag.
+        let proto = AppleContainerProtocol;
+        let spec = ContainerSpec {
+            image: "alpine".into(),
+            read_only: Some(true),
+            seccomp: Some("default".into()),
+            ..Default::default()
+        };
+        let args = cli_backend::splice_security_args(
+            proto.run_args(&spec),
+            &spec.image,
+            proto.security_args(&spec.security_profile()),
+        );
+        assert!(args.contains(&"--read-only".to_string()));
+        assert!(
+            !args.iter().any(|s| s.contains("seccomp")),
+            "apple argv must not contain seccomp; got {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn test_compose_service_security_opt_flows_into_container_spec() {
+        // `ComposeService::to_container_spec` must parse
+        // `security_opt: [...]` into the spec-level fields so
+        // `run_command` routes through the security-aware path instead
+        // of dropping the entries on the plain-`run` floor.
+        let svc = crate::types::ComposeService {
+            image: Some("redis:7".into()),
+            security_opt: Some(vec!["seccomp=default".into(), "no-new-privileges".into()]),
+            ..Default::default()
+        };
+        let spec = svc.to_container_spec("cache", "cache-ctr");
+        assert_eq!(spec.seccomp.as_deref(), Some("default"));
+        assert_eq!(spec.no_new_privileges, Some(true));
+        assert!(spec.has_security_opts());
     }
 
     #[test]

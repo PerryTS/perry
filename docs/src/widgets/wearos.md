@@ -84,4 +84,4 @@ Same as Android phone widgets — Wear OS is Android:
 
 ## Refresh
 
-Wear Tiles use `freshnessIntervalMillis` on the `Tile` builder. Set via `reloadPolicy: { after: { minutes: N } }` in the provider return value. Default: 60 minutes.
+Wear Tiles use `freshnessIntervalMillis` on the `Tile` builder. Set via a literal `reloadPolicy: { after: { minutes: N } }` in the provider return value — the interval is read at compile time. Default: 60 minutes. Minimum: 15 minutes (shorter requests are clamped with a compile-time warning). See [Reload Policies](data-fetching.md#reload-policies).

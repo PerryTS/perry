@@ -70,6 +70,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
                 args: vec![Expr::Integer(4)],
                 type_args: vec![],
                 byte_offset: 0,
+                cap_args_appended: 0,
             },
         ),
         Some(HirType::Array(Box::new(HirType::Any)))

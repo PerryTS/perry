@@ -896,11 +896,18 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # Observed 19-37 min/shard on the first real sharded PR run. 40 left only
-    # ~3 min headroom over the slowest shard, so a slow-runner day could trip
-    # the timeout and (once this gate is a required context) flaky-red-block
-    # every PR. 55 gives comfortable headroom without hiding a genuine hang.
-    timeout-minutes: 55
+    # Per-shard wall time has crept up as the gap suite grew: the original
+    # sharded run was 19-37 min/shard, but 2026-07-16 measured 33-44 min for
+    # shards 2-8 and shard 1 (its slice is the heaviest) hit 55:18 — the exact
+    # 55-min cap — and CANCELLED on every run, incl. `gh run rerun --failed`.
+    # On slow-runner days a second shard (observed: shard 3) also grazed 55.
+    # Because `conformance-smoke-complete` is a required context, that
+    # deterministic timeout flaky-red-blocked every PR (#6456). Bump to 75 for
+    # comfortable headroom (~35 min over the normal-day slowest, ~20 over the
+    # heavy shard) while still bounding a genuine hang. Durable fix — raising
+    # the shard count 8->12 so no single slice approaches the cap — tracked as
+    # a follow-up on #6456.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
 

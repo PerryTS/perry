@@ -778,6 +778,13 @@ pub(super) fn incremental_mark_barrier_disable() {
         cell.set(std::ptr::null());
     });
     INCREMENTAL_MARK_BARRIER_MINOR_ONLY.with(|cell| cell.set(false));
+    // Keep allocate-black aligned with the barrier (see enable). Sweep-phase
+    // births need no mark either: both the arena cursor and the malloc sweep
+    // are snapshot-bounded at sweep-state construction, so the in-flight
+    // sweep can never visit them — while a birth mark they carry would leak
+    // into the next cycle as "already traced" (post-snapshot objects are
+    // exactly the ones this sweep never visits and never unmarks).
+    GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));
 }
 
 /// Allocate-black birth flags for runtime-path allocations — see
@@ -785,6 +792,32 @@ pub(super) fn incremental_mark_barrier_disable() {
 #[inline(always)]
 pub fn gc_birth_extra_flags() -> u8 {
     GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get())
+}
+
+/// A born-black object must also be TRACED: marking treats MARKED as
+/// "already visited", so without a seed the object's children are reachable
+/// through it only via the store-time shade — and the insertion barrier is
+/// not active during the budgeted BuildValidPointerSet phase's mutator
+/// windows. A child linked into a build-window birth before barrier-enable
+/// and reachable through nothing else was never marked and got swept live
+/// (the compiled-TUI lost-fiber-field bug: a React WIP fiber born in a
+/// build window, its `alternate` back-edge holding the only path to the
+/// old fiber tree). Seeding every black birth closes this for all phases;
+/// the trace drains absorb seeds continuously, so the cost is one worklist
+/// visit per mid-cycle runtime allocation.
+#[inline]
+pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
+    if GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.get()) & GC_FLAG_MARKED == 0 {
+        return;
+    }
+    // Leaf types (strings, pointer-free payloads) carry no child edges — the
+    // birth mark alone protects them, and seeding them would turn a lazy
+    // init burst (e.g. the globalThis builtins table populating mid-cycle:
+    // thousands of interned strings) into pure drain traffic.
+    if unsafe { gc_type_is_pointer_free((*header).obj_type) } {
+        return;
+    }
+    push_mark_seed(header);
 }
 
 #[inline]

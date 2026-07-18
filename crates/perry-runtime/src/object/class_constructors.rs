@@ -943,6 +943,95 @@ static KEEP_JS_ARRAY_PUSH_SPREAD_ANY: unsafe extern "C" fn(
 /// snapshotted onto the class object (`__perry_ctor_caps`, an own array in
 /// capture-param order) fill the trailing slots. No-op when the class has no
 /// registered constructor.
+/// #6469: spec default Error-init for a dynamic `new` whose entire ctor chain
+/// is implicit and terminates at the native Error base. The static-`new` path
+/// synthesizes this at codegen (#573, `lower_call/new.rs`: forward args[0]
+/// into `this.message`); the two dynamic replay paths below used to bail with
+/// a silent `return`, so `new <classValue>("msg")` on any bare
+/// `class X extends Error {}` produced a message-less instance. effect's
+/// `makeException` classes are exactly this shape and are ONLY constructed
+/// dynamically (the class escapes its factory), so every effect error printed
+/// "An error has occurred". Mirrors the static arm: ToString(args[0]) → own
+/// `message` when present and not undefined. `name` / `instanceof` /
+/// `toString` already resolve through `extends_builtin_error` elsewhere.
+unsafe fn default_error_init_for_implicit_chain(
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+) {
+    if !crate::object::extends_builtin_error(class_cid) || args_ptr.is_null() || args_len == 0 {
+        return;
+    }
+    let msg = *args_ptr;
+    if msg.to_bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let msg_str = crate::value::js_jsvalue_to_string(msg);
+    if msg_str.is_null() {
+        return;
+    }
+    let boxed =
+        f64::from_bits(crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK));
+    let key = crate::string::js_string_from_bytes(b"message".as_ptr(), b"message".len() as u32);
+    crate::object::js_object_set_field_by_name(inst, key, boxed);
+}
+
+/// #6469: spec default Error-init, called from the SYNTHESIZED standalone
+/// constructor of a no-own-ctor class whose ancestor walk terminates at a
+/// native Error-family base (`class X extends Error {}` — effect's
+/// `makeException` shape). The static-`new` path bakes this init at the call
+/// site (#573, `lower_call/new.rs`); the standalone ctor — the only body the
+/// DYNAMIC construct replay runs — previously emitted field initializers
+/// only, so `new <classValue>("msg")` produced a message-less instance and
+/// every effect error printed "An error has occurred".
+///
+/// `message` follows the spec's "If message is not undefined" guard: the
+/// standalone ctor's forwarding params are padded with undefined for missing
+/// call args, and setting an OWN undefined `message` would shadow
+/// `Error.prototype.message` (""). Set non-enumerable, matching the built-in
+/// (test262 NativeError/*-message). `name` mirrors the static arm: the
+/// terminating Error-family kind as an own property.
+#[no_mangle]
+pub unsafe extern "C" fn js_error_subclass_default_init(
+    this_val: f64,
+    msg: f64,
+    name_ptr: *const crate::StringHeader,
+) {
+    let bits = this_val.to_bits();
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if raw < 0x10000 {
+        return;
+    }
+    let inst = raw as *mut ObjectHeader;
+    if msg.to_bits() != crate::value::TAG_UNDEFINED {
+        let msg_str = crate::value::js_jsvalue_to_string(msg);
+        if !msg_str.is_null() {
+            let boxed = f64::from_bits(
+                crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK),
+            );
+            let key =
+                crate::string::js_string_from_bytes(b"message".as_ptr(), b"message".len() as u32);
+            crate::object::js_object_set_field_by_name_nonenum(inst, key, boxed);
+        }
+    }
+    if !name_ptr.is_null() {
+        let name_boxed = f64::from_bits(
+            crate::value::STRING_TAG | (name_ptr as u64 & crate::value::POINTER_MASK),
+        );
+        let key = crate::string::js_string_from_bytes(b"name".as_ptr(), b"name".len() as u32);
+        crate::object::js_object_set_field_by_name(inst, key, name_boxed);
+    }
+}
+
+/// Keepalive: generated code is the only caller (#6469).
+#[used]
+static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(
+    f64,
+    f64,
+    *const crate::StringHeader,
+) = js_error_subclass_default_init;
+
 pub(crate) unsafe fn replay_class_object_constructor(
     classobj_value: f64,
     class_cid: u32,
@@ -975,6 +1064,9 @@ pub(crate) unsafe fn replay_class_object_constructor(
         }
     };
     let Some((ctor_ptr, total_params, sig_caps)) = found else {
+        // #6469: all-implicit ctor chain to a native base — run the spec
+        // default Error-init instead of silently constructing message-less.
+        default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
         return;
     };
 
@@ -1123,6 +1215,9 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         }
     };
     let Some((ctor_ptr, total_params, sig_caps)) = found else {
+        // #6469: all-implicit ctor chain to a native base — run the spec
+        // default Error-init instead of silently constructing message-less.
+        default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
         return;
     };
 

@@ -29,3 +29,8 @@ console.log("(3) M.DirectCls.ast._tag:", (M as any).DirectCls.ast?._tag);
 
 // (4) the global `Number` is still itself (not shadowed by the import).
 console.log("(4) global Number(42):", Number("42"));
+
+// (5) a renamed export whose per-evaluation static is explicitly `null` reads
+// back `null` — it must not fall through to a sibling evaluation's (last-wins)
+// `ast`. Guards the proto-object-before-registry ordering of the #6552 fix.
+console.log("(5) M.NullAst.ast:", (M as any).NullAst.ast);

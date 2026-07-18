@@ -329,6 +329,31 @@ fn should_parse_as_script(filename: &str, source: &str) -> bool {
     !looks_like_es_module(source)
 }
 
+/// Whether `filename` is an ES module purely by its module FORMAT — i.e.
+/// independent of in-file `import`/`export` syntax or a `"use strict"`
+/// directive, which the caller weighs separately. An explicit ESM extension
+/// (`.mjs`/`.mts`) is always a module; a CommonJS extension (`.cjs`/`.cts`) is
+/// never a module by format (Node treats it as CommonJS even under
+/// `"type":"module"`); an ambiguous extension (`.js`/`.ts`/`.jsx`/`.tsx`) is a
+/// module when it sits in an ESM package context (`"type":"module"` /
+/// conditional-export map). Mirrors the format half of Node's CJS-vs-ESM
+/// detection and of `should_parse_as_script`'s package-context guard.
+///
+/// Module code is strict-mode code, so lowering consults this to decide the
+/// runtime strictness of a file that carries no in-file module syntax (#6542):
+/// a frozen-object write is a silent no-op in a sloppy CommonJS script but a
+/// TypeError in an ESM/strict module.
+pub fn file_is_es_module_by_format(filename: &str) -> bool {
+    let path = path_for_extension_check(filename);
+    if path.ends_with(".mjs") || path.ends_with(".mts") {
+        return true;
+    }
+    if path.ends_with(".cjs") || path.ends_with(".cts") {
+        return false;
+    }
+    file_is_in_esm_package_context(path)
+}
+
 fn looks_like_es_module(source: &str) -> bool {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
@@ -899,6 +924,27 @@ mod tests {
         assert_eq!(path_for_extension_check("./mod.ts?inline"), "./mod.ts");
         assert_eq!(path_for_extension_check("mod.wasm#section"), "mod.wasm");
         assert_eq!(path_for_extension_check("/home/u/mod.ts"), "/home/u/mod.ts");
+    }
+
+    #[test]
+    fn file_is_es_module_by_format_honors_extension() {
+        // #6542: an explicit ESM extension is a module by format regardless of
+        // any package context, so its code is strict.
+        assert!(file_is_es_module_by_format("/no/such/pkg/mod.mjs"));
+        assert!(file_is_es_module_by_format("/no/such/pkg/mod.mts"));
+        assert!(file_is_es_module_by_format("./mod.mjs?v=2"));
+        // A CommonJS extension is never a module by format — Node treats `.cjs`/
+        // `.cts` as CommonJS even under `"type":"module"`, so an ancestor
+        // package context must not flip these to strict.
+        assert!(!file_is_es_module_by_format("/no/such/pkg/mod.cjs"));
+        assert!(!file_is_es_module_by_format("/no/such/pkg/mod.cts"));
+        // An ambiguous extension with no package.json anywhere up the tree is a
+        // CommonJS script (sloppy) — the format signal alone does not make it a
+        // module (in-file import/export or a "use strict" directive still can,
+        // but those are weighed by the caller, not here).
+        assert!(!file_is_es_module_by_format(
+            "/nonexistent-perry-6542-root/deep/mod.ts"
+        ));
     }
 
     #[test]

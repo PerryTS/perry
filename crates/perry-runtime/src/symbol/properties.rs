@@ -62,6 +62,7 @@ pub(crate) fn set_symbol_property_attrs(
     if owner == 0 || sym_key == 0 {
         return;
     }
+    super::note_symbol_key_installed(sym_key);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
     if guard.is_none() {
         *guard = Some(HashMap::new());
@@ -266,6 +267,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    super::note_symbol_key_installed(sym_key);
     // #5437 (Next.js): a native HANDLE (small-id NaN-boxed POINTER, e.g. the
     // node:http IncomingMessage) carries per-request metadata in the symbol
     // side table keyed by its handle id. Node shares one metadata object by

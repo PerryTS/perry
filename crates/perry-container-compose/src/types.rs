@@ -614,6 +614,14 @@ impl ComposeService {
             None => None,
         };
         let labels = self.labels.as_ref().map(|l| l.to_map());
+        // Parse `security_opt: [...]` into the spec-level seccomp /
+        // no-new-privileges fields so `run_command` can route through
+        // the security-aware backend path (mirrors the SecurityProfile
+        // `ComposeEngine::up` builds from the same entries).
+        let mut sec = crate::backend::SecurityProfile::default();
+        if let Some(opts) = &self.security_opt {
+            sec.merge_security_opt(opts);
+        }
         ContainerSpec {
             image: self.image_ref(service_name),
             name: Some(container_name.to_string()),
@@ -631,6 +639,12 @@ impl ComposeService {
             workdir: self.working_dir.clone(),
             cap_add: self.cap_add.clone(),
             cap_drop: self.cap_drop.clone(),
+            seccomp: sec.seccomp,
+            no_new_privileges: if sec.no_new_privileges {
+                Some(true)
+            } else {
+                None
+            },
             // network_aliases is populated separately by ComposeEngine::up
             // (using the service KEY + any long-form `aliases` from the
             // compose-spec) — this single-service `to_container_spec`
@@ -700,7 +714,12 @@ impl ComposeService {
     ) -> crate::error::Result<ContainerHandle> {
         let container_name = crate::service::service_container_name(self, service_name);
         let spec = self.to_container_spec(service_name, &container_name);
-        backend.run(&spec).await
+        if spec.has_security_opts() {
+            let profile = spec.security_profile();
+            backend.run_with_security(&spec, &profile).await
+        } else {
+            backend.run(&spec).await
+        }
     }
 
     /// Start an already-created (stopped) container.
@@ -840,6 +859,23 @@ pub struct ContainerSpec {
     pub workdir: Option<String>,
     pub cap_add: Option<Vec<String>>,
     pub cap_drop: Option<Vec<String>>,
+    /// Seccomp profile: a path to a JSON profile file, or the literal
+    /// string `"default"` for the runtime's default profile. Emitted
+    /// as `--security-opt seccomp=<value>` via the security-aware
+    /// launch path ([`crate::backend::ContainerBackend::run_with_security`] /
+    /// [`crate::backend::ContainerBackend::create_with_security`]).
+    /// Backends without seccomp support (apple/container) drop the
+    /// field with a normalization warning instead of emitting a flag
+    /// their CLI rejects. Pre-fix this field didn't exist on the spec,
+    /// so a `seccomp:` key sent through the public `run()`/`create()`
+    /// FFI was silently discarded by serde.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seccomp: Option<String>,
+    /// `--security-opt no-new-privileges` — SUID/SGID binaries inside
+    /// the container can't gain privileges via execve. Routed through
+    /// the same security-aware launch path as `seccomp`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_new_privileges: Option<bool>,
     /// Additional DNS-resolvable names this container should answer to
     /// on its attached network (`--network-alias <name>` per entry).
     /// Populated by `ComposeEngine::up()` from the service key plus any
@@ -849,6 +885,32 @@ pub struct ContainerSpec {
     /// matching docker-compose semantics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_aliases: Option<Vec<String>>,
+}
+
+impl ContainerSpec {
+    /// Whether any spec field that can only reach the CLI through
+    /// [`crate::backend::SecurityProfile`] is set. `read_only`,
+    /// `cap_drop`, `user`, … are emitted directly by the protocols'
+    /// `run_args`/`create_args`; `seccomp` and `no_new_privileges`
+    /// only exist on `security_args`, so callers must route through
+    /// `run_with_security`/`create_with_security` when this returns
+    /// true — plain `run()`/`create()` would silently drop them.
+    pub fn has_security_opts(&self) -> bool {
+        self.seccomp.is_some() || self.no_new_privileges.unwrap_or(false)
+    }
+
+    /// Build the [`crate::backend::SecurityProfile`] equivalent of this
+    /// spec's security fields. Mirrors the profile `ComposeEngine::up`
+    /// derives from a service's `read_only` + `security_opt` entries,
+    /// so the single-container API and the compose engine hand the
+    /// backend identical profiles for identical knobs.
+    pub fn security_profile(&self) -> crate::backend::SecurityProfile {
+        crate::backend::SecurityProfile {
+            read_only_root: self.read_only.unwrap_or(false),
+            seccomp: self.seccomp.clone(),
+            no_new_privileges: self.no_new_privileges.unwrap_or(false),
+        }
+    }
 }
 
 /// Handle returned after creating/running a container.

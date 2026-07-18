@@ -24,6 +24,10 @@ const FOREIGN_READABLE_KEY: &[u8] = b"__perryForeignReadable";
 const READABLE_ITERATOR_DATA_CB_KEY: &[u8] = b"__perryReadableIteratorDataCb";
 const READABLE_ITERATOR_END_CB_KEY: &[u8] = b"__perryReadableIteratorEndCb";
 const READABLE_ITERATOR_ERROR_CB_KEY: &[u8] = b"__perryReadableIteratorErrorCb";
+// One-shot async iterator (`js_make_single_value_async_iterator`) — the value it
+// yields on its single pull.
+const SINGLE_VALUE_ITERATOR_SHAPE_ID: u32 = 0x7FFF_FF64;
+const SINGLE_VALUE_ITERATOR_VALUE_KEY: &[u8] = b"__perrySingleValueIteratorValue";
 
 fn iterator_result(value: f64, done: bool) -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
@@ -574,6 +578,59 @@ fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
     );
     install_async_iterator_symbol(iterator, ns_readable_iterator_self);
     iterator
+}
+
+/// Build an async iterator that yields `value` exactly once, then completes.
+/// If `value` is `undefined`/`null`, the iterator completes immediately (yields
+/// nothing).
+///
+/// Used for handle-backed readables whose entire payload is already buffered by
+/// the time they are iterated: perry's http `IncomingMessage` delivers the whole
+/// request body as a single buffer (its `.on('data')` emits `body_bytes` in one
+/// shot), so a one-shot iterator reproduces the observable `for await (const c of
+/// req)` result — the same total bytes — without wiring the handle into
+/// node:stream's event registry (which keys on a JS-object identity the handle
+/// does not have). Closes #6432: `for await…of req` used to throw
+/// `is not iterable` and yield nothing, so Next.js's `requestToBodyStream` read
+/// an empty POST body and Auth.js rejected every credentials login with
+/// `MissingCSRF`.
+#[no_mangle]
+pub extern "C" fn js_make_single_value_async_iterator(value: f64) -> f64 {
+    let methods = [
+        ("next", cast0(single_value_iterator_next)),
+        ("return", cast0(single_value_iterator_return)),
+    ];
+    let obj = build_object(
+        &methods,
+        SINGLE_VALUE_ITERATOR_SHAPE_ID + methods.len() as u32,
+    );
+    let iterator = box_pointer(obj as *const u8);
+    let v = crate::value::JSValue::from_bits(value.to_bits());
+    let empty = v.is_undefined() || v.is_null();
+    set_hidden_value(iterator, hidden_key(SINGLE_VALUE_ITERATOR_VALUE_KEY), value);
+    set_hidden_value(
+        iterator,
+        hidden_key(READABLE_ITERATOR_DONE_KEY),
+        f64::from_bits(if empty { TAG_TRUE } else { TAG_FALSE }),
+    );
+    install_async_iterator_symbol(iterator, ns_readable_iterator_self);
+    iterator
+}
+
+extern "C" fn single_value_iterator_next(closure: *const ClosureHeader) -> f64 {
+    let iterator = this_value(closure);
+    if iterator_is_done(iterator) {
+        return readable_iterator_done();
+    }
+    iterator_mark_done(iterator);
+    let value = get_hidden_value(iterator, hidden_key(SINGLE_VALUE_ITERATOR_VALUE_KEY))
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+    resolved_promise(iterator_result(value, false))
+}
+
+extern "C" fn single_value_iterator_return(closure: *const ClosureHeader) -> f64 {
+    iterator_mark_done(this_value(closure));
+    readable_iterator_done()
 }
 
 /// Install node:stream's async iterator on a readable that is *not* a node:stream

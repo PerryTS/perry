@@ -41,6 +41,14 @@ The full `ComposeSpec` shape is exported from `perry/compose` as
 `ComposeSpec`, with sub-types `Service`, `ComposeNetwork`,
 `ComposeVolume`, `Build`, and `Healthcheck`.
 
+The root-level `name:` field sets the **compose project name** — it
+labels every container (`perry.compose.project=<name>`) and namespaces
+non-external volumes and networks as `<name>_<declared-name>`, exactly
+like docker-compose's project prefix. It defaults to `"perry-stack"`
+when omitted, so set it whenever more than one stack can run on the
+same host (see [Volumes → Volume naming and
+ownership](./volumes.md#volume-naming-and-ownership)).
+
 ### Recognised Service fields
 
 The full set Perry's engine understands (matches compose-spec § services):
@@ -133,12 +141,14 @@ still works but is now optional.
 `down(handle)` removes containers and networks, and **preserves named
 volumes by default**. Pass `{ volumes: true }` to also drop the volumes
 (destroys committed data — use only for "rip and replace" redeploy or
-test cleanup).
+test cleanup). Pass `{ removeOrphans: true }` to also sweep out
+containers left behind by earlier deploys of the same project whose
+service key no longer exists in the spec.
 
 | `down` option | Type | Default | Effect |
 |---|---|---|---|
 | `volumes` | `boolean` | `false` | Also remove named volumes after containers + networks. |
-| `removeOrphans` | `boolean` | `false` | Remove containers labelled with this stack's project but not in the current spec. |
+| `removeOrphans` | `boolean` | `false` | Remove **orphaned containers**: ones still carrying this stack's `perry.compose.project` label whose `perry.compose.service` key is no longer in the spec (service renamed/deleted between deploys). Strictly label-scoped — other projects' containers and anything not created by Perry are never touched. |
 
 ## Status / logs / exec
 
