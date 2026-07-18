@@ -3,14 +3,15 @@
 //! with their runtime `new Function` codegen evaluated by the dyn-eval
 //! interpreter.
 //!
-//! STATUS: currently `#[ignore]`d — all three libraries now COMPILE natively
-//! (perry.compilePackages opt-in below) but hit PRE-EXISTING perry
-//! CJS-compilation gaps at module load / library init, BEFORE any
-//! runtime-generated code runs (per-test reasons on the #[ignore]
-//! attributes). The interpreter itself is proven end-to-end against the
-//! captured generated-code shapes of these exact library versions in
-//! issue_6559_dyn_function_interpreter.rs (always-on, green). Un-ignore as
-//! the CJS walls fall.
+//! STATUS: find-my-way is now un-ignored and green (#6587: `x instanceof C`
+//! with a `null`/`undefined` LHS no longer throws — see
+//! `perry-runtime/src/object/instanceof.rs`). ajv and fast-json-stringify
+//! remain `#[ignore]`d on PRE-EXISTING perry CJS-compilation gaps at module
+//! load / library init, BEFORE any runtime-generated code runs (per-test
+//! reasons on the #[ignore] attributes). The interpreter itself is proven
+//! end-to-end against the captured generated-code shapes of these exact
+//! library versions in issue_6559_dyn_function_interpreter.rs (always-on,
+//! green). Un-ignore each remaining test as its CJS wall falls.
 //!
 //! Each test provisions its own tempdir project via `npm install` (pinned
 //! majors matching the versions the shapes were captured from). When npm or
@@ -350,10 +351,12 @@ try {
 /// (version + host), then look them up — every matcher (`matchPrefix`,
 /// `_createParamsObject`, `deriveSyncConstraints`, `getMatchingHandler`) is
 /// runtime-generated via `new Function`.
+// #6587 fixed the CJS-init wall (`FindMyWay(opts)` called without `new`
+// evaluated `this instanceof Router` with `this === undefined`, which threw
+// `TypeError: Cannot convert undefined or null to object` before any route was
+// registered). This test now runs end-to-end; it still SKIPs when npm / the
+// network is unavailable unless `PERRY_REQUIRE_NPM_E2E=1` is set.
 #[test]
-#[ignore = "blocked on a PRE-EXISTING perry CJS-compilation gap, not the #6559 interpreter: \
-the compiled find-my-way module tree throws `TypeError: Cannot convert undefined or null to \
-object` at load. Run with PERRY_REQUIRE_NPM_E2E=1 -- --ignored once the gap is fixed."]
 fn real_find_my_way_router() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
