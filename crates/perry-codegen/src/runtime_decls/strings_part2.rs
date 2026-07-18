@@ -719,29 +719,16 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // js_has_exception() returns i32 (1 if exception is active, 0 otherwise).
     // js_enter_finally() / js_leave_finally() bracket finally blocks.
     module.declare_function("js_try_push", PTR, &[]);
-    // setjmp variant selection:
-    //   - Windows MSVC requires _setjmp(buf, frame_ptr)
-    //   - Apple targets: the default C `setjmp(3)` saves the signal mask
-    //     via a `sigprocmask` syscall (and the alt-signal-stack via
-    //     `__sigaltstack`) — together those syscalls dominate CPU for
-    //     async-heavy workloads (~43% of CPU on promise_all_chains.ts
-    //     before the swap). Perry never longjmps out of a signal
-    //     handler, so the fast `_setjmp(3)` (no sigprocmask) is
-    //     functionally equivalent for our exception path. The LLVM-IR
-    //     name `_setjmp` maps to the Mach-O linker symbol `__setjmp`
-    //     (the C ABI prepends an underscore), which is the fast
-    //     variant in libsystem_platform.dylib.
-    //   - Linux glibc: the C `setjmp(3)` already does NOT save the
-    //     signal mask (POSIX leaves it implementation-defined;
-    //     `sigsetjmp(env, 1)` is the signal-saving variant on Linux).
-    //     So `setjmp` on Linux is already the fast path; no swap
-    //     needed.
-    if cfg!(target_os = "windows") {
-        module.declare_function("_setjmp", I32, &[PTR, PTR]);
-    } else if cfg!(target_vendor = "apple") {
-        module.declare_function("_setjmp", I32, &[PTR]);
-    } else {
-        module.declare_function("setjmp", I32, &[PTR]);
+    // setjmp variant selection: decided by `crate::setjmp_abi` from the
+    // compile target's LLVM triple (`module.target_triple`), NOT host
+    // `cfg!` — cross-compiles must declare the *target's* setjmp ABI
+    // (Windows MSVC 2-arg `_setjmp`, Apple fast 1-arg `_setjmp`, plain
+    // `setjmp` elsewhere; full rationale in `crate::setjmp_abi`). The
+    // same `SetjmpAbi` drives the call sites in `stmt/try_stmt.rs`, so
+    // the declaration and the calls can never disagree on name or arity.
+    {
+        let abi = crate::setjmp_abi::setjmp_abi_for_triple(&module.target_triple);
+        module.declare_function(abi.callee(), I32, abi.param_types());
     }
     module.declare_function("js_try_end", VOID, &[]);
     module.declare_function("js_get_exception", DOUBLE, &[]);
