@@ -1070,6 +1070,14 @@ pub fn get_root_widget(app_handle: i64) -> Option<i64> {
 #[cfg(target_os = "windows")]
 const WM_PERRY_LAYOUT: u32 = WM_USER + 100;
 
+/// Set while a WM_PERRY_LAYOUT message is in flight, so a burst of
+/// mutations (tree rebuild, several setText calls in one timer tick)
+/// coalesces into a single layout pass instead of N.
+#[cfg(target_os = "windows")]
+thread_local! {
+    static LAYOUT_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Request a deferred layout pass on the main window's root widget.
 /// Uses PostMessage so multiple rapid calls (e.g., during tree rebuild)
 /// are coalesced into a single layout pass in the message loop.
@@ -1080,8 +1088,16 @@ pub fn request_layout() {
             let apps = apps.borrow();
             if let Some(app) = apps.first() {
                 if app.root_widget.is_some() {
+                    if LAYOUT_PENDING.with(|p| p.replace(true)) {
+                        return; // one already queued
+                    }
                     unsafe {
-                        let _ = PostMessageW(Some(app.hwnd), WM_PERRY_LAYOUT, WPARAM(0), LPARAM(0));
+                        if PostMessageW(Some(app.hwnd), WM_PERRY_LAYOUT, WPARAM(0), LPARAM(0))
+                            .is_err()
+                        {
+                            // Queue full / window gone — don't wedge the flag.
+                            LAYOUT_PENDING.with(|p| p.set(false));
+                        }
                     }
                 }
             }
@@ -1315,6 +1331,9 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         x if x == WM_PERRY_LAYOUT => {
+            // Clear BEFORE laying out so a mutation made from inside a
+            // layout-triggered callback can queue the next pass.
+            LAYOUT_PENDING.with(|p| p.set(false));
             do_layout();
             LRESULT(0)
         }

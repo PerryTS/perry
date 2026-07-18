@@ -247,7 +247,17 @@ pub fn set_text_str(handle: i64, text: &str) {
             let wide = to_wide(text);
             unsafe {
                 let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
+                // Repaint explicitly — our STATICs are styled via
+                // WM_CTLCOLORSTATIC with a transparent background, so the
+                // WM_SETTEXT default repaint can leave the old glyphs
+                // behind (classic timer-driven-counter symptom: the text
+                // changes but the screen doesn't).
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
+            // New content ⇒ new measured extent. Layout otherwise only
+            // runs on WM_SIZE, so a longer string stayed clipped to the
+            // old bounds until the user resized the window.
+            crate::app::request_layout();
         }
     }
 
@@ -525,6 +535,10 @@ fn apply_font(handle: i64, font: HFONT) {
                 Some(LPARAM(1)),
             );
         }
+        // Font metrics feed measure_text_height — a size/weight/family
+        // change alters the intrinsic extent, so reflow (single choke
+        // point for set_font_size / set_font_weight / set_font_family).
+        crate::app::request_layout();
     }
 }
 
