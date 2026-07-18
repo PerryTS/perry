@@ -1033,33 +1033,58 @@ pub extern "C" fn js_object_get_field_by_name(
                     // chain walk so the #2059 own-name synthesis below answers
                     // with THIS class's registered name instead of an ancestor's.
                     if name != "name" {
-                        let mut cid = class_id;
+                        // Walk the class-object proto chain for an inherited static
+                        // DATA field. At EACH level the class's pinned
+                        // per-evaluation parent OBJECT is consulted BEFORE the
+                        // parent's registry props (`CLASS_DYNAMIC_PROPS`).
+                        //
+                        // #6552: a subclass of a class-EXPRESSION value evaluated
+                        // more than once (`function make(a){return class{static
+                        // ast=a}}`, then `class Number$ extends make(x) {}` /
+                        // `class Widget$ extends make(y) {}`) records THIS
+                        // evaluation's parent object as its static prototype
+                        // (`class_prototype_object`, #1788), but the parent's
+                        // `CLASS_DYNAMIC_PROPS` are keyed by the class-expression
+                        // TEMPLATE id — shared, last-wins across every evaluation.
+                        // Reading the registry entry for such a parent collapses
+                        // sibling subclasses to the LAST `make(...)` (effect Schema:
+                        // `Number$.ast`/`Widget$.ast` both read the last parent's
+                        // `ast`). The pinned object carries this evaluation's own
+                        // edge, so it is authoritative; the registry read remains
+                        // the fallback for a plain declaration parent (#6443:
+                        // Auth.js `SignInError.kind`), which has no pinned object.
+                        let mut child = class_id;
                         let mut depth = 0usize;
                         while depth < 32 {
-                            match get_parent_class_id(cid) {
-                                Some(p) if p != 0 && p != cid => {
-                                    cid = p;
-                                    depth += 1;
+                            let proto =
+                                super::super::class_registry::class_prototype_object(child);
+                            if !proto.is_null() {
+                                let v = js_object_get_field_by_name(proto as *const _, key);
+                                if !v.is_undefined() && !v.is_null() {
+                                    return v;
                                 }
+                            }
+                            let p = match get_parent_class_id(child) {
+                                Some(p) if p != 0 && p != child => p,
                                 _ => break,
+                            };
+                            // A key deleted on THIS ancestor is not provided by it,
+                            // but a higher ancestor may still define it — `delete
+                            // Mid.foo` must let `Sub.foo` inherit `Base.foo`, not
+                            // resolve to undefined. Skip the registry read for the
+                            // deleted level and keep walking up.
+                            if !super::super::class_registry::class_is_key_deleted(p, name) {
+                                let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
+                                    m.borrow()
+                                        .get(&p)
+                                        .and_then(|props| props.get(name).copied())
+                                });
+                                if let Some(v) = inherited {
+                                    return JSValue::from_bits(v.to_bits());
+                                }
                             }
-                            if super::super::class_registry::class_is_key_deleted(cid, name) {
-                                // A key deleted on THIS ancestor is not provided by
-                                // it, but a higher ancestor may still define it —
-                                // `delete Mid.foo` must let `Sub.foo` inherit
-                                // `Base.foo`, not resolve to undefined. Skip this
-                                // level and keep walking up (safe: `cid`/`depth`
-                                // advance at the top of every iteration).
-                                continue;
-                            }
-                            let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
-                                m.borrow()
-                                    .get(&cid)
-                                    .and_then(|props| props.get(name).copied())
-                            });
-                            if let Some(v) = inherited {
-                                return JSValue::from_bits(v.to_bits());
-                            }
+                            child = p;
+                            depth += 1;
                         }
                     }
                     if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
