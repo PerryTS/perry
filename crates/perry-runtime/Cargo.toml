@@ -105,8 +105,9 @@ full = ["dep:hostname", "dep:dirs"]
 # tokio reactor). Dropping the whole module from those copies removes the
 # shadow. The shipped standalone `libperry_runtime.a` is built WITHOUT this
 # feature, so it keeps the stubs and runtime-only builds still link.
-# `manifest_ext_runtime_features.rs` guards that every runtime-bundling ext crate
-# sets it. NOTE: this is a pure symbol-suppression gate; it must NOT be confused
+# The `ext_crates_bundle_a_full_featured_perry_runtime` test (well_known.rs)
+# guards that every runtime-bundling ext crate sets it. NOTE: this is a pure
+# symbol-suppression gate; it must NOT be confused
 # with the behavioral `external-fetch-symbols` (fetch dispatch routing) below.
 stdlib = []
 # Extension-crate test binaries that link the real perry-ext-ws symbols still
