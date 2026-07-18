@@ -38,7 +38,7 @@ The `Gauge` component is designed for watchOS circular complications:
 ## Refresh Budgets
 
 watchOS has stricter refresh budgets than iOS:
-- Recommended: refresh every 60 minutes (`reloadPolicy: { after: { minutes: 60 } }`)
+- Recommended: refresh every 60 minutes (`reloadPolicy: { after: { minutes: 60 } }`); requests below 15 minutes are clamped at compile time
 - Maximum: system may throttle more aggressively than iOS
 - Background refresh uses `BackgroundTask` framework
 

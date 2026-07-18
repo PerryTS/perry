@@ -1189,6 +1189,28 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
         if class_id_from_method_receiver(call_this).is_some() {
             return call_this;
         }
+        // #6475: a FUNCTION-object call-site `this` — effect's `TagClass`, a
+        // plain function given the Tag class prototype via
+        // `Object.setPrototypeOf(TagClass, Object.getPrototypeOf(tagInstance))` —
+        // is a legitimate spec receiver for an inherited class method
+        // (`TagClass.pipe(...)`: `pipe` lives on the Tag class prototype and
+        // must run with `this === TagClass`). `class_id_from_method_receiver`
+        // deliberately rejects closures (reading `class_id` off a
+        // `ClosureHeader` is type confusion), but that guard protects
+        // RESOLUTION — and `dispatch_bound_method` resolves the method from
+        // the CAPTURED owner proto-ref, never from this substituted receiver.
+        // Passing the closure through only changes the `this` the body
+        // observes, which previously leaked the INT32 proto-ref marker
+        // (`typeof this === "number"`): effect's Pipeable composed against
+        // it, `HttpApiBuilder.group(...)` returned a curried function instead
+        // of a Layer, and web.ts died with "Not a valid effect: undefined".
+        let jv = JSValue::from_bits(call_this.to_bits());
+        if jv.is_pointer() {
+            let raw = (call_this.to_bits() & crate::value::POINTER_MASK) as usize;
+            if crate::closure::is_closure_ptr(raw) {
+                return call_this;
+            }
+        }
     }
     captured
 }

@@ -31,6 +31,19 @@ use std::sync::RwLock;
 
 pub(crate) static VTABLE_GEN: AtomicU64 = AtomicU64::new(1);
 
+/// Current vtable generation — consumed by caches (method IC below, the
+/// store-plan cache in `object::prop_plan`) that must invalidate on any
+/// class registration/mutation.
+#[inline]
+pub(crate) fn vtable_generation() -> u64 {
+    VTABLE_GEN.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn test_bump_vtable_generation() {
+    VTABLE_GEN.fetch_add(1, Ordering::Release);
+}
+
 const VTABLE_IC_SIZE: usize = 4096;
 const VTABLE_IC_MASK: usize = VTABLE_IC_SIZE - 1;
 

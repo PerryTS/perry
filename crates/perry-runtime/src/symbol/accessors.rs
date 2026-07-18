@@ -34,6 +34,7 @@ pub(crate) unsafe fn set_symbol_accessor_property(
     if obj_key == 0 || sym_key == 0 {
         return;
     }
+    crate::symbol::note_symbol_key_installed(sym_key);
     {
         let mut props = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if let Some(map) = props.as_mut() {

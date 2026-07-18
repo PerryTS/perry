@@ -27,6 +27,7 @@
 //! reachable, and the owner key is rewritten on evacuation.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 type BufferProps = HashMap<usize, HashMap<String, u64>>;
@@ -36,11 +37,25 @@ fn buffer_props() -> &'static Mutex<BufferProps> {
     PROPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Monotonic "some buffer own prop was ever stored" flag (#6386). Hot
+/// accessor fast paths (DataView get*/set*) use it to skip the mutex +
+/// double-HashMap shadow probe entirely in the overwhelmingly common program
+/// that never assigns properties onto a buffer/typed-array/DataView. Set
+/// (release) BEFORE the table insert, so a `false` (acquire) read guarantees
+/// no insert has completed — the probe it skips could only have found nothing.
+static BUFFER_OWN_PROPS_EVER: AtomicBool = AtomicBool::new(false);
+
+/// `false` while no buffer own prop has ever been stored process-wide.
+pub fn buffer_own_props_possible() -> bool {
+    BUFFER_OWN_PROPS_EVER.load(Ordering::Acquire)
+}
+
 /// Store `buf.<prop> = value`. Only reached for a registered buffer address.
 pub fn buffer_set_own_prop(addr: usize, prop: &str, value: f64) {
     if addr == 0 {
         return;
     }
+    BUFFER_OWN_PROPS_EVER.store(true, Ordering::Release);
     if let Ok(mut props) = buffer_props().lock() {
         props
             .entry(addr)

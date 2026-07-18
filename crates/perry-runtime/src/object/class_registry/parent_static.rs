@@ -8,6 +8,9 @@ use std::sync::RwLock;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
+    // Parent linking changes what a class chain can intercept — flush cached
+    // store plans (`object::prop_plan`).
+    crate::object::prop_plan::prop_plan_epoch_bump();
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
@@ -362,6 +365,12 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
         unsafe {
             (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
+            // #6530: record cid → class object so `instance.constructor`
+            // resolves to the SAME value the module scope/exports hold (see
+            // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
+            // `js_object_alloc(cid, …)` call directly preceding this mark.
+            let cid = (*(obj as *const ObjectHeader)).class_id;
+            super::class_object_value_root_store(cid, obj as *mut ObjectHeader);
         }
     }
 }
@@ -470,6 +479,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if sym_key == 0 {
             return;
         }
+        crate::symbol::note_symbol_key_installed(sym_key);
         {
             let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
             if guard.is_none() {
@@ -606,6 +616,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         if sym_key == 0 {
             return;
         }
+        crate::symbol::note_symbol_key_installed(sym_key);
         let mut guard = CLASS_SYMBOL_ACCESSORS.write().unwrap();
         if guard.is_none() {
             *guard = Some(HashMap::new());
@@ -1438,6 +1449,41 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // constructs the subclass.
             let prev_this = crate::object::js_implicit_this_set(receiver);
             let result = crate::closure::js_native_call_value(static_val, args_ptr, args_len);
+            crate::object::js_implicit_this_set(prev_this);
+            return result;
+        }
+    }
+    // #6475: `class X extends <function value>() {}` — a static member
+    // INHERITED from the parent FUNCTION's own properties, invoked as a call
+    // (`X.use(f)`, effect's `HttpRouter.Tag(id)().use`/`unwrap`/`serve`). The
+    // field-GET path already walks the parent closure
+    // (`get_field_by_name.rs` #36/#321: `closure_get_dynamic_prop(parent,
+    // name)`), so `typeof X.use === "function"` — but the fused static-CALL
+    // lowering routes here, and this helper only consulted CLASS_DYNAMIC_PROPS
+    // (which holds statics of a CLASS parent, not the own props of a runtime
+    // FUNCTION parent stored in the closure-props table). So the call missed,
+    // fell to the receiver fallback below, and effect's `X.use(f)` returned the
+    // class ref (`1`) instead of running the inherited arrow — every Tag-based
+    // Layer built through `.use`/`.serve` silently became the class itself.
+    // Walk the parent-closure chain and invoke the resolved callable with `this`
+    // bound to the receiver, mirroring the GET path.
+    if let Some(closure_ptr) = parent_closure_in_chain(class_id) {
+        let closure_val = f64::from_bits(
+            crate::value::POINTER_TAG | (closure_ptr as u64 & crate::value::POINTER_MASK),
+        );
+        let member = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+        let mv = crate::value::JSValue::from_bits(member.to_bits());
+        if !mv.is_undefined()
+            && !mv.is_null()
+            && crate::collection_iter::is_callable(member)
+            // Guard against the closure_get_dynamic_prop fallback returning the
+            // closure itself for an unknown key (it never should for a miss,
+            // but be defensive): a member equal to the parent closure value is
+            // not a real inherited member.
+            && member.to_bits() != closure_val.to_bits()
+        {
+            let prev_this = crate::object::js_implicit_this_set(receiver);
+            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
             crate::object::js_implicit_this_set(prev_this);
             return result;
         }

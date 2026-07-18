@@ -359,6 +359,82 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // #6475: `ns.fn(...spread)` where `ns` is a namespace import and
+            // `fn` is a REST function export (effect's
+            // `Schema.Union(...Array.from(...))`). The regular-call path routes
+            // through `try_lower_namespace_member_call`, which resolves the
+            // export's `perry_fn_<src>__fn` symbol directly. The spread path
+            // instead fell to `lower_expr(callee)` below, which resolves
+            // `ns.fn` as a VALUE — and `property_get`'s bare-name `class_ids`
+            // lookup returns a same-named CLASS ref for the collision
+            // `Schema.Union` (a Union CLASS exists in an unrelated module),
+            // baking it as the spread callee → "value is not a function". A
+            // rest function's `perry_fn` symbol takes its trailing args as a
+            // single bundled array, so bundle the whole spread into that rest
+            // slot and call the symbol directly, exactly as the regular path
+            // does for `fixed_count == 0`. Gated on a known rest-function
+            // export, so class members and non-rest shapes are untouched.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() {
+                    if ctx.namespace_imports.contains(ns_name)
+                        && ctx.imported_func_has_rest.contains(property)
+                        && ctx
+                            .imported_func_param_counts
+                            .get(property)
+                            .copied()
+                            .unwrap_or(1)
+                            == 1
+                    {
+                        let source_prefix_opt = ctx
+                            .namespace_member_prefixes
+                            .get(&(ns_name.clone(), property.clone()))
+                            .cloned()
+                            .or_else(|| ctx.import_function_prefixes.get(property).cloned());
+                        if let Some(source_prefix) = source_prefix_opt {
+                            let origin_suffix = crate::expr::import_origin_suffix_ns(
+                                ctx.import_function_origin_names,
+                                ctx.namespace_member_origin_names,
+                                ns_name,
+                                property,
+                            );
+                            let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
+                            // Bundle every arg (regular + spread) into the single
+                            // rest array, in source order.
+                            let mut acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+                            for a in args {
+                                match a {
+                                    CallArg::Expr(e) => {
+                                        let v = lower_expr(ctx, e)?;
+                                        acc = ctx.block().call(
+                                            I64,
+                                            "js_array_push_f64",
+                                            &[(I64, &acc), (DOUBLE, &v)],
+                                        );
+                                    }
+                                    CallArg::Spread(e) => {
+                                        let part_box = lower_expr(ctx, e)?;
+                                        let part = ctx.block().call(
+                                            I64,
+                                            "js_array_like_to_array",
+                                            &[(DOUBLE, &part_box)],
+                                        );
+                                        acc = ctx.block().call(
+                                            I64,
+                                            "js_array_concat",
+                                            &[(I64, &acc), (I64, &part)],
+                                        );
+                                    }
+                                }
+                            }
+                            let rest_box = nanbox_pointer_inline(ctx.block(), &acc);
+                            ctx.pending_declares
+                                .push((symbol.clone(), DOUBLE, vec![DOUBLE]));
+                            return Ok(ctx.block().call(DOUBLE, &symbol, &[(DOUBLE, &rest_box)]));
+                        }
+                    }
+                }
+            }
+
             // Closure callee path: `cb(reg0, reg1, ..., ...spread)` where
             // `cb` is a closure value (not a known FuncRef). We lower the
             // callee to its NaN-boxed value, marshal regular args into a

@@ -474,6 +474,7 @@ mod tests {
                 args: Vec::new(),
                 type_args: Vec::new(),
                 byte_offset: 0,
+                cap_args_appended: 0,
             }),
         }
     }

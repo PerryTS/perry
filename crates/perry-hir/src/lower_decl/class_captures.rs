@@ -18,6 +18,7 @@ pub fn synthesize_class_captures(
     constructor: &mut Option<Function>,
     static_methods: &mut Vec<Function>,
 ) {
+    let cap_salt = ctx.cap_salt();
     let module_level_ids = ctx.module_level_ids.clone();
     let outer_scope_ids: std::collections::HashSet<LocalId> =
         ctx.locals.iter().map(|(_, id, _)| *id).collect();
@@ -140,7 +141,9 @@ pub fn synthesize_class_captures(
     let inherited_cap_ids: std::collections::HashSet<LocalId> = captures_vec
         .iter()
         .copied()
-        .filter(|cid| inherited_cap_field_names.contains(&format!("__perry_cap_{}", cid)))
+        .filter(|cid| {
+            inherited_cap_field_names.contains(&crate::cap_fields::cap_field_name(cap_salt, *cid))
+        })
         .collect();
 
     // 1. Hidden fields keyed by outer id, skipping inherited.
@@ -149,7 +152,7 @@ pub fn synthesize_class_captures(
             continue;
         }
         fields.push(ClassField {
-            name: format!("__perry_cap_{}", cid),
+            name: crate::cap_fields::cap_field_name(cap_salt, cid),
             key_expr: None,
             ty: Type::Any,
             init: None,
@@ -161,7 +164,7 @@ pub fn synthesize_class_captures(
     if let Some(existing) = ctx.lookup_class_field_names(name) {
         let mut updated: Vec<String> = existing.to_vec();
         for &cid in &captures_vec {
-            let field_name = format!("__perry_cap_{}", cid);
+            let field_name = crate::cap_fields::cap_field_name(cap_salt, cid);
             if !updated.contains(&field_name) {
                 updated.push(field_name);
             }
@@ -203,7 +206,7 @@ pub fn synthesize_class_captures(
     // enough to defer to a follow-up.
     let field_propagation: std::collections::HashMap<LocalId, String> = captures_vec
         .iter()
-        .map(|&cid| (cid, format!("__perry_cap_{}", cid)))
+        .map(|&cid| (cid, crate::cap_fields::cap_field_name(cap_salt, cid)))
         .collect();
 
     // Helper closure: build a fresh-id map for one function's body,
@@ -234,7 +237,7 @@ pub fn synthesize_class_captures(
             // (same machinery as the ctor param rebinds above).
             prologue.push(Stmt::Let {
                 id: new_id,
-                name: format!("__perry_cap_{}", outer_id),
+                name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty,
                 mutable: true,
                 init: Some(Expr::ClassCaptureValue {
@@ -242,7 +245,7 @@ pub fn synthesize_class_captures(
                     index: index as u32,
                     fallback: Some(Box::new(Expr::PropertyGet {
                         object: Box::new(Expr::This),
-                        property: format!("__perry_cap_{}", outer_id),
+                        property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                     })),
                     prefer_fallback: true,
                 }),
@@ -334,7 +337,7 @@ pub fn synthesize_class_captures(
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
                 id: new_id,
-                name: format!("__perry_cap_{}", outer_id),
+                name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
                     .get(&outer_id)
                     .cloned()
@@ -377,7 +380,7 @@ pub fn synthesize_class_captures(
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
                 id: new_id,
-                name: format!("__perry_cap_{}", outer_id),
+                name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
                     .get(&outer_id)
                     .cloned()
@@ -494,7 +497,7 @@ pub fn synthesize_class_captures(
             .unwrap_or(Type::Any);
         ctor.params.push(Param {
             id: fresh_param_id,
-            name: format!("__perry_cap_{}", outer_id),
+            name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
             ty,
             default: None,
             decorators: Vec::new(),
@@ -518,7 +521,7 @@ pub fn synthesize_class_captures(
         )));
         assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
             object: Box::new(Expr::This),
-            property: format!("__perry_cap_{}", outer_id),
+            property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
             value: Box::new(Expr::LocalGet(fresh_param_id)),
         }));
     }

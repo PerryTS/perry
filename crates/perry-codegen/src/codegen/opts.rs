@@ -812,6 +812,10 @@ pub(crate) struct CrossModuleCtx {
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,
+    /// #6405: set when this module assigns a Buffer numeric read-method name as
+    /// an own property (`buf.readUInt8 = fn`). Threaded into every FnCtx so the
+    /// inline read intrinsic deopts to own-prop-aware runtime dispatch.
+    pub program_shadows_buffer_read_method: bool,
     /// (Issue #50) Module-level `const` 2D int arrays folded into flat
     /// `[N x i32]` LLVM constants. Maps local_id → info. Populated by
     /// scanning `hir.init`; threaded through every FnCtx so the IndexGet

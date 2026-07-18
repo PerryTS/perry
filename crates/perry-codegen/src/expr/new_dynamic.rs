@@ -74,6 +74,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             args,
             byte_offset,
+            cap_args_appended,
             ..
         } => {
             // #5253: under `--debug-symbols`, attach this `new`'s source
@@ -81,7 +82,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // runtime-construct fallback (or a built-in non-constructor) renders
             // a location. No-op for resolved user classes (no throw fires).
             crate::expr::calls::emit_call_location_at(ctx, *byte_offset);
-            lower_new(ctx, class_name, args)
+            lower_new(ctx, class_name, args, *cap_args_appended)
         }
 
         // `new <callee>(...spread)` — spread-bearing construction. Fold every
@@ -330,7 +331,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if matches!(property.as_str(), "BlockList" | "SocketAddress") {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "net" || mod_name == "node:net" {
-                            return lower_new(ctx, property, args);
+                            // NewDynamic reroute of a native-module builtin ctor
+                            // export: no HIR cap forwards are appended here.
+                            return lower_new(ctx, property, args, 0);
                         }
                     }
                 }
@@ -340,7 +343,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if property == "WebSocket" {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "http" || mod_name == "node:http" {
-                            return lower_new(ctx, property, args);
+                            // NewDynamic reroute of a native-module builtin ctor
+                            // export: no HIR cap forwards are appended here.
+                            return lower_new(ctx, property, args, 0);
                         }
                     }
                 }
@@ -469,7 +474,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                         )
                     {
-                        return lower_new(ctx, property, args);
+                        // NewDynamic reroute of a native-module stream ctor
+                        // export: no HIR cap forwards are appended here.
+                        return lower_new(ctx, property, args, 0);
                     }
                 }
             }

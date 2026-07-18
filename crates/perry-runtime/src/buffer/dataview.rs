@@ -18,18 +18,24 @@ use super::*;
 
 /// Numeric element kind for a DataView accessor. Encodes signedness, width and
 /// float-ness; endianness is a separate flag passed alongside.
+///
+/// `repr(i32)` with explicit discriminants: the values are an ABI contract
+/// with codegen's direct DataView lowering (#6386), which passes them as the
+/// `kind_code` of `js_data_view_{get,set}_direct` — see
+/// `data_view_kind_code` in `perry-codegen`'s DataView method lowering.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
 pub enum DataViewKind {
-    Int8,
-    Uint8,
-    Int16,
-    Uint16,
-    Int32,
-    Uint32,
-    Float32,
-    Float64,
-    BigInt64,
-    BigUint64,
+    Int8 = 0,
+    Uint8 = 1,
+    Int16 = 2,
+    Uint16 = 3,
+    Int32 = 4,
+    Uint32 = 5,
+    Float32 = 6,
+    Float64 = 7,
+    BigInt64 = 8,
+    BigUint64 = 9,
 }
 
 impl DataViewKind {
@@ -48,6 +54,41 @@ impl DataViewKind {
     #[inline]
     fn is_bigint(self) -> bool {
         matches!(self, DataViewKind::BigInt64 | DataViewKind::BigUint64)
+    }
+
+    /// Inverse of the codegen `kind_code` ABI (see the enum doc): map the
+    /// discriminant back to a kind, rejecting out-of-range codes.
+    fn from_code(code: i32) -> Option<DataViewKind> {
+        Some(match code {
+            0 => DataViewKind::Int8,
+            1 => DataViewKind::Uint8,
+            2 => DataViewKind::Int16,
+            3 => DataViewKind::Uint16,
+            4 => DataViewKind::Int32,
+            5 => DataViewKind::Uint32,
+            6 => DataViewKind::Float32,
+            7 => DataViewKind::Float64,
+            8 => DataViewKind::BigInt64,
+            9 => DataViewKind::BigUint64,
+            _ => return None,
+        })
+    }
+
+    /// The `get*`/`set*` method-name suffix for this kind (fallback-dispatch
+    /// name reconstruction in the `*_direct` entry points).
+    fn method_suffix(self) -> &'static str {
+        match self {
+            DataViewKind::Int8 => "Int8",
+            DataViewKind::Uint8 => "Uint8",
+            DataViewKind::Int16 => "Int16",
+            DataViewKind::Uint16 => "Uint16",
+            DataViewKind::Int32 => "Int32",
+            DataViewKind::Uint32 => "Uint32",
+            DataViewKind::Float32 => "Float32",
+            DataViewKind::Float64 => "Float64",
+            DataViewKind::BigInt64 => "BigInt64",
+            DataViewKind::BigUint64 => "BigUint64",
+        }
     }
 
     /// Map a `get*`/`set*` method name (without the `get`/`set` prefix) to a
@@ -84,6 +125,12 @@ fn throw_dataview_oob() -> ! {
 /// `NaN`/`0` for those cases — so a Symbol didn't throw, `valueOf` never ran, and
 /// negative/Infinity offsets only surfaced (if at all) as a later bounds error.
 fn to_byte_offset(value: f64) -> i64 {
+    // Fast path (#6386): a non-NaN f64 is by NaN-boxing construction a
+    // genuine Number (every tag pattern is a NaN payload), so a valid
+    // integral index needs no coercion machinery at all.
+    if value >= 0.0 && value <= 9_007_199_254_740_991.0 && value.trunc() == value {
+        return value as i64;
+    }
     if crate::value::JSValue::from_bits(value.to_bits()).is_bigint() {
         crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
     }
@@ -103,6 +150,12 @@ fn to_byte_offset(value: f64) -> i64 {
 /// step order). A BigInt accessor takes the `to_bigint_raw_or_throw` path instead.
 #[inline]
 fn to_number(value: f64) -> f64 {
+    // A non-NaN f64 is by NaN-boxing construction already a Number (#6386);
+    // every non-Number value (and boxed int32) carries a NaN tag pattern and
+    // takes the full coercion.
+    if !value.is_nan() {
+        return value;
+    }
     crate::builtins::js_number_coerce(value)
 }
 
@@ -294,6 +347,118 @@ pub fn js_data_view_set(
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+/// Shared receiver guard for the direct DataView accessor entries (#6386):
+/// `Some(addr)` when `recv` is a NaN-boxed pointer to a registered DataView
+/// with no own-prop shadow for `method_name` — i.e. when the specialized
+/// helper may run without consulting the generic dispatch tower.
+#[inline]
+fn data_view_direct_receiver(recv: f64, method_name: &str) -> Option<usize> {
+    let bits = recv.to_bits();
+    if bits >> 48 != 0x7FFD {
+        return None;
+    }
+    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if !super::is_data_view(addr) {
+        return None;
+    }
+    // `dv.getFloat64 = fn` style shadows live in the buffer own-props table;
+    // the monotonic flag keeps this probe (a process-global mutex) off the
+    // hot path for programs that never store props on a buffer.
+    if super::buffer_own_props_possible() && super::buffer_get_own_prop(addr, method_name).is_some()
+    {
+        return None;
+    }
+    Some(addr)
+}
+
+/// Cold fallback for the direct entries: a receiver whose static type said
+/// `DataView` but which isn't one at runtime (reassigned variable, subclass
+/// exotica, shadowed method) re-enters the generic dispatch tower under the
+/// reconstructed method name, preserving its full semantics.
+#[cold]
+unsafe fn data_view_direct_fallback(recv: f64, method_name: &str, args: &[f64]) -> f64 {
+    crate::object::js_native_call_method(
+        recv,
+        method_name.as_ptr() as *const i8,
+        method_name.len(),
+        args.as_ptr(),
+        args.len(),
+    )
+}
+
+/// Direct codegen entry for `dv.get<Kind>(byteOffset, littleEndian?)` on a
+/// receiver statically typed `DataView` (#6386). Skips the generic
+/// method-call tower (method-name interning, typed-feedback observation,
+/// args-Vec + handle-scope setup, buffer/own-prop/registry dispatch ladder)
+/// for the guarded common case. `little_value` is the RAW third argument
+/// (TAG_UNDEFINED when absent — truthiness matches the generic path's
+/// `args.len() >= 3 && truthy(args[2])`). `argc` is the source-level
+/// argument count, forwarded so a fallback dispatch preserves the
+/// callee-visible arity.
+#[no_mangle]
+pub extern "C" fn js_data_view_get_direct(
+    recv: f64,
+    offset: f64,
+    little_value: f64,
+    kind_code: i32,
+    argc: i32,
+) -> f64 {
+    let Some(kind) = DataViewKind::from_code(kind_code) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let mut name_buf = [0u8; 16];
+    let method_name = data_view_method_name(&mut name_buf, "get", kind);
+    if data_view_direct_receiver(recv, method_name).is_some() {
+        let little = crate::value::js_is_truthy(little_value) != 0;
+        return js_data_view_get(recv, offset, kind, little);
+    }
+    let args = [offset, little_value];
+    unsafe { data_view_direct_fallback(recv, method_name, &args[..(argc.clamp(0, 2) as usize)]) }
+}
+
+/// Direct codegen entry for `dv.set<Kind>(byteOffset, value, littleEndian?)`
+/// — see [`js_data_view_get_direct`].
+#[no_mangle]
+pub extern "C" fn js_data_view_set_direct(
+    recv: f64,
+    offset: f64,
+    value: f64,
+    little_value: f64,
+    kind_code: i32,
+    argc: i32,
+) -> f64 {
+    let Some(kind) = DataViewKind::from_code(kind_code) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let mut name_buf = [0u8; 16];
+    let method_name = data_view_method_name(&mut name_buf, "set", kind);
+    if data_view_direct_receiver(recv, method_name).is_some() {
+        let little = crate::value::js_is_truthy(little_value) != 0;
+        return js_data_view_set(recv, offset, value, kind, little);
+    }
+    let args = [offset, value, little_value];
+    unsafe { data_view_direct_fallback(recv, method_name, &args[..(argc.clamp(0, 3) as usize)]) }
+}
+
+/// Assemble `get<Kind>`/`set<Kind>` in a stack buffer (no allocation on the
+/// guard path, which needs the name for the own-prop shadow check).
+#[inline]
+fn data_view_method_name<'a>(buf: &'a mut [u8; 16], prefix: &str, kind: DataViewKind) -> &'a str {
+    let suffix = kind.method_suffix();
+    buf[..3].copy_from_slice(prefix.as_bytes());
+    buf[3..3 + suffix.len()].copy_from_slice(suffix.as_bytes());
+    // Both halves are ASCII literals.
+    unsafe { std::str::from_utf8_unchecked(&buf[..3 + suffix.len()]) }
+}
+
+// Called from generated code — keep the exports alive under release/LTO.
+#[used]
+static KEEP_JS_DATA_VIEW_GET_DIRECT: extern "C" fn(f64, f64, f64, i32, i32) -> f64 =
+    js_data_view_get_direct;
+#[used]
+static KEEP_JS_DATA_VIEW_SET_DIRECT: extern "C" fn(f64, f64, f64, f64, i32, i32) -> f64 =
+    js_data_view_set_direct;
 
 /// ToIntN/ToUintN: truncate toward zero then reduce modulo 2^bits. NaN and the
 /// infinities map to 0 (per the abstract `ToNumber` → `ToIntegerOrInfinity`
