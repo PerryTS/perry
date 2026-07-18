@@ -113,7 +113,7 @@ fn terminate_without_atexit(exit_code: i32) -> ! {
     #[cfg(windows)]
     {
         extern "system" {
-            fn ExitProcess(uExitCode: u32);
+            fn ExitProcess(uExitCode: u32) -> !;
         }
         unsafe {
             ExitProcess(exit_code as u32);
