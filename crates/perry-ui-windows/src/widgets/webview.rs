@@ -179,6 +179,20 @@ thread_local! {
 #[cfg(target_os = "windows")]
 const WEBVIEW_SUBCLASS_ID: usize = 0x77_76_69_77; // 'w','v','i','w'
 
+/// True when `handle` belongs to a WebView. WebViews register their host
+/// HWND as `WidgetKind::Image`, so kind checks can't identify them — the
+/// message pump uses this to keep dialog-style Tab navigation away from
+/// WebView2's Chromium children (they own their keyboard handling).
+#[cfg(target_os = "windows")]
+pub fn is_webview(handle: i64) -> bool {
+    WEBVIEW_STATES.with(|m| m.borrow().contains_key(&handle))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_webview(_handle: i64) -> bool {
+    false
+}
+
 static NEXT_DATA_DIR_TAG: AtomicI64 = AtomicI64::new(1);
 
 // =============================================================================

@@ -70,7 +70,9 @@ pub fn create() -> i64 {
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
             let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                // WS_EX_CONTROLPARENT: dialog manager recurses into
+                // containers for Tab navigation (see vstack.rs).
+                WINDOW_EX_STYLE(WS_EX_CONTROLPARENT.0),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
@@ -110,7 +112,9 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
 
             // Create the BS_GROUPBOX frame
             let groupbox_hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                // WS_EX_CONTROLPARENT: dialog manager recurses into
+                // containers for Tab navigation (see vstack.rs).
+                WINDOW_EX_STYLE(WS_EX_CONTROLPARENT.0),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(wide_title.as_ptr()),
                 WINDOW_STYLE(BS_GROUPBOX as u32 | WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0),

@@ -151,6 +151,43 @@ thread_local! {
     static NEXT_HOTKEY_ID: std::cell::Cell<i32> = std::cell::Cell::new(1);
 }
 
+/// Should `msg`'s target get dialog-style keyboard navigation
+/// (IsDialogMessageW: Tab / Shift-Tab / arrow-key focus movement)?
+///
+/// True when the message targets one of OUR widget HWNDs — walking up to
+/// 4 ancestors so the inner EDIT of a composite control (COMBOBOX, etc.)
+/// still qualifies — and that widget is not a WebView: WebView2's
+/// Chromium children own their keyboard handling, and routing their keys
+/// through the dialog manager would steal Tab from web content. Foreign
+/// windows (owned dialogs, IME windows, thread messages with hwnd=0)
+/// never qualify.
+#[cfg(target_os = "windows")]
+fn wants_dialog_navigation(hwnd: HWND) -> bool {
+    let mut probe = hwnd;
+    for _ in 0..4 {
+        if probe.0.is_null() {
+            return false;
+        }
+        // Our top-level windows qualify directly — before any control has
+        // focus, keyboard messages target the window itself, and the first
+        // Tab must still bootstrap focus into the first WS_TABSTOP child.
+        let probe_val = probe.0 as isize;
+        let is_app_window =
+            APPS.with(|apps| apps.borrow().iter().any(|a| a.hwnd.0 as isize == probe_val));
+        if is_app_window || crate::window::is_perry_window_hwnd(probe_val) {
+            return true;
+        }
+        let handle = crate::widgets::find_handle_by_hwnd(probe);
+        if handle != 0 {
+            // WebViews register as WidgetKind::Image (host HWND reuse), so
+            // ask the webview module directly.
+            return !crate::widgets::webview::is_webview(handle);
+        }
+        probe = unsafe { GetParent(probe).unwrap_or_default() };
+    }
+    false
+}
+
 /// Get the HWND of the first (main) app window.
 #[cfg(target_os = "windows")]
 pub fn get_main_hwnd() -> Option<HWND> {
@@ -482,6 +519,23 @@ pub fn app_run(app_handle: i64) {
                         msg.lParam.0 as isize,
                         false,
                     );
+                }
+                // Dialog-style keyboard navigation (Tab / Shift-Tab / arrow
+                // keys between WS_TABSTOP controls). A raw GetMessage →
+                // DispatchMessage pump never runs the dialog manager, so
+                // every control's WS_TABSTOP bit was dead and Tab did
+                // nothing in Perry windows. IsDialogMessageW performs its
+                // own translate+dispatch when it handles a message, so skip
+                // the normal dispatch then. Deliberately AFTER the shortcut
+                // and onKeyDown/onKeyUp dispatch above: app shortcuts still
+                // win, and JS key events still observe Tab presses.
+                if (WM_KEYFIRST..=WM_KEYLAST).contains(&msg.message)
+                    && wants_dialog_navigation(msg.hwnd)
+                {
+                    let root = GetAncestor(msg.hwnd, GA_ROOT);
+                    if !root.0.is_null() && IsDialogMessageW(root, &msg).as_bool() {
+                        continue;
+                    }
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);

@@ -183,7 +183,11 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
             let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                // WS_EX_CONTROLPARENT: the dialog manager (IsDialogMessageW
+                // in the message pump) must recurse INTO containers to find
+                // WS_TABSTOP controls — without it, Tab stops dead at the
+                // container level.
+                WINDOW_EX_STYLE(WS_EX_CONTROLPARENT.0),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,

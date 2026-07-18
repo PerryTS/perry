@@ -27,6 +27,15 @@ thread_local! {
     static HWND_TO_WINDOW: RefCell<HashMap<isize, i64>> = RefCell::new(HashMap::new());
 }
 
+/// True when `hwnd` is a secondary Perry `Window(...)` top-level. Used by
+/// the message pump's dialog-navigation gate (Tab focus movement must also
+/// engage while focus sits on the window itself, before any control has
+/// been focused).
+#[cfg(target_os = "windows")]
+pub fn is_perry_window_hwnd(hwnd_val: isize) -> bool {
+    HWND_TO_WINDOW.with(|m| m.borrow().contains_key(&hwnd_val))
+}
+
 fn str_from_header(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         return "";

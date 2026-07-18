@@ -61,7 +61,9 @@ pub fn create() -> i64 {
         unsafe {
             let hinstance = GetModuleHandleW(None).unwrap();
             let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
+                // WS_EX_CONTROLPARENT: dialog manager recurses into
+                // containers for Tab navigation (see vstack.rs).
+                WINDOW_EX_STYLE(WS_EX_CONTROLPARENT.0),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
