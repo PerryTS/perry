@@ -411,10 +411,77 @@ fn overflow_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
 /// never read).
 ///
 /// Fast path skips the outer HashMap when `obj_ptr` matches the last-
+/// Learned per-class inline sizing: the dynamic-construct path allocates 8
+/// inline slots (it cannot see the constructor body), so a 23-field
+/// ES5-pattern object keeps 15 fields in [`OVERFLOW_FIELDS`] — a `Vec<u64>`
+/// plus map entry per object (~250B, more than the object payload), visited,
+/// rekeyed and finalized by every GC cycle. The FIRST instance that
+/// overflows records its class's high-water field index here; every LATER
+/// `new` of the same (synthetic or registered) class right-sizes its
+/// allocation so all fields land inline. Capped so a pathological dynamic
+/// writer can't inflate every future instance.
+const LEARNED_INLINE_MAX_FIELDS: u32 = 64;
+const LEARNED_INLINE_TABLE_SIZE: usize = 1024;
+
+thread_local! {
+    static LEARNED_INLINE_FIELDS: std::cell::UnsafeCell<[(u32, u32); LEARNED_INLINE_TABLE_SIZE]> =
+        const { std::cell::UnsafeCell::new([(0u32, 0u32); LEARNED_INLINE_TABLE_SIZE]) };
+}
+
+#[inline]
+fn note_learned_inline_fields(class_id: u32, needed_fields: u32) {
+    if class_id == 0 || needed_fields > LEARNED_INLINE_MAX_FIELDS {
+        return;
+    }
+    let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
+    LEARNED_INLINE_FIELDS.with(|t| unsafe {
+        let e = &mut (*t.get())[slot];
+        if e.0 != class_id {
+            *e = (class_id, needed_fields);
+        } else if e.1 < needed_fields {
+            e.1 = needed_fields;
+        }
+    });
+}
+
+/// Inline field count to pre-size a dynamic construct of `class_id` with —
+/// the learned high-water mark, or 0 when nothing was learned (caller keeps
+/// its default).
+#[inline]
+pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
+    // Bisection kill-switch: PERRY_LEARNED_INLINE=0 disables consumption.
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_LEARNED_INLINE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    }) {
+        return 0;
+    }
+    if class_id == 0 {
+        return 0;
+    }
+    let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
+    LEARNED_INLINE_FIELDS.with(|t| unsafe {
+        let e = (*t.get())[slot];
+        if e.0 == class_id {
+            e.1
+        } else {
+            0
+        }
+    })
+}
+
 /// accessed Vec — the common row-build pattern where an object's
 /// overflow slots fill in sequence.
 #[inline]
 fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
+    // Learn the class's true width so FUTURE instances allocate it inline.
+    unsafe {
+        let hdr = obj_ptr as *const ObjectHeader;
+        note_learned_inline_fields((*hdr).class_id, (field_index as u32).saturating_add(1));
+    }
     let cached_slot = OVERFLOW_LAST.with(|c| unsafe {
         let (cached_obj, cached_vec) = *c.get();
         if cached_obj == obj_ptr && !cached_vec.is_null() {

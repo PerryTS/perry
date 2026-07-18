@@ -250,4 +250,103 @@ mod tests {
             );
         }
     }
+
+    /// #6303 / #6314 — every `perry-ext-*` crate that depends on perry-runtime
+    /// must build it with BOTH the `default` and `stdlib` features.
+    ///
+    /// These crates are `crate-type = ["staticlib", ...]`, so `libperry_ext_*.a`
+    /// physically bundles a copy of perry-runtime, and perry links the ext
+    /// archives BEFORE stdlib (`prefer_well_known_before_stdlib`) — the bundled
+    /// copy wins the link for every symbol it exports. The workspace dep is
+    /// `default-features = false`, and a per-crate `cargo build -p perry-ext-<x>`
+    /// (what release-packages.yml does in its per-crate loop) is what makes the
+    /// divergence real.
+    ///
+    /// * `default` (#6303) keeps the bundled copy feature-identical to the
+    ///   shipped runtime, so unconditionally-exported, feature-gated dispatchers
+    ///   (`js_string_replace_search_dyn`, `js_native_call_method`, …) don't
+    ///   silently degrade — e.g. `str.replace(re, fn)` keeps firing its callback.
+    /// * `stdlib` (#6314) gates OUT perry-runtime's no-op `stdlib_stubs` module
+    ///   (`js_stdlib_init_dispatch`, `js_stdlib_process_pending`, the fetch/ws/
+    ///   readline no-ops). Without it the bundled no-op wins the link over
+    ///   perry-stdlib's real dispatch, so a `node:http` server never registers
+    ///   its tokio reactor and dies on the first accept. The link-time strip that
+    ///   should drop those members silently no-ops when perry can't find LLVM
+    ///   `nm`/`objcopy` (e.g. a stock macOS host), so the copy must not emit them.
+    ///
+    /// Lives here as a unit test (not an integration test under `tests/`) so it
+    /// runs on every PR's `cargo test`.
+    #[test]
+    fn ext_crates_bundle_a_full_featured_perry_runtime() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let crates_dir = manifest_dir
+            .parent() // crates/
+            .and_then(|p| p.parent()) // workspace
+            .expect("workspace root reachable from CARGO_MANIFEST_DIR")
+            .join("crates");
+
+        let mut checked = 0usize;
+        let mut missing_default: Vec<String> = Vec::new();
+        let mut missing_stdlib: Vec<String> = Vec::new();
+
+        for entry in std::fs::read_dir(&crates_dir)
+            .expect("read crates/")
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("perry-ext-") {
+                continue;
+            }
+            let Ok(manifest) = std::fs::read_to_string(entry.path().join("Cargo.toml")) else {
+                continue;
+            };
+            // Only the `perry-runtime = { ... }` / `perry-runtime.workspace` forms
+            // appear in these crates, so a line-prefix match needs no toml parser.
+            let Some(dep_line) = manifest.lines().map(str::trim).find(|l| {
+                l.starts_with("perry-runtime.workspace") || l.starts_with("perry-runtime =")
+            }) else {
+                // perry-ffi-only crate — cannot bundle a divergent runtime copy.
+                continue;
+            };
+            checked += 1;
+
+            // `perry-runtime.workspace = true` inherits `default-features = false`
+            // from the workspace dep and adds nothing back — always a violation.
+            let has_features = dep_line.contains("features");
+            if !(has_features && dep_line.contains("\"default\"")) {
+                missing_default.push(format!("  {name}: {dep_line}"));
+            }
+            if !(has_features && dep_line.contains("\"stdlib\"")) {
+                missing_stdlib.push(format!("  {name}: {dep_line}"));
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "found no perry-ext-* crate depending on perry-runtime — did the crate \
+             layout change? This guard would silently pass forever."
+        );
+        assert!(
+            missing_default.is_empty(),
+            "#6303: these perry-ext-* crates bundle a feature-stripped perry-runtime \
+             into their staticlib. They are linked BEFORE stdlib/runtime, so their copy \
+             wins the link and silently degrades every unconditionally-exported \
+             dispatcher whose body is feature-gated (js_string_replace_search_dyn, ...) \
+             — e.g. `str.replace(re, fn)` stops invoking its callback.\n\
+             Add \"default\" to the perry-runtime `features` list:\n{}",
+            missing_default.join("\n")
+        );
+        assert!(
+            missing_stdlib.is_empty(),
+            "#6314: these perry-ext-* crates bundle a perry-runtime that still exports \
+             the no-op `stdlib_stubs`. They are linked BEFORE stdlib, so the bundled \
+             no-op `js_stdlib_init_dispatch` wins the link and perry-stdlib's real \
+             dispatch never runs — a node:http server never registers its tokio reactor \
+             and dies on the first accept. The link-time strip that should drop those \
+             members silently no-ops when perry can't find LLVM nm/objcopy (e.g. a stock \
+             macOS host), so the copy must not emit the stubs.\n\
+             Add \"stdlib\" to the perry-runtime `features` list:\n{}",
+            missing_stdlib.join("\n")
+        );
+    }
 }

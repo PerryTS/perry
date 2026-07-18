@@ -867,7 +867,10 @@ pub unsafe extern "C" fn js_new_function_construct(
             crate::value::JSValue::from_bits(func_value.to_bits()).as_pointer::<ObjectHeader>();
         let class_cid = js_object_get_class_id(obj);
         if class_cid != 0 {
-            let inst = js_object_alloc(class_cid, 0);
+            let inst = js_object_alloc(
+                class_cid,
+                crate::object::learned_inline_field_count(class_cid),
+            );
             // Replay the class's registered constructor (instance-field
             // initializers + body) on the fresh instance, filling the
             // capture params from the snapshotted `__perry_ctor_caps`. The
@@ -913,7 +916,9 @@ pub unsafe extern "C" fn js_new_function_construct(
     // constructor body fills `this.<field>` writes through
     // PropertySet, and prototype-method dispatch consults the
     // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
-    let obj_ptr = js_object_alloc(cid, 0);
+    // Learned inline sizing: a class that overflowed once pre-sizes every
+    // later instance so all its fields land inline (object/mod.rs).
+    let obj_ptr = js_object_alloc(cid, crate::object::learned_inline_field_count(cid));
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
     // A user-assigned `foo.prototype = <obj/array>` lives as the closure's
     // "prototype" dynamic prop; the instance's [[Prototype]] must be THAT
@@ -1308,7 +1313,10 @@ unsafe fn construct_registered_class_ref(
     let inst = if let Some((keys_array, field_count)) = registered_class_keys_array(instance_cid) {
         js_object_alloc_class_inline_keys(instance_cid, 0, field_count, keys_array)
     } else {
-        js_object_alloc(instance_cid, 0)
+        js_object_alloc(
+            instance_cid,
+            crate::object::learned_inline_field_count(instance_cid),
+        )
     };
     // #2768: a registered-class constructor reached through this path — static
     // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
@@ -1549,7 +1557,9 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     // the synthetic per-function id applies. (The real `[[Prototype]]` link is
     // still set below from `newTarget.prototype`.)
     let cid = new_target_class_id(nt).unwrap_or_else(|| synthetic_class_id_for_function(nt));
-    let obj_ptr = js_object_alloc(cid, 0);
+    // Learned inline sizing: a class that overflowed once pre-sizes every
+    // later instance so all its fields land inline (object/mod.rs).
+    let obj_ptr = js_object_alloc(cid, crate::object::learned_inline_field_count(cid));
     let nan_boxed = crate::value::js_nanbox_pointer(obj_ptr as i64);
     if let Some(proto_bits) = constructor_prototype_bits(nt) {
         super::super::prototype_chain::object_set_static_prototype(obj_ptr as usize, proto_bits);
