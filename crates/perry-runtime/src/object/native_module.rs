@@ -435,6 +435,9 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
         }
         "path/posix" => "path.posix",
         "path/win32" => "path.win32",
+        // #6563: `@lydell/node-pty` is an API-identical fork of node-pty
+        // (opencode's import); both names resolve to the one runtime pty.
+        "@lydell/node-pty" => "node-pty",
         _ => module_name,
     }
 }
@@ -474,6 +477,7 @@ pub(crate) fn cjs_default_base_module(module_name: &str) -> Option<&'static str>
         "inspector.default" => Some("inspector"),
         "inspector/promises.default" => Some("inspector/promises"),
         "module.default" => Some("module"),
+        "node-pty.default" => Some("node-pty"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "path.posix.default" => Some("path.posix"),
@@ -500,6 +504,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "inspector" => Some("inspector.default"),
         "inspector/promises" => Some("inspector/promises.default"),
         "module" => Some("module.default"),
+        "node-pty" => Some("node-pty.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "path.posix" => Some("path.posix.default"),
@@ -539,9 +544,11 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             "process".len(),
         )),
         "module" => Some(bound_native_callable_export_value("module", "Module")),
-        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "sea" | "url"
-        | "util" | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
+        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "node-pty"
+        | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl"
+        | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {
+            create_cjs_default_namespace(module_name)
+        }
         _ => None,
     }
 }
@@ -618,6 +625,8 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "inspector/promises"
             | "inspector/promises.default"
             | "module"
+            | "node-pty"
+            | "node-pty.default"
             | "os"
             | "os.default"
             | "path"
@@ -787,6 +796,16 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     }
     if module_name == "url" && property_name == "URLPattern" {
         return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+    }
+    // #6560 — Bun globals shim pack: `Bun.stdin` / `Bun.stdout` / `Bun.stderr`
+    // are object-valued reads (BunFile-like handles built by `bun_compat`).
+    if module_name == "bun" {
+        match property_name {
+            "stdin" => return crate::bun_compat::js_bun_stdin(),
+            "stdout" => return crate::bun_compat::js_bun_stdout(),
+            "stderr" => return crate::bun_compat::js_bun_stderr(),
+            _ => {}
+        }
     }
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {

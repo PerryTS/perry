@@ -196,6 +196,41 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
+    // #6560: the `Bun` global shim pack — member position only, and only when
+    // no user binding shadows `Bun`. `Bun.stdin` / `Bun.stdout` / `Bun.stderr`
+    // are object-valued handle reads; bare method-value reads
+    // (`const sw = Bun.stringWidth`) bind the callable export through the
+    // native-module property path. Bare `Bun` / `typeof Bun` are deliberately
+    // untouched: node-targeting bundles feature-detect Bun exactly that way
+    // and must keep taking their node paths. The call form
+    // (`Bun.stringWidth(...)`) lowers via `expr_call/module_static.rs`.
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        if obj_ident.sym.as_ref() == "Bun"
+            && ctx.lookup_local("Bun").is_none()
+            && ctx.lookup_native_module("Bun").is_none()
+        {
+            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                if matches!(
+                    prop_ident.sym.as_ref(),
+                    "stdin"
+                        | "stdout"
+                        | "stderr"
+                        | "stringWidth"
+                        | "hash"
+                        | "file"
+                        | "write"
+                        | "pathToFileURL"
+                        | "fileURLToPath"
+                ) {
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(Expr::NativeModuleRef("bun".to_string())),
+                        property: prop_ident.sym.as_ref().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
     // Promise statics are receiver-sensitive: ECMA-262 uses their `this`
     // value as the constructor, so value reads like `Promise.resolve.call(...)`
     // must keep the `Promise` receiver instead of collapsing to the legacy

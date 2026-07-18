@@ -207,6 +207,48 @@ pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
+/// `"bun"` module shim pack (#6560). Callable exports; `stdin`/`stdout`/
+/// `stderr` are property reads handled in `native_module.rs`, and
+/// `pathToFileURL`/`fileURLToPath` alias the `node:url` implementations.
+#[allow(clippy::all)]
+pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
+    let _ = (obj, args_ptr, args_len, assert_skip_prototype);
+    nm_general_closures!(
+        obj,
+        args_ptr,
+        args_len,
+        arg,
+        i32_arg,
+        bool_to_f64,
+        str_to_f64,
+        pack_args,
+        pack_args_from,
+        bool_tag,
+        ptr_addr,
+        optional_ptr_addr,
+        _arg_event_ptr,
+        arg_bits,
+        _arg_closure_ptr,
+        ptr_to_f64,
+        typed_kind
+    );
+    match (module_name, method_name) {
+        ("bun", "stringWidth") => crate::bun_compat::js_bun_string_width(arg(0), arg(1)),
+        ("bun", "hash") => crate::bun_compat::js_bun_hash(arg(0), arg(1)),
+        ("bun", "file") => crate::bun_compat::js_bun_file(arg(0)),
+        ("bun", "write") => crate::bun_compat::js_bun_write(arg(0), arg(1)),
+        ("bun", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
+        ("bun", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        _ => f64::from_bits(JSValue::undefined().bits()),
+    }
+}
+
 #[allow(
     unused_variables,
     unused_mut,

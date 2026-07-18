@@ -682,13 +682,19 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
         regular_count as usize
     };
 
-    let arr = spread_arr_handle as *const ArrayHeader;
-    let (spread_n, spread_data): (usize, *const f64) = if arr.is_null() {
-        (0, std::ptr::null())
+    // #6518: resolve a push-grown array's forwarding stub (#233, the #6486
+    // family) before reading length. In-tree codegen callsites pre-resolve
+    // the spread source through `js_array_like_to_array` (whose real-Array
+    // arm runs `clean_arr_ptr`), but this helper is `#[no_mangle]` and
+    // declared to stdlib FFI — a caller passing a raw handle to a grown
+    // array would read the forwarding pointer's bytes as the spread length.
+    // Don't lean on upstream cleaning for memory safety here; the re-clean
+    // on an already-resolved pointer is cheap.
+    let arr = crate::array::clean_arr_ptr(spread_arr_handle as *const ArrayHeader);
+    let spread_n: usize = if arr.is_null() {
+        0
     } else {
-        let len = (*arr).length as usize;
-        let data = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        (len, data)
+        (*arr).length as usize
     };
 
     let total = reg_n + spread_n;
@@ -696,14 +702,20 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
     // Small fast path: stack buffer for up to 16 args (matches js_closure_call16).
     let mut stack_buf: [f64; 16] = [0.0; 16];
     let mut heap_buf: Vec<f64>;
+    // Spread slots are read per element via `js_array_get_f64`, not a raw
+    // memcpy: a sparse array (length > capacity, far slots in
+    // ARRAY_NAMED_PROPS) legally passes `clean_arr_ptr`, so copying `length`
+    // raw slots reads out of bounds (same rule as #6517's from-array
+    // constructors). The accessor resolves far-index slots and reads holes
+    // as undefined.
     let buf_ptr: *const f64 = if total <= 16 {
         if !regular_args.is_null() && reg_n > 0 {
             // GC_STORE_AUDIT(STACK): spread-call regular args copy into a temporary stack buffer.
             std::ptr::copy_nonoverlapping(regular_args, stack_buf.as_mut_ptr(), reg_n);
         }
-        if !spread_data.is_null() && spread_n > 0 {
+        for i in 0..spread_n {
             // GC_STORE_AUDIT(STACK): spread args copy into a temporary stack buffer.
-            std::ptr::copy_nonoverlapping(spread_data, stack_buf.as_mut_ptr().add(reg_n), spread_n);
+            stack_buf[reg_n + i] = crate::array::js_array_get_f64(arr, i as u32);
         }
         stack_buf.as_ptr()
     } else {
@@ -712,9 +724,9 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
             // GC_STORE_AUDIT(STACK): regular args copy into a temporary native Vec buffer.
             std::ptr::copy_nonoverlapping(regular_args, heap_buf.as_mut_ptr(), reg_n);
         }
-        if !spread_data.is_null() && spread_n > 0 {
+        for i in 0..spread_n {
             // GC_STORE_AUDIT(STACK): spread args copy into a temporary native Vec buffer.
-            std::ptr::copy_nonoverlapping(spread_data, heap_buf.as_mut_ptr().add(reg_n), spread_n);
+            heap_buf[reg_n + i] = crate::array::js_array_get_f64(arr, i as u32);
         }
         heap_buf.as_ptr()
     };

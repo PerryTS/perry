@@ -8,6 +8,9 @@ use std::sync::RwLock;
 
 /// Register a class with its parent class ID in the global registry
 pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
+    // Parent linking changes what a class chain can intercept — flush cached
+    // store plans (`object::prop_plan`).
+    crate::object::prop_plan::prop_plan_epoch_bump();
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(HashMap::new());
@@ -362,6 +365,12 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
     if obj != 0 {
         unsafe {
             (*(obj as *mut ObjectHeader)).object_type = crate::error::OBJECT_TYPE_CLASS;
+            // #6530: record cid → class object so `instance.constructor`
+            // resolves to the SAME value the module scope/exports hold (see
+            // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
+            // `js_object_alloc(cid, …)` call directly preceding this mark.
+            let cid = (*(obj as *const ObjectHeader)).class_id;
+            super::class_object_value_root_store(cid, obj as *mut ObjectHeader);
         }
     }
 }
@@ -470,6 +479,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if sym_key == 0 {
             return;
         }
+        crate::symbol::note_symbol_key_installed(sym_key);
         {
             let mut guard = CLASS_SYMBOL_METHODS.write().unwrap();
             if guard.is_none() {
@@ -606,6 +616,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         if sym_key == 0 {
             return;
         }
+        crate::symbol::note_symbol_key_installed(sym_key);
         let mut guard = CLASS_SYMBOL_ACCESSORS.write().unwrap();
         if guard.is_none() {
             *guard = Some(HashMap::new());

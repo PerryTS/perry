@@ -4,6 +4,7 @@ use super::*;
 
 #[path = "global_this_webassembly.rs"]
 mod global_this_webassembly;
+pub(crate) use global_this_webassembly::webassembly_error_ctor_instanceof;
 
 // Topical sub-modules split out of the original monolithic `global_this.rs`
 // (pure code move; see the per-module re-exports below for the resolving paths).

@@ -63,6 +63,10 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "AggregateError" => 0xFFFF0014,
         "EvalError" => 0xFFFF0015,
         "URIError" => 0xFFFF0016,
+        // #6364 — keep in sync with the `lower_instanceof` match above and
+        // `CLASS_ID_SUPPRESSED_ERROR` so `class X extends SuppressedError {}`
+        // walks the parent edge and `new X() instanceof SuppressedError` holds.
+        "SuppressedError" => 0xFFFF003E,
         "Date" => 0xFFFF0020,
         "RegExp" => 0xFFFF0021,
         "Map" => 0xFFFF0022,
@@ -377,6 +381,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "AggregateError" => 0xFFFF0014u32,
                 "EvalError" | "globalThis.EvalError" => 0xFFFF0015u32,
                 "URIError" | "globalThis.URIError" => 0xFFFF0016u32,
+                // #6364 — SuppressedError (TC39 explicit-resource-management).
+                // Must match `CLASS_ID_SUPPRESSED_ERROR` in
+                // perry-runtime/src/disposable.rs. The instance is a
+                // GC_TYPE_OBJECT carrying this class id, so the runtime
+                // class-id chain fast-path matches it (see instanceof.rs).
+                "SuppressedError" => 0xFFFF003Eu32,
                 // Uint8Array / Buffer — runtime detects these via a
                 // thread-local buffer registry (see buffer.rs). The
                 // TextEncoder path registers its ArrayHeader result

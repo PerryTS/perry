@@ -58,6 +58,41 @@ pub(super) fn try_module_static_methods(
     has_spread: bool,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(member) = expr {
+        // #6560: `Bun.<method>(...)` — the Bun global shim pack, member
+        // position only (mirrors the `WebAssembly` receiver pattern below:
+        // an unshadowed bare `Bun` ident). Bare `Bun` / `typeof Bun` stay
+        // untouched so node-targeting bundles that feature-detect Bun via
+        // `typeof Bun !== "undefined"` keep taking their node paths. Only
+        // the implemented surface lowers natively; unknown members fall
+        // through to the ordinary (undefined-global) lowering.
+        if !has_spread {
+            if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident)) =
+                (member.obj.as_ref(), &member.prop)
+            {
+                if obj_ident.sym.as_ref() == "Bun"
+                    && ctx.lookup_local("Bun").is_none()
+                    && ctx.lookup_native_module("Bun").is_none()
+                    && matches!(
+                        method_ident.sym.as_ref(),
+                        "stringWidth"
+                            | "hash"
+                            | "file"
+                            | "write"
+                            | "pathToFileURL"
+                            | "fileURLToPath"
+                    )
+                {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "bun".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: method_ident.sym.as_ref().to_string(),
+                        args,
+                    }));
+                }
+            }
+        }
+
         // WebAssembly.Module.* metadata statics. This is intentionally a
         // direct-call lowering so it does not duplicate the runtime namespace
         // descriptor work handled separately in #3635.
@@ -371,51 +406,49 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "stringify" => {
-                            if args.len() >= 2 {
-                                let mut it = args.into_iter();
-                                let value = it.next().unwrap();
-                                let replacer = it.next().unwrap();
-                                let spacer = it.next().unwrap_or(Expr::Null);
-                                return Ok(Ok(Expr::JsonStringifyFull(
-                                    Box::new(value),
-                                    Box::new(replacer),
-                                    Box::new(spacer),
-                                )));
-                            } else if args.len() == 1 {
-                                let value = args.into_iter().next().unwrap();
+                            if !args.is_empty() {
                                 // `JSON.stringify(url)` should invoke `url.toJSON()`
                                 // (which returns href) and stringify the resulting
                                 // string. Perry's runtime JSON stringifier doesn't
                                 // honor `toJSON` on opaque runtime objects, so
                                 // intercept the URL case at HIR time. Recognize URL
-                                // both via the original AST (typed local / direct
-                                // `new URL`) and via the HIR variants (`UrlNew`,
-                                // `UrlInstanceToJSON`, …) that earlier passes may
-                                // already have produced.
+                                // via the original AST (typed local / direct
+                                // `new URL`) and via `Expr::UrlNew` when the arg
+                                // was already lowered. `UrlInstanceToJSON` /
+                                // `UrlInstanceToString` must NOT match here: those
+                                // are the href STRING produced by `u.toJSON()` /
+                                // `u.toString()`, and wrapping them in another
+                                // `UrlInstanceToJSON` reads a `StringHeader` as a
+                                // URL `ObjectHeader` → undefined (#6488). The
+                                // AST-side check can't misfire on those either:
+                                // `static_receiver_class` of a call expression is
+                                // `None`, not the callee receiver's class.
+                                //
+                                // The wrap applies to the replacer/spacer forms
+                                // too: per SerializeJSONProperty, `toJSON` runs
+                                // BEFORE the replacer, so the replacer observing
+                                // the href string matches Node. Without it,
+                                // `JSON.stringify(u, null, 2)` walked the opaque
+                                // URL object and threw a circular-structure
+                                // TypeError on its searchParams back-reference.
                                 let original_arg = call.args.first().map(|a| a.expr.as_ref());
                                 let arg_is_url = original_arg
                                     .map(|e| static_receiver_class(ctx, e) == Some("URL"))
                                     .unwrap_or(false)
-                                    || matches!(
-                                        &value,
-                                        Expr::UrlNew { .. }
-                                            | Expr::UrlInstanceToJSON(_)
-                                            | Expr::UrlInstanceToString(_)
-                                    );
+                                    || matches!(args.first(), Some(Expr::UrlNew { .. }));
+                                let mut it = args.into_iter();
+                                let mut value = it.next().unwrap();
+                                let replacer = it.next().unwrap_or(Expr::Null);
+                                let spacer = it.next().unwrap_or(Expr::Null);
                                 if arg_is_url {
-                                    let href = Expr::UrlInstanceToJSON(Box::new(value));
-                                    return Ok(Ok(Expr::JsonStringifyFull(
-                                        Box::new(href),
-                                        Box::new(Expr::Null),
-                                        Box::new(Expr::Null),
-                                    )));
+                                    value = Expr::UrlInstanceToJSON(Box::new(value));
                                 }
-                                // Route ALL single-arg stringify through JsonStringifyFull
+                                // Route ALL stringify calls through JsonStringifyFull
                                 // so the runtime can return TAG_UNDEFINED for undefined input
                                 return Ok(Ok(Expr::JsonStringifyFull(
                                     Box::new(value),
-                                    Box::new(Expr::Null),
-                                    Box::new(Expr::Null),
+                                    Box::new(replacer),
+                                    Box::new(spacer),
                                 )));
                             }
                         }

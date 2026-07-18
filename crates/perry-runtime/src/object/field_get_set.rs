@@ -111,6 +111,7 @@ pub(crate) fn is_fetch_subclass_body_method(name: &[u8]) -> bool {
 // ── Topical sub-modules (issue #1103: keep every file < 2000 lines) ──
 mod accessors;
 mod buffer_own_prop;
+mod class_object_props;
 mod crypto_key;
 mod enumeration;
 mod field_ops;

@@ -13,6 +13,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "async_hooks" => Some("js_nm_install_async_hooks"),
         "bigint" => Some("js_nm_install_bigint"),
         "buffer" | "buffer.Buffer" => Some("js_nm_install_buffer"),
+        "bun" => Some("js_nm_install_bun"),
         "child_process" => Some("js_nm_install_child_process"),
         "cluster" => Some("js_nm_install_cluster"),
         "console" => Some("js_nm_install_console"),
@@ -27,6 +28,8 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "inspector" | "inspector.Network" | "inspector/promises" => Some("js_nm_install_inspector"),
         "module" => Some("js_nm_install_module"),
         "net" => Some("js_nm_install_net"),
+        // #6563: node-pty + the API-identical @lydell fork share one bucket.
+        "node-pty" | "@lydell/node-pty" => Some("js_nm_install_node_pty"),
         "os" => Some("js_nm_install_os"),
         "path" | "path.posix" | "path.win32" => Some("js_nm_install_path"),
         "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {
@@ -67,6 +70,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_async_hooks",
     "js_nm_install_bigint",
     "js_nm_install_buffer",
+    "js_nm_install_bun",
     "js_nm_install_child_process",
     "js_nm_install_cluster",
     "js_nm_install_console",
@@ -80,6 +84,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_inspector",
     "js_nm_install_module",
     "js_nm_install_net",
+    "js_nm_install_node_pty",
     "js_nm_install_os",
     "js_nm_install_path",
     "js_nm_install_perf",

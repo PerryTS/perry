@@ -275,6 +275,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if let Some(class_id) = builtin_ctor_class_id_from_value(type_ref) {
         return js_instanceof(value, class_id);
     }
+    // #6558: `e instanceof WebAssembly.CompileError` (and LinkError /
+    // RuntimeError). These constructors live on the WebAssembly NAMESPACE —
+    // not on `globalThis`, so the builtin-name path above never resolves
+    // them — and their instances are ErrorHeader-backed values with no
+    // prototype chain reaching the namespace ctor's `.prototype`, so the
+    // ordinary prototype walk below can't brand them either. Identify the
+    // ctor by its dedicated thunk func_ptr (GC-move-safe) and brand-check
+    // the instance by its error `.name`.
+    if let Some(matches) = super::global_this::webassembly_error_ctor_instanceof(value, type_ref) {
+        return f64::from_bits(if matches {
+            crate::value::TAG_TRUE
+        } else {
+            crate::value::TAG_FALSE
+        });
+    }
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
         if module == "stream"
             && matches!(

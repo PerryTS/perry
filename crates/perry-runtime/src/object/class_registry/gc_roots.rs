@@ -29,6 +29,9 @@ enum ClassSideTableRootSlot {
     DynamicParentValue {
         class_id: u32,
     },
+    ClassObjectValue {
+        class_id: u32,
+    },
     ClassSymbolMethod {
         class_id: u32,
         sym_key: usize,
@@ -127,6 +130,18 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     // visit + forward — otherwise `js_get_dynamic_parent_value` later hands
     // `super()` a stale pointer.
     if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
+        if let Some(map) = guard.as_mut() {
+            for value_bits in map.values_mut() {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
+        }
+    }
+
+    // #6530: cid → per-evaluation class OBJECT (`instance.constructor`
+    // identity for capture-carrying classes). Same liveness/forwarding needs
+    // as the dynamic-parent stash above: the entries are heap objects a
+    // moving GC must visit + forward.
+    if let Ok(mut guard) = CLASS_OBJECT_VALUES.write() {
         if let Some(map) = guard.as_mut() {
             for value_bits in map.values_mut() {
                 visitor.visit_nanbox_u64_slot(value_bits);
@@ -242,6 +257,16 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     }
 
+    // Step twin of the CLASS_OBJECT_VALUES block in
+    // `scan_class_side_table_roots_mut` (#6530).
+    if let Ok(guard) = CLASS_OBJECT_VALUES.read() {
+        if let Some(map) = guard.as_ref() {
+            for &class_id in map.keys() {
+                slots.push(ClassSideTableRootSlot::ClassObjectValue { class_id });
+            }
+        }
+    }
+
     if let Ok(guard) = CLASS_SYMBOL_METHODS.read() {
         if let Some(map) = guard.as_ref() {
             for &(class_id, sym_key, is_static) in map.keys() {
@@ -327,6 +352,13 @@ fn scan_class_side_table_root_slot(
         }
         ClassSideTableRootSlot::DynamicParentValue { class_id } => {
             if let Ok(mut guard) = CLASS_DYNAMIC_PARENT_VALUE.write() {
+                if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                    visitor.visit_nanbox_u64_slot(value_bits);
+                }
+            }
+        }
+        ClassSideTableRootSlot::ClassObjectValue { class_id } => {
+            if let Ok(mut guard) = CLASS_OBJECT_VALUES.write() {
                 if let Some(value_bits) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
                     visitor.visit_nanbox_u64_slot(value_bits);
                 }

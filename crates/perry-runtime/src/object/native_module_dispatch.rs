@@ -270,6 +270,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // #3687: cluster default-import method calls (`cluster.fork()`,
         // `cluster.emit(...)`) dispatch against the base `cluster` arms.
         "cluster.default" => ("cluster", false),
+        // #6563: `(await import("node-pty")).default.spawn(...)` — the CJS
+        // interop shape esbuild-bundled consumers produce.
+        "node-pty.default" => ("node-pty", false),
         "os.default" => ("os", false),
         "path.default" => ("path", false),
         "path.posix.default" => ("path.posix", false),
@@ -311,15 +314,16 @@ mod dispatch_v_z;
 
 pub(crate) use dispatch_a_c::{
     nm_dispatch_assert, nm_dispatch_async_hooks, nm_dispatch_bigint, nm_dispatch_buffer,
-    nm_dispatch_child_process, nm_dispatch_cluster, nm_dispatch_console, nm_dispatch_crypto,
+    nm_dispatch_bun, nm_dispatch_child_process, nm_dispatch_cluster, nm_dispatch_console,
+    nm_dispatch_crypto,
 };
 pub(crate) use dispatch_d_i::{
     nm_dispatch_dgram, nm_dispatch_dns, nm_dispatch_domain, nm_dispatch_events, nm_dispatch_fs,
     nm_dispatch_http, nm_dispatch_inspector,
 };
 pub(crate) use dispatch_m_p::{
-    nm_dispatch_module, nm_dispatch_net, nm_dispatch_os, nm_dispatch_path, nm_dispatch_perf,
-    nm_dispatch_process,
+    nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty, nm_dispatch_os, nm_dispatch_path,
+    nm_dispatch_perf, nm_dispatch_process,
 };
 pub(crate) use dispatch_q_u::{
     nm_dispatch_punycode, nm_dispatch_querystring, nm_dispatch_readline, nm_dispatch_repl,

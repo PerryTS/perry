@@ -2323,4 +2323,285 @@ object PerryBridge {
 
     @JvmStatic
     external fun nativeMenuItemSelected(menuHandle: Long, index: Int)
+
+    // =====================================================================
+    // Notifications (issues #95/#96/#97) — local + scheduled notifications.
+    //
+    // These static methods are invoked over JNI from
+    // perry-ui-android/src/system.rs; the Kotlin signatures must keep
+    // matching the JNI descriptors used there exactly:
+    //   sendNotification                (Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)V
+    //   cancelNotification              (Landroid/app/Activity;Ljava/lang/String;)V
+    //   registerForRemoteNotifications  (Landroid/app/Activity;)V
+    //   scheduleInterval                (Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;DZ)V
+    //   scheduleCalendar                (Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;D)V
+    // =====================================================================
+
+    private const val NOTIFICATION_TAG = "PerryNotification"
+
+    /** Channel every Perry notification posts to (required since API 26). */
+    private const val NOTIFICATION_CHANNEL_ID = "perry_default"
+
+    /**
+     * Identifier used by `notificationSend` (the TS surface passes no id for
+     * plain sends). Matches the fixed "perry_notification" request identifier
+     * the Apple implementations use, so
+     * `notificationCancel("perry_notification")` behaves the same on both
+     * platforms.
+     */
+    private const val DEFAULT_NOTIFICATION_ID = "perry_notification"
+
+    private fun ensureNotificationChannel(context: Context) {
+        if (android.os.Build.VERSION.SDK_INT < 26) return
+        val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE)
+            as android.app.NotificationManager
+        if (mgr.getNotificationChannel(NOTIFICATION_CHANNEL_ID) == null) {
+            mgr.createNotificationChannel(
+                android.app.NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    "Notifications",
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+    }
+
+    /**
+     * The template ships no launcher icon of its own (the manifest has no
+     * `android:icon`), so fall back to a system drawable when
+     * `applicationInfo.icon` is unset — the system rejects notifications
+     * without a valid small icon.
+     */
+    private fun notificationSmallIcon(context: Context): Int {
+        val appIcon = context.applicationInfo.icon
+        return if (appIcon != 0) appIcon else android.R.drawable.ic_dialog_info
+    }
+
+    /** True when we may post notifications (POST_NOTIFICATIONS on API 33+). */
+    private fun canPostNotifications(context: Context): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 33) return true
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Build + post one notification. Shared by `sendNotification` (immediate)
+     * and `PerryNotificationReceiver` (AlarmManager-scheduled fire, so this
+     * must work from a receiver context with `PerryBridge.init` never run).
+     * `id` becomes the notification *tag*, which is what lets
+     * `cancelNotification` key the shade entry by the same string id.
+     */
+    fun postNotification(context: Context, id: String, title: String, body: String) {
+        if (!canPostNotifications(context)) {
+            Log.w(
+                NOTIFICATION_TAG,
+                "notification '$id' dropped: POST_NOTIFICATIONS not granted (Android 13+). " +
+                    "PerryActivity requests it at launch; the user denied it."
+            )
+            return
+        }
+        ensureNotificationChannel(context)
+
+        // Tapping the banner must launch the Activity directly — apps
+        // targeting API 31+ may not start an activity from a
+        // receiver/service reached via a notification tap ("trampoline"
+        // block), so the tap PendingIntent points straight at
+        // PerryActivity, which forwards the id extra to
+        // nativeNotificationTap (issue #97). No data URI here: PerryActivity
+        // forwards `intent.data` to the deep-link callbacks (#583), and a
+        // synthetic URI would fire those spuriously. Distinct ids get
+        // distinct PendingIntents via the request code instead (extras
+        // don't participate in PendingIntent matching).
+        val tapIntent = Intent(context, PerryActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(PerryNotificationReceiver.EXTRA_ID, id)
+        }
+        val tapPending = android.app.PendingIntent.getActivity(
+            context,
+            id.hashCode(),
+            tapIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification =
+            androidx.core.app.NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(notificationSmallIcon(context))
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setContentIntent(tapPending)
+                .build()
+        try {
+            androidx.core.app.NotificationManagerCompat.from(context).notify(id, 0, notification)
+        } catch (e: SecurityException) {
+            // Permission revoked between the check above and the call.
+            Log.w(NOTIFICATION_TAG, "notify('$id') failed: ${e.message}")
+        }
+    }
+
+    /** JNI: `notificationSend(title, body)` — post immediately. */
+    @JvmStatic
+    fun sendNotification(activity: Activity, title: String, body: String) {
+        postNotification(activity, DEFAULT_NOTIFICATION_ID, title, body)
+    }
+
+    /**
+     * Build the AlarmManager PendingIntent for a scheduled notification id.
+     * The `perry-notification://fire/<id>` data URI is what makes each id
+     * its own PendingIntent (extras are ignored by `Intent.filterEquals`),
+     * so schedule/cancel pairs resolve to the same alarm.
+     */
+    private fun scheduledFirePendingIntent(
+        context: Context,
+        id: String,
+        title: String?,
+        body: String?,
+        flags: Int,
+    ): android.app.PendingIntent? {
+        val intent = Intent(context, PerryNotificationReceiver::class.java).apply {
+            action = PerryNotificationReceiver.ACTION_FIRE
+            data = Uri.parse("perry-notification://fire/" + Uri.encode(id))
+            putExtra(PerryNotificationReceiver.EXTRA_ID, id)
+            if (title != null) putExtra(PerryNotificationReceiver.EXTRA_TITLE, title)
+            if (body != null) putExtra(PerryNotificationReceiver.EXTRA_BODY, body)
+        }
+        return android.app.PendingIntent.getBroadcast(
+            context, 0, intent, flags or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    /**
+     * JNI: schedule a fire-after-N-seconds notification (issue #96).
+     * Inexact timing: exact alarms need the SCHEDULE_EXACT_ALARM special
+     * permission on API 31+, which a notification banner doesn't justify.
+     * Repeating intervals under a minute are clamped to 60s by the OS.
+     */
+    @JvmStatic
+    fun scheduleInterval(
+        activity: Activity,
+        id: String,
+        title: String,
+        body: String,
+        seconds: Double,
+        repeats: Boolean,
+    ) {
+        val alarm = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val delayMs = (seconds * 1000.0).toLong().coerceAtLeast(0L)
+        val triggerAt = System.currentTimeMillis() + delayMs
+        val pending = scheduledFirePendingIntent(
+            activity, id, title, body, android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        ) ?: return
+        if (repeats) {
+            alarm.setRepeating(android.app.AlarmManager.RTC_WAKEUP, triggerAt, delayMs, pending)
+        } else {
+            alarm.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAt, pending)
+        }
+    }
+
+    /** JNI: schedule a fire-at-wallclock-ms notification (issue #96). */
+    @JvmStatic
+    fun scheduleCalendar(
+        activity: Activity,
+        id: String,
+        title: String,
+        body: String,
+        timestampMs: Double,
+    ) {
+        val alarm = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val pending = scheduledFirePendingIntent(
+            activity, id, title, body, android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        ) ?: return
+        alarm.setAndAllowWhileIdle(
+            android.app.AlarmManager.RTC_WAKEUP, timestampMs.toLong(), pending
+        )
+    }
+
+    /** JNI: cancel a scheduled and/or already-delivered notification by id. */
+    @JvmStatic
+    fun cancelNotification(activity: Activity, id: String) {
+        // Cancel the pending AlarmManager schedule, if one exists.
+        val alarm = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val pending = scheduledFirePendingIntent(
+            activity, id, null, null, android.app.PendingIntent.FLAG_NO_CREATE
+        )
+        if (pending != null) {
+            alarm.cancel(pending)
+            pending.cancel()
+        }
+        // Remove the delivered notification (tag = id) from the shade.
+        androidx.core.app.NotificationManagerCompat.from(activity).cancel(id, 0)
+    }
+
+    /**
+     * JNI: `notificationRegisterRemote` (issue #95). Real FCM registration
+     * needs app-level Firebase wiring the scaffold intentionally does not
+     * ship: a `google-services.json`, the `com.google.gms.google-services`
+     * Gradle plugin, the `com.google.firebase:firebase-messaging`
+     * dependency, and a `FirebaseMessagingService` subclass. Until the app
+     * adds those, this logs exactly what's missing instead of failing the
+     * JNI lookup silently.
+     *
+     * When you do add Firebase to the generated project, forward the token
+     * and payloads to the native side from your service:
+     *   onNewToken(token)      → PerryBridge.nativeNotificationToken(token)
+     *   onMessageReceived(msg) → PerryBridge.nativeNotificationReceive(json)
+     *                            and/or nativeNotificationBackgroundReceive(json)
+     */
+    @JvmStatic
+    fun registerForRemoteNotifications(activity: Activity) {
+        Log.w(
+            NOTIFICATION_TAG,
+            "registerForRemoteNotifications: this app has no Firebase Messaging. Add " +
+                "google-services.json, the google-services Gradle plugin and " +
+                "com.google.firebase:firebase-messaging, then forward onNewToken / " +
+                "onMessageReceived to PerryBridge.nativeNotificationToken / " +
+                "nativeNotificationReceive. See https://github.com/PerryTS/perry/issues/95"
+        )
+    }
+
+    /**
+     * Forward a notification-tap Intent (built by `postNotification`) to the
+     * native tap callback. Called from PerryActivity.onCreate/onNewIntent.
+     * Returns true when a tap id was present and dispatched.
+     */
+    @JvmStatic
+    fun handleNotificationTapIntent(intent: Intent?): Boolean {
+        val id = intent?.getStringExtra(PerryNotificationReceiver.EXTRA_ID) ?: return false
+        return try {
+            nativeNotificationTap(id)
+            true
+        } catch (_: UnsatisfiedLinkError) {
+            // Cold start: the tap arrived before the native library loaded,
+            // so no JS callback can be registered yet. Same v1 limitation as
+            // FCM cold delivery (#98).
+            Log.w(
+                NOTIFICATION_TAG,
+                "notification tap for '$id' before native lib load; onTap callback skipped"
+            )
+            false
+        }
+    }
+
+    // Notification native callbacks (issues #95/#97/#98) — exported by
+    // perry-ui-android/src/system.rs as
+    // Java_com_perry_app_PerryBridge_nativeNotification{Tap,Token,Receive,BackgroundReceive}.
+
+    /** User tapped a delivered notification; `id` is the notification id. */
+    @JvmStatic
+    external fun nativeNotificationTap(id: String)
+
+    /** FCM registration token (initial fetch + rotations). */
+    @JvmStatic
+    external fun nativeNotificationToken(token: String)
+
+    /** Foreground push payload as a JSON string. */
+    @JvmStatic
+    external fun nativeNotificationReceive(payloadJson: String)
+
+    /** Background push payload as a JSON string. */
+    @JvmStatic
+    external fun nativeNotificationBackgroundReceive(payloadJson: String)
 }

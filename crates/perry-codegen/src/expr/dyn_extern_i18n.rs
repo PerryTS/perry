@@ -333,6 +333,117 @@ fn emit_i18n_template(
     Ok(nanbox_string_inline(ctx.block(), &final_handle))
 }
 
+/// Resolve every locale's template for one i18n string-table row. An empty
+/// translation cell means the locale file is missing this key — fall back to
+/// `fallback_text` (the base key's source text; for plural-form rows this is
+/// the base key WITHOUT the `.one`/`.other` suffix, so an untranslated form
+/// never leaks the suffixed registry key to the user).
+///
+/// Returns `(templates, default_idx, locale_codes)`; a `(vec![fallback],
+/// 0, vec![])` triple when i18n isn't configured for this build.
+fn resolve_i18n_templates(
+    i18n: &Option<I18nLowerCtx>,
+    fallback_text: &str,
+    string_idx: u32,
+) -> (Vec<String>, usize, Vec<String>) {
+    let (mut templates, default_idx, locale_codes): (Vec<String>, usize, Vec<String>) =
+        match i18n.as_ref() {
+            Some(t) if t.key_count > 0 => {
+                let locale_count = t.translations.len() / t.key_count;
+                let rows = (0..locale_count)
+                    .map(
+                        |li| match t.translations.get(li * t.key_count + string_idx as usize) {
+                            Some(s) if !s.is_empty() => s.clone(),
+                            _ => fallback_text.to_string(),
+                        },
+                    )
+                    .collect();
+                (rows, t.default_locale_idx, t.locale_codes.clone())
+            }
+            _ => (Vec::new(), 0, Vec::new()),
+        };
+    if templates.is_empty() {
+        templates.push(fallback_text.to_string());
+    }
+    let default_idx = default_idx.min(templates.len() - 1);
+    (templates, default_idx, locale_codes)
+}
+
+/// Emit the runtime locale-row index for this site as an i32 SSA value.
+/// `perry_i18n_locale_index_for` lazily detects the system locale on first
+/// call (the entry `main` prelude's `perry_i18n_init` normally resolved it
+/// already — then this is a cached atomic load), matches it against the
+/// configured locale list (one interned "en,de,fr" literal), and returns the
+/// row index; an explicit `perry_i18n_set_locale_index` always wins.
+fn emit_locale_index(ctx: &mut FnCtx<'_>, locale_codes: &[String], default_idx: usize) -> String {
+    let locales_joined = locale_codes.join(",");
+    let locales_key_idx = ctx.strings.intern(&locales_joined);
+    let locales_handle_global = format!("@{}", ctx.strings.entry(locales_key_idx).handle_global);
+    let blk = ctx.block();
+    let locales_box = blk.load(DOUBLE, &locales_handle_global);
+    let locales_handle = unbox_to_i64(blk, &locales_box);
+    blk.call(
+        I32,
+        "perry_i18n_locale_index_for",
+        &[(I64, &locales_handle), (I32, &default_idx.to_string())],
+    )
+}
+
+/// Emit the value for one resolved i18n row (a `templates` vector in locale
+/// order): the compile-time fast path when every locale's template is
+/// identical (or the build is single-locale / lacks a runtime locale index),
+/// otherwise a branch chain on `locale_idx_val` with the default locale's row
+/// as the fallthrough.
+fn emit_i18n_row_value(
+    ctx: &mut FnCtx<'_>,
+    templates: &[String],
+    default_idx: usize,
+    locale_idx_val: Option<&str>,
+    lowered_params: &std::collections::HashMap<String, String>,
+) -> Result<String> {
+    let all_same = templates.iter().all(|t| t == &templates[default_idx]);
+    let locale_idx = match locale_idx_val {
+        Some(v) if !all_same => v,
+        _ => return emit_i18n_template(ctx, &templates[default_idx], lowered_params),
+    };
+
+    let result_slot = ctx.block().alloca(DOUBLE);
+    let join_block_idx = ctx.new_block("i18n_locale_join");
+
+    for (li, template) in templates.iter().enumerate() {
+        if li == default_idx {
+            continue; // default row is the fallthrough below
+        }
+        let blk = ctx.block();
+        let cond = blk.icmp_eq(I32, locale_idx, &li.to_string());
+        let match_block_idx = ctx.new_block(&format!("i18n_locale_{}", li));
+        let next_block_idx = ctx.new_block(&format!("i18n_locale_next_{}", li));
+        let match_label = ctx.block_label(match_block_idx);
+        let next_label = ctx.block_label(next_block_idx);
+        ctx.block().cond_br(&cond, &match_label, &next_label);
+
+        ctx.current_block = match_block_idx;
+        let val = emit_i18n_template(ctx, template, lowered_params)?;
+        let join_label = ctx.block_label(join_block_idx);
+        let blk = ctx.block();
+        blk.store(DOUBLE, &val, &result_slot);
+        blk.br(&join_label);
+
+        ctx.current_block = next_block_idx;
+    }
+
+    // Fallthrough: the default locale's row (also covers a stale
+    // out-of-range index from perry_i18n_set_locale_index).
+    let val = emit_i18n_template(ctx, &templates[default_idx], lowered_params)?;
+    let join_label = ctx.block_label(join_block_idx);
+    let blk = ctx.block();
+    blk.store(DOUBLE, &val, &result_slot);
+    blk.br(&join_label);
+
+    ctx.current_block = join_block_idx;
+    Ok(ctx.block().load(DOUBLE, &result_slot))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::WorkerNew {
@@ -990,47 +1101,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //        runtime. Fragments are interned via the StringPool so
         //        identical templates share storage.
         //
-        // Plurals: `plural_forms` and `plural_param` are deliberately
-        // ignored in this first cut. The lowering uses the canonical
-        // `string_idx` (which is what the singular/non-plural form
-        // points at). CLDR plural rule selection at runtime is a
-        // followup; in the meantime plural-tagged keys still produce a
-        // working translation, just not the count-aware variant.
+        // Plurals: when the key carries `.zero`/`.one`/…/`.other` variants
+        // in the locale files (registered by the perry-transform pass as
+        // `plural_forms: (category, string_idx)` rows) AND the call site
+        // passes the detected plural parameter, the lowering selects the
+        // CLDR plural category at runtime via `perry_i18n_plural_category`
+        // and branches to the matching form's row — each form then runs the
+        // same per-locale selection as a non-plural key. Sites without a
+        // count param (or keys without plural variants) use the canonical
+        // `string_idx` row directly.
         Expr::I18nString {
             key,
             string_idx,
             params,
-            ..
+            plural_forms,
+            plural_param,
         } => {
-            // Resolve every locale's template for this key from the flat
-            // 2D table. An empty translation cell means the locale file
-            // is missing this key — fall back to the source key so the
-            // user at least sees the English text instead of `""`.
-            let (mut templates, default_idx, locale_codes): (Vec<String>, usize, Vec<String>) =
-                match ctx.i18n.as_ref() {
-                    Some(t) if t.key_count > 0 => {
-                        let locale_count = t.translations.len() / t.key_count;
-                        let rows = (0..locale_count)
-                            .map(|li| {
-                                match t.translations.get(li * t.key_count + *string_idx as usize) {
-                                    Some(s) if !s.is_empty() => s.clone(),
-                                    _ => key.clone(),
-                                }
-                            })
-                            .collect();
-                        (rows, t.default_locale_idx, t.locale_codes.clone())
-                    }
-                    _ => (Vec::new(), 0, Vec::new()),
-                };
-            if templates.is_empty() {
-                templates.push(key.clone());
-            }
-            let default_idx = default_idx.min(templates.len() - 1);
+            // Resolve every locale's template for the base row (and later,
+            // each plural form's row) from the flat 2D table.
+            let (templates, default_idx, locale_codes) =
+                resolve_i18n_templates(ctx.i18n, key, *string_idx);
 
             // Lower each param exactly once, up front, so closures and
             // side effects in arg expressions fire in source order — no
-            // matter which locale branch runs (or whether the template
-            // references the param at all).
+            // matter which locale/plural branch runs (or whether the
+            // template references the param at all).
             let mut lowered_params: std::collections::HashMap<String, String> =
                 std::collections::HashMap::with_capacity(params.len());
             for (name, v) in params {
@@ -1038,53 +1133,79 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered_params.insert(name.clone(), v_box);
             }
 
-            // Compile-time fast path: single-locale build, or a key whose
-            // resolved template is identical in every locale (incl. the
-            // untranslated-key fallback) — no runtime selection needed.
-            let all_same = templates.iter().all(|t| t == &templates[default_idx]);
-            if all_same || locale_codes.len() != templates.len() {
-                return emit_i18n_template(ctx, &templates[default_idx], &lowered_params);
-            }
+            // A runtime locale index is only meaningful when the table
+            // metadata is consistent and there is more than one locale.
+            let multi_locale = locale_codes.len() == templates.len() && templates.len() > 1;
 
-            // Multi-locale: select the translation row at RUNTIME.
-            // `perry_i18n_locale_index_for` lazily detects the system
-            // locale on first call (NSBundle/CFLocale on Apple, Win32 /
-            // Android props / env vars elsewhere), matches it against the
-            // configured locale list (one interned "en,de,fr" literal),
-            // and caches the row index — an explicit
-            // `perry_i18n_set_locale_index` beats it. Then branch per
-            // locale and emit that row's template plan; the default
-            // locale's row is the fallthrough.
-            let locales_joined = locale_codes.join(",");
-            let locales_key_idx = ctx.strings.intern(&locales_joined);
-            let locales_handle_global =
-                format!("@{}", ctx.strings.entry(locales_key_idx).handle_global);
-            let blk = ctx.block();
-            let locales_box = blk.load(DOUBLE, &locales_handle_global);
-            let locales_handle = unbox_to_i64(blk, &locales_box);
-            let locale_idx = blk.call(
+            // Plural selection applies when the key has plural variants and
+            // this site actually passes the plural parameter.
+            let count_val = plural_param
+                .as_ref()
+                .and_then(|p| lowered_params.get(p))
+                .cloned()
+                .filter(|_| !plural_forms.is_empty());
+
+            let Some(count_val) = count_val else {
+                // Non-plural path: base row only.
+                let locale_idx = if multi_locale {
+                    Some(emit_locale_index(ctx, &locale_codes, default_idx))
+                } else {
+                    None
+                };
+                return emit_i18n_row_value(
+                    ctx,
+                    &templates,
+                    default_idx,
+                    locale_idx.as_deref(),
+                    &lowered_params,
+                );
+            };
+
+            // Plural path. The locale index feeds both the CLDR category
+            // lookup and each form's per-locale template selection.
+            let locale_idx = if multi_locale {
+                emit_locale_index(ctx, &locale_codes, default_idx)
+            } else {
+                // Single-locale build: row 0 is the only (= default) row.
+                default_idx.to_string()
+            };
+            let category = ctx.block().call(
                 I32,
-                "perry_i18n_locale_index_for",
-                &[(I64, &locales_handle), (I32, &default_idx.to_string())],
+                "perry_i18n_plural_category",
+                &[(I32, &locale_idx), (DOUBLE, &count_val)],
             );
 
-            let result_slot = ctx.block().alloca(DOUBLE);
-            let join_block_idx = ctx.new_block("i18n_locale_join");
+            // `other` (category 5) is the fallthrough when present; a key
+            // with no `.other` variant falls back to the base row.
+            let fallback_row: u32 = plural_forms
+                .iter()
+                .find(|(cat, _)| *cat == 5)
+                .map(|(_, idx)| *idx)
+                .unwrap_or(*string_idx);
 
-            for li in 0..templates.len() {
-                if li == default_idx {
-                    continue; // default row is the fallthrough below
-                }
+            let result_slot = ctx.block().alloca(DOUBLE);
+            let join_block_idx = ctx.new_block("i18n_plural_join");
+
+            for (cat, form_idx) in plural_forms.iter().filter(|(cat, _)| *cat != 5) {
                 let blk = ctx.block();
-                let cond = blk.icmp_eq(I32, &locale_idx, &li.to_string());
-                let match_block_idx = ctx.new_block(&format!("i18n_locale_{}", li));
-                let next_block_idx = ctx.new_block(&format!("i18n_locale_next_{}", li));
+                let cond = blk.icmp_eq(I32, &category, &cat.to_string());
+                let match_block_idx = ctx.new_block(&format!("i18n_plural_{}", cat));
+                let next_block_idx = ctx.new_block(&format!("i18n_plural_next_{}", cat));
                 let match_label = ctx.block_label(match_block_idx);
                 let next_label = ctx.block_label(next_block_idx);
                 ctx.block().cond_br(&cond, &match_label, &next_label);
 
                 ctx.current_block = match_block_idx;
-                let val = emit_i18n_template(ctx, &templates[li], &lowered_params)?;
+                let (form_templates, form_default_idx, _) =
+                    resolve_i18n_templates(ctx.i18n, key, *form_idx);
+                let locale_idx_ref = multi_locale.then_some(locale_idx.as_str());
+                let val = emit_i18n_row_value(
+                    ctx,
+                    &form_templates,
+                    form_default_idx,
+                    locale_idx_ref,
+                    &lowered_params,
+                )?;
                 let join_label = ctx.block_label(join_block_idx);
                 let blk = ctx.block();
                 blk.store(DOUBLE, &val, &result_slot);
@@ -1093,9 +1214,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.current_block = next_block_idx;
             }
 
-            // Fallthrough: the default locale's row (also covers a stale
-            // out-of-range index from perry_i18n_set_locale_index).
-            let val = emit_i18n_template(ctx, &templates[default_idx], &lowered_params)?;
+            // Fallthrough: the `other` form (or the base row).
+            let (fb_templates, fb_default_idx, _) =
+                resolve_i18n_templates(ctx.i18n, key, fallback_row);
+            let locale_idx_ref = multi_locale.then_some(locale_idx.as_str());
+            let val = emit_i18n_row_value(
+                ctx,
+                &fb_templates,
+                fb_default_idx,
+                locale_idx_ref,
+                &lowered_params,
+            )?;
             let join_label = ctx.block_label(join_block_idx);
             let blk = ctx.block();
             blk.store(DOUBLE, &val, &result_slot);

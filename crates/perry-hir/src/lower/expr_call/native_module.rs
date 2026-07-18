@@ -1357,6 +1357,7 @@ pub(super) fn try_native_module_methods(
                                                 args: new_args,
                                                 type_args: vec![],
                                                 byte_offset: 0,
+                                                cap_args_appended: 0,
                                             }));
                                         }
                                     }
