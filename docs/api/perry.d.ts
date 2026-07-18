@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1955 entries across 115 modules
+// Coverage: 1967 entries across 116 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -261,6 +261,33 @@ declare module "buffer" {
   export function resolveObjectURL(...args: any[]): any;
   /** stdlib */
   export function transcode(...args: any[]): any;
+}
+
+declare module "bun:ffi" {
+  /** stdlib */
+  export const FFIType: any;
+  /** stdlib */
+  export const suffix: any;
+  /** stdlib */
+  export function CFunction(...args: any[]): any;
+  /** stdlib */
+  export function CString(...args: any[]): any;
+  /** stdlib */
+  export function JSCallback(...args: any[]): any;
+  /** stdlib */
+  export function dlopen(...args: any[]): any;
+  /** stdlib */
+  export function linkSymbols(...args: any[]): any;
+  /** stdlib */
+  export function ptr(...args: any[]): any;
+  /** stdlib */
+  export function read(...args: any[]): any;
+  /** stdlib */
+  export function toArrayBuffer(...args: any[]): any;
+  /** stdlib */
+  export function toBuffer(...args: any[]): any;
+  /** stdlib */
+  export function viewSource(...args: any[]): any;
 }
 
 declare module "cheerio" {

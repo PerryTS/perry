@@ -207,6 +207,27 @@ pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_n
     }
 }
 
+/// bun:ffi (#6562) — dlopen / ptr / CString / FFIType / suffix. Method
+/// resolution lives in `crate::bun_ffi::dispatch`; this bucket just forwards
+/// the raw NaN-boxed args.
+#[allow(unused_variables, unused_mut, unused_unsafe, clippy::all)]
+pub(crate) unsafe fn nm_dispatch_bun_ffi(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
+    let NmCtx {
+        obj,
+        args_ptr,
+        args_len,
+        assert_skip_prototype,
+    } = *ctx;
+    let _ = (obj, assert_skip_prototype);
+    if module_name != "bun:ffi" {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    match crate::bun_ffi::dispatch(method_name, args_ptr, args_len) {
+        Some(v) => v,
+        None => f64::from_bits(JSValue::undefined().bits()),
+    }
+}
+
 #[allow(
     unused_variables,
     unused_mut,

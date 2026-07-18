@@ -203,6 +203,24 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("better-sqlite3", "pluck", true, None),
     method("better-sqlite3", "columns", true, None),
     method("better-sqlite3", "transaction", true, None),
+    // bun:ffi (#6562) — stage-1 surface. `FFIType` and `suffix` are
+    // constants; symbol-table call stubs live on the object `dlopen`
+    // returns, so the module surface itself is small. The stage-2/3
+    // exports (toArrayBuffer / JSCallback / linkSymbols / CFunction /
+    // viewSource / read / toBuffer) are declared and throw a descriptive
+    // ERR_NOT_IMPLEMENTED at runtime.
+    method("bun:ffi", "dlopen", false, None),
+    method("bun:ffi", "ptr", false, None),
+    method("bun:ffi", "CString", false, None),
+    property("bun:ffi", "FFIType"),
+    property("bun:ffi", "suffix"),
+    method("bun:ffi", "toArrayBuffer", false, None),
+    method("bun:ffi", "toBuffer", false, None),
+    method("bun:ffi", "JSCallback", false, None),
+    method("bun:ffi", "CFunction", false, None),
+    method("bun:ffi", "linkSymbols", false, None),
+    method("bun:ffi", "viewSource", false, None),
+    method("bun:ffi", "read", false, None),
     class("sqlite", "DatabaseSync"),
     class("sqlite", "Session"),
     class("sqlite", "SQLTagStore"),

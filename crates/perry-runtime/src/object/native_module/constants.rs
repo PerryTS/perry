@@ -150,6 +150,16 @@ pub(crate) unsafe fn get_native_module_constant(
         ));
     }
 
+    // bun:ffi (#6562): `FFIType` is a plain enum object (cached, GC-rooted
+    // in `bun_ffi::types`); `suffix` is the platform dylib suffix string.
+    if module_name == "bun:ffi" {
+        match property {
+            "FFIType" => return Some(crate::bun_ffi::types::ffi_type_object_value()),
+            "suffix" => return Some(crate::bun_ffi::types::suffix_value()),
+            _ => {}
+        }
+    }
+
     let o_nofollow: f64 = {
         #[cfg(target_os = "macos")]
         {

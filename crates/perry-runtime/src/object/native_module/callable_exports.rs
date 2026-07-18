@@ -317,6 +317,12 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
 
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // bun:ffi (#6562).
+        ("bun:ffi", "dlopen") => Some(2),
+        ("bun:ffi", "ptr" | "CString" | "JSCallback" | "CFunction" | "linkSymbols") => Some(1),
+        ("bun:ffi", "toArrayBuffer" | "toBuffer") => Some(3),
+        ("bun:ffi", "viewSource") => Some(2),
+        ("bun:ffi", "read") => Some(0),
         // #3687: node:cluster — module-method `.length` matches Node.
         ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
         ("cluster", "emit") => Some(1),

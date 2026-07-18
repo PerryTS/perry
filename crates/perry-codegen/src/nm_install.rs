@@ -13,6 +13,9 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "async_hooks" => Some("js_nm_install_async_hooks"),
         "bigint" => Some("js_nm_install_bigint"),
         "buffer" | "buffer.Buffer" => Some("js_nm_install_buffer"),
+        // #6562: bun:ffi keeps its scheme prefix (only `node:` is stripped
+        // above).
+        "bun:ffi" => Some("js_nm_install_bun_ffi"),
         "child_process" => Some("js_nm_install_child_process"),
         "cluster" => Some("js_nm_install_cluster"),
         "console" => Some("js_nm_install_console"),
@@ -67,6 +70,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_async_hooks",
     "js_nm_install_bigint",
     "js_nm_install_buffer",
+    "js_nm_install_bun_ffi",
     "js_nm_install_child_process",
     "js_nm_install_cluster",
     "js_nm_install_console",

@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2830 entries across 117 modules.
+Total: 2842 entries across 118 modules.
 
 ## Modules
 
@@ -17,6 +17,7 @@ Total: 2830 entries across 117 modules.
 - [`better-sqlite3`](#better-sqlite3)
 - [`bignumber.js`](#bignumber-js)
 - [`buffer`](#buffer)
+- [`bun:ffi`](#bun-ffi)
 - [`cheerio`](#cheerio)
 - [`child_process`](#child-process)
 - [`cluster`](#cluster)
@@ -326,6 +327,26 @@ Total: 2830 entries across 117 modules.
 - `constants`
 - `kMaxLength`
 - `kStringMaxLength`
+
+## `bun:ffi`
+
+### Methods
+
+- `CFunction` — module
+- `CString` — module
+- `JSCallback` — module
+- `dlopen` — module
+- `linkSymbols` — module
+- `ptr` — module
+- `read` — module
+- `toArrayBuffer` — module
+- `toBuffer` — module
+- `viewSource` — module
+
+### Properties
+
+- `FFIType`
+- `suffix`
 
 ## `cheerio`
 

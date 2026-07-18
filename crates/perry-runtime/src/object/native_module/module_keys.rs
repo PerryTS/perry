@@ -1672,6 +1672,23 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"default",
         ]),
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
+        // bun:ffi (#6562) — stage-1 surface plus the declared-but-throwing
+        // exports (their reads resolve to callables that raise the stage-1
+        // error).
+        "bun:ffi" => Some(&[
+            b"dlopen",
+            b"FFIType",
+            b"ptr",
+            b"CString",
+            b"suffix",
+            b"toArrayBuffer",
+            b"toBuffer",
+            b"JSCallback",
+            b"CFunction",
+            b"linkSymbols",
+            b"viewSource",
+            b"read",
+        ]),
         "sea" => Some(SEA_NAMESPACE_KEYS),
         "sea.default" => Some(SEA_DEFAULT_KEYS),
         "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
