@@ -684,6 +684,126 @@ pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifySt
     stats
 }
 
+/// Non-fatal mark-invariant probe (`PERRY_GC_VERIFY_MARK`): walks the marked
+/// heap and, instead of panicking, logs the first marked→UNMARKED-child edge
+/// with parent/child obj_types. Lets the bundle be driven to reproduce a
+/// swept-live-child (freed Map value) without aborting. Diagnostic only.
+pub(super) fn verify_marked_heap_report_nonfatal(phase: &str) {
+    let mut stats = MarkInvariantVerifyStats::default();
+    crate::arena::arena_walk_objects(|hp| unsafe {
+        verify_marked_object_child_marks(&mut stats, hp as *mut GcHeader);
+    });
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &header in s.objects.iter() {
+            unsafe {
+                verify_marked_object_child_marks(&mut stats, header);
+            }
+        }
+    });
+    let tn = |t: u8| gc_type_info(t).map_or("?", |i| i.name);
+    if let Some(m) = stats.first_missing {
+        let (ptype, ctype) = unsafe {
+            let ph = (m.parent as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            let ch = (m.child as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            ((*ph).obj_type, (*ch).obj_type)
+        };
+        eprintln!(
+            "[gc-mark-verify:{}] marked->UNMARKED edges={} checked_marked={} checked_edges={} | first parent=0x{:x} ptype={}({}) slot=0x{:x} child=0x{:x} ctype={}({})",
+            phase,
+            stats.missing_edges,
+            stats.checked_marked_objects,
+            stats.checked_edges,
+            m.parent,
+            tn(ptype),
+            ptype,
+            m.slot,
+            m.child,
+            tn(ctype),
+            ctype,
+        );
+    } else {
+        eprintln!(
+            "[gc-mark-verify:{}] OK (no marked->unmarked) checked_marked={} checked_edges={}",
+            phase, stats.checked_marked_objects, stats.checked_edges,
+        );
+    }
+}
+
+/// Non-fatal minor-sweep probe (`PERRY_GC_VERIFY_MARK`): at the minor's
+/// AtomicFinalize→Sweep boundary (marks final, nothing freed yet), walk every
+/// OLD-gen parent (implicitly live in a minor) and report any child slot that
+/// points at a sweep-eligible (young/malloc) object which is UNMARKED — i.e.
+/// about to be freed while its parent survives. This is the direct signature
+/// of a dropped remembered-set edge. Logs a per-(parent,child)-type histogram
+/// plus the first edge; diagnostic only.
+pub(super) fn verify_minor_unmarked_young_children_report(phase: &str) {
+    let mut missing = 0usize;
+    let mut checked_parents = 0usize;
+    let mut checked_edges = 0usize;
+    let mut first: Option<(usize, usize, usize, u8, u8)> = None;
+    let mut hist: std::collections::HashMap<(u8, u8), usize> = std::collections::HashMap::new();
+    let mut visit_parent = |header: *mut GcHeader| unsafe {
+        if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            return;
+        }
+        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        if !matches!(
+            crate::arena::classify_heap_generation(user),
+            crate::arena::HeapGeneration::Old
+        ) {
+            return;
+        }
+        checked_parents += 1;
+        visit_gc_rewrite_slots(header, |slot| unsafe {
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+                return;
+            }
+            slot.record_layout_read();
+            let child_addr = decode_heap_addr(*slot.slot);
+            if child_addr == 0 || !crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
+                return;
+            }
+            checked_edges += 1;
+            let ch = (child_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            if (*ch).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                missing += 1;
+                *hist
+                    .entry(((*header).obj_type, (*ch).obj_type))
+                    .or_insert(0) += 1;
+                if first.is_none() {
+                    first = Some((
+                        header as usize,
+                        slot.slot as usize,
+                        child_addr,
+                        (*header).obj_type,
+                        (*ch).obj_type,
+                    ));
+                }
+            }
+        });
+    };
+    crate::arena::old_arena_walk_objects(|hp| {
+        visit_parent(hp as *mut GcHeader);
+    });
+    let tn = |t: u8| gc_type_info(t).map_or("?", |i| i.name);
+    if let Some((p, s, c, pt, ct)) = first {
+        let mut hist_str = String::new();
+        for ((pt, ct), n) in &hist {
+            hist_str.push_str(&format!(" {}({})->{}({})={}", tn(*pt), pt, tn(*ct), ct, n));
+        }
+        eprintln!(
+            "[gc-mark-verify:{}] SWEEP-LIVE-CHILD edges={} parents={} young_edges={} | first parent=0x{:x} ptype={}({}) slot=0x{:x} child=0x{:x} ctype={}({}) | hist:{}",
+            phase, missing, checked_parents, checked_edges, p, tn(pt), pt, s, c, tn(ct), ct, hist_str,
+        );
+    } else {
+        eprintln!(
+            "[gc-mark-verify:{}] OK parents={} young_edges={}",
+            phase, checked_parents, checked_edges,
+        );
+    }
+}
+
 pub(super) unsafe fn verify_heap_object_fields(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
