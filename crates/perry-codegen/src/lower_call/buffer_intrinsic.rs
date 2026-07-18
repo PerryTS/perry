@@ -298,6 +298,25 @@ pub(crate) fn module_shadows_buffer_read_method(module: &perry_hir::Module) -> b
         if found {
             return true;
         }
+        // A shadow assignment can hide in any expression position of a class,
+        // not just member bodies: a dynamic `extends` expression, a field
+        // initializer or computed field key, or a computed member key. Field
+        // initializers in particular live in `fields[*].init` (emitted via
+        // `apply_field_initializers_recursive`), NOT the constructor body, so
+        // they need an explicit walk. (We do NOT match member *names* — a class
+        // method/field named `readUInt8` is a user-class member, never an own
+        // property on a `Buffer.alloc` local, so it can't shadow a folded read.)
+        if let Some(ext) = &class.extends_expr {
+            expr_shadows(ext, &mut found);
+        }
+        for f in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(key) = &f.key_expr {
+                expr_shadows(key, &mut found);
+            }
+            if let Some(init) = &f.init {
+                expr_shadows(init, &mut found);
+            }
+        }
         if let Some(ctor) = &class.constructor {
             scan_body(&ctor.body, &mut found);
         }
@@ -314,6 +333,7 @@ pub(crate) fn module_shadows_buffer_read_method(module: &perry_hir::Module) -> b
             scan_body(&s.body, &mut found);
         }
         for cm in &class.computed_members {
+            expr_shadows(&cm.key_expr, &mut found);
             scan_body(&cm.function.body, &mut found);
         }
     }
@@ -499,7 +519,7 @@ fn target_endian() -> BufferEndian {
 #[cfg(test)]
 mod shadow_scan_tests {
     use super::module_shadows_buffer_read_method;
-    use perry_hir::{Expr, Module, Stmt};
+    use perry_hir::{Class, ClassField, Expr, Module, Stmt};
 
     fn filler() -> Box<Expr> {
         Box::new(Expr::Integer(0))
@@ -507,14 +527,61 @@ mod shadow_scan_tests {
 
     /// `x[key] = v` (computed set with an explicit receiver — how
     /// `(b as any).readUInt8 = fn` and `b["readUInt8"] = fn` both lower).
-    fn put_value_set(key: &str) -> Stmt {
-        Stmt::Expr(Expr::PutValueSet {
+    fn put_value_set_expr(key: &str) -> Expr {
+        Expr::PutValueSet {
             target: filler(),
             key: Box::new(Expr::String(key.to_string())),
             value: filler(),
             receiver: filler(),
             strict: false,
-        })
+        }
+    }
+
+    fn put_value_set(key: &str) -> Stmt {
+        Stmt::Expr(put_value_set_expr(key))
+    }
+
+    /// A bare class carrying only the given instance fields — every other slot
+    /// empty. Used to prove the scan walks field *initializers*, not just member
+    /// bodies (field inits live in `fields[*].init`, emitted separately from the
+    /// constructor body).
+    fn class_with_fields(fields: Vec<ClassField>) -> Class {
+        Class {
+            id: 1,
+            name: "C".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields,
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+        }
+    }
+
+    fn field_with_init(name: &str, init: Expr) -> ClassField {
+        ClassField {
+            name: name.to_string(),
+            key_expr: None,
+            ty: perry_types::Type::Any,
+            init: Some(init),
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }
     }
 
     /// `x.prop = v` (dot set).
@@ -556,5 +623,30 @@ mod shadow_scan_tests {
     #[test]
     fn empty_module_does_not_shadow() {
         assert!(!module_shadows_buffer_read_method(&Module::new("t")));
+    }
+
+    #[test]
+    fn detects_shadow_in_class_field_initializer() {
+        // `class C { tag = ((buf as any).readDoubleLE = fn); }` — the shadow
+        // lives in `fields[*].init`, not the constructor body (#6405 review).
+        let mut m = Module::new("t");
+        m.classes.push(class_with_fields(vec![field_with_init(
+            "tag",
+            put_value_set_expr("readDoubleLE"),
+        )]));
+        assert!(module_shadows_buffer_read_method(&m));
+    }
+
+    #[test]
+    fn plain_class_field_does_not_shadow() {
+        // A field NAMED like a read method (`class C { readUInt8 = 0; }`) is a
+        // user-class member, not an own-prop assignment on a Buffer — it must
+        // NOT trip the scan.
+        let mut m = Module::new("t");
+        m.classes.push(class_with_fields(vec![field_with_init(
+            "readUInt8",
+            Expr::Integer(0),
+        )]));
+        assert!(!module_shadows_buffer_read_method(&m));
     }
 }

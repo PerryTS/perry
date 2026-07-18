@@ -29,6 +29,11 @@ console.log("loop-bytes:", buf[0], buf[1], buf[2], buf[3]);
 // a method value read through a dynamic key still binds (no own-prop shadow).
 console.log("method-typeof:", typeof (buf as any)["readUInt8"]);
 
-// a dynamic key that IS a canonical index still reads the byte.
+// a dynamic key that IS a canonical index still reads the byte — whether it
+// arrives as a number or a canonical numeric-index STRING (`buf["2"]`).
 const idx: any = 2;
 console.log("dyn-index:", (buf as any)[idx]);
+const sidx: any = "2";
+console.log("dyn-str-index:", (buf as any)[sidx]);
+const soob: any = "99";
+console.log("dyn-str-oob:", (buf as any)[soob]);

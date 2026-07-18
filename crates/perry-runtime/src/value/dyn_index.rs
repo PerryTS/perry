@@ -28,6 +28,37 @@ fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
     }
 }
 
+/// A canonical non-negative integer array-index string ("0", "2", "10", …) —
+/// how a `Buffer`/`Uint8Array` `[[Get]]` treats a STRING key: it reads the byte
+/// at that index rather than a named property (`buf["2"]` === `buf[2]`).
+/// Leading-zero forms (`"01"`), signs, fractions, and values past `i32::MAX`
+/// are ordinary property names, not indices. Reads the `StringHeader` bytes
+/// directly (valid for heap and materialized short strings alike).
+unsafe fn canonical_buffer_index(key_ptr: *const crate::StringHeader) -> Option<u32> {
+    if key_ptr.is_null() {
+        return None;
+    }
+    let len = (*key_ptr).byte_len as usize;
+    if len == 0 || len > 10 {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(
+        (key_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+        len,
+    );
+    if bytes[0] == b'0' && len > 1 {
+        return None;
+    }
+    let mut val: u64 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val * 10 + u64::from(b - b'0');
+    }
+    (val <= i32::MAX as u64).then_some(val as u32)
+}
+
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
 /// static type. Issue #514. Strings → js_string_char_at; objects stringify
 /// numeric keys (`obj[0]` is `obj["0"]`), while arrays/buffers keep numeric
@@ -176,11 +207,20 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         // `js_object_set_index_polymorphic` → `buffer_set_own_prop` (#6412).
         // Route through the by-name getter, which resolves buffer own props +
         // bound method values (`buffer_own_prop_or_method`), matching the
-        // dotted `buf.k` read and the static-string-key `buf["k"]` fold.
+        // dotted `buf.k` read and the static-string-key `buf["k"]` fold. A
+        // canonical numeric-index string (`buf["2"]`) is still a byte read,
+        // not a named property (IntegerIndexedExotic `[[Get]]`).
         let key_jsval = JSValue::from_bits(index.to_bits());
         if key_jsval.is_string() || key_jsval.is_short_string() {
             let key_ptr = js_get_string_pointer_unified(index) as *const crate::StringHeader;
             if !key_ptr.is_null() {
+                if let Some(canon) = unsafe { canonical_buffer_index(key_ptr) } {
+                    let len = unsafe { (*buf).length };
+                    if canon >= len {
+                        return f64::from_bits(TAG_UNDEFINED);
+                    }
+                    return crate::buffer::js_buffer_get(buf, canon as i32) as f64;
+                }
                 return crate::object::js_object_get_field_by_name_f64(
                     raw_ptr as *const crate::object::ObjectHeader,
                     key_ptr,
