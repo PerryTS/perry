@@ -268,9 +268,20 @@ fn main() -> Result<()> {
     // large codebases. Bumped from 64 MB in v0.5.973 — ioredis-via-
     // compilePackages (~30 transitive CJS modules) overflowed 64 MB in the
     // collect/lower walk on the perry-main thread.
+    //
+    // PERRY_MAIN_STACK_MB overrides the size (in MB) without a rebuild —
+    // useful both for diagnosing suspected-unbounded recursion (bump it and
+    // see whether the overflow moves, #6593) and as an escape hatch for
+    // legitimately deep inputs that outgrow the default (already happened
+    // twice: v0.5.973, #6593). Invalid or zero values fall back to 128.
+    let stack_mb: usize = std::env::var("PERRY_MAIN_STACK_MB")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|mb| *mb > 0)
+        .unwrap_or(128);
     let builder = std::thread::Builder::new()
         .name("perry-main".into())
-        .stack_size(128 * 1024 * 1024);
+        .stack_size(stack_mb * 1024 * 1024);
     let handler = builder.spawn(main_inner).unwrap();
     match handler.join() {
         Ok(result) => result,

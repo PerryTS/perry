@@ -24,16 +24,28 @@ impl Drop for InlineExprRecursionGuard {
 }
 
 pub(crate) fn enter_inline_expr_recursion() -> Option<InlineExprRecursionGuard> {
-    let entered = INLINE_EXPR_RECURSION_DEPTH.with(|depth| {
+    // The guard must only ever exist when the increment actually happened.
+    // The previous `entered.then_some(InlineExprRecursionGuard)` constructed
+    // the guard EAGERLY (`then_some` takes its argument by value), so on the
+    // bail path `then_some` dropped that guard — and its `Drop` decremented a
+    // depth unit this call never took. Every bail refunded one level of
+    // budget, so any AST node that makes two or more sibling recursive
+    // descents (Conditional then/else, a freshly-inlined-result re-walk, …)
+    // could burn the first sibling's bail to push the next sibling one level
+    // deeper, forever: the cap stopped bounding recursion at all (#6593, the
+    // 13.3MB pi bundle overflowed a 512MB stack this way). Linear chains —
+    // like the #733 nested-closure regression test — never exposed this,
+    // because with a single descent per level there is no later sibling to
+    // spend the refunded budget.
+    INLINE_EXPR_RECURSION_DEPTH.with(|depth| {
         let current = depth.get();
         if current >= MAX_INLINE_EXPR_RECURSION_DEPTH {
-            false
+            None
         } else {
             depth.set(current + 1);
-            true
+            Some(InlineExprRecursionGuard)
         }
-    });
-    entered.then_some(InlineExprRecursionGuard)
+    })
 }
 
 fn expr_contains_lexical_super(expr: &Expr) -> bool {
@@ -131,4 +143,34 @@ fn stmt_contains_lexical_super(stmt: &Stmt) -> bool {
 
 pub(crate) fn method_contains_lexical_super(method: &Function) -> bool {
     method.body.iter().any(stmt_contains_lexical_super)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #6593 regression: a failed entry (cap hit) must NOT refund depth
+    /// budget. With the old eager `then_some(InlineExprRecursionGuard)`, the
+    /// bail path dropped an eagerly-built guard, decrementing the counter it
+    /// never incremented — so the attempt right after a bail wrongly
+    /// succeeded, and branching recursion could descend without bound.
+    #[test]
+    fn bail_does_not_refund_depth_budget() {
+        let guards: Vec<InlineExprRecursionGuard> = (0..MAX_INLINE_EXPR_RECURSION_DEPTH)
+            .map(|_| enter_inline_expr_recursion().expect("budget not yet exhausted"))
+            .collect();
+        assert!(
+            enter_inline_expr_recursion().is_none(),
+            "entry at cap must bail"
+        );
+        assert!(
+            enter_inline_expr_recursion().is_none(),
+            "a bail must not refund budget: the next attempt at cap must bail too"
+        );
+        drop(guards);
+        assert!(
+            enter_inline_expr_recursion().is_some(),
+            "budget must be restored once real guards unwind"
+        );
+    }
 }
