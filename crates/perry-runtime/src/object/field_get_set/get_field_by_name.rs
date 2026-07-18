@@ -1060,7 +1060,15 @@ pub extern "C" fn js_object_get_field_by_name(
                                 super::super::class_registry::class_prototype_object(child);
                             if !proto.is_null() {
                                 let v = js_object_get_field_by_name(proto as *const _, key);
-                                if !v.is_undefined() && !v.is_null() {
+                                // Return a value present on the pinned object even
+                                // when it is `null` — a static explicitly set to
+                                // `null` on THIS evaluation is authoritative and
+                                // must not fall through to the last-wins registry
+                                // entry (a sibling evaluation's value). Only
+                                // `undefined` means "absent here", which continues
+                                // the walk to the parent's registry props / a higher
+                                // ancestor.
+                                if !v.is_undefined() {
                                     return v;
                                 }
                             }
