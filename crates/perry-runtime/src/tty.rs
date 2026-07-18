@@ -1,12 +1,15 @@
 //! TTY module — Phase 3 of #347.
 //!
 //! Provides:
-//!   - `tty.isatty(fd)` — bool (libc::isatty / GetFileType+FILE_TYPE_CHAR)
+//!   - `tty.isatty(fd)` — bool (libc::isatty / GetConsoleMode probe on the
+//!     std handle on Windows)
 //!   - `process.std{in,out,err}.isTTY` — same as isatty(0/1/2)
 //!   - `process.stdout.columns` / `.rows` — terminal dimensions via
 //!     TIOCGWINSZ on Unix / GetConsoleScreenBufferInfo on Windows
 //!   - `process.stdout.on('resize', cb)` — SIGWINCH handler that fires
-//!     the registered callback when the terminal is resized
+//!     the registered callback when the terminal is resized (Unix only;
+//!     Windows has no SIGWINCH — resize events need event-loop polling
+//!     and are not wired up yet)
 //!
 //! All calls are synchronous and return `undefined` when stdout isn't a
 //! TTY. The resize event handler is async-signal-safe (only sets an
@@ -76,16 +79,28 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn isatty_impl(fd: i32) -> bool {
+    // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
+    // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
+    // and the same criterion libuv uses to classify a handle as `UV_TTY`.
+    // Piped/redirected handles fail the probe → false, matching Node.
+    crate::win_console::is_console_fd(fd)
+}
+
+#[cfg(windows)]
+fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
+    // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
+    // bottom-top+1) for the stdout/stderr console handle.
+    crate::win_console::window_size(fd)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn isatty_impl(_fd: i32) -> bool {
-    // TODO: GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR
-    // on Windows. Until the windows-rs dep is wired here, treat all fds
-    // as non-TTY — `isTTY` returns false, columns/rows return undefined,
-    // SIGWINCH is a no-op.
     false
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
     None
 }
@@ -310,7 +325,22 @@ fn set_fd_raw_mode(fd: i32, enabled: bool) -> bool {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_fd_raw_mode(fd: i32, enabled: bool) -> bool {
+    // Only the console *input* handle can be flipped raw on Windows, and
+    // fd 0 is the only fd that maps to it via GetStdHandle. The shared
+    // helper mirrors the readline.rs / tui/input.rs flag handling (#406):
+    // clear ENABLE_{LINE,ECHO,PROCESSED}_INPUT, set
+    // ENABLE_VIRTUAL_TERMINAL_INPUT so arrow keys arrive as ANSI
+    // `\x1b[A..D`, save the cooked mode on first enable, restore on
+    // disable. Fails (returns false) when stdin is piped/redirected.
+    if fd != 0 {
+        return false;
+    }
+    crate::win_console::set_stdin_raw(enabled)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_fd_raw_mode(_fd: i32, _enabled: bool) -> bool {
     false
 }
@@ -1308,6 +1338,61 @@ mod tests {
                 JSValue::try_short_string(b"0").unwrap().bits()
             )),
             None
+        );
+    }
+
+    /// Windows: isatty/columns/rows/setRawMode against std handles that are
+    /// guaranteed pipes. `cargo test` doesn't guarantee the harness's own
+    /// std handles are redirected (a direct terminal run inherits the
+    /// console), so the test re-invokes itself with all three std streams
+    /// piped and does the assertions in the child — deterministic whether
+    /// or not the environment has a console.
+    #[cfg(windows)]
+    #[test]
+    fn isatty_and_winsize_report_false_for_piped_std_handles() {
+        if std::env::var_os("PERRY_TTY_TEST_PIPED_CHILD").is_some() {
+            // All three std handles are pipes here.
+            assert_eq!(js_tty_isatty(0.0).to_bits(), TAG_FALSE_F64.to_bits());
+            assert_eq!(js_tty_isatty(1.0).to_bits(), TAG_FALSE_F64.to_bits());
+            assert_eq!(js_tty_isatty(2.0).to_bits(), TAG_FALSE_F64.to_bits());
+            assert!(!is_tty_fd(0));
+            // Node: `.isTTY` is undefined (not false) on non-TTY streams.
+            assert_eq!(
+                js_process_stdout_isatty().to_bits(),
+                TAG_UNDEFINED_F64.to_bits()
+            );
+            // No console screen buffer → columns/rows undefined.
+            assert_eq!(
+                js_process_stdout_columns().to_bits(),
+                TAG_UNDEFINED_F64.to_bits()
+            );
+            assert_eq!(
+                js_process_stdout_rows().to_bits(),
+                TAG_UNDEFINED_F64.to_bits()
+            );
+            // setRawMode(true) must fail on a piped stdin — and must not
+            // have saved anything to restore.
+            assert!(!set_fd_raw_mode(0, true));
+            return;
+        }
+        let exe = std::env::current_exe().expect("current_exe");
+        let output = std::process::Command::new(exe)
+            .args([
+                "tty::tests::isatty_and_winsize_report_false_for_piped_std_handles",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("PERRY_TTY_TEST_PIPED_CHILD", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn self with piped std handles");
+        assert!(
+            output.status.success(),
+            "piped-child assertions failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

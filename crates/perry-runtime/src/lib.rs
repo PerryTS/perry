@@ -234,6 +234,13 @@ pub mod util_usv;
 #[cfg(all(target_os = "watchos", feature = "watchos-game-loop"))]
 pub mod watchos_game_loop;
 pub mod weakref;
+/// Shared Win32 console helpers: GetStdHandle/GetConsoleMode plumbing,
+/// raw-input mode save/restore, window size, and the startup
+/// ENABLE_VIRTUAL_TERMINAL_PROCESSING hook. Used by `tty` (isatty,
+/// columns/rows, setRawMode), `tui::input` (render-loop raw mode) and
+/// `gc::js_gc_init` (VT output at program start).
+#[cfg(windows)]
+pub mod win_console;
 
 pub use array::ArrayHeader;
 pub use bigint::BigIntHeader;

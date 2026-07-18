@@ -543,6 +543,14 @@ pub fn gc_init() {
 
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
+    // Windows: opt console stdout/stderr into VT/ANSI escape processing
+    // once at program start so runtime-emitted escapes (console.clear, tty
+    // cursor ops, color output keyed off isTTY) render instead of printing
+    // literally. No-op for piped/redirected streams; a failing
+    // SetConsoleMode is ignored — this never fails startup. Idempotent, so
+    // a second js_gc_init on another thread is harmless.
+    #[cfg(windows)]
+    crate::win_console::enable_vt_output();
     crate::node_submodules::diagnostics_channel_init_main_thread();
     // #5093: force every class-field access back through the full guard call —
     // i.e. disable the codegen-inlined fast path — when:
