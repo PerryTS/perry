@@ -74,7 +74,7 @@ unsafe fn alloc_transform_stream_with_strategies(
 
     // Allocate writable side; its write_cb is synthesized via the
     // dispatcher table below to invoke transform(chunk, controller).
-    let writable_id = next_id(&NEXT_STREAM_ID);
+    let writable_id = next_stream_id();
     let ready = internal_promise();
     let closed = internal_promise();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
@@ -106,7 +106,7 @@ unsafe fn alloc_transform_stream_with_strategies(
         },
     );
 
-    let id = next_id(&NEXT_STREAM_ID);
+    let id = next_stream_id();
     TRANSFORM_STREAMS.lock().unwrap().insert(
         id,
         TransformStreamData {
@@ -464,6 +464,7 @@ pub(super) unsafe fn transform_close(writable_id: usize) -> *mut Promise {
             let cp = s.closed_promise;
             js_promise_reject(cp, f64::from_bits(error_bits));
         }
+        super::idalloc::retire_writable_terminal(writable_id);
         js_promise_reject(promise, f64::from_bits(error_bits));
         return promise;
     }
@@ -569,6 +570,7 @@ unsafe fn finish_transform_close(
         let cp = s.closed_promise;
         js_promise_resolve(cp, f64::from_bits(TAG_UNDEFINED));
     }
+    super::idalloc::retire_writable_terminal(writable_id);
     js_promise_resolve(close_promise, f64::from_bits(TAG_UNDEFINED));
 }
 
@@ -590,6 +592,7 @@ unsafe fn error_transform_close(
         let cp = s.closed_promise;
         js_promise_reject(cp, f64::from_bits(reason_bits));
     }
+    super::idalloc::retire_writable_terminal(writable_id);
     js_promise_reject(close_promise, f64::from_bits(reason_bits));
 }
 

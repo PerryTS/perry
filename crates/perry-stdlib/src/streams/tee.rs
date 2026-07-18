@@ -8,8 +8,8 @@
 //! `controller_close` / `controller_error`).
 
 use super::{
-    build_iter_result, byob, close_pending, error_pending, js_promise_resolve, next_id,
-    throw_type_error, ReadableState, ReadableStreamData, NEXT_STREAM_ID, READABLE_STREAMS,
+    build_iter_result, byob, close_pending, error_pending, idalloc, js_promise_resolve,
+    next_stream_id, throw_type_error, ReadableState, ReadableStreamData, READABLE_STREAMS,
 };
 use perry_runtime::array::{js_array_alloc, js_array_push};
 use perry_runtime::closure::ClosureHeader;
@@ -120,6 +120,19 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
     let Some((a, b)) = tee_branches_of(source) else {
         return;
     };
+    // #6602: stamp the source itself terminal. It used to stay `Readable`
+    // forever, leaking its registry entry, queued chunks and id once the tee
+    // links were gone; nothing can drive it after the unlink below.
+    {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        if let Some(s) = g.get_mut(&source) {
+            if s.state == ReadableState::Readable {
+                s.state = ReadableState::Errored;
+                s.error_value = reason_bits;
+            }
+            s.clear_chunks();
+        }
+    }
     for branch in [a, b] {
         {
             let mut g = READABLE_STREAMS.lock().unwrap();
@@ -137,9 +150,37 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
 
 fn tee_unlink(source: usize, a: usize, b: usize) {
     TEE_SOURCE_BRANCHES.lock().unwrap().remove(&source);
-    let mut bs = TEE_BRANCH_SOURCE.lock().unwrap();
-    bs.remove(&a);
-    bs.remove(&b);
+    {
+        let mut bs = TEE_BRANCH_SOURCE.lock().unwrap();
+        bs.remove(&a);
+        bs.remove(&b);
+    }
+    // #6602: the unlinked source is terminal (close flow: Closed and drained
+    // by pull discovery; error flow: stamped Errored above) — retire its id.
+    // Its `TEE_LOCK_SENTINEL` reader_handle matches no READERS entry.
+    idalloc::retire_readable_terminal(source);
+}
+
+/// #6602: eviction hook — drop any tee links keyed by an evicted id.
+pub(super) fn evict_ids(batch: &[usize]) {
+    {
+        let mut g = TEE_SOURCE_BRANCHES.lock().unwrap();
+        for id in batch {
+            g.remove(id);
+        }
+    }
+    {
+        let mut g = TEE_BRANCH_SOURCE.lock().unwrap();
+        for id in batch {
+            g.remove(id);
+        }
+    }
+    {
+        let mut g = TEE_PULLING.lock().unwrap();
+        for id in batch {
+            g.remove(id);
+        }
+    }
 }
 
 /// Enqueue on a tee'd SOURCE: the chunk stays in the source queue (spec size
@@ -382,8 +423,8 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
     } else {
         0
     };
-    let id_a = next_id(&NEXT_STREAM_ID);
-    let id_b = next_id(&NEXT_STREAM_ID);
+    let id_a = next_stream_id();
+    let id_b = next_stream_id();
     {
         let mut g = READABLE_STREAMS.lock().unwrap();
         for new_id in [id_a, id_b] {

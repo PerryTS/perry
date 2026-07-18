@@ -48,6 +48,7 @@ pub(crate) fn internal_promise() -> *mut Promise {
 
 mod byob;
 mod expando;
+mod idalloc;
 mod pipe;
 mod strategy;
 mod subclass;
@@ -270,14 +271,16 @@ lazy_static::lazy_static! {
     static ref TRANSFORM_STREAMS: Mutex<HashMap<usize, TransformStreamData>> = Mutex::new(HashMap::new());
     static ref READERS: Mutex<HashMap<usize, ReaderData>> = Mutex::new(HashMap::new());
     static ref WRITERS: Mutex<HashMap<usize, WriterData>> = Mutex::new(HashMap::new());
-    // #1545: ONE id counter shared across all five Web Streams registries.
-    // Stream handles are raw numeric f64 values, not POINTER_TAG small handles,
-    // so they live just above the runtime's `< 0x100000` small-handle band.
-    // That keeps them disjoint from Fetch/native/proxy pointer-tagged ids while
-    // the runtime's finite-number stream probes still route dynamic calls like
-    // `src.pipeThrough(ts).getReader()`.
-    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(STREAM_HANDLE_ID_START);
 }
+
+// #1545: ONE id allocator shared across all five Web Streams registries.
+// Stream handles are raw numeric f64 values, not POINTER_TAG small handles,
+// so they live just above the runtime's `< 0x100000` small-handle band. That
+// keeps them disjoint from Fetch/native/proxy pointer-tagged ids while the
+// runtime's finite-number stream probes still route dynamic calls like
+// `src.pipeThrough(ts).getReader()`. #6602: ids of terminal objects recycle
+// through `idalloc` so the finite band survives long-running servers.
+use self::idalloc::next_stream_id;
 
 static GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
@@ -382,16 +385,6 @@ fn scan_stream_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
-
-fn next_id(slot: &Mutex<usize>) -> usize {
-    let mut guard = slot.lock().unwrap();
-    let id = *guard;
-    if id >= STREAM_HANDLE_ID_END {
-        panic!("Web Streams handle id range exhausted");
-    }
-    *guard += 1;
-    id
-}
 
 unsafe fn closure_from_bits(bits: u64) -> i64 {
     if bits == TAG_UNDEFINED || bits == TAG_NULL || bits == 0 {
@@ -572,7 +565,7 @@ fn alloc_readable_with_strategy(
     is_byte_stream: bool,
     strategy_size_cb: i64,
 ) -> usize {
-    let id = next_id(&NEXT_STREAM_ID);
+    let id = next_stream_id();
     READABLE_STREAMS.lock().unwrap().insert(
         id,
         ReadableStreamData {
@@ -624,7 +617,7 @@ fn alloc_writable_with_strategy(
     hwm: f64,
     strategy_size_cb: i64,
 ) -> usize {
-    let id = next_id(&NEXT_STREAM_ID);
+    let id = next_stream_id();
     let ready = internal_promise();
     let closed = internal_promise();
     js_promise_resolve(ready, f64::from_bits(TAG_UNDEFINED));
@@ -790,6 +783,7 @@ unsafe fn close_pending(stream_id: usize) {
     // #5437: stream is done — drop any expando entries so the table doesn't
     // grow one row per stream over the server's lifetime.
     expando::stream_expando_clear(stream_id);
+    idalloc::retire_readable_terminal(stream_id);
 }
 
 unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
@@ -806,6 +800,7 @@ unsafe fn error_pending(stream_id: usize, reason_bits: u64) {
     byob::error_pending_byob(stream_id, reason_bits);
     // #5437: stream errored — drop any expando entries (see close_pending).
     expando::stream_expando_clear(stream_id);
+    idalloc::retire_readable_terminal(stream_id);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -993,7 +988,7 @@ pub unsafe extern "C" fn js_readable_stream_get_reader_with_options(
         if s.reader_handle.is_some() {
             true
         } else {
-            let reader_id = next_id(&NEXT_STREAM_ID);
+            let reader_id = next_stream_id();
             let closed_p = internal_promise();
             if s.state == ReadableState::Closed {
                 js_promise_resolve(closed_p, f64::from_bits(TAG_UNDEFINED));
@@ -1928,6 +1923,7 @@ pub unsafe extern "C" fn js_reader_release_lock(reader_handle: f64) -> f64 {
     // #5437: the reader instance is done — drop any expando entries keyed by
     // its handle id so the table doesn't retain them for the process lifetime.
     expando::stream_expando_clear(reader_id);
+    idalloc::retire_reader_if_released(reader_id);
     f64::from_bits(TAG_UNDEFINED)
 }
 
