@@ -683,6 +683,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "__get_writableEnded"
                 | "__get_writableFinished"
                 | "__get_finished"
+                | "__get_destroyed"
                 | "__get_sendDate"
                 | "__set_sendDate"
                 | "__get_strictContentLength"
