@@ -6,6 +6,32 @@
 use perry_hir::ir::*;
 use std::fmt::Write;
 
+/// Default WidgetKit refresh interval (seconds) when the widget declares no
+/// compile-time `reloadPolicy`: 30 minutes.
+const DEFAULT_RELOAD_SECONDS: u32 = 1800;
+
+/// WidgetKit floor (seconds): the system's refresh budget does not honor
+/// reload requests below ~15 minutes, so anything shorter is clamped.
+const MIN_RELOAD_SECONDS: u32 = 900;
+
+/// Resolve the widget's effective timeline reload interval in seconds:
+/// the parsed `reloadPolicy` if present, clamped to the WidgetKit floor
+/// (with a compile-time warning), or the 30-minute default.
+fn effective_reload_seconds(widget: &WidgetDecl) -> u32 {
+    match widget.reload_after_seconds {
+        None => DEFAULT_RELOAD_SECONDS,
+        Some(s) if s < MIN_RELOAD_SECONDS => {
+            eprintln!(
+                "[perry] warning: widget '{}': reloadPolicy requests a refresh every {}s, \
+below the WidgetKit minimum of {}s (15 minutes); clamping to {}s",
+                widget.kind, s, MIN_RELOAD_SECONDS, MIN_RELOAD_SECONDS
+            );
+            MIN_RELOAD_SECONDS
+        }
+        Some(s) => s,
+    }
+}
+
 /// Emit the TimelineEntry struct (and any nested Codable structs for complex types)
 pub fn emit_entry_struct(widget: &WidgetDecl, name: &str) -> String {
     let mut out = String::new();
@@ -296,7 +322,7 @@ fn emit_static_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
 fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     let mut out = String::new();
     let func_name = widget.provider_func_name.as_deref().unwrap();
-    let reload_seconds = widget.reload_after_seconds.unwrap_or(1800);
+    let reload_seconds = effective_reload_seconds(widget);
 
     writeln!(out, "struct {}Provider: TimelineProvider {{", name).unwrap();
     writeln!(
@@ -388,7 +414,7 @@ fn emit_app_intent_timeline_provider(
     has_provider: bool,
 ) -> String {
     let mut out = String::new();
-    let reload_seconds = widget.reload_after_seconds.unwrap_or(1800);
+    let reload_seconds = effective_reload_seconds(widget);
 
     writeln!(out, "struct {}Provider: AppIntentTimelineProvider {{", name).unwrap();
     writeln!(
@@ -1269,6 +1295,74 @@ mod tests {
             app_group: None,
             reload_after_seconds: None,
         }
+    }
+
+    #[test]
+    fn test_native_provider_custom_reload_policy() {
+        let mut widget = make_widget(
+            "com.test.Reload",
+            vec![("value".to_string(), WidgetFieldType::Number)],
+            vec![],
+        );
+        widget.provider_func_name = Some("__widget_provider_Reload".to_string());
+        widget.reload_after_seconds = Some(3600);
+
+        let swift = emit_timeline_provider(&widget, "Reload");
+        assert!(swift.contains("Date().addingTimeInterval(3600)"));
+        assert!(swift.contains("policy: .after(reloadDate)"));
+        assert!(!swift.contains("addingTimeInterval(1800)"));
+    }
+
+    #[test]
+    fn test_native_provider_default_reload_policy() {
+        let mut widget = make_widget(
+            "com.test.Reload",
+            vec![("value".to_string(), WidgetFieldType::Number)],
+            vec![],
+        );
+        widget.provider_func_name = Some("__widget_provider_Reload".to_string());
+        // reload_after_seconds stays None → 30-minute default.
+
+        let swift = emit_timeline_provider(&widget, "Reload");
+        assert!(swift.contains("Date().addingTimeInterval(1800)"));
+    }
+
+    #[test]
+    fn test_native_provider_reload_policy_clamped_to_widgetkit_floor() {
+        let mut widget = make_widget(
+            "com.test.Reload",
+            vec![("value".to_string(), WidgetFieldType::Number)],
+            vec![],
+        );
+        widget.provider_func_name = Some("__widget_provider_Reload".to_string());
+        // 5 minutes — below the 15-minute WidgetKit floor, must clamp to 900s.
+        widget.reload_after_seconds = Some(300);
+
+        let swift = emit_timeline_provider(&widget, "Reload");
+        assert!(swift.contains("Date().addingTimeInterval(900)"));
+        assert!(!swift.contains("addingTimeInterval(300)\n"));
+    }
+
+    #[test]
+    fn test_app_intent_provider_custom_reload_policy() {
+        let mut widget = make_widget(
+            "com.test.Reload",
+            vec![("value".to_string(), WidgetFieldType::Number)],
+            vec![],
+        );
+        widget.provider_func_name = Some("__widget_provider_Reload".to_string());
+        widget.config_params = vec![WidgetConfigParam {
+            name: "site".to_string(),
+            title: "Site".to_string(),
+            param_type: WidgetConfigParamType::String {
+                default: String::new(),
+            },
+        }];
+        widget.reload_after_seconds = Some(2700);
+
+        let swift = emit_timeline_provider(&widget, "Reload");
+        assert!(swift.contains("AppIntentTimelineProvider"));
+        assert!(swift.contains("Date().addingTimeInterval(2700)"));
     }
 
     #[test]

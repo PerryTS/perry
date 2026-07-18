@@ -45,7 +45,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "query",
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_query",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -54,7 +54,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "execute",
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_execute",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -72,7 +72,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "query",
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_query",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -81,7 +81,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "execute",
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_execute",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -100,7 +100,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "query",
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_query",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -109,7 +109,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "execute",
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_execute",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -118,7 +118,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "query",
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_query",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -127,7 +127,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "execute",
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_execute",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     // mysql2 generic instance methods (Connection fallback, class_filter: None)
@@ -137,7 +137,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "query",
         class_filter: None,
         runtime: "js_mysql2_connection_query",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -146,7 +146,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "execute",
         class_filter: None,
         runtime: "js_mysql2_connection_execute",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -209,7 +209,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "query",
         class_filter: None,
         runtime: "js_mysql2_connection_query",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -218,7 +218,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         method: "execute",
         class_filter: None,
         runtime: "js_mysql2_connection_execute",
-        args: &[NA_STR, NA_PTR],
+        args: &[NA_STR, NA_F64],
         ret: NR_PTR,
     },
     NativeModSig {

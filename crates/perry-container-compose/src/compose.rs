@@ -540,6 +540,14 @@ impl ComposeEngine {
                 workdir: svc.working_dir.clone(),
                 cap_add: svc.cap_add.clone(),
                 cap_drop: svc.cap_drop.clone(),
+                // Left unset here: the compose engine expresses seccomp
+                // / no-new-privileges through the `SecurityProfile`
+                // built from `security_opt` below, and
+                // `run_with_security` emits them from the profile.
+                // Setting them on the spec too would double-emit the
+                // `--security-opt` flags.
+                seccomp: None,
+                no_new_privileges: None,
                 // Register the service KEY as a DNS alias on the
                 // attached network. This makes `db:5432` / `api:8080`
                 // etc. resolve from sibling containers without the
@@ -768,7 +776,7 @@ impl ComposeEngine {
     pub async fn down(
         &self,
         services: &[String],
-        _remove_orphans: bool,
+        remove_orphans: bool,
         remove_volumes: bool,
     ) -> Result<()> {
         // `rollback()` removes `session_volumes` unconditionally — that's
@@ -823,6 +831,55 @@ impl ComposeEngine {
             let container_name = self.resolve_container_name(svc_name);
             let _ = self.backend.stop(&container_name, Some(10)).await;
             let _ = self.backend.remove(&container_name, true).await;
+        }
+
+        // Orphan removal (`down --remove-orphans` semantics): containers
+        // that still carry THIS project's `perry.compose.project` label
+        // but whose `perry.compose.service` key is no longer in the
+        // current spec — typically left behind when a service was
+        // renamed or deleted between deploys. Every container the
+        // engine creates is stamped with both labels in `up()`, so the
+        // label pair is the ownership test; unlabelled containers (or
+        // ones without a service label) were never ours and are left
+        // alone, as are other projects' containers. Runs BEFORE network
+        // removal so an orphan attached to a project network doesn't
+        // keep the network alive. Pre-fix this flag was parsed at the
+        // FFI boundary and then discarded (`_remove_orphans`).
+        if remove_orphans {
+            match self.backend.list(true).await {
+                Ok(all) => {
+                    for c in all {
+                        let ours = c
+                            .labels
+                            .get("perry.compose.project")
+                            .map(|v| v == &self.project_name)
+                            .unwrap_or(false);
+                        if !ours {
+                            continue;
+                        }
+                        let orphan = c
+                            .labels
+                            .get("perry.compose.service")
+                            .map(|svc| !self.spec.services.contains_key(svc))
+                            .unwrap_or(false);
+                        if orphan {
+                            let _ = self.backend.stop(&c.id, Some(10)).await;
+                            let _ = self.backend.remove(&c.id, true).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Best-effort like the rest of down(): a backend
+                    // that can't list containers shouldn't abort the
+                    // network/volume teardown below.
+                    tracing::warn!(
+                        target: "perry::compose::down",
+                        project = %self.project_name,
+                        error = %e,
+                        "remove_orphans: could not list containers; skipping orphan sweep"
+                    );
+                }
+            }
         }
 
         if let Some(networks) = &self.spec.networks {

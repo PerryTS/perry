@@ -19,7 +19,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "diagnostics", "mod-dgram"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -84,6 +84,8 @@ intl-segmenter = ["dep:unicode-segmentation"]
 # usage). Already pulled transitively by `temporal`, so default/shipped builds
 # carry no extra weight. A hand-rolled structural fallback covers the off case.
 intl-locale = ["dep:icu_locale_core"]
+# CLDR-accurate Intl.DateTimeFormat / toLocaleString date-time patterns.
+intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -91,7 +93,22 @@ intl-locale = ["dep:icu_locale_core"]
 # ioredis.rs is the live Redis path). Removing them drops ~1.5+ MB from every
 # Perry binary that links libperry_runtime.a.
 full = ["dep:hostname", "dep:dirs"]
-# When perry-stdlib is the consumer, exclude no-op stubs to avoid duplicate symbols
+# Exclude perry-runtime's no-op `stdlib_stubs` module (js_stdlib_init_dispatch,
+# js_stdlib_process_pending, the fetch/ws/readline no-ops). Enabled by any crate
+# that BUNDLES perry-runtime into a staticlib AND is always co-linked with the
+# real perry-stdlib: perry-stdlib itself, and every perry-ext-* wrapper (#6314).
+# Those wrappers are `crate-type = ["staticlib", ...]`, so `libperry_ext_*.a`
+# physically contains a copy of perry-runtime, and perry links the ext archives
+# BEFORE stdlib (`prefer_well_known_before_stdlib`) — so the bundled no-op stub
+# would win first-definition over perry-stdlib's real symbol (e.g. a node:http
+# server's `js_stdlib_init_dispatch` binds to the no-op and never registers the
+# tokio reactor). Dropping the whole module from those copies removes the
+# shadow. The shipped standalone `libperry_runtime.a` is built WITHOUT this
+# feature, so it keeps the stubs and runtime-only builds still link.
+# The `ext_crates_bundle_a_full_featured_perry_runtime` test (well_known.rs)
+# guards that every runtime-bundling ext crate sets it. NOTE: this is a pure
+# symbol-suppression gate; it must NOT be confused
+# with the behavioral `external-fetch-symbols` (fetch dispatch routing) below.
 stdlib = []
 # Extension-crate test binaries that link the real perry-ext-ws symbols still
 # need runtime-link for perry-ffi helpers, but must not also export runtime-only
@@ -153,6 +170,14 @@ unicode-segmentation = { version = "1", optional = true }
 # `Intl.getCanonicalLocales` / `*.supportedLocalesOf`. The data-free structural
 # parser only (no CLDR alias tables); already in our lock graph via temporal_rs.
 icu_locale_core = { version = "2", optional = true }
+# CLDR date/time formatting for Intl.DateTimeFormat / Date.prototype.toLocale*
+# (icu4x 2.x, matching the icu_calendar/icu_locale_core already in the graph).
+# `compiled_data` vendors the CLDR dataset, so byte-for-byte-with-Node locale
+# patterns need no runtime data loading. Gated behind `intl-datetime` so only
+# programs that actually format localized dates link the data.
+icu_datetime = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+icu_time = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+icu_calendar = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
 idna = { version = "1", optional = true }
 url = { version = "2", optional = true }
 # #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format

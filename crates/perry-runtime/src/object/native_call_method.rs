@@ -1074,8 +1074,18 @@ pub unsafe extern "C" fn js_native_call_method(
         {
             let dyn_val = crate::closure::closure_get_dynamic_prop(raw_addr, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
+                // #6438: same rebind as the GC_TYPE_CLOSURE arm below —
+                // `closure_get_dynamic_prop` may return a method read off the
+                // closure's `Object.setPrototypeOf` proto, whose bound `this`
+                // (an object-literal method binds the literal) would otherwise
+                // win over IMPLICIT_THIS and leave `this` as the PROTO.
+                let bound = crate::closure::clone_closure_rebind_this(
+                    dyn_val.to_bits(),
+                    f64::from_bits(object.to_bits()),
+                );
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(object.to_bits()));
-                let result = crate::closure::js_native_call_value(dyn_val, args_ptr, args_len);
+                let result =
+                    crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }
@@ -1335,8 +1345,37 @@ pub unsafe extern "C" fn js_native_call_method(
             let dyn_val = crate::closure::closure_get_dynamic_prop(obj as usize, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {
                 let recv_bits = jsval.bits();
+                // #6438: `closure_get_dynamic_prop` also walks the closure's
+                // `Object.setPrototypeOf` chain, so `dyn_val` may be a method
+                // read off the PROTO object — and an object-literal method
+                // carries a bound `this` (the literal). A bound `this` wins over
+                // IMPLICIT_THIS, so setting IMPLICIT_THIS alone left `this` as
+                // the PROTO instead of the receiver. Rebind to the receiver,
+                // exactly as the ObjectHeader arm does for its inherited-field
+                // dispatch (`clone_closure_rebind_this` + IMPLICIT_THIS) — that
+                // asymmetry is why a plain-object receiver worked and a FUNCTION
+                // receiver did not.
+                //
+                // @effect/platform's HttpApiGroup is built this way:
+                //
+                //   const Proto = { prefix() { Record.map(this.endpoints, …) }, … }
+                //   const makeProto = (options) => {
+                //     function HttpApiGroup() {}
+                //     Object.setPrototypeOf(HttpApiGroup, Proto)
+                //     return Object.assign(HttpApiGroup, options)   // own props on a FUNCTION
+                //   }
+                //
+                // so `group.prefix("/api")` ran with `this === Proto`, read
+                // `this.endpoints` as undefined, and threw
+                // "Cannot convert undefined or null to object" out of
+                // `Object.keys` — killing `HttpApi` construction at module init.
+                let bound = crate::closure::clone_closure_rebind_this(
+                    dyn_val.to_bits(),
+                    f64::from_bits(recv_bits),
+                );
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(recv_bits));
-                let result = crate::closure::js_native_call_value(dyn_val, args_ptr, args_len);
+                let result =
+                    crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
                 IMPLICIT_THIS.with(|c| c.set(prev_this));
                 return result;
             }

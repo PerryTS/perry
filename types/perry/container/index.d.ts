@@ -28,6 +28,30 @@ export interface ContainerSpec {
   network?: string;
   /** Remove container on exit */
   rm?: boolean;
+  /** Container labels */
+  labels?: Record<string, string>;
+  /** Mount the root filesystem read-only */
+  read_only?: boolean;
+  /** Privileged mode — use sparingly (dropped with a warning on
+   *  apple/container, which has no privileged concept) */
+  privileged?: boolean;
+  /** UID, username, or `"UID:GID"` the container's processes run as */
+  user?: string;
+  /** Working directory inside the container */
+  workdir?: string;
+  /** Linux capabilities to add (e.g. `["NET_BIND_SERVICE"]`) */
+  cap_add?: string[];
+  /** Linux capabilities to drop (e.g. `["ALL"]`) */
+  cap_drop?: string[];
+  /** Seccomp profile: a path to a JSON profile file, or `"default"`
+   *  for the runtime's default profile. Emitted as
+   *  `--security-opt seccomp=<value>`. Dropped with a warning on
+   *  backends without seccomp support (apple/container). */
+  seccomp?: string;
+  /** Set `--security-opt no-new-privileges` so SUID/SGID binaries
+   *  inside the container can't gain privileges via execve. Dropped
+   *  with a warning on apple/container. */
+  no_new_privileges?: boolean;
 }
 
 /**
@@ -222,6 +246,11 @@ export function removeImage(reference: string, force?: boolean): Promise<void>;
  * Multi-container application specification.
  */
 export interface ComposeSpec {
+  /** Compose project name — labels every container
+   *  (`perry.compose.project=<name>`) and namespaces non-external
+   *  volumes / networks as `<name>_<declared-name>`. Defaults to
+   *  `"perry-stack"` when omitted. */
+  name?: string;
   /** Compose file version */
   version?: string;
   /** Service definitions */
@@ -294,6 +323,11 @@ export interface ComposeService {
   cap_add?: string[];
   /** Linux capabilities to drop (e.g. `["ALL"]`) */
   cap_drop?: string[];
+  /** Security options (compose-spec § service.security_opt), e.g.
+   *  `["seccomp=default", "no-new-privileges"]`. Parsed into the
+   *  engine's `SecurityProfile`; entries a backend can't honor are
+   *  dropped with a warning. */
+  security_opt?: string[];
 }
 
 /**

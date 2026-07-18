@@ -131,6 +131,9 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_intl_locale {
         cross_features.push("perry-runtime/intl-locale".to_string());
     }
+    if ctx.uses_intl_datetime {
+        cross_features.push("perry-runtime/intl-datetime".to_string());
+    }
     // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
     // pulled only by them) — enabled only when the program uses a heap-snapshot
     // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON

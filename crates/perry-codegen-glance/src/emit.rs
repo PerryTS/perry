@@ -5,6 +5,36 @@
 use perry_hir::ir::*;
 use std::fmt::Write;
 
+/// Default `android:updatePeriodMillis` when the widget declares no
+/// compile-time `reloadPolicy`: 30 minutes.
+const DEFAULT_UPDATE_PERIOD_MS: u64 = 1_800_000;
+
+/// Android hard floor for `updatePeriodMillis`: the framework does not
+/// deliver periodic updates more often than every 30 minutes.
+const MIN_UPDATE_PERIOD_MS: u64 = 1_800_000;
+
+/// Resolve the widget's effective `android:updatePeriodMillis`: the parsed
+/// `reloadPolicy` if present, clamped to the Android 30-minute floor (with a
+/// compile-time warning), or the 30-minute default.
+fn effective_update_period_millis(widget: &WidgetDecl) -> u64 {
+    match widget.reload_after_seconds {
+        None => DEFAULT_UPDATE_PERIOD_MS,
+        Some(s) => {
+            let ms = s as u64 * 1000;
+            if ms < MIN_UPDATE_PERIOD_MS {
+                eprintln!(
+                    "[perry] warning: widget '{}': reloadPolicy requests a refresh every {}ms, \
+below the Android `updatePeriodMillis` minimum of {}ms (30 minutes); clamping to {}ms",
+                    widget.kind, ms, MIN_UPDATE_PERIOD_MS, MIN_UPDATE_PERIOD_MS
+                );
+                MIN_UPDATE_PERIOD_MS
+            } else {
+                ms
+            }
+        }
+    }
+}
+
 /// Emit the main GlanceAppWidget Kotlin class
 pub fn emit_widget(widget: &WidgetDecl, name: &str, package: &str) -> String {
     let mut out = String::new();
@@ -259,7 +289,12 @@ pub fn emit_widget_info_xml(widget: &WidgetDecl, name: &str) -> String {
     writeln!(out).unwrap();
     writeln!(out, "    android:minWidth=\"{}dp\"", min_width).unwrap();
     writeln!(out, "    android:minHeight=\"{}dp\"", min_height).unwrap();
-    writeln!(out, "    android:updatePeriodMillis=\"1800000\"").unwrap();
+    writeln!(
+        out,
+        "    android:updatePeriodMillis=\"{}\"",
+        effective_update_period_millis(widget)
+    )
+    .unwrap();
     writeln!(
         out,
         "    android:initialLayout=\"@layout/glance_default_loading_layout\""
@@ -767,5 +802,44 @@ mod tests {
         let xml = emit_widget_info_xml(&widget, "Hello");
         assert!(xml.contains("android:minWidth=\"250dp\""));
         assert!(xml.contains("android:minHeight=\"110dp\""));
+    }
+
+    fn make_reload_widget(reload_after_seconds: Option<u32>) -> WidgetDecl {
+        WidgetDecl {
+            kind: "com.test.Reload".to_string(),
+            display_name: "Reload".to_string(),
+            description: String::new(),
+            supported_families: vec!["systemMedium".to_string()],
+            entry_fields: vec![],
+            render_body: vec![],
+            entry_param_name: "entry".to_string(),
+            config_params: vec![],
+            provider_func_name: None,
+            placeholder: None,
+            family_param_name: None,
+            app_group: None,
+            reload_after_seconds,
+        }
+    }
+
+    #[test]
+    fn test_widget_info_xml_custom_reload_policy() {
+        // 60 minutes → 3600000 ms in the appwidget-provider XML.
+        let xml = emit_widget_info_xml(&make_reload_widget(Some(3600)), "Reload");
+        assert!(xml.contains("android:updatePeriodMillis=\"3600000\""));
+    }
+
+    #[test]
+    fn test_widget_info_xml_default_reload_policy() {
+        let xml = emit_widget_info_xml(&make_reload_widget(None), "Reload");
+        assert!(xml.contains("android:updatePeriodMillis=\"1800000\""));
+    }
+
+    #[test]
+    fn test_widget_info_xml_reload_policy_clamped_to_android_floor() {
+        // 10 minutes — below Android's 30-minute updatePeriodMillis floor.
+        let xml = emit_widget_info_xml(&make_reload_widget(Some(600)), "Reload");
+        assert!(xml.contains("android:updatePeriodMillis=\"1800000\""));
+        assert!(!xml.contains("android:updatePeriodMillis=\"600000\""));
     }
 }

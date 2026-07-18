@@ -180,6 +180,9 @@ pub fn scan_intern_table_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    // Interned strings can be relocated by this collection; pointer-identity
+    // verdicts in the store-plan cache would go stale — flush them.
+    crate::object::prop_plan::prop_plan_epoch_bump();
     with_intern_table(|table| unsafe {
         for i in 0..INTERN_TABLE_SIZE {
             let entry = &mut (*table)[i];

@@ -70,9 +70,16 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
 
 /// `crypto.randomBytes(size, callback)` — callback form.
 ///
-/// Perry executes the callback synchronously, but preserves Node's
-/// observable callback shape `(err, buffer)` for parity tests and common
-/// compatibility paths.
+/// Node runs `randomBytes` on the libuv threadpool, so the `(err, buffer)`
+/// callback fires on a LATER event-loop iteration (one macrotask hop), never
+/// synchronously. Perry generates the bytes synchronously but must preserve
+/// that timing: schedule the callback via `setImmediate` instead of calling it
+/// inline. Resolving it synchronously let an `await`ing caller continue a
+/// macrotask early — e.g. Auth.js generates its CSRF token with async
+/// `randomBytes`, so a Next.js Server Component's `await auth()` completed one
+/// event-loop iteration ahead of Node, reordering the React Flight (RSC) rows
+/// of the streamed response. The bytes are still produced eagerly; only the
+/// callback dispatch is deferred.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: f64) -> f64 {
     let buf = js_crypto_random_bytes_buffer(size);
@@ -81,7 +88,23 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    // Only a genuine closure is a schedulable callback. The timer queue
+    // reinterprets the i64 as `*const ClosureHeader` and calls it with no
+    // validation, so a bare `is_pointer()` check is not enough: a non-function
+    // POINTER value (a plain object or array passed as the callback —
+    // `randomBytes(n, {})`, which Node rejects with ERR_INVALID_CALLBACK) would
+    // pass it and be miscast as a closure, then dereferenced when the timer
+    // fires. Gate on `is_closure_ptr` (the CLOSURE_MAGIC + heap-range probe used
+    // by every other node-style-callback site) so a non-callable argument is a
+    // safe no-op instead. `is_closure_ptr` self-rejects the whole handle band
+    // and any non-heap address, so a primitive/undefined callback is covered
+    // without a separate magnitude floor.
+    let cb_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_bits);
+    if perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
+        let err = f64::from_bits(JSValue::null().bits());
+        let args = [err, value];
+        perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
+    }
     f64::from_bits(JSValue::undefined().bits())
 }
 

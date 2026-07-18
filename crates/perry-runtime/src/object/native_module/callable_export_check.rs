@@ -253,6 +253,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("tls", "createSecureContext")
             | ("tls", "SecureContext")
             | ("wasi", "WASI")
+            | ("net", "connect")
+            | ("net", "createConnection")
             | ("net", "createServer")
             | ("net", "Server")
             | ("net", "Socket")

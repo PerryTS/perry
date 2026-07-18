@@ -260,60 +260,110 @@ fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
     }
 }
 
+/// Compile `(pattern, flags)` into the caches if absent, reporting whether
+/// SOME engine accepted the flag-prefixed pattern. One NFA build total —
+/// `js_regexp_new` used to build every unique pattern TWICE (once discarded
+/// for validation at construction, once here for the cache), which doubled
+/// regex cost during bundle startup where every module-level literal
+/// constructs eagerly (the emoji-regex class of pattern costs milliseconds
+/// per build).
+///
+/// Returns `true` when the pattern is usable: compiled by the `regex` crate
+/// (cached in `REGEX_CACHE`), or by `fancy-regex` (cached in `FANCY_CACHE`,
+/// with the never-match placeholder in `REGEX_CACHE` so non-fancy callers
+/// don't crash — the fancy fallback is handled in `js_regexp_exec_fancy`).
+/// Returns `false` when BOTH engines reject it — nothing is cached and the
+/// caller decides whether that is a SyntaxError (see `js_regexp_new`'s
+/// bare-pattern fallback for the flag-prefix size edge).
+#[cfg(feature = "regex-engine")]
+fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
+    let already = REGEX_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .contains_key(&(pattern.to_string(), flags.to_string()))
+    });
+    if already {
+        return true;
+    }
+    // Translate JS regex to Rust-compatible pattern
+    let translated = js_regex_to_rust(pattern);
+    let case_insensitive = flags.contains('i');
+    let multiline = flags.contains('m');
+    // #2828: the `s` (dotAll) flag maps directly onto the Rust `regex`
+    // crate's `(?s)` inline mode, so `.` matches newlines.
+    let dot_all = flags.contains('s');
+    let regex_pattern = if case_insensitive || multiline || dot_all {
+        let mut prefix = String::from("(?");
+        if case_insensitive {
+            prefix.push('i');
+        }
+        if multiline {
+            prefix.push('m');
+        }
+        if dot_all {
+            prefix.push('s');
+        }
+        prefix.push(')');
+        format!("{}{}", prefix, translated)
+    } else {
+        translated
+    };
+    let regex = match build_std_regex(&regex_pattern) {
+        Ok(re) => re,
+        Err(_) => {
+            // Pattern has features regex crate doesn't support
+            // (lookbehind, lookahead). Try fancy-regex which supports
+            // the full JS regex feature set, and if it compiles, wrap
+            // the result via a find-and-replace approach at the exec
+            // call sites. Store a never-matching pattern so existing
+            // callers don't crash.
+            let fancy_ok = FANCY_CACHE.with(|fc| {
+                if let Ok(fre) = build_fancy_regex(&regex_pattern) {
+                    let mut fc = fc.borrow_mut();
+                    evict_regex_cache_if_full(&mut fc);
+                    fc.insert(
+                        (pattern.to_string(), flags.to_string()),
+                        std::sync::Arc::new(fre),
+                    );
+                    true
+                } else {
+                    false
+                }
+            });
+            if !fancy_ok {
+                return false;
+            }
+            Regex::new(r"[^\s\S]").unwrap()
+        }
+    };
+    REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        evict_regex_cache_if_full(&mut cache);
+        cache.insert((pattern.to_string(), flags.to_string()), Arc::new(regex));
+    });
+    true
+}
+
 #[cfg(feature = "regex-engine")]
 fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
+    let hit = REGEX_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .get(&(pattern.to_string(), flags.to_string()))
+            .cloned()
+    });
+    if let Some(re) = hit {
+        return re;
+    }
+    let _ = compile_and_cache_regex_checked(pattern, flags);
     REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(re) = cache.get(&(pattern.to_string(), flags.to_string())) {
             return re.clone();
         }
-        // Translate JS regex to Rust-compatible pattern
-        let translated = js_regex_to_rust(pattern);
-        let case_insensitive = flags.contains('i');
-        let multiline = flags.contains('m');
-        // #2828: the `s` (dotAll) flag maps directly onto the Rust `regex`
-        // crate's `(?s)` inline mode, so `.` matches newlines.
-        let dot_all = flags.contains('s');
-        let regex_pattern = if case_insensitive || multiline || dot_all {
-            let mut prefix = String::from("(?");
-            if case_insensitive {
-                prefix.push('i');
-            }
-            if multiline {
-                prefix.push('m');
-            }
-            if dot_all {
-                prefix.push('s');
-            }
-            prefix.push(')');
-            format!("{}{}", prefix, translated)
-        } else {
-            translated
-        };
-        let regex = match build_std_regex(&regex_pattern) {
-            Ok(re) => re,
-            Err(_) => {
-                // Pattern has features regex crate doesn't support
-                // (lookbehind, lookahead). Try fancy-regex which supports
-                // the full JS regex feature set, and if it compiles, wrap
-                // the result via a find-and-replace approach at the exec
-                // call sites. For now, store a never-matching pattern so
-                // existing callers don't crash — the fancy-regex fallback
-                // is handled in js_regexp_exec_fancy below.
-                FANCY_CACHE.with(|fc| {
-                    if let Ok(fre) = build_fancy_regex(&regex_pattern) {
-                        let mut fc = fc.borrow_mut();
-                        evict_regex_cache_if_full(&mut fc);
-                        fc.insert(
-                            (pattern.to_string(), flags.to_string()),
-                            std::sync::Arc::new(fre),
-                        );
-                    }
-                });
-                Regex::new(r"[^\s\S]").unwrap()
-            }
-        };
-        let arc = Arc::new(regex);
+        // Both engines rejected it (validation normally throws before this
+        // point) — keep the historical behavior: cache + return never-match.
+        let arc = Arc::new(Regex::new(r"[^\s\S]").unwrap());
         evict_regex_cache_if_full(&mut cache);
         cache.insert((pattern.to_string(), flags.to_string()), arc.clone());
         arc
@@ -651,14 +701,25 @@ pub extern "C" fn js_regexp_new(
                     pattern_str
                 ));
             }
-            // The expensive part of validation: compile the pattern with both
-            // engines just to confirm it is well-formed.
-            let translated = js_regex_to_rust(pattern_str);
-            if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
-                throw_regexp_syntax_error(&format!(
-                    "Invalid regular expression: /{}/: invalid pattern",
-                    pattern_str
-                ));
+            // The expensive part of validation: compile the pattern. This
+            // BUILDS AND CACHES in one step (`compile_and_cache_regex_checked`)
+            // so the `get_or_compile_regex` below is a guaranteed cache hit —
+            // previously every unique pattern was NFA-compiled twice (once
+            // discarded here, once for the cache), doubling startup regex cost.
+            if !compile_and_cache_regex_checked(pattern_str, flags_str) {
+                // Preserve the historical edge: validation used to test the
+                // BARE translated pattern (no `(?ims)` prefix). A pattern that
+                // compiles bare but blows the size limit with the flag prefix
+                // must stay a silent never-match (matching prior behavior),
+                // not a SyntaxError.
+                let translated = js_regex_to_rust(pattern_str);
+                if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err()
+                {
+                    throw_regexp_syntax_error(&format!(
+                        "Invalid regular expression: /{}/: invalid pattern",
+                        pattern_str
+                    ));
+                }
             }
         }
     }

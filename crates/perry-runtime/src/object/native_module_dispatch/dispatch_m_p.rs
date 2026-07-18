@@ -104,6 +104,35 @@ pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name
         typed_kind
     );
     match (module_name, method_name) {
+        // `net.connect(port, host)` / `net.createConnection(...)` as a bound
+        // VALUE (mysql2-via-turbopack's externals wrapper requires 'net' and
+        // calls the export dynamically) — the socket factory lives in
+        // perry-stdlib, so route through the registered stdlib dispatcher,
+        // the same bridge the http client entry points use.
+        ("net", "connect") | ("net", "createConnection") => {
+            let ptr =
+                crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(
+                    *const u8,
+                    usize,
+                    *const u8,
+                    usize,
+                    *const f64,
+                    usize,
+                ) -> f64 = std::mem::transmute(ptr);
+                dispatch(
+                    module_name.as_ptr(),
+                    module_name.len(),
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args_ptr,
+                    args_len,
+                )
+            }
+        }
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
         ("net", "_createServerHandle") => crate::net_validate::js_net_create_server_handle_stub(
             arg(0),

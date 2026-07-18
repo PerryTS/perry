@@ -488,6 +488,7 @@ fn test_old_page_defrag_selection_reports_releasable_granule_bytes() {
             pinned_bytes,
             pinned_object_count: usize::from(pinned_bytes > 0),
             dirty_slots: 0,
+            dirty_slots_epoch: 0,
             dirty: false,
             evacuation_eligible: false,
         }
