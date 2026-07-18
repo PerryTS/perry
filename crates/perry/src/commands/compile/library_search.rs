@@ -325,6 +325,101 @@ pub(super) fn find_lld_link() -> Option<PathBuf> {
     None
 }
 
+/// MSVC `lib.exe` — the archive manager that ships in the same MSVC bin
+/// directory as `link.exe`. Located via vswhere (through `find_msvc_link_exe`,
+/// which already picks the newest VC tools bin dir) first, then PATH (covers
+/// vcvars64 developer prompts). Windows-host only: on other hosts a
+/// Windows-target archive is built with llvm-lib / llvm-ar instead.
+#[cfg(target_os = "windows")]
+pub(super) fn find_msvc_lib_exe() -> Option<PathBuf> {
+    if let Some(link_exe) = find_msvc_link_exe() {
+        let lib = link_exe.with_file_name("lib.exe");
+        if lib.exists() {
+            return Some(lib);
+        }
+    }
+    if let Ok(output) = Command::new("where").arg("lib.exe").output() {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if let Some(first) = s.lines().next() {
+                let p = PathBuf::from(first.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn find_msvc_lib_exe() -> Option<PathBuf> {
+    None
+}
+
+/// The archiver selected for bundling a Windows `--output-type staticlib`
+/// (#1088). Selection is split from discovery so the precedence is
+/// unit-testable off-Windows (`windows_link_tests`).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum WindowsArchiver {
+    /// MSVC `lib.exe`, or LLVM's `llvm-lib` — a drop-in lib.exe replacement
+    /// (same `/OUT:` command line) that ships with `winget install LLVM.LLVM`.
+    LibExe(PathBuf),
+    /// LLVM's generic `ar` — last resort (rustup's llvm-tools component
+    /// carries llvm-ar but not llvm-lib). `--format=coff` makes it emit the
+    /// MSVC-compatible archive flavor.
+    LlvmAr(PathBuf),
+}
+
+/// Pick the Windows archiver from the tools that resolved, in precedence
+/// order: MSVC `lib.exe` → `llvm-lib` → `llvm-ar`. `None` when no archiver
+/// is installed at all — the caller emits the two-toolchain install hint.
+pub(super) fn choose_windows_archiver(
+    msvc_lib_exe: Option<PathBuf>,
+    llvm_lib: Option<PathBuf>,
+    llvm_ar: Option<PathBuf>,
+) -> Option<WindowsArchiver> {
+    if let Some(p) = msvc_lib_exe {
+        return Some(WindowsArchiver::LibExe(p));
+    }
+    if let Some(p) = llvm_lib {
+        return Some(WindowsArchiver::LibExe(p));
+    }
+    llvm_ar.map(WindowsArchiver::LlvmAr)
+}
+
+/// Locate the archiver for a Windows-target staticlib. `find_llvm_tool`
+/// contributes the `PERRY_LLVM_LIB` / `PERRY_LLVM_AR` env overrides, the
+/// rustup-sysroot probe, and the PATH lookup for free, so all three rungs
+/// follow the established lookup precedence.
+pub(super) fn find_windows_archiver() -> Option<WindowsArchiver> {
+    choose_windows_archiver(
+        find_msvc_lib_exe(),
+        find_llvm_tool("llvm-lib"),
+        find_llvm_tool("llvm-ar"),
+    )
+}
+
+/// Build the archive command for the selected archiver. The caller appends
+/// the object files.
+pub(super) fn windows_archiver_command(archiver: &WindowsArchiver, out: &Path) -> Command {
+    match archiver {
+        WindowsArchiver::LibExe(path) => {
+            let mut c = Command::new(path);
+            c.arg(format!("/OUT:{}", out.display()));
+            c
+        }
+        WindowsArchiver::LlvmAr(path) => {
+            let mut c = Command::new(path);
+            // `c` create, `r` insert/replace, `s` write index — same as the
+            // Unix `ar crs` branch; `--format=coff` selects the MSVC archive
+            // flavor so `link.exe` / `lld-link` consume the result.
+            c.arg("--format=coff").arg("crs").arg(out);
+            c
+        }
+    }
+}
+
 /// Location where `perry setup windows` writes the xwin'd Microsoft CRT +
 /// Windows SDK. Returns `Some(root)` only when `<root>/crt/lib/x86_64` exists,
 /// so callers can treat `Some` as "toolchain is complete and ready to link."
