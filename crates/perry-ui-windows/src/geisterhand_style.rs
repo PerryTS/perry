@@ -38,8 +38,12 @@ pub extern "C" fn apply_style(handle: i64, prop_id: u32, a0: f64, a1: f64, a2: f
         // Windows uses `set_insets` (vs `set_edge_insets` on macOS / GTK4) —
         // same FFI shape, different helper name internal to the crate.
         PADDING_UNIFORM => widgets::set_insets(handle, a0, a0, a0, a0),
-        HIDDEN => crate::perry_ui_set_widget_hidden(handle, if a0 != 0.0 { 1 } else { 0 }),
-        ENABLED => crate::perry_ui_widget_set_enabled(handle, if a0 != 0.0 { 1 } else { 0 }),
+        HIDDEN => {
+            crate::ffi::styling::perry_ui_set_widget_hidden(handle, if a0 != 0.0 { 1 } else { 0 })
+        }
+        ENABLED => {
+            crate::ffi::styling::perry_ui_widget_set_enabled(handle, if a0 != 0.0 { 1 } else { 0 })
+        }
         _ => {}
     }
 }

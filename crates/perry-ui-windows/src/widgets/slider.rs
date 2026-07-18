@@ -167,6 +167,28 @@ pub fn create(min: f64, max: f64, initial: f64, on_change: f64) -> i64 {
     }
 }
 
+/// Current slider value in user units (trackbar pos mapped back through
+/// the stored [min, max]). None when `handle` isn't a slider. Used by the
+/// geisterhand `read_widget_value` hook.
+pub fn get_value(handle: i64) -> Option<f64> {
+    #[cfg(target_os = "windows")]
+    {
+        let hwnd = super::get_hwnd(handle)?;
+        let pos =
+            unsafe { SendMessageW(hwnd, TBM_GETPOS, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32 };
+        return SLIDER_INFO.with(|info| {
+            info.borrow()
+                .get(&handle)
+                .map(|si| pos_to_value(pos, si.min, si.max))
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = handle;
+        None
+    }
+}
+
 /// Handle WM_HSCROLL from trackbar — read position and call callback.
 pub fn handle_scroll(handle: i64) {
     #[cfg(target_os = "windows")]
