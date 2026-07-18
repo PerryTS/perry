@@ -206,6 +206,59 @@ fn emit_error_to_stderr(prefix: &str, err: *mut c_char) {
     }
 }
 
+/// Consume (and free) a host error C-string into a `WebAssembly.<name>`-
+/// shaped error value: an ordinary `ErrorHeader` whose `.name` is
+/// `CompileError` / `LinkError` — the same shape the graceful-fail
+/// namespace produces (#6558), so `err instanceof WebAssembly.CompileError`
+/// and `.catch` handlers see one consistent brand in both modes.
+fn wasm_error_value_from_host(name: &'static [u8], err: *mut c_char, fallback: &str) -> f64 {
+    let message = if err.is_null() {
+        fallback.to_string()
+    } else {
+        let cs = unsafe { std::ffi::CStr::from_ptr(err) };
+        let text = cs.to_string_lossy().into_owned();
+        unsafe { perry_wasm_host_string_free(err) };
+        text
+    };
+    let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_error_new_with_name_message_bytes(name, message_ptr);
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+fn wasm_type_error_value(message: &str) -> f64 {
+    let message_ptr = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_typeerror_new(message_ptr);
+    crate::value::js_nanbox_pointer(error as i64)
+}
+
+fn rejected_promise_value(reason: f64) -> f64 {
+    let promise = crate::promise::js_promise_rejected(reason);
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+/// Compile `bytes_jsval` into a module wrapper. `Err` carries a ready-to-
+/// throw/reject JS error VALUE (TypeError for a non-buffer argument,
+/// CompileError for invalid bytes) so each caller can pick the spec-mandated
+/// delivery: `new WebAssembly.Module` throws synchronously, `compile` /
+/// `instantiate` reject their promise.
+fn module_new_value(bytes_jsval: f64) -> Result<f64, f64> {
+    let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
+        return Err(wasm_type_error_value(
+            "WebAssembly.Module: argument must be a Uint8Array or ArrayBuffer",
+        ));
+    };
+    let mut err: *mut c_char = std::ptr::null_mut();
+    let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
+    if module.is_null() {
+        return Err(wasm_error_value_from_host(
+            b"CompileError",
+            err,
+            "WebAssembly.Module(): compile failed",
+        ));
+    }
+    Ok(make_module_object(module))
+}
+
 fn string_value(bytes: &[u8]) -> f64 {
     let ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
@@ -338,33 +391,31 @@ pub extern "C" fn js_webassembly_validate(bytes_jsval: f64) -> f64 {
 }
 
 /// `new WebAssembly.Module(bytes)` — compile bytes and return a JS wrapper
-/// around the host module handle.
+/// around the host module handle. Per spec this constructor THROWS
+/// synchronously: TypeError for a non-buffer argument, CompileError for
+/// invalid bytes (#6558 — previously logged to stderr and returned
+/// `undefined`, which crashed callers later at the first property read).
 #[no_mangle]
 pub extern "C" fn js_webassembly_module_new(bytes_jsval: f64) -> f64 {
-    let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
-        eprintln!("WebAssembly.Module: argument is not a Uint8Array or ArrayBuffer");
-        return nanbox_undefined();
-    };
-    let mut err: *mut c_char = std::ptr::null_mut();
-    let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
-    if module.is_null() {
-        emit_error_to_stderr("WebAssembly.CompileError", err);
-        return nanbox_undefined();
+    match module_new_value(bytes_jsval) {
+        Ok(module) => module,
+        Err(error) => crate::exception::js_throw(error),
     }
-    make_module_object(module)
 }
 
 /// `WebAssembly.compile(bytes)` — async-standard shape, implemented as a
-/// pre-resolved Promise over the same module wrapper used by the constructor.
+/// pre-resolved Promise over the same module wrapper used by the
+/// constructor. Failures REJECT (never throw) with a `CompileError`-named
+/// error carrying the host's message, per spec.
 #[no_mangle]
 pub extern "C" fn js_webassembly_compile(bytes_jsval: f64) -> f64 {
-    let module = js_webassembly_module_new(bytes_jsval);
-    let promise = if module.to_bits() == TAG_UNDEFINED {
-        crate::promise::js_promise_rejected(string_value(b"WebAssembly compile failed"))
-    } else {
-        crate::promise::js_promise_resolved(module)
-    };
-    crate::value::js_nanbox_pointer(promise as i64)
+    match module_new_value(bytes_jsval) {
+        Ok(module) => {
+            let promise = crate::promise::js_promise_resolved(module);
+            crate::value::js_nanbox_pointer(promise as i64)
+        }
+        Err(error) => rejected_promise_value(error),
+    }
 }
 
 #[no_mangle]
@@ -455,24 +506,32 @@ pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_
     array_value(arr)
 }
 
-/// `WebAssembly.instantiate(bytes)` — synchronous, returns an opaque handle
-/// (NaN-boxed pointer) suitable for `callExport`. On error logs to stderr
-/// and returns `undefined`.
+/// `WebAssembly.instantiate(bytes)` — synchronous on SUCCESS, returning an
+/// opaque handle (NaN-boxed pointer) suitable for `callExport`. This is the
+/// Perry MVP shape, **not** the standard `Promise<{module,instance}>`; the
+/// standard async surface is tracked as follow-up work (see issue #76).
 ///
-/// Note: this is the Perry MVP shape, **not** the standard
-/// `Promise<{module,instance}>`. The standard async surface is tracked as
-/// follow-up work (see issue #76).
+/// Failures return a REJECTED PROMISE instead of `undefined` (#6558):
+/// TypeError for a non-buffer argument, CompileError for invalid bytes,
+/// LinkError for instantiation failure. `await`-shaped consumers (the
+/// standard spelling) then land in their own `catch` path instead of
+/// crashing on `undefined.instance`, and the MVP handle shape is unchanged
+/// on the success path.
 #[no_mangle]
 pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64) -> f64 {
     let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
-        eprintln!("WebAssembly.instantiate: argument is not a Uint8Array or ArrayBuffer");
-        return nanbox_undefined();
+        return rejected_promise_value(wasm_type_error_value(
+            "WebAssembly.instantiate: argument must be a Uint8Array or ArrayBuffer",
+        ));
     };
     let mut err: *mut c_char = std::ptr::null_mut();
     let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
     if module.is_null() {
-        emit_error_to_stderr("WebAssembly.CompileError", err);
-        return nanbox_undefined();
+        return rejected_promise_value(wasm_error_value_from_host(
+            b"CompileError",
+            err,
+            "WebAssembly.instantiate(): compile failed",
+        ));
     }
     let mut err2: *mut c_char = std::ptr::null_mut();
     let inst = unsafe { perry_wasm_host_instance_new(module, &mut err2) };
@@ -480,8 +539,11 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64) -> f64 {
     // wasmi's Arc. Leaks the wrapper but not the wasm module data.
     unsafe { perry_wasm_host_module_drop(module) };
     if inst.is_null() {
-        emit_error_to_stderr("WebAssembly.LinkError", err2);
-        return nanbox_undefined();
+        return rejected_promise_value(wasm_error_value_from_host(
+            b"LinkError",
+            err2,
+            "WebAssembly.instantiate(): instantiation failed",
+        ));
     }
     nanbox_pointer_raw(inst as *const c_void)
 }
