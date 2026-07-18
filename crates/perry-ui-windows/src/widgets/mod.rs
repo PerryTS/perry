@@ -1,6 +1,7 @@
 //! Widget registry — Vec<WidgetEntry> with 1-based handles.
 //! Each widget has an HWND (on Windows), a kind, children list, and layout info.
 
+pub mod ad_banner;
 pub mod attributed_text;
 pub mod bloomview;
 pub mod bottom_nav;

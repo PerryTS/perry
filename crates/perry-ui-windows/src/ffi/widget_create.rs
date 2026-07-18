@@ -7,6 +7,15 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     widgets::text::create(text_ptr as *const u8)
 }
 
+/// Create an AdBanner placeholder (#867). `unit_id_ptr` / `size_ptr` are
+/// string pointers per the `AdBanner(unitId, size)` dispatch row. This
+/// symbol was previously absent from the Windows staticlib, so any TS
+/// program using AdBanner failed at link time.
+#[no_mangle]
+pub extern "C" fn perry_ui_adbanner_create(unit_id_ptr: i64, size_ptr: i64) -> i64 {
+    widgets::ad_banner::create(unit_id_ptr as *const u8, size_ptr as *const u8)
+}
+
 /// Create a Button.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
